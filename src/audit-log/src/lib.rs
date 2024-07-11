@@ -295,8 +295,8 @@ pub struct RefreshDecisionWithReasonV1 {
     /// Objects that currently need a refresh on the cluster (taking into account the rehydration
     /// time estimate).
     pub objects_needing_refresh: Vec<String>,
-    /// The REHYDRATION TIME ESTIMATE setting of the cluster.
-    pub rehydration_time_estimate: String,
+    /// The HYDRATION TIME ESTIMATE setting of the cluster.
+    pub hydration_time_estimate: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]

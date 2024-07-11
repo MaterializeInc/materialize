@@ -2510,7 +2510,7 @@ pub static MZ_CLUSTER_SCHEDULES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column(
-            "refresh_rehydration_time_estimate",
+            "refresh_hydration_time_estimate",
             ScalarType::Interval.nullable(true),
         ),
     is_retained_metrics_object: false,

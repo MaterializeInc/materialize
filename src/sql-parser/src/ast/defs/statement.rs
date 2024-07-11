@@ -3727,7 +3727,7 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
 pub enum ClusterScheduleOptionValue {
     Manual,
     Refresh {
-        rehydration_time_estimate: Option<IntervalValue>,
+        hydration_time_estimate: Option<IntervalValue>,
     },
 }
 
@@ -3745,12 +3745,12 @@ impl AstDisplay for ClusterScheduleOptionValue {
                 f.write_str("MANUAL");
             }
             ClusterScheduleOptionValue::Refresh {
-                rehydration_time_estimate,
+                hydration_time_estimate,
             } => {
                 f.write_str("ON REFRESH");
-                if let Some(rehydration_time_estimate) = rehydration_time_estimate {
-                    f.write_str(" (REHYDRATION TIME ESTIMATE = '");
-                    f.write_node(rehydration_time_estimate);
+                if let Some(hydration_time_estimate) = hydration_time_estimate {
+                    f.write_str(" (HYDRATION TIME ESTIMATE = '");
+                    f.write_node(hydration_time_estimate);
                     f.write_str(")");
                 }
             }

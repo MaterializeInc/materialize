@@ -1339,7 +1339,7 @@ statement ok
 ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = '1');
 
 statement ok
-ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '0 seconds'));
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '0 seconds'));
 
 # Setting some other cluster option in ALTER CLUSTER shouldn't change the SCHEDULE.
 # (The sleep is needed so that if the following ALTER erroneously sets the SCHEDULE to MANUAL, then we should be in a
@@ -1465,22 +1465,22 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_4
 ----
 0
 
-## REHYDRATION TIME ESTIMATE
+## HYDRATION TIME ESTIMATE
 
 statement error db error: ERROR: Expected literal string, found number "0"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = 0));
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = 0));
 
-statement error db error: ERROR: REHYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '-1 hour'));
+statement error db error: ERROR: HYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '-1 hour'));
 
 statement error db error: ERROR: invalid input syntax for type interval: unknown units aaaa: "1 aaaa"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 aaaa'));
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 aaaa'));
 
-statement error db error: ERROR: REHYDRATION TIME ESTIMATE must not involve units larger than days
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 month'));
+statement error db error: ERROR: HYDRATION TIME ESTIMATE must not involve units larger than days
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 month'));
 
 statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1000000000000 days'));
+CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1000000000000 days'));
 
 # ----------------------------------------
 # Introspection
@@ -1533,16 +1533,16 @@ mvi3  at  NULL  NULL  true
 mvi3  at  NULL  NULL  true
 
 statement ok
-CREATE CLUSTER c_schedule_rehydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
-# Make the above cluster turn on, so that we can test how the REHYDRATION TIME ESTIMATE looks in `mz_audit_events`.
+# Make the above cluster turn on, so that we can test how the HYDRATION TIME ESTIMATE looks in `mz_audit_events`.
 statement ok
 CREATE MATERIALIZED VIEW mv_rte
-IN CLUSTER c_schedule_rehydration_time_estimate
+IN CLUSTER c_schedule_hydration_time_estimate
 WITH (REFRESH EVERY '1 sec') AS SELECT * FROM t2;
 
 query TTT
-SELECT name, cs.type, cs.refresh_rehydration_time_estimate
+SELECT name, cs.type, cs.refresh_hydration_time_estimate
 FROM mz_internal.mz_cluster_schedules cs, mz_catalog.mz_clusters c
 WHERE c.id = cs.cluster_id
 ORDER BY name;
@@ -1552,7 +1552,7 @@ c_schedule_2  manual  NULL
 c_schedule_3  on-refresh  00:00:00
 c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
-c_schedule_rehydration_time_estimate  on-refresh  00:16:35
+c_schedule_hydration_time_estimate  on-refresh  00:16:35
 mz_catalog_server  manual  NULL
 mz_probe  manual  NULL
 mz_support  manual  NULL
@@ -1582,12 +1582,12 @@ drop  cluster-replica  "c_schedule_4"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
-drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"00:00:00"}
-drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
-create  cluster-replica  "c_schedule_rehydration_time_estimate"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:16:35"}
+drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
+drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_refresh":["uXXX"]}
 
 # Materialized views in this file can be explained
 

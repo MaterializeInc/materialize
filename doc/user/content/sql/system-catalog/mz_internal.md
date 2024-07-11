@@ -135,11 +135,11 @@ the most recent status for each AWS PrivateLink connection in the system.
 The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each cluster.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_schedules -->
-| Field                               | Type         | Meaning                                                       |
-|-------------------------------------|--------------|---------------------------------------------------------------|
-| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).|
-| `type`                              | [`text`]     | `on-refresh`, or `manual`. Default: `manual`                       |
-| `refresh_rehydration_time_estimate` | [`interval`] | The interval given in the `REHYDRATION TIME ESTIMATE` option. |
+| Field                               | Type         | Meaning                                                        |
+|-------------------------------------|--------------|----------------------------------------------------------------|
+| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
+| `type`                              | [`text`]     | `on-refresh`, or `manual`. Default: `manual`                   |
+| `refresh_hydration_time_estimate`   | [`interval`] | The interval given in the `HYDRATION TIME ESTIMATE` option.    |
 
 ## `mz_cluster_replica_frontiers`
 

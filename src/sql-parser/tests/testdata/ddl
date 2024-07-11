@@ -1712,49 +1712,57 @@ CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH)
 ----
 CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { rehydration_time_estimate: None })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: None })) }], features: [] })
 
+parse-statement
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
+----
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [] })
+
+# Legacy version: `REHYDRATION TIME ESTIMATE`
 parse-statement
 CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'))
 ----
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'))
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { rehydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [] })
 
 parse-statement
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE '1 hour'))
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE '1 hour'))
 ----
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'))
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { rehydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [] })
 
 parse-statement
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE))
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE))
 ----
 error: Expected literal string, found right parenthesis
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE))
-                                                                                    ^
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE))
+                                                                                  ^
 
 parse-statement
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = ))
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = ))
 ----
 error: Expected literal string, found right parenthesis
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = ))
-                                                                                       ^
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = ))
+                                                                                     ^
 
 parse-statement
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION))
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION))
 ----
 error: Expected TIME, found right parenthesis
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION))
-                                                                      ^
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION))
+                                                                    ^
 
 parse-statement
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour')
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 ----
 error: Expected right parenthesis, found EOF
-CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour')
-                                                                                                ^
+CREATE CLUSTER cluster (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
+                                                                                              ^
 
 parse-statement
 ALTER CLUSTER cluster SET (SIZE '1')

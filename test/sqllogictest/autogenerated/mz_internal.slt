@@ -99,7 +99,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 ----
 1  cluster_id  text
 2  type  text
-3  refresh_rehydration_time_estimate  interval
+3  refresh_hydration_time_estimate  interval
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position

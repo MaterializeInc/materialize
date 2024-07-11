@@ -244,7 +244,7 @@ you can configure a cluster to automatically turn on and off using the
 ```mzsql
 CREATE CLUSTER my_scheduled_cluster (
   SIZE = '3200cc',
-  SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour')
+  SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 );
 ```
 
@@ -267,17 +267,17 @@ To re-enable scheduling:
 
 ```mzsql
 ALTER CLUSTER my_scheduled_cluster
-SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'));
+SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
 ```
 
-#### Rehydration time estimate
+#### Hydration time estimate
 
-<p style="font-size:14px"><b>Syntax:</b> <code>REHYDRATION TIME ESTIMATE</code> <i>interval</i></p>
+<p style="font-size:14px"><b>Syntax:</b> <code>HYDRATION TIME ESTIMATE</code> <i>interval</i></p>
 
 By default, scheduled clusters will turn on at the scheduled refresh time. To
 avoid [unavailability of the objects scheduled for refresh](/sql/create-materialized-view/#querying-materialized-views-with-refresh-strategies) during the refresh
 operation, we recommend turning the cluster on ahead of the scheduled time to
-allow rehydration to complete. This can be controlled using the `REHYDRATION
+allow rehydration to complete. This can be controlled using the `HYDRATION
 TIME ESTIMATE` clause.
 
 #### Introspection
@@ -290,7 +290,7 @@ system catalog table:
 SELECT c.id AS cluster_id,
        c.name AS cluster_name,
        cs.type AS schedule_type,
-       cs.refresh_rehydration_time_estimate
+       cs.refresh_hydration_time_estimate
 FROM mz_internal.mz_cluster_schedules cs
 JOIN mz_clusters c ON cs.cluster_id = c.id
 WHERE c.name = 'my_refresh_cluster';

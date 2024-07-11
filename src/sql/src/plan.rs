@@ -590,9 +590,9 @@ pub enum ClusterSchedule {
     /// The system won't automatically turn the cluster On or Off.
     Manual,
     /// The cluster will be On when a REFRESH materialized view on it needs to refresh.
-    /// `rehydration_time_estimate` determines how much time before a refresh to turn the
+    /// `hydration_time_estimate` determines how much time before a refresh to turn the
     /// cluster On, so that it can rehydrate already before the refresh time.
-    Refresh { rehydration_time_estimate: Duration },
+    Refresh { hydration_time_estimate: Duration },
 }
 
 impl Default for ClusterSchedule {

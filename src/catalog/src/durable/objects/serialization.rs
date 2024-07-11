@@ -92,11 +92,11 @@ impl RustType<proto::ClusterSchedule> for ClusterSchedule {
                 value: Some(cluster_schedule::Value::Manual(Empty {})),
             },
             ClusterSchedule::Refresh {
-                rehydration_time_estimate,
+                hydration_time_estimate,
             } => proto::ClusterSchedule {
                 value: Some(cluster_schedule::Value::Refresh(
                     ClusterScheduleRefreshOptions {
-                        rehydration_time_estimate: Some(rehydration_time_estimate.into_proto()),
+                        rehydration_time_estimate: Some(hydration_time_estimate.into_proto()),
                     },
                 )),
             },
@@ -108,7 +108,7 @@ impl RustType<proto::ClusterSchedule> for ClusterSchedule {
             None => Ok(Default::default()),
             Some(cluster_schedule::Value::Manual(Empty {})) => Ok(ClusterSchedule::Manual),
             Some(cluster_schedule::Value::Refresh(csro)) => Ok(ClusterSchedule::Refresh {
-                rehydration_time_estimate: csro
+                hydration_time_estimate: csro
                     .rehydration_time_estimate
                     .into_rust_if_some("rehydration_time_estimate")?,
             }),
@@ -1841,7 +1841,7 @@ impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV1>
         proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
             decision: Some(decision),
             objects_needing_refresh: self.objects_needing_refresh.clone(),
-            rehydration_time_estimate: self.rehydration_time_estimate.clone(),
+            rehydration_time_estimate: self.hydration_time_estimate.clone(),
         }
     }
 
@@ -1864,7 +1864,7 @@ impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV1>
         Ok(RefreshDecisionWithReasonV1 {
             decision,
             objects_needing_refresh: proto.objects_needing_refresh,
-            rehydration_time_estimate: proto.rehydration_time_estimate,
+            hydration_time_estimate: proto.rehydration_time_estimate,
         })
     }
 }

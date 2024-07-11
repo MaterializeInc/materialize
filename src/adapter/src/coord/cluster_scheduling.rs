@@ -50,8 +50,8 @@ pub struct RefreshDecision {
     /// Objects that currently need a refresh on the cluster (taking into account the rehydration
     /// time estimate).
     objects_needing_refresh: Vec<GlobalId>,
-    /// The REHYDRATION TIME ESTIMATE setting of the cluster.
-    rehydration_time_estimate: Duration,
+    /// The HYDRATION TIME ESTIMATE setting of the cluster.
+    hydration_time_estimate: Duration,
 }
 
 impl SchedulingDecision {
@@ -66,12 +66,12 @@ impl SchedulingDecision {
                     SchedulingDecision::Refresh(RefreshDecision {
                         cluster_on,
                         objects_needing_refresh: mvs_needing_refresh,
-                        rehydration_time_estimate,
+                        hydration_time_estimate,
                     }) => {
-                        let mut rehydration_time_estimate_str = String::new();
+                        let mut hydration_time_estimate_str = String::new();
                         mz_repr::strconv::format_interval(
-                            &mut rehydration_time_estimate_str,
-                            Interval::from_duration(rehydration_time_estimate).expect(
+                            &mut hydration_time_estimate_str,
+                            Interval::from_duration(hydration_time_estimate).expect(
                                 "planning ensured that this is convertible back to Interval",
                             ),
                         );
@@ -81,7 +81,7 @@ impl SchedulingDecision {
                                 .iter()
                                 .map(|id| id.to_string())
                                 .collect(),
-                            rehydration_time_estimate: rehydration_time_estimate_str,
+                            hydration_time_estimate: hydration_time_estimate_str,
                         })
                     }
                 })
@@ -114,7 +114,7 @@ impl Coordinator {
                         // Nothing to do, user manages this cluster manually.
                     }
                     ClusterSchedule::Refresh {
-                        rehydration_time_estimate,
+                        hydration_time_estimate,
                     } => {
                         let mvs = cluster
                             .bound_objects()
@@ -139,11 +139,7 @@ impl Coordinator {
                             })
                             .collect_vec();
                         debug!(%cluster.id, ?refresh_mv_write_frontiers, "check_refresh_policy");
-                        refresh_mv_write_frontiers.push((
-                            cluster.id,
-                            rehydration_time_estimate,
-                            mvs,
-                        ));
+                        refresh_mv_write_frontiers.push((cluster.id, hydration_time_estimate, mvs));
                     }
                 }
             }
@@ -163,14 +159,14 @@ impl Coordinator {
             let decisions = refresh_mv_write_frontiers
                 .into_iter()
                 .map(
-                    |(cluster_id, rehydration_time_estimate, refresh_mv_write_frontiers)| {
+                    |(cluster_id, hydration_time_estimate, refresh_mv_write_frontiers)| {
                         // We are just checking that
-                        // write_frontier < local_read_ts + rehydration_time_estimate
-                        let rehydration_estimate = &rehydration_time_estimate
+                        // write_frontier < local_read_ts + hydration_time_estimate
+                        let hydration_estimate = &hydration_time_estimate
                             .try_into()
                             .expect("checked during planning");
                         let local_read_ts_adjusted =
-                            local_read_ts.step_forward_by(rehydration_estimate);
+                            local_read_ts.step_forward_by(hydration_estimate);
                         let mvs_needing_refresh = refresh_mv_write_frontiers
                             .into_iter()
                             .filter_map(|(id, frontier)| {
@@ -187,7 +183,7 @@ impl Coordinator {
                             SchedulingDecision::Refresh(RefreshDecision {
                                 cluster_on,
                                 objects_needing_refresh: mvs_needing_refresh,
-                                rehydration_time_estimate,
+                                hydration_time_estimate,
                             }),
                         )
                     },

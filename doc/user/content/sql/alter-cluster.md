@@ -40,7 +40,7 @@ ALTER CLUSTER c1 SET (SIZE '100cc');
 {{< private-preview />}}
 
 ```sql
-ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'));
+ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
 ```
 
 See the reference documentation for [`CREATE CLUSTER`](../create-cluster/#scheduling)

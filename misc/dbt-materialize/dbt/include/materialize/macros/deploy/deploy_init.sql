@@ -115,7 +115,7 @@
             c.id AS cluster_id,
             c.name AS cluster_name,
             cs.type AS schedule_type,
-            cs.refresh_rehydration_time_estimate
+            cs.refresh_hydration_time_estimate
         FROM mz_clusters c
         LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
         WHERE c.name = {{ dbt.string_literal(cluster) }}
@@ -130,7 +130,7 @@
         {% set size = results[1] %}
         {% set replication_factor = results[2] %}
         {% set schedule_type = results[5] %}
-        {% set refresh_rehydration_time_estimate = results[6] %}
+        {% set refresh_hydration_time_estimate = results[6] %}
 
         {% if not managed %}
             {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
@@ -141,7 +141,7 @@
             size=size,
             replication_factor=replication_factor,
             schedule_type=schedule_type,
-            refresh_rehydration_time_estimate=refresh_rehydration_time_estimate,
+            refresh_hydration_time_estimate=refresh_hydration_time_estimate,
             ignore_existing_objects=ignore_existing_objects,
             force_deploy_suffix=True
         ) %}
