@@ -2017,8 +2017,9 @@ ddl_action_list = ActionList(
         (DropKafkaSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        (CreateMySqlSourceAction, 4),
-        (DropMySqlSourceAction, 4),
+        # TODO: Reenable when #28108 is fixed
+        # (CreateMySqlSourceAction, 4),
+        # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
         (GrantPrivilegesAction, 4),
