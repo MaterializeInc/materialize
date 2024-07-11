@@ -1800,6 +1800,58 @@ pub struct ClusterOption<T: AstInfo> {
 }
 impl_display_for_with_option!(ClusterOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClusterAlterOptionName {
+    /// The `Wait` option.
+    Wait,
+}
+
+impl AstDisplay for ClusterAlterOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterAlterOptionName::Wait => f.write_str("WAIT"),
+        }
+    }
+}
+
+impl WithOptionName for ClusterAlterOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterAlterOptionName::Wait => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ClusterAlterOptionValue {
+    For(Value),
+}
+
+impl AstDisplay for ClusterAlterOptionValue {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterAlterOptionValue::For(duration) => {
+                f.write_str("FOR ");
+                f.write_node(duration);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `ALTER CLUSTER... WITH` statement.
+pub struct ClusterAlterOption<T: AstInfo> {
+    pub name: ClusterAlterOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl_display_for_with_option!(ClusterAlterOption);
+
 // Note: the `AstDisplay` implementation and `Parser::parse_` method for this
 // enum are generated automatically by this crate's `build.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1888,7 +1940,10 @@ impl_display_t!(ReplicaDefinition);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterClusterAction<T: AstInfo> {
-    SetOptions(Vec<ClusterOption<T>>),
+    SetOptions {
+        options: Vec<ClusterOption<T>>,
+        with_options: Vec<ClusterAlterOption<T>>,
+    },
     ResetOptions(Vec<ClusterOptionName>),
 }
 
@@ -1912,10 +1967,18 @@ impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
         f.write_node(&self.name);
         f.write_str(" ");
         match &self.action {
-            AlterClusterAction::SetOptions(options) => {
+            AlterClusterAction::SetOptions {
+                options,
+                with_options,
+            } => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
             }
             AlterClusterAction::ResetOptions(options) => {
                 f.write_str("RESET (");
@@ -3594,6 +3657,7 @@ pub enum WithOptionValue<T: AstInfo> {
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
+    ClusterAlterStrategy(ClusterAlterOptionValue),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -3618,7 +3682,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
                 | WithOptionValue::ClusterReplicas(_)
-                | WithOptionValue::ClusterScheduleOptionValue(_) => {
+                | WithOptionValue::ClusterScheduleOptionValue(_)
+                | WithOptionValue::ClusterAlterStrategy(_) => {
                     // These do not need redaction.
                 }
             }
@@ -3668,6 +3733,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::Refresh(opt) => f.write_node(opt),
             WithOptionValue::ClusterScheduleOptionValue(value) => f.write_node(value),
+            WithOptionValue::ClusterAlterStrategy(value) => f.write_node(value),
         }
     }
 }

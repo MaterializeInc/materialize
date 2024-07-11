@@ -1761,63 +1761,70 @@ ALTER CLUSTER cluster SET (SIZE '1')
 ----
 ALTER CLUSTER cluster SET (SIZE = '1')
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Size, value: Some(Value(String("1"))) }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }], with_options: [] } })
+
+parse-statement
+ALTER CLUSTER cluster SET (SIZE '1') WITH ( WAIT FOR '1s' )
+----
+ALTER CLUSTER cluster SET (SIZE = '1') WITH (WAIT = FOR '1s')
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }], with_options: [ClusterAlterOption { name: Wait, value: Some(ClusterAlterStrategy(For(String("1s")))) }] } })
 
 parse-statement
 ALTER CLUSTER IF EXISTS cluster SET (MANAGED)
 ----
 ALTER CLUSTER IF EXISTS cluster SET (MANAGED)
 =>
-AlterCluster(AlterClusterStatement { if_exists: true, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: None }]) })
+AlterCluster(AlterClusterStatement { if_exists: true, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Managed, value: None }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster SET (REPLICATION FACTOR 1)
 ----
 ALTER CLUSTER cluster SET (REPLICATION FACTOR = 1)
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('1', '2'))
 ----
 ALTER CLUSTER cluster SET (AVAILABILITY ZONES = ('1', '2'))
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster SET (MANAGED true)
 ----
 ALTER CLUSTER cluster SET (MANAGED = true)
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster SET (MANAGED)
 ----
 ALTER CLUSTER cluster SET (MANAGED)
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: Managed, value: None }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Managed, value: None }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL '1')
 ----
 ALTER CLUSTER cluster SET (INTROSPECTION INTERVAL = '1')
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING true)
 ----
 ALTER CLUSTER cluster SET (INTROSPECTION DEBUGGING = true)
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster SET (AVAILABILITY ZONES ('a'), INTROSPECTION INTERVAL 1, INTROSPECTION DEBUGGING 1, MANAGED, REPLICAS (), REPLICATION FACTOR 0, SIZE 1)
 ----
 ALTER CLUSTER cluster SET (AVAILABILITY ZONES = ('a'), INTROSPECTION INTERVAL = 1, INTROSPECTION DEBUGGING = 1, MANAGED, REPLICAS = (), REPLICATION FACTOR = 0, SIZE = 1)
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions([ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("a"))])) }, ClusterOption { name: IntrospectionInterval, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionDebugging, value: Some(Value(Number("1"))) }, ClusterOption { name: Managed, value: None }, ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }, ClusterOption { name: ReplicationFactor, value: Some(Value(Number("0"))) }, ClusterOption { name: Size, value: Some(Value(Number("1"))) }]) })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("a"))])) }, ClusterOption { name: IntrospectionInterval, value: Some(Value(Number("1"))) }, ClusterOption { name: IntrospectionDebugging, value: Some(Value(Number("1"))) }, ClusterOption { name: Managed, value: None }, ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }, ClusterOption { name: ReplicationFactor, value: Some(Value(Number("0"))) }, ClusterOption { name: Size, value: Some(Value(Number("1"))) }], with_options: [] } })
 
 parse-statement
 ALTER CLUSTER cluster RESET (SIZE)
