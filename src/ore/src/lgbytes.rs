@@ -272,13 +272,18 @@ impl LgBytesOpMetrics {
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped
     /// region, falling back to a heap allocation.
     pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> LgBytes {
-        let region = self.try_mmap_region(buf);
+        let buf = buf.as_ref();
+        let region = self
+            .try_mmap_region(buf)
+            .unwrap_or_else(|_| self.metrics_region(Region::Heap(buf.to_vec())));
         LgBytes::from(Arc::new(region))
     }
 
-    /// Attempts to copy the given buf into an lgalloc managed file-based mapped
-    /// region, falling back to a heap allocation.
-    pub fn try_mmap_region<T: Copy>(&self, buf: impl AsRef<[T]>) -> MetricsRegion<T> {
+    /// Attempts to copy the given buf into an lgalloc managed file-based mapped region.
+    pub fn try_mmap_region<T: Copy>(
+        &self,
+        buf: impl AsRef<[T]>,
+    ) -> Result<MetricsRegion<T>, AllocError> {
         let start = Instant::now();
         let buf = buf.as_ref();
         // Round the capacity up to the minimum lgalloc mmap size.
@@ -286,22 +291,22 @@ impl LgBytesOpMetrics {
         let buf = match Region::new_mmap(capacity) {
             Ok(mut region) => {
                 region.extend_from_slice(buf);
-                region
+                Ok(region)
             }
             Err(err) => {
-                match err {
+                match &err {
                     AllocError::Disabled => self.mmap_disabled_count.inc(),
                     err => {
                         debug!("failed to mmap allocate: {}", err);
                         self.mmap_error_count.inc();
                     }
                 };
-                Region::Heap(buf.to_owned())
+                Err(err)
             }
-        };
+        }?;
         let region = self.metrics_region(buf);
         self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
-        region
+        Ok(region)
     }
 
     /// Wraps the already owned buf into a [Region::Heap] with metrics.
