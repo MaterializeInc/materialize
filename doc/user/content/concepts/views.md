@@ -27,10 +27,10 @@ All views in Materialize are built by reading data from
 
 ## Non-materialized views
 
-A non-materialized view saves a query under a name to provide a shorthand for
-referencing the query. The query is **not** executed during non-materialized
-view creation, and a non-materialized view does **not** persist its results in
-durable storage.
+A non-materialized view, also generally referred to as a "view", saves a query
+under a name to provide a shorthand for referencing the query. The query is
+**not** executed during non-materialized view creation, and a non-materialized
+view does **not** persist its results in durable storage.
 
 **However**, you can [index](/concepts/indexes/) a non-materialized view to
 **maintain and incrementally update view results** in memory within a cluster.
