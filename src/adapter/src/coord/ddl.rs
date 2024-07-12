@@ -36,7 +36,6 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
-use mz_secrets::SecretsReader;
 use mz_sql::catalog::{CatalogCluster, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::session::metadata::SessionMetadata;
@@ -48,7 +47,6 @@ use mz_sql::session::vars::{
     MAX_SOURCES, MAX_TABLES,
 };
 use mz_storage_client::controller::ExportDescription;
-use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -193,13 +191,6 @@ impl Coordinator {
 
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
-        struct PendingReplicationSlotDrop {
-            connection: PostgresConnection,
-            secrets_reader: Arc<dyn SecretsReader>,
-            storage_config: StorageConfiguration,
-            replication_slot_name: String,
-        }
-
         let mut sources_to_drop = vec![];
         let mut webhook_sources_to_restart = BTreeSet::new();
         let mut tables_to_drop = vec![];
@@ -207,7 +198,7 @@ impl Coordinator {
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<PendingReplicationSlotDrop> = vec![];
+        let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
@@ -248,22 +239,10 @@ impl Coordinator {
                                                     let conn = conn.clone().into_inline_connection(
                                                         self.catalog().state(),
                                                     );
-                                                    let pending_drop = PendingReplicationSlotDrop {
-                                                        connection: conn.connection.clone(),
-                                                        secrets_reader: Arc::clone(
-                                                            self.secrets_reader(),
-                                                        ),
-                                                        storage_config: self
-                                                            .controller
-                                                            .storage
-                                                            .config()
-                                                            .clone(),
-                                                        replication_slot_name: conn
-                                                            .publication_details
-                                                            .slot
-                                                            .clone(),
-                                                    };
-
+                                                    let pending_drop = (
+                                                        conn.connection.clone(),
+                                                        conn.publication_details.slot.clone(),
+                                                    );
                                                     replication_slots_to_drop.push(pending_drop);
                                                 }
                                                 _ => {}
@@ -700,15 +679,12 @@ impl Coordinator {
             // catalog, and so we wouldn't be able to retry anyway.
             let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
             if !replication_slots_to_drop.is_empty() {
+                let secrets_reader = Arc::clone(self.secrets_reader());
+                let storage_config = self.controller.storage.config().clone();
+
                 // TODO(guswynn): see if there is more relevant info to add to this name
                 task::spawn(|| "drop_replication_slots", async move {
-                    for pending_drop in replication_slots_to_drop {
-                        let PendingReplicationSlotDrop {
-                            connection,
-                            secrets_reader,
-                            storage_config,
-                            replication_slot_name,
-                        } = pending_drop;
+                    for (connection, replication_slot_name) in replication_slots_to_drop {
                         tracing::info!(?replication_slot_name, "dropping replication slot");
 
                         // Try to drop the replication slots, but give up after a while.
@@ -737,8 +713,9 @@ impl Coordinator {
                             })
                             .await;
 
-                        // TODO(parkmycar): Pass back a channel so we can unblock the coordinator
-                        // but still bubble this error up to the user.
+                        // TODO(14551): Safer cleanup for non-Materialize resources.
+                        //
+                        // See <https://github.com/MaterializeInc/materialize/issues/14551>
                         if let Err(err) = result {
                             tracing::warn!(
                                 ?replication_slot_name,
