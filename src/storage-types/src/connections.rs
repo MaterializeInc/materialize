@@ -640,8 +640,8 @@ impl KafkaConnection {
             Tunnel::AwsPrivatelink(t) => {
                 assert!(&self.brokers.is_empty());
 
-                let algo =
-                    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM.get(storage_configuration.config_set());
+                let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
+                    .get(storage_configuration.config_set());
                 options.insert("ssl.endpoint.identification.algorithm".into(), algo.into());
 
                 // When using a default privatelink tunnel broker/brokers cannot be specified
