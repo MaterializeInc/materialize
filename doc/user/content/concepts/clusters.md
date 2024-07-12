@@ -31,7 +31,7 @@ resources available and can therefore process data faster and handle larger data
 volumes. You can resize a cluster at any time, even while the cluster is
 running, to respond to changes in your workload.
 
-## Key Properties
+## Key properties
 
 Clusters provide two important properties:
 
