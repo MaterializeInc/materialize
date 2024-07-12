@@ -39,7 +39,7 @@ even for queries that do not use the index key(s).
 
 ## Indexes and clusters
 
-Indexes are local to a cluster.  Queries in a different cluster cannot use the
+Indexes are local to a cluster. Queries in a different cluster cannot use the
 indexes in another cluster.
 
 ## Related pages
