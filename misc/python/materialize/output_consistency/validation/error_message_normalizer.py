@@ -42,7 +42,7 @@ class ErrorMessageNormalizer:
                     r"function .*?record\(.*\) does not exist", normalized_message
                 )
             )
-            or (re.search(r"operator does not exist:.*? record", normalized_message))
+            or (re.search(r"operator does not exist: .*?record", normalized_message))
             or "CAST does not support casting from record" in normalized_message
         ):
             # tracked with https://github.com/MaterializeInc/materialize/issues/28129
