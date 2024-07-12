@@ -35,7 +35,7 @@ up-to-date results without themselves performing the incremental computation.
 The in-memory up-to-date results are accessible to queries within the cluster,
 even for queries that do not use the index key(s).
 
-## Indexes and Clusters
+## Indexes and clusters
 
 Indexes are local to a cluster.  Queries in a different cluster cannot use the
 indexes in another cluster.
