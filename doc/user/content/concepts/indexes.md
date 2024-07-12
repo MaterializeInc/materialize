@@ -29,8 +29,7 @@ key(s).
 ## Indexes and materialized views
 
 In Materialize, indexing a 
-[materialized view](/concepts/views/#materialized-views) maintains results from durable
-storage in memory within the [cluster](/concepts/clusters/). Because
+[materialized view](/concepts/views/#materialized-views) maintains results in memory within the [cluster](/concepts/clusters/). Because
 materialized view maintains the up-to-date results in durable storage, indexes
 on materialized views serve up-to-date results without themselves performing the
 incremental computation. The in-memory results are accessible to queries within
