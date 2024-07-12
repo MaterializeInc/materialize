@@ -196,13 +196,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// WARNING: This is meant for use in integration tests and has bad performance.
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError>;
 
-    /// Gets all storage usage events
-    ///
-    /// Results are guaranteed to be sorted by ID.
-    ///
-    /// WARNING: This is meant for use in integration tests and has bad performance.
-    async fn get_storage_usage(&mut self) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
-
     /// Get the next ID of `id_type`, without allocating it.
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError>;
 
@@ -228,12 +221,16 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
     /// Listen and return all updates that are currently in the catalog.
     ///
+    /// IMPORTANT: This exlcudes updates to storage usage.
+    ///
     /// Returns an error if this instance has been fenced out.
     async fn sync_to_current_updates(
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
     /// Listen and return all updates in the catalog up to and including `ts`.
+    ///
+    /// IMPORTANT: This exlcudes updates to storage usage.
     ///
     /// Returns an error if this instance has been fenced out.
     async fn sync_updates(
@@ -260,15 +257,15 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// NB: We may remove this in later iterations of Pv2.
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
-    /// Permanently deletes storage usage events from the catalog
+    /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
     ///
-    /// Returns the catalog updates that result from the pruning.
-    async fn prune_storage_usage(
+    /// Results are guaranteed to be sorted by ID.
+    async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
+    ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     #[mz_ore::instrument(level = "debug")]

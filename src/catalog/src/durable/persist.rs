@@ -1195,7 +1195,8 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 .add(update.diff);
         }
 
-        {
+        // Storage usage events are skipped due to their size.
+        if !matches!(update.kind, StateUpdateKind::StorageUsage(..)) {
             let update: Option<memory::objects::StateUpdate> = (&update).try_into()?;
             if let Some(update) = update {
                 self.updates.push_back(update);
@@ -1260,31 +1261,6 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             .collect::<Result<_, _>>()?;
         audit_logs.sort_by(|a, b| a.sortable_id().cmp(&b.sortable_id()));
         Ok(audit_logs)
-    }
-
-    async fn get_storage_usage(&mut self) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
-        self.sync_to_current_upper().await?;
-        let storage_usage: Vec<_> = self
-            .persist_snapshot()
-            .await
-            .filter_map(
-                |StateUpdate {
-                     kind,
-                     ts: _,
-                     diff: _,
-                 }| match kind {
-                    StateUpdateKind::StorageUsage(key, ()) => Some(key),
-                    _ => None,
-                },
-            )
-            .collect();
-        let mut storage_usage: Vec<_> = storage_usage
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|key: StorageUsageKey| key.metric)
-            .collect::<Result<_, _>>()?;
-        storage_usage.sort_by(|a, b| a.sortable_id().cmp(&b.sortable_id()));
-        Ok(storage_usage)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1443,16 +1419,12 @@ impl DurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument]
-    async fn prune_storage_usage(
+    async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+    ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         self.sync_to_current_upper().await?;
-
-        if self.is_read_only() {
-            return Ok(Vec::new());
-        }
 
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
@@ -1484,22 +1456,28 @@ impl DurableCatalogState for PersistCatalogState {
             .into_iter()
             .map(RustType::from_proto)
             .map_ok(|key: StorageUsageKey| key.metric);
+        let mut events = Vec::new();
         let mut expired = Vec::new();
 
         for event in storage_usage {
             let event = event?;
-            if u128::from(event.timestamp()) < cutoff_ts {
+            if u128::from(event.timestamp()) >= cutoff_ts {
+                events.push(event);
+            } else if retention_period.is_some() {
                 debug!("pruning storage event {event:?}");
                 expired.push(event);
             }
         }
 
-        let mut txn = self.transaction().await?;
-        txn.remove_storage_usage_events(expired);
-        let updates = txn.get_and_commit_op_updates();
-        txn.commit().await?;
+        if !self.is_read_only() {
+            let mut txn = self.transaction().await?;
+            txn.remove_storage_usage_events(expired);
+            txn.commit_internal().await?;
+        }
 
-        Ok(updates)
+        events.sort_by(|event1, event2| event1.sortable_id().cmp(&event2.sortable_id()));
+
+        Ok(events)
     }
 }
 
