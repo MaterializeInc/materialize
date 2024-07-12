@@ -2315,7 +2315,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Any) => UnaryFunc::PgColumnSize(func::PgColumnSize) => Int32, 1269;
         },
         "pg_size_pretty" => Scalar {
-            params!(Numeric) => UnaryFunc::PgSizePretty(func::PgSizePretty) => String, 1269; //Fixme: find correct op id
+            params!(Numeric) => UnaryFunc::PgSizePretty(func::PgSizePretty) => String, 2288;
         },
         "mz_row_size" => Scalar {
             params!(Any) => Operation::unary(|ecx, e| {

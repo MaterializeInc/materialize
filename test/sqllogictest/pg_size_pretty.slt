@@ -16,11 +16,11 @@ SELECT size, pg_size_pretty(size), pg_size_pretty(-1 * size) FROM
 query TTT rowsort
 SELECT size, pg_size_pretty(size), pg_size_pretty(-1 * size) FROM
    (VALUES (10::numeric), (1000::numeric), (1000000::numeric),
-   (1000000000::numeric), (1000000000000::numeric),
-   (1000000000000000::numeric),
-   (10.5::numeric), (1000.5::numeric), (1000000.5::numeric),
-   (1000000000.5::numeric), (1000000000000.5::numeric),
-   (1000000000000000.5::numeric)) x(size);
+           (1000000000::numeric), (1000000000000::numeric),
+           (1000000000000000::numeric),
+           (10.5::numeric), (1000.5::numeric), (1000000.5::numeric),
+           (1000000000.5::numeric), (1000000000000.5::numeric),
+           (1000000000000000.5::numeric)) x(size);
 ----
 10	10␠bytes	-10␠bytes
 1000	1000␠bytes	-1000␠bytes
@@ -33,7 +33,7 @@ SELECT size, pg_size_pretty(size), pg_size_pretty(-1 * size) FROM
 1000000.5	977␠kB	-977␠kB
 1000000000.5	954␠MB	-954␠MB
 1000000000000.5	931␠GB	-931␠GB
- 1000000000000000.5	909␠TB	-909␠TB
+1000000000000000.5	909␠TB	-909␠TB
 
 query TTT rowsort
 SELECT size, pg_size_pretty(size), pg_size_pretty(-1 * size) FROM
@@ -56,12 +56,12 @@ SELECT size, pg_size_pretty(size), pg_size_pretty(-1 * size) FROM
 
 query TTT rowsort
 SELECT size, pg_size_pretty(size), pg_size_pretty(-1 * size) FROM
-(VALUES (10239::numeric), (10240::numeric),
-(10485247::numeric), (10485248::numeric),
-(10736893951::numeric), (10736893952::numeric),
-(10994579406847::numeric), (10994579406848::numeric),
-(11258449312612351::numeric), (11258449312612352::numeric),
-(11528652096115048447::numeric), (11528652096115048448::numeric)) x(size);
+   (VALUES (10239::numeric), (10240::numeric),
+           (10485247::numeric), (10485248::numeric),
+           (10736893951::numeric), (10736893952::numeric),
+           (10994579406847::numeric), (10994579406848::numeric),
+           (11258449312612351::numeric), (11258449312612352::numeric),
+           (11528652096115048447::numeric), (11528652096115048448::numeric)) x(size);
 ----
 10239	10239␠bytes	-10239␠bytes
 10240	10␠kB	-10␠kB
