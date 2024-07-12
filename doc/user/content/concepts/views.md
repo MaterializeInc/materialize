@@ -45,7 +45,7 @@ See also:
 ### Indexes and non-materialized views
 
 Indexes can improve query performance. In Materialize, non-materialized views
-can be [indexed](/concepts/indexes/). Indexing a non-materialize view causes
+can be [indexed](/concepts/indexes/). Indexing a non-materialized view causes
 view results to be **maintained and incrementally updated in memory** within
 that [cluster](/concepts/clusters/). The in-memory up-to-date results are
 accessible to queries within the cluster, even for queries that do not use the
