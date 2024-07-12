@@ -19,7 +19,6 @@ use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, CatalogError, DurableCatalogError,
     Item, OpenableDurableCatalogState, USER_ITEM_ALLOC_KEY,
 };
-use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
 use mz_ore::assert_ok;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::SYSTEM_TIME;
