@@ -139,7 +139,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::AsCollection;
-use futures::TryStreamExt;
+use futures::{StreamExt as _, TryStreamExt};
 use mz_expr::MirScalarExpr;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
