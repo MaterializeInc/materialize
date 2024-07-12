@@ -20,7 +20,7 @@ Materialize offers the following types of views:
 Type |
 -----|------------
 [**Non-materialized views**](#non-materialized-views) | Results are **not** persisted in durable storage. Non-materialized views can be indexed to maintain and incrementally update results in memory.
-[**Materialized views**](#materialized-views) | Results **are** persisted and incrementally updated in durable storage. Materialized views can be indexed to load the updated results from durable storage into memory.
+[**Materialized views**](#materialized-views) | Results **are** persisted and incrementally updated in durable storage. Materialized views can be indexed to maintain the results in memory.
 
 All views in Materialize are built by reading data from
 [sources](/concepts/sources) and other views.
@@ -74,7 +74,7 @@ provide a shorthand for referencing the query. But, unlike a non-materialized
 view, the query is executed during the view creation, and a materialized view
 **persists and incrementally updates** its results in durable storage.
 
-You can index a materialized view to load the up-to-date view results in memory
+You can index a materialized view to maintain the results in memory
 within the cluster. This enables queries within the cluster to use the index to
 access view results from memory.  See [Indexes and materialized views](#indexes-and-materialized-views)
 for more information.
@@ -87,13 +87,12 @@ See also:
 ### Indexes and materialized views
 
 Indexes can improve query performance. In Materialize,
-[indexing](/concepts/indexes/) a materialized view loads the already up-to-date
-view results from durable storage to memory within the
-[cluster](/concepts/clusters/).  Because materialized views maintain the
-up-to-date results in durable storage, indexes on materialized views serve
-up-to-date results without themselves performing the incremental computation.
-The in-memory up-to-date results are accessible to queries within the cluster,
-even for queries that do not use the index key(s).
+[indexing](/concepts/indexes/) a materialized view maintains the results in
+memory within the [cluster](/concepts/clusters/).  Because materialized views
+maintain the up-to-date results in durable storage, indexes on materialized
+views serve up-to-date results without themselves performing the incremental
+computation. The in-memory up-to-date results are accessible to queries within
+the cluster, even for queries that do not use the index key(s).
 
 Indexes are local to a cluster.
 
