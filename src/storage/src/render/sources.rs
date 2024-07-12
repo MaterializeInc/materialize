@@ -14,7 +14,7 @@
 use std::iter;
 use std::sync::Arc;
 
-use differential_dataflow::{collection, AsCollection, Collection, Hashable};
+use differential_dataflow::{collection, AsCollection, Collection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -33,7 +33,7 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr};
+use timely::dataflow::operators::{Concat, ConnectLoop, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp};
@@ -398,7 +398,7 @@ where
         }
     };
 
-    let (stream, errors, health) = (
+    let (collection, errors, health) = (
         envelope_ok,
         envelope_err,
         decode_health.concat(&envelope_health),
@@ -407,11 +407,6 @@ where
     if let Some(errors) = errors {
         error_collections.push(errors);
     }
-
-    // Perform various additional transformations on the collection.
-
-    // Force a shuffling of data in case sources are not uniformly distributed.
-    let collection = stream.inner.exchange(|x| x.hashed()).as_collection();
 
     // Flatten the error collections.
     let err_collection = match error_collections.len() {
