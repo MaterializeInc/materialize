@@ -58,6 +58,17 @@ pub trait Codec: Sized + PartialEq + 'static {
     fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut;
+
+    /// Encode a key or value to a Vec.
+    ///
+    /// This is a convenience function for calling [Self::encode] with a fresh
+    /// `Vec` each time. Reuse an allocation when performance matters!
+    fn encode_to_vec(&self) -> Vec<u8> {
+        let mut buf = vec![];
+        self.encode(&mut buf);
+        buf
+    }
+
     /// Decode a key or value previous encoded with this codec's
     /// [Codec::encode].
     ///

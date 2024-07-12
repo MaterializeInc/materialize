@@ -125,11 +125,7 @@ fn generate_missing_encodings() {
             .into_iter()
             .map(|kind| kind.raw())
             .map(SourceData::from)
-            .map(|source_data| {
-                let mut buf = Vec::new();
-                source_data.encode(&mut buf);
-                buf
-            })
+            .map(|source_data| source_data.encode_to_vec())
             .map(|buf| {
                 let mut encoded = String::new();
                 base64::encode_config_buf(buf.as_slice(), base64_config, &mut encoded);

@@ -831,9 +831,7 @@ mod codec_impls {
         type ArrowColumn = BinaryArray;
 
         fn push(&self, builder: &mut Self::ArrowBuilder) {
-            let mut buf = Vec::new();
-            MaelstromVal::encode(self, &mut buf);
-            builder.append_value(&buf);
+            builder.append_value(&self.encode_to_vec());
         }
         fn push_null(builder: &mut Self::ArrowBuilder) {
             builder.append_null()
@@ -863,9 +861,7 @@ mod codec_impls {
 
         fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
             SimpleSchema::<MaelstromVal, Vec<u8>>::push_encoder(cols, |col, val| {
-                let mut buf = Vec::new();
-                MaelstromVal::encode(val, &mut buf);
-                ColumnPush::<Vec<u8>>::push(col, &buf)
+                ColumnPush::<Vec<u8>>::push(col, &val.encode_to_vec())
             })
         }
     }
