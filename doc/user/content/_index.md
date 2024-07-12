@@ -33,7 +33,7 @@ data freshness**.
 {{< linkbox icon="bulb" title="Key Concepts" >}}
 
 -   [Materialize overview](/overview/what-is-materialize/)
--   [Key Concepts](/get-started/key-concepts/)
+-   [Key Concepts](/concepts/)
     {{</ linkbox >}}
     {{< linkbox icon="doc" title="Guides" >}}
 -   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)

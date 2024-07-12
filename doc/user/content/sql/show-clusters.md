@@ -7,7 +7,7 @@ menu:
 
 ---
 
-`SHOW CLUSTERS` lists the [clusters](/get-started/key-concepts/#clusters) configured in Materialize.
+`SHOW CLUSTERS` lists the [clusters](/concepts/clusters/) configured in Materialize.
 
 ## Syntax
 
