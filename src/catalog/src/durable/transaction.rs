@@ -1991,7 +1991,7 @@ impl<'a> Transaction<'a> {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn commit_internal(
         self,
-    ) -> Result<&'a mut dyn DurableCatalogState, CatalogError> {
+    ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
         let (mut txn_batch, durable_catalog) = self.into_parts();
         let TransactionBatch {
             databases,
@@ -2039,8 +2039,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
 
-        durable_catalog.commit_transaction(txn_batch).await?;
-        Ok(durable_catalog)
+        let upper = durable_catalog.commit_transaction(txn_batch).await?;
+        Ok((durable_catalog, upper))
     }
 
     /// Commits the storage transaction to durable storage. Any error returned outside read-only
@@ -2067,9 +2067,9 @@ impl<'a> Transaction<'a> {
         );
 
         let commit_ts = self.commit_ts();
-        let durable_storage = self.commit_internal().await?;
+        let (durable_storage, upper) = self.commit_internal().await?;
         // Drain all the updates from the commit since it is assumed that they were already applied.
-        let updates = durable_storage.sync_updates(commit_ts).await?;
+        let updates = durable_storage.sync_updates(upper).await?;
         // Writable and savepoint catalogs should have consumed all updates before committing a
         // transaction, otherwise the commit was performed with an out of date state.
         // Read-only catalogs can only commit empty transactions, so they don't need to consume all

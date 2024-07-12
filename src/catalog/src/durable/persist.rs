@@ -284,11 +284,13 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     }
 
     /// Appends `updates` iff the current global upper of the catalog is `self.upper`.
+    ///
+    /// Returns the next upper used to commit the transaction.
     #[mz_ore::instrument]
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindRaw>(
         &mut self,
         updates: Vec<(S, Diff)>,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Timestamp, CatalogError> {
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindRaw = kind.into();
             ((Into::<SourceData>::into(kind), ()), self.upper, diff)
@@ -330,7 +332,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             ),
         }
         self.sync(next_upper).await?;
-        Ok(())
+        Ok(next_upper)
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -1364,12 +1366,12 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     #[mz_ore::instrument(level = "debug")]
     async fn sync_updates(
         &mut self,
-        ts: mz_repr::Timestamp,
+        target_upper: mz_repr::Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
-        self.sync(ts.into()).await?;
+        self.sync(target_upper.into()).await?;
         let mut updates = Vec::new();
         while let Some(update) = self.update_applier.updates.front() {
-            if update.ts > ts {
+            if update.ts >= target_upper {
                 break;
             }
 
@@ -1402,11 +1404,11 @@ impl DurableCatalogState for PersistCatalogState {
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Timestamp, CatalogError> {
         async fn commit_transaction_inner(
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
-        ) -> Result<(), CatalogError> {
+        ) -> Result<Timestamp, CatalogError> {
             // If the transaction is empty then we don't error, even in read-only mode. This matches the
             // semantics that the stash uses.
             if !txn_batch.is_empty() && catalog.is_read_only() {
@@ -1428,19 +1430,22 @@ impl DurableCatalogState for PersistCatalogState {
             let updates = StateUpdate::from_txn_batch(txn_batch).collect();
             debug!("committing updates: {updates:?}");
 
-            if matches!(catalog.mode, Mode::Writable) {
-                catalog.compare_and_append(updates).await?;
-            } else if matches!(catalog.mode, Mode::Savepoint) {
-                let ts = catalog.upper;
-                let updates =
-                    updates
-                        .into_iter()
-                        .map(|(kind, diff)| StateUpdate { kind, ts, diff });
-                catalog.apply_updates(updates)?;
-                catalog.upper = catalog.upper.step_forward();
-            }
+            let next_upper = match catalog.mode {
+                Mode::Writable => catalog.compare_and_append(updates).await?,
+                Mode::Savepoint => {
+                    let ts = catalog.upper;
+                    let updates =
+                        updates
+                            .into_iter()
+                            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+                    catalog.apply_updates(updates)?;
+                    catalog.upper = catalog.upper.step_forward();
+                    catalog.upper
+                }
+                Mode::Readonly => catalog.upper,
+            };
 
-            Ok(())
+            Ok(next_upper)
         }
         self.metrics.transaction_commits.inc();
         let counter = self.metrics.transaction_commit_latency_seconds.clone();
