@@ -19,7 +19,7 @@ Component                                | Use
 -----------------------------------------|-----
 [Clusters](/concepts/clusters/)          | Clusters are isolated pools of compute resources for sources, sinks, indexes, materialized views, and ad-hoc queries.
 [Sources](/concepts/sources/)            | Sources describe an external system you want Materialize to read data from.
-[Views(Non-Materialized and Materialized)](/concepts/views/)    | Views represent queries of sources and other views that you want to save for repeated execution.
+[Views](/concepts/views/)    | Views represent a named query that you want to save for repeated execution. You can use **indexed views** and **materialized views** to incrementally maintain the results of views.
 [Indexes](/concepts/indexes/)            | Indexes represent query results stored in memory.
 [Sinks](/concepts/sinks/)                | Sinks describe an external system you want Materialize to write data to.
 
