@@ -17,7 +17,7 @@ addition, because indexes in Materialize are maintained in memory, indexing a
 view (non-materialized and materialized) may provide further performance
 improvements.
 
-## Indexes and non-materialized views
+## Indexes and views
 
 In Materialize, indexing a [non-materialize
 view](/concepts/views/#non-materialized-views) causes view results to be
