@@ -122,15 +122,16 @@ is placed in the currently ongoing auction.
 
 {{< warn-if-unreleased "v0.107" >}}
 
-The clock load generator produces a single row
-with a single `timestamp with time zone` column, `time`.
-Like [the `now` function (and unlike `mz_now`)](../../functions/now_and_mz_now/)
-it tracks the system clock of the source cluster,
-but can be used in contexts where the `now` function is not available.
+The clock load generator tracks the system clock time, and can be used in
+contexts where the [`now()` function cannot](/sql/functions/now_and_mz_now/#limitations).
+On each tick interval, the source emits the system clock time. For example,
+configuring this load generator with `TICK INTERVAL '1 minute'` will cause the
+source to update every minute.
 
-This clock "ticks" once every `TICK INVERVAL`;
-for example, configuring this load generator with `TICK INVERVAL '1 minute'`
-will cause the source to update about once a minute.
+Field | Type                         | Description
+----  | ---------------------------- | -------------
+time  | `timestamp with time zone`   | The system clock time.
+
 
 ### Marketing
 
@@ -322,7 +323,7 @@ SELECT * from bids;
 
 {{< warn-if-unreleased "v0.107" >}}
 
-To create a clock source that ticks over to a new time every second:
+To create a load generator source that ticks over to a new time every second:
 
 ```mzsql
 CREATE SOURCE clock
@@ -337,12 +338,10 @@ SHOW SOURCES;
 ```
 
 ```nofmt
-materialize=> show sources;
       name      |      type      | size |  cluster
 ----------------+----------------+------+-----------
  clock          | load-generator | 1    | mz_system
  clock_progress | progress       |      |
-(2 rows)
 ```
 
 To check the current clock time:
