@@ -6,6 +6,8 @@ menu:
     parent: 'concepts'
     weight: 5
     identifier: 'concepts-clusters'
+aliases:
+  - /get-started/key-concepts/#clusters
 ---
 
 ## Overview
