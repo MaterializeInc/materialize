@@ -1,6 +1,6 @@
 ---
 title: "Concepts"
-description: "Core Concepts in Materialize"
+description: "Core concepts in Materialize"
 disable_list: true
 menu:
   main:
