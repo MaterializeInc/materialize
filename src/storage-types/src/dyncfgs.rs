@@ -76,13 +76,14 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
-pub const KAFKA_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> = Config::new(
-    "kafka_endpoint_identification_algorithm",
-    // Default to no hostname verification, which is the default in versions of `librdkafka <1.9.2`.
-    "none",
-    "The value we set for the 'ssl.endpoint.identification.algorithm' option in the Kafka \
+pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
+    Config::new(
+        "kafka_default_aws_privatelink_endpoint_identification_algorithm",
+        // Default to no hostname verification, which is the default in versions of `librdkafka <1.9.2`.
+        "none",
+        "The value we set for the 'ssl.endpoint.identification.algorithm' option in the Kafka \
     Connection config. default: 'none'",
-);
+    );
 
 // MySQL
 
@@ -183,7 +184,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
-        .add(&KAFKA_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
