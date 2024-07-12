@@ -1493,6 +1493,8 @@ impl DurableCatalogState for PersistCatalogState {
             txn.commit_internal().await?;
         }
 
+        events.sort_by(|event1, event2| event1.sortable_id().cmp(&event2.sortable_id()));
+
         Ok(events)
     }
 }
