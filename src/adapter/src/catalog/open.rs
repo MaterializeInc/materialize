@@ -58,7 +58,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::controller::TxnWalTablesImpl;
 use timely::Container;
-use tracing::{info, warn, Instrument};
+use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -839,6 +839,19 @@ impl Catalog {
         txn: &mut Transaction<'_>,
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, Error> {
+        for id in &migration_metadata.user_item_drop_ops {
+            let entry = state.get_entry(id);
+            if entry.is_sink() {
+                let full_name = state.resolve_full_name(entry.name(), None);
+                error!(
+                    "user sink {full_name} will be recreated as part of a builtin migration which \
+                    can result in duplicate data being emitted. This is a known issue, \
+                    https://github.com/MaterializeInc/materialize/issues/18767. Please inform the \
+                    customer that their sink may produce duplicate data."
+                )
+            }
+        }
+
         let mut builtin_table_updates = Vec::new();
         txn.remove_items(&migration_metadata.user_item_drop_ops.drain(..).collect())?;
         txn.update_system_object_mappings(std::mem::take(

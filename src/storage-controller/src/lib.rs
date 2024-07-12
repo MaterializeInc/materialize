@@ -664,7 +664,7 @@ where
             new_collections.insert(id);
 
             // Ensure that the ingestion has an export for its primary source.
-            // This is done in an akward spot to appease the borrow checker.
+            // This is done in an awkward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
                 ingestion.source_exports.insert(
                     id,
