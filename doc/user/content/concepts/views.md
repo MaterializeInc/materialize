@@ -89,7 +89,7 @@ See also:
 Indexes can improve query performance. In Materialize,
 [indexing](/concepts/indexes/) a materialized view loads the already up-to-date
 view results from durable storage to memory within the
-[cluster](/concepts/clusters/).  Because materialized view maintains the
+[cluster](/concepts/clusters/).  Because materialized views maintain the
 up-to-date results in durable storage, indexes on materialized views serve
 up-to-date results without themselves performing the incremental computation.
 The in-memory up-to-date results are accessible to queries within the cluster,
