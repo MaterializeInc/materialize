@@ -378,6 +378,9 @@ class ResultComparator:
         if isinstance(value1, tuple) and isinstance(value2, tuple):
             return self.is_list_or_tuple_equal(value1, value2, expression)
 
+        if isinstance(value1, dict) and isinstance(value2, dict):
+            return self.is_dict_equal(value1, value2, expression)
+
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             if value1.is_nan() and value2.is_nan():
                 return True
@@ -404,6 +407,24 @@ class ResultComparator:
         for value1, value2 in zip(collection1, collection2):
             # use is_tolerant because tuples may contain all values as strings
             if not self.is_value_equal(value1, value2, expression, is_tolerant=True):
+                return False
+
+        return True
+
+    def is_dict_equal(
+        self,
+        dict1: dict[Any, Any],
+        dict2: dict[Any, Any],
+        expression: Expression,
+    ) -> bool:
+        if len(dict1) != len(dict2):
+            return False
+
+        if not self.is_value_equal(dict1.keys(), dict2.keys(), expression):
+            return False
+
+        for key in dict1.keys():
+            if not self.is_value_equal(dict1[key], dict2[key], expression):
                 return False
 
         return True
