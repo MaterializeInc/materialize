@@ -404,6 +404,10 @@ class ResultComparator:
         if len(collection1) != len(collection2):
             return False
 
+        if self.ignore_order_when_comparing_collection(expression):
+            collection1 = sorted(collection1)
+            collection2 = sorted(collection2)
+
         for value1, value2 in zip(collection1, collection2):
             # use is_tolerant because tuples may contain all values as strings
             if not self.is_value_equal(value1, value2, expression, is_tolerant=True):
@@ -428,3 +432,6 @@ class ResultComparator:
                 return False
 
         return True
+
+    def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
+        return False
