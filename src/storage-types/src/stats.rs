@@ -10,6 +10,7 @@
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
 use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, UnmaterializableFunc};
+use mz_ore::soft_panic_no_log;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{
@@ -73,10 +74,7 @@ fn downcast_stats<T: Data>(
     match stats.downcast::<T>() {
         Some(x) => Some(x),
         None => {
-            // TODO: There is a known instance of this #22680. While we look
-            // into it, log at warn instead of error to avoid spamming Sentry.
-            // Once we fix it, flip this back to error.
-            warn!(
+            let msg = format!(
                 "unexpected stats type for {} {} {}: expected {} got {:?}",
                 name,
                 col_name,
@@ -84,7 +82,15 @@ fn downcast_stats<T: Data>(
                 std::any::type_name::<T::Stats>(),
                 stats,
             );
+
+            // TODO: There is a known instance of this #22680. While we look
+            // into it, log at warn instead of error to avoid spamming Sentry.
+            // Once we fix it, flip this back to error.
+            warn!("{msg}");
+            // Soft Panic so we can be sure CI fails if we encounter this.
+            soft_panic_no_log!("{msg}");
             metrics.mismatched_count.inc();
+
             None
         }
     }
