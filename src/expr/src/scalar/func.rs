@@ -4859,7 +4859,8 @@ derive_unary!(
     AclItemPrivileges,
     QuoteIdent,
     TryParseMonotonicIso8601Timestamp,
-    RegexpSplitToArray
+    RegexpSplitToArray,
+    PgSizePretty
 );
 
 impl UnaryFunc {
@@ -5251,6 +5252,7 @@ impl Arbitrary for UnaryFunc {
             Panic::arbitrary().prop_map_into().boxed(),
             AdjustNumericScale::arbitrary().prop_map_into().boxed(),
             PgColumnSize::arbitrary().prop_map_into().boxed(),
+            PgSizePretty::arbitrary().prop_map_into().boxed(),
             MzRowSize::arbitrary().prop_map_into().boxed(),
             MzTypeName::arbitrary().prop_map_into().boxed(),
             RangeLower::arbitrary().prop_map_into().boxed(),
@@ -5632,6 +5634,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::Panic(_) => Panic(()),
             UnaryFunc::AdjustNumericScale(func) => AdjustNumericScale(func.0.into_proto()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
+            UnaryFunc::PgSizePretty(_) => PgSizePretty(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
             UnaryFunc::CastMzTimestampToString(_) => CastMzTimestampToString(()),
@@ -6107,6 +6110,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     Ok(impls::AdjustNumericScale(max_scale.into_rust()?).into())
                 }
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
+                PgSizePretty(()) => Ok(impls::PgSizePretty.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),
                 MzTypeName(()) => Ok(impls::MzTypeName.into()),
 

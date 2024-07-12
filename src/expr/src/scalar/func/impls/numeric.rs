@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use dec::{OrderedDecimal, Rounding};
+use dec::{Decimal, OrderedDecimal, Rounding};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{strconv, ColumnType, ScalarType};
@@ -296,6 +296,28 @@ sqlfunc!(
         cx.clear_status();
         cx.try_into_u64(a)
             .or(Err(EvalError::UInt64OutOfRange(a.to_string())))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "pg_size_pretty"]
+    #[preserves_uniqueness = false]
+    fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
+        let mut cx = numeric::cx_datum();
+        let units = ["bytes", "kB", "MB", "GB", "TB", "PB"];
+
+        for unit in units {
+            if Decimal::from(-10_000) <= a && a <= Decimal::from(10_000) {
+                cx.round(&mut a);
+                return Ok(format!("{} {unit}", a));
+            }
+
+            cx.div::<13>(&mut a, &Decimal::from(1024));
+            numeric::munge_numeric(&mut a).unwrap();
+        }
+
+        cx.round(&mut a);
+        Ok(format!("{} PB", a))
     }
 );
 
