@@ -201,6 +201,18 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
 }
 
 /// A handle for interacting with the persist catalog shard.
+///
+/// The catalog shard is used in multiple different contexts, for example pre-open and post-open,
+/// but for all contexts the majority of the durable catalog's behavior is identical. This struct
+/// implements those behaviors that are identical while allowing the user to specify the different
+/// behaviors via generic parameters.
+///
+/// The behavior of the durable catalog can be different along one of two axes. The first is the
+/// format of each individual update, i.e. raw binary, the current protobuf version, previous
+/// protobuf versions, etc. The second axis is what to do with each individual update, for example
+/// before opening we cache all config updates but don't cache them after opening. These behaviors
+/// are customizable via the `T: TryIntoStateUpdateKind` and `U: ApplyUpdate<T>` generic parameters
+/// respectively.
 #[derive(Debug)]
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The [`Mode`] that this catalog was opened in.
@@ -642,6 +654,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
     }
 }
 
+/// Applies updates for an unopened catalog.
 #[derive(Debug)]
 pub(crate) struct UnopenedCatalogStateInner {
     /// The organization ID of the environment.
@@ -702,7 +715,7 @@ impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
 /// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
 /// catalog, see [`OpenableDurableCatalogState::open`] for more details.
 ///
-/// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
+/// Production users should call [`Self::expire`] before dropping an [`UnopenedPersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 pub(crate) type UnopenedPersistCatalogState =
     PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
@@ -1164,6 +1177,7 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
     }
 }
 
+/// Applies updates for an opened catalog.
 #[derive(Debug)]
 struct CatalogStateInner {
     /// A cache of storage usage events that is only populated during startup.
@@ -1221,7 +1235,11 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
     }
 }
 
-/// A durable store of the catalog state using Persist as an implementation.
+/// A durable store of the catalog state using Persist as an implementation. The durable store can
+/// serve any catalog data and transactionally modify catalog data.
+///
+/// Production users should call [`Self::expire`] before dropping a [`PersistCatalogState`]
+/// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 
 #[async_trait]
@@ -1608,7 +1626,8 @@ async fn snapshot_binary_inner(
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
 }
 
-// Debug methods.
+// Debug methods used by the catalog-debug tool.
+
 impl Trace {
     /// Generates a [`Trace`] from snapshot.
     fn from_snapshot(snapshot: impl IntoIterator<Item = StateUpdate>) -> Trace {
