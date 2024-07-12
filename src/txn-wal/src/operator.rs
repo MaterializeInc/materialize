@@ -19,6 +19,7 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;

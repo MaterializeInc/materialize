@@ -16,6 +16,7 @@ use std::str::FromStr;
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::{Collection, Hashable};
+use futures::StreamExt;
 use http::Uri;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
