@@ -176,7 +176,7 @@ impl Metrics {
     }
 }
 
-/// Metrics associated with a [`crate::Session`].
+/// Metrics associated with a [`crate::session::Session`].
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
