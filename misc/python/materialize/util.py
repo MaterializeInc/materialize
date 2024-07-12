@@ -108,7 +108,7 @@ def ensure_dir_exists(path_to_dir: str) -> None:
     )
 
 
-def compute_sha256_of_file(path: str | Path) -> str:
+def sha256_of_file(path: str | Path) -> str:
     sha256 = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(filecmp.BUFSIZE), b""):
@@ -116,7 +116,7 @@ def compute_sha256_of_file(path: str | Path) -> str:
     return sha256.hexdigest()
 
 
-def compute_sha256_of_utf8_string(value: str) -> str:
+def sha256_of_utf8_string(value: str) -> str:
     return hashlib.sha256(bytes(value, encoding="utf-8")).hexdigest()
 
 
