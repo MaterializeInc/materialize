@@ -28,8 +28,8 @@ key(s).
 
 ## Indexes and materialized views
 
-In Materialize, indexing a [materialize
-view](/concepts/views/#materialized-views) loads the already up-to-date view
+In Materialize, indexing a [materialize view](/concepts/views/#materialized-views)
+loads the already up-to-date view
 results from durable storage to memory within the
 [cluster](/concepts/clusters/).  Because materialized view maintains the
 up-to-date results in durable storage, indexes on materialized views serve
