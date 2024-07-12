@@ -42,7 +42,7 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
-use crate::adt::numeric::PackedNumeric;
+use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::stats2::{
@@ -58,7 +58,7 @@ use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 #[allow(clippy::as_conversions)]
 mod fixed_binary_sizes {
     use super::*;
-    
+
     pub const TIME_FIXED_BYTES: i32 = PackedNaiveTime::SIZE as i32;
     pub const TIMESTAMP_FIXED_BYTES: i32 = PackedNaiveDateTime::SIZE as i32;
     pub const INTERVAL_FIXED_BYTES: i32 = PackedInterval::SIZE as i32;
@@ -135,6 +135,8 @@ enum DatumColumnEncoder {
         binary_values: BinaryBuilder,
         /// Also maintain a float64 approximation for sorting.
         approx_values: Float64Builder,
+        /// Re-usable `libdecimal` context for conversions.
+        numeric_context: Context<Numeric>,
     },
     Bytes(BinaryBuilder),
     String(StringBuilder),
@@ -229,11 +231,12 @@ impl DatumColumnEncoder {
                 DatumColumnEncoder::Numeric {
                     approx_values,
                     binary_values,
+                    numeric_context,
                 },
                 Datum::Numeric(val),
             ) => {
-                let mut ctx = Context::default();
-                let float_approx = ctx.try_into_f64(val.0).unwrap_or_else(|_| {
+                let float_approx = numeric_context.try_into_f64(val.0).unwrap_or_else(|_| {
+                    numeric_context.clear_status();
                     if val.0.is_negative() {
                         f64::NEG_INFINITY
                     } else {
@@ -444,6 +447,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Numeric {
                 approx_values,
                 binary_values,
+                numeric_context: _,
             } => {
                 approx_values.append_null();
                 binary_values.append_null();
@@ -597,6 +601,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Numeric {
                 mut approx_values,
                 mut binary_values,
+                numeric_context: _,
             } => {
                 let approx_array = approx_values.finish();
                 let binary_array = binary_values.finish();
@@ -1561,6 +1566,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
             approx_values: Float64Builder::new(),
             binary_values: BinaryBuilder::new(),
+            numeric_context: crate::adt::numeric::cx_datum().clone(),
         },
         ScalarType::String
         | ScalarType::PgLegacyName
