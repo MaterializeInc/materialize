@@ -150,26 +150,19 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
     let recent_event = VersionedStorageUsage::V1(recent_event);
 
     // Test with no retention period.
-    let updates = state.prune_storage_usage(None, boot_ts).await.unwrap();
-    let events = state.get_storage_usage().await.unwrap();
-    assert!(updates.is_empty(), "updates should be empty: {updates:?}");
+    let events = state
+        .get_and_prune_storage_usage(None, boot_ts)
+        .await
+        .unwrap();
     assert_eq!(events.len(), 2, "unexpected events len: {events:?}");
     assert!(events.contains(&old_event));
     assert!(events.contains(&recent_event));
 
     // Test with some retention period.
-    let updates = state
-        .prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
+    let events = state
+        .get_and_prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
         .await
         .unwrap();
-    let events = state.get_storage_usage().await.unwrap();
-    assert_eq!(updates.len(), 1, "unexpected updates len: {updates:?}");
-    let update = updates.into_element();
-    assert_eq!(update.diff, StateDiff::Retraction);
-    let StateUpdateKind::StorageUsage(update_usage) = update.kind else {
-        panic!("unexpected update kind: {:?}", update.kind);
-    };
-    assert_eq!(update_usage.metric, old_event);
     assert_eq!(events.len(), 1, "unexpected events len: {events:?}");
     assert_eq!(events.into_element(), recent_event);
     Box::new(state).expire().await;

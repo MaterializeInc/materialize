@@ -29,7 +29,7 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    BootstrapStateUpdateKind, CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges,
+    BootstrapStateUpdateKind, CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateDiff,
     StateUpdate, StateUpdateKind,
 };
 use mz_catalog::SYSTEM_CONN_ID;
@@ -532,21 +532,25 @@ impl Catalog {
                 }
             }
 
-            {
-                let mut storage = catalog.storage().await;
-                let updates = storage
-                    .prune_storage_usage(config.storage_usage_retention_period, boot_ts)
-                    .await?;
-                soft_assert_no_log!(
-                    updates
-                        .iter()
-                        .all(|update| matches!(update.kind, StateUpdateKind::StorageUsage(_))),
-                    "unexpected update kinds: {updates:?}"
-                );
-                let storage_usage_builtin_table_updates =
-                    catalog.state.generate_builtin_table_updates(updates);
-                builtin_table_updates.extend(storage_usage_builtin_table_updates);
-            }
+            let storage_usage_events = catalog
+                .storage()
+                .await
+                .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
+                .await?
+                .into_iter()
+                .map(|metric| StateUpdate {
+                    kind: StateUpdateKind::StorageUsage(
+                        mz_catalog::durable::objects::StorageUsage { metric },
+                    ),
+                    ts: boot_ts,
+                    diff: StateDiff::Addition,
+                })
+                .collect();
+            builtin_table_updates.extend(
+                catalog
+                    .state
+                    .generate_builtin_table_updates(storage_usage_events),
+            );
 
             for ip in &catalog.state.egress_ips {
                 builtin_table_updates.push(
