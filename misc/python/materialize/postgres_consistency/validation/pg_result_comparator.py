@@ -6,13 +6,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
 import math
 import re
 from decimal import Decimal
+from functools import partial
 from typing import Any
 
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.ignore_filter.expression_matchers import (
+    matches_fun_by_name,
+)
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -143,3 +146,15 @@ class PostgresResultComparator(ResultComparator):
         assert self.is_timestamp(value1)
         assert self.is_timestamp(value2)
         return value1 == value2
+
+    def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
+        if expression.matches(
+            partial(
+                matches_fun_by_name, function_name_in_lower_case="jsonb_object_agg"
+            ),
+            True,
+        ):
+            # this is because of #28192
+            return True
+
+        return False
