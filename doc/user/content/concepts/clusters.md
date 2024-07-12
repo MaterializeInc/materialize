@@ -1,6 +1,6 @@
 ---
 title: "Clusters"
-description: "Clusters"
+description: "Learn about clusters in Materialize."
 menu:
   main:
     parent: 'concepts'

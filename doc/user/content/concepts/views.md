@@ -1,11 +1,13 @@
 ---
 title: Views (Non-Materialized and Materialized)
-description: Conceptual page on views.
+description: Learn about views in Materialize.
 menu:
   main:
     parent: concepts
     weight: 15
     identifier: 'concepts-views'
+aliases:
+  - /get-started/key-concepts/#views
 ---
 
 ## Overview

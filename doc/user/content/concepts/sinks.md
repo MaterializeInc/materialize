@@ -1,11 +1,13 @@
 ---
 title: Sinks
-description: Conceptual page on sinks.
+description: Learn about sinks in Materialize.
 menu:
   main:
     parent: concepts
     weight: 25
     identifier: 'concepts-sinks'
+aliases:
+  - /get-started/key-concepts/#sinks
 ---
 
 ## Overview

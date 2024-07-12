@@ -1,11 +1,13 @@
 ---
 title: Indexes
-description: Conceptual page on indexes.
+description: "Learn about indexes in Materialize."
 menu:
   main:
     parent: concepts
     weight: 20
     identifier: 'concepts-indexes'
+aliases:
+  - /get-started/key-concepts/#indexes
 ---
 
 ## Overview
