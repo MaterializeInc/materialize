@@ -24,6 +24,7 @@ from pathlib import Path
 from threading import Thread
 from typing import Protocol, TypeVar
 
+import xxhash
 import zstandard
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
@@ -115,8 +116,15 @@ def compute_sha256_of_file(path: str | Path) -> str:
     return sha256.hexdigest()
 
 
-def compute_sha256_of_utf8_string(string: str) -> str:
-    return hashlib.sha256(bytes(string, encoding="utf-8")).hexdigest()
+def compute_sha256_of_utf8_string(value: str) -> str:
+    return hashlib.sha256(bytes(value, encoding="utf-8")).hexdigest()
+
+
+def stable_int_hash(*values: str) -> int:
+    if len(values) == 1:
+        return xxhash.xxh64(values[0], seed=0).intdigest()
+
+    return stable_int_hash(",".join([str(stable_int_hash(entry)) for entry in values]))
 
 
 class HasName(Protocol):
