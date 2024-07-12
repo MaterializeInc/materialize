@@ -13,6 +13,7 @@ from typing import Any, cast
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -321,11 +322,10 @@ class ResultComparator:
         for row_index in range(0, row_length):
             result_value1 = result1.result_rows[row_index][col_index]
             result_value2 = result2.result_rows[row_index][col_index]
-            expression = query_execution.query_template.select_expressions[
-                col_index
-            ].to_sql(SqlDialectAdjuster(), True)
+            expression = query_execution.query_template.select_expressions[col_index]
+            expression_as_sql = expression.to_sql(SqlDialectAdjuster(), True)
 
-            if not self.is_value_equal(result_value1, result_value2):
+            if not self.is_value_equal(result_value1, result_value2, expression):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
                 error_message = "Value differs"
             elif not self.is_type_equal(result_value1, result_value2):
@@ -350,8 +350,8 @@ class ResultComparator:
                         strategy=result2.strategy, value=result_value2, sql=result2.sql
                     ),
                     col_index=col_index,
-                    concerned_expression=expression,
-                    location=f"row index {row_index}, column index {col_index} ('{expression}')",
+                    concerned_expression=expression_as_sql,
+                    location=f"row index {row_index}, column index {col_index} ('{expression_as_sql}')",
                 ),
             )
 
@@ -363,16 +363,20 @@ class ResultComparator:
         return type(value1) == type(value2)
 
     def is_value_equal(
-        self, value1: Any, value2: Any, is_tolerant: bool = False
+        self,
+        value1: Any,
+        value2: Any,
+        expression: Expression,
+        is_tolerant: bool = False,
     ) -> bool:
         if value1 == value2:
             return True
 
         if isinstance(value1, list) and isinstance(value2, list):
-            return self.is_list_or_tuple_equal(value1, value2)
+            return self.is_list_or_tuple_equal(value1, value2, expression)
 
         if isinstance(value1, tuple) and isinstance(value2, tuple):
-            return self.is_list_or_tuple_equal(value1, value2)
+            return self.is_list_or_tuple_equal(value1, value2, expression)
 
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             if value1.is_nan() and value2.is_nan():
@@ -389,14 +393,17 @@ class ResultComparator:
         return False
 
     def is_list_or_tuple_equal(
-        self, collection1: list[Any] | tuple[Any], collection2: list[Any] | tuple[Any]
+        self,
+        collection1: list[Any] | tuple[Any],
+        collection2: list[Any] | tuple[Any],
+        expression: Expression,
     ) -> bool:
         if len(collection1) != len(collection2):
             return False
 
         for value1, value2 in zip(collection1, collection2):
             # use is_tolerant because tuples may contain all values as strings
-            if not self.is_value_equal(value1, value2, is_tolerant=True):
+            if not self.is_value_equal(value1, value2, expression, is_tolerant=True):
                 return False
 
         return True

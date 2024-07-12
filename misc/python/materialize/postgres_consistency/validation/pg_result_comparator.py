@@ -12,6 +12,7 @@ import re
 from decimal import Decimal
 from typing import Any
 
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -49,9 +50,13 @@ class PostgresResultComparator(ResultComparator):
         return False
 
     def is_value_equal(
-        self, value1: Any, value2: Any, is_tolerant: bool = False
+        self,
+        value1: Any,
+        value2: Any,
+        expression: Expression,
+        is_tolerant: bool = False,
     ) -> bool:
-        if super().is_value_equal(value1, value2, is_tolerant=is_tolerant):
+        if super().is_value_equal(value1, value2, expression, is_tolerant=is_tolerant):
             return True
 
         if isinstance(value1, Decimal):
