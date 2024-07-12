@@ -76,8 +76,8 @@ view, the query is executed during the view creation, and a materialized view
 
 You can index a materialized view to load the up-to-date view results in memory
 within the cluster. This enables queries within the cluster to use the index to
-access view results from memory.  See [Indexes and materialized
-views](#indexes-and-materialized-views) for more information.
+access view results from memory.  See [Indexes and materialized views](#indexes-and-materialized-views)
+for more information.
 
 See also:
 
