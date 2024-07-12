@@ -348,7 +348,7 @@ materialize=> show sources;
 To check the current clock time:
 
 ```mzsql
-SELECT * from clock;
+SELECT * FROM clock;
 ```
 
 ```nofmt
