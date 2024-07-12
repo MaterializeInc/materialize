@@ -799,7 +799,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             Self::refine_union_negate_consolidation(&mut dataflow);
         }
 
-        if dataflow.is_single_time() {
+        if dataflow.is_single_or_empty_time() {
             Self::refine_single_time_operator_selection(&mut dataflow);
 
             // The relaxation of the `must_consolidate` flag performs an LIR-based
@@ -955,9 +955,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         fields(path.segment = "refine_single_time_operator_selection")
     )]
     fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
-        // We should only reach here if we have a one-shot SELECT query, i.e.,
-        // a single-time dataflow.
-        assert!(dataflow.is_single_time());
+        // This refinement is only valid if the given dataflow is known to produce a single or no
+        // times.
+        assert!(dataflow.is_single_or_empty_time());
 
         // Upgrade single-time plans to monotonic.
         for build_desc in dataflow.objects_to_build.iter_mut() {
@@ -1009,9 +1009,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         dataflow: &mut DataflowDescription<Self>,
         config: &TransformConfig,
     ) -> Result<(), String> {
-        // We should only reach here if we have a one-shot SELECT query, i.e.,
-        // a single-time dataflow.
-        assert!(dataflow.is_single_time());
+        // This refinement is only valid if the given dataflow is known to produce a single or no
+        // times.
+        assert!(dataflow.is_single_or_empty_time());
 
         let transform = transform::RelaxMustConsolidate::<T>::new();
         for build_desc in dataflow.objects_to_build.iter_mut() {
