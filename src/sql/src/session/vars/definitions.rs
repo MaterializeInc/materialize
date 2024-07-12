@@ -2128,6 +2128,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_graceful_cluster_reconfiguration,
+        desc: "Enable graceful reconfiguration for alter cluster",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
