@@ -8,12 +8,17 @@
 // by the Apache License, Version 2.0.
 
 //! Breaks complex `Reduce` variants into a join of simpler variants.
+//!
+//! Specifically, any `Reduce` that contains two different "types" of aggregation,
+//! in the sense of `ReductionType`, will be broken in to one `Reduce` for each
+//! type of aggregation, each containing the aggregations of that type,
+//! and the results are then joined back together.
 
 use crate::TransformCtx;
-use mz_compute_types::plan::reduce::{reduction_type, ReductionType};
+use mz_compute_types::plan::reduce::reduction_type;
 use mz_expr::MirRelationExpr;
 
-/// Fuses multiple `Filter` operators into one and deduplicates predicates.
+/// Breaks complex `Reduce` variants into a join of simpler variants.
 #[derive(Debug)]
 pub struct ReduceReduction;
 
@@ -46,72 +51,60 @@ impl ReduceReduction {
             expected_group_size,
         } = relation
         {
-            // Do nothing if `aggregates` contains 1. nothing, 2. a single aggregate, or 3. only accumulable aggregates.
-            // Otherwise, rip apart `aggregates` into accumulable aggregates and each other aggregate.
-            let mut accumulable = Vec::new();
-            let mut all_others = Vec::new();
-            for (index, aggregate) in aggregates.iter().enumerate() {
-                if reduction_type(&aggregate.func) == ReductionType::Accumulable {
-                    accumulable.push((index, aggregate));
-                } else {
-                    all_others.push((index, aggregate));
+            // Segment the aggregates by reduction type.
+            let mut segmented_aggregates = std::collections::BTreeMap::default();
+            for (index, aggr) in aggregates.iter().enumerate() {
+                let (aggrs, indexes) = segmented_aggregates
+                    .entry(reduction_type(&aggr.func))
+                    .or_insert_with(|| (Vec::default(), Vec::default()));
+                indexes.push(group_key.len() + index);
+                aggrs.push(aggr.clone());
+            }
+
+            // Do nothing unless there are at least two distinct types of aggregations.
+            if segmented_aggregates.len() < 2 {
+                return;
+            }
+
+            // For each type of aggregation we'll plan the corresponding `Reduce`,
+            // and then join the at-least-two `Reduce` stages together.
+            // TODO: Perhaps we should introduce a `Let` stage rather than clone the input?
+            let mut reduces = Vec::with_capacity(segmented_aggregates.keys().count());
+            // Track the current and intended locations of each output column.
+            let mut columns = Vec::new();
+
+            for (_aggr_type, (aggrs, indexes)) in segmented_aggregates {
+                columns.extend(0..group_key.len());
+                columns.extend(indexes);
+
+                reduces.push(MirRelationExpr::Reduce {
+                    input: input.clone(),
+                    group_key: group_key.clone(),
+                    aggregates: aggrs,
+                    monotonic: *monotonic,
+                    expected_group_size: *expected_group_size,
+                });
+            }
+
+            // Now build a `Join` of the reduces, on their keys, followed by a permutation of their aggregates.
+            // Equate all `group_key` columns in all inputs.
+            let mut equivalences = vec![Vec::with_capacity(reduces.len()); group_key.len()];
+            for column in 0..group_key.len() {
+                for input in 0..reduces.len() {
+                    equivalences[column].push((input, column));
                 }
             }
 
-            // We only leap in to action if there are things to break apart.
-            if all_others.len() > 1 || (!accumulable.is_empty() && !all_others.is_empty()) {
-                let mut reduces = Vec::new();
-                for (_index, aggr) in all_others.iter() {
-                    reduces.push(MirRelationExpr::Reduce {
-                        input: input.clone(),
-                        group_key: group_key.clone(),
-                        aggregates: vec![(*aggr).clone()],
-                        monotonic: *monotonic,
-                        expected_group_size: *expected_group_size,
-                    });
-                }
-                if !accumulable.is_empty() {
-                    reduces.push(MirRelationExpr::Reduce {
-                        input: input.clone(),
-                        group_key: group_key.clone(),
-                        aggregates: accumulable
-                            .iter()
-                            .map(|(_index, aggr)| (*aggr).clone())
-                            .collect(),
-                        monotonic: *monotonic,
-                        expected_group_size: *expected_group_size,
-                    });
-                }
-                // Now build a `Join` of the reduces, on their keys, followed by a permutation of their aggregates.
-                // Equate all `group_key` columns in all inputs.
-                let mut equivalences = vec![Vec::with_capacity(reduces.len()); group_key.len()];
-                for column in 0..group_key.len() {
-                    for input in 0..reduces.len() {
-                        equivalences[column].push((input, column));
-                    }
-                }
-                // Project the group key and then each of the aggregates in order.
-                let mut projection =
-                    Vec::with_capacity(group_key.len() + all_others.len() + accumulable.len());
-                projection.extend(0..group_key.len());
-                let mut accumulable_count = 0;
-                let mut all_others_count = 0;
-                for aggr in aggregates.iter() {
-                    if reduction_type(&aggr.func) == ReductionType::Accumulable {
-                        projection.push(
-                            (group_key.len() + 1) * all_others.len()
-                                + group_key.len()
-                                + accumulable_count,
-                        );
-                        accumulable_count += 1;
-                    } else {
-                        projection.push((group_key.len() + 1) * all_others_count + group_key.len());
-                        all_others_count += 1;
-                    }
-                }
-                // Now make the join.
-                *relation = MirRelationExpr::join(reduces, equivalences).project(projection);
+            // Determine projection that puts aggregate columns in their intended locations,
+            // and projects away repeated key columns.
+            let max_column = columns.iter().max().expect("Non-empty aggregates expected");
+            let mut projection = Vec::with_capacity(max_column + 1);
+            for column in 0..max_column + 1 {
+                projection.push(columns.iter().position(|c| *c == column).unwrap())
             }
+
+            // Now make the join.
+            *relation = MirRelationExpr::join(reduces, equivalences).project(projection);
         }
     }
 }
