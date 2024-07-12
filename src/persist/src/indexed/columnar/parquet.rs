@@ -32,6 +32,7 @@ use crate::indexed::columnar::arrow::{
     decode_arrow_batch_kvtd, decode_arrow_batch_kvtd_ks_vs, encode_arrow_batch_kvtd,
     encode_arrow_batch_kvtd_ks_vs, SCHEMA_ARROW_RS_KVTD,
 };
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, BlobTraceUpdates,
 };
@@ -123,31 +124,22 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
 
-    let (iter, schema, format): (Box<dyn Iterator<Item = _>>, _, _) = match updates {
-        BlobTraceUpdates::Row(updates) => {
-            let iter = updates.into_iter().map(encode_arrow_batch_kvtd);
-            (
-                Box::new(iter),
-                Arc::clone(&*SCHEMA_ARROW_RS_KVTD),
-                "k,v,t,d",
-            )
-        }
+    let (columns, schema, format) = match updates {
+        BlobTraceUpdates::Row(updates) => (
+            encode_arrow_batch_kvtd(updates),
+            Arc::clone(&*SCHEMA_ARROW_RS_KVTD),
+            "k,v,t,d",
+        ),
         BlobTraceUpdates::Both(codec_updates, structured_updates) => {
             let (fields, arrays) = encode_arrow_batch_kvtd_ks_vs(codec_updates, structured_updates);
             let schema = Schema::new(fields);
-            (
-                Box::new(std::iter::once(arrays)),
-                Arc::new(schema),
-                "k,v,t,d,k_s,v_s",
-            )
+            (arrays, Arc::new(schema), "k,v,t,d,k_s,v_s")
         }
     };
 
     let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(properties))?;
-    for chunk in iter {
-        let batch = RecordBatch::try_new(Arc::clone(&schema), chunk)?;
-        writer.write(&batch)?
-    }
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+    writer.write(&batch)?;
 
     writer.flush()?;
     let bytes_written = writer.bytes_written();
@@ -190,7 +182,9 @@ pub fn decode_parquet_file_kvtd(
                 let batch = batch.map_err(|e| Error::String(e.to_string()))?;
                 ret.push(decode_arrow_batch_kvtd(batch.columns(), metrics)?);
             }
-            Ok(BlobTraceUpdates::Row(ret))
+            Ok(BlobTraceUpdates::Row(ColumnarRecords::concat(
+                &ret, metrics,
+            )))
         }
         Some(ProtoFormatMetadata::StructuredMigration(v @ 1 | v @ 2)) => {
             if schema.fields().len() > 6 {
@@ -216,7 +210,7 @@ pub fn decode_parquet_file_kvtd(
             // Version 1 is a deprecated format so we just ignored the k_s and v_s columns.
             if *v == 1 {
                 let records = decode_arrow_batch_kvtd(primary_columns, metrics)?;
-                return Ok(BlobTraceUpdates::Row(vec![records]));
+                return Ok(BlobTraceUpdates::Row(records));
             }
 
             let k_s_column = schema

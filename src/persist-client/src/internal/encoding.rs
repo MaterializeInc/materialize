@@ -1436,7 +1436,7 @@ impl ProtoInlineBatchPart {
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
             index: proto.index.into_rust()?,
-            updates: BlobTraceUpdates::Row(vec![updates]),
+            updates: BlobTraceUpdates::Row(updates),
         })
     }
 }

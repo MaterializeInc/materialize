@@ -138,11 +138,11 @@ where
     V: Codec,
 {
     let updates = match updates {
-        BlobTraceUpdates::Row(updates) => itertools::Either::Left(updates.into_iter()),
+        BlobTraceUpdates::Row(updates) => updates,
         BlobTraceUpdates::Both(codec, _structured) => {
             // This is super unexpected, but not worthy of a panic.
             soft_panic_or_log!("re-encoding structured data?");
-            itertools::Either::Right(std::iter::once(codec))
+            codec
         }
     };
 
@@ -155,31 +155,30 @@ where
 
     if format.is_structured() {
         let mut builder = PartBuilder2::new(schemas.key.as_ref(), schemas.val.as_ref());
-        for update in updates {
-            for ((k, v), t, d) in update.iter() {
-                let t = i64::from_le_bytes(t);
-                let d = i64::from_le_bytes(d);
+        for ((k, v), t, d) in updates.iter() {
+            let t = i64::from_le_bytes(t);
+            let d = i64::from_le_bytes(d);
 
-                // Attempt to re-use allocations as much as possible.
-                match (k_reuse.as_mut(), v_reuse.as_mut()) {
-                    (Some(k_reuse), Some(v_reuse)) => {
-                        K::decode_from(k_reuse, k, &mut k_storage)?;
-                        V::decode_from(v_reuse, v, &mut v_storage)?;
+            // Attempt to re-use allocations as much as possible.
+            match (k_reuse.as_mut(), v_reuse.as_mut()) {
+                (Some(k_reuse), Some(v_reuse)) => {
+                    K::decode_from(k_reuse, k, &mut k_storage)?;
+                    V::decode_from(v_reuse, v, &mut v_storage)?;
 
-                        builder.push(k_reuse, v_reuse, t, d);
-                    }
-                    (_, _) => {
-                        let k = K::decode(k)?;
-                        let v = V::decode(v)?;
+                    builder.push(k_reuse, v_reuse, t, d);
+                }
+                (_, _) => {
+                    let k = K::decode(k)?;
+                    let v = V::decode(v)?;
 
-                        builder.push(&k, &v, t, d);
+                    builder.push(&k, &v, t, d);
 
-                        k_reuse.replace(k);
-                        v_reuse.replace(v);
-                    }
-                };
-            }
+                    k_reuse.replace(k);
+                    v_reuse.replace(v);
+                }
+            };
         }
+
         let Part2 {
             key,
             key_stats,
@@ -193,16 +192,15 @@ where
         Ok(((Some(key), Some(val)), PartStats { key: key_stats }))
     } else {
         let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
-        for update in updates {
-            for ((k, v), t, d) in update.iter() {
-                let k = K::decode(k)?;
-                let v = V::decode(v)?;
-                let t = i64::from_le_bytes(t);
-                let d = i64::from_le_bytes(d);
+        for ((k, v), t, d) in updates.iter() {
+            let k = K::decode(k)?;
+            let v = V::decode(v)?;
+            let t = i64::from_le_bytes(t);
+            let d = i64::from_le_bytes(d);
 
-                builder.push(&k, &v, t, d);
-            }
+            builder.push(&k, &v, t, d);
         }
+
         let part = builder.finish();
         let stats = PartStats::new(&part)?;
 
