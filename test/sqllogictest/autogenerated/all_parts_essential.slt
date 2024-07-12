@@ -306,8 +306,20 @@ GROUP BY 1,
          2
 ----
 Explained Query:
-  Project (#0..=#4, #3) // { arity: 6 }
-    Reduce group_by=[#1, #2] aggregates=[count(*), min(#2), min(#0)] // { arity: 5 }
+  Return // { arity: 6 }
+    Project (#0..=#2, #5, #6, #5) // { arity: 6 }
+      Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 7 }
+        implementation
+          %0[#0, #1]UKKA » %1[#0, #1]UKKA
+        ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+          Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
+            Project (#1, #2) // { arity: 2 }
+              Get l0 // { arity: 3 }
+        ArrangeBy keys=[[#0, #1]] // { arity: 4 }
+          Reduce group_by=[#1, #2] aggregates=[min(#2), min(#0)] // { arity: 4 }
+            Get l0 // { arity: 3 }
+  With
+    cte l0 =
       Project (#0, #1, #28) // { arity: 3 }
         Filter (#10 <= 1995-11-14) AND (#30 <= 12907776) AND (#10 >= 1995-04-19) AND (#30 >= #5) // { arity: 33 }
           Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
@@ -608,8 +620,20 @@ GROUP BY 1,
          2
 ----
 Explained Query:
-  Project (#0, #0..=#2) // { arity: 4 }
-    Reduce group_by=[#1] aggregates=[min(#0), count(*)] // { arity: 3 }
+  Return // { arity: 4 }
+    Project (#0, #0, #3, #1) // { arity: 4 }
+      Join on=(#0 = #2) type=differential // { arity: 4 }
+        implementation
+          %0[#0]UKA » %1[#0]UKA
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+            Project (#1) // { arity: 1 }
+              Get l0 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#1] aggregates=[min(#0)] // { arity: 2 }
+            Get l0 // { arity: 2 }
+  With
+    cte l0 =
       Project (#2, #3) // { arity: 2 }
         Filter (#1 < #5) AND (#11 > #4) AND (#11 >= #0) // { arity: 14 }
           Join on=(#3 = #6) type=delta // { arity: 14 }
