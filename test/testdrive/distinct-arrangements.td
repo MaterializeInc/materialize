@@ -19,8 +19,8 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # Run the majority of this test on its own cluster to ensure it doesn't
 # interfere with any other tests.
-> CREATE CLUSTER distinct_arrangements REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
-> SET cluster TO distinct_arrangements
+> CREATE CLUSTER arrangement_sharing REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
+> SET cluster TO arrangement_sharing
 > SET cluster_replica = r1
 
 # from attributes/mir_unique_keys.slt
@@ -304,7 +304,6 @@ DistinctByErrorCheck
 
 > SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
-"Arrange ReduceCollation"
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
@@ -342,8 +341,6 @@ ArrangeBy[[Column(2)]]
 "DistinctBy"
 DistinctByErrorCheck
 ReduceAccumulable
-ReduceCollation
-"ReduceCollation Errors"
 ReduceMinsMaxes
 ReduceMinsMaxes
 ReduceMinsMaxes
@@ -575,7 +572,7 @@ ArrangeBy[[]]
 ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
-> SET cluster=distinct_arrangements
+> SET cluster=arrangement_sharing
 > DROP CLUSTER linear_join CASCADE
 
 # from negative-multiplicities.td
@@ -611,10 +608,8 @@ ALTER SYSTEM SET enable_repeat_row  = true
 AccumulableErrorCheck
 AccumulableErrorCheck
 AccumulableErrorCheck
-"Arrange ReduceCollation"
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
-"Arrange bundle err"
 "ArrangeAccumulable [val: empty]"
 "ArrangeAccumulable [val: empty]"
 "ArrangeAccumulable [val: empty]"
@@ -622,7 +617,9 @@ AccumulableErrorCheck
 "ArrangeBy[[CallUnary { func: CastInt32ToInt64(CastInt32ToInt64), expr: Column(0) }]]"
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
 "ArrangeBy[[Column(0)]]"
+ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 "Arranged Accumulable Distinct [val: empty]"
@@ -640,7 +637,6 @@ ArrangeBy[[Column(0)]]-errors
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
-"Arranged ReduceFuseBasic input"
 "Arranged ReduceInaccumulable"
 "Arranged ReduceInaccumulable"
 "Arranged TopK input"
@@ -654,11 +650,9 @@ ArrangeBy[[Column(0)]]-errors
 ReduceAccumulable
 ReduceAccumulable
 ReduceAccumulable
-ReduceCollation
-"ReduceCollation Errors"
-ReduceFuseBasic
 ReduceInaccumulable
 ReduceInaccumulable
+"ReduceInaccumulable Error Check"
 "ReduceInaccumulable Error Check"
 ReduceMinsMaxes
 ReduceMinsMaxes
@@ -776,11 +770,11 @@ ReduceMinsMaxes
 "Reduced TopK input" 52
 "Threshold local" 10
 
-> SET cluster TO distinct_arrangements
+> SET cluster TO arrangement_sharing
 
 # Check dataflows of our logging infrastructure with log_logging
-> ALTER CLUSTER distinct_arrangements SET (MANAGED = false);
-> CREATE CLUSTER REPLICA distinct_arrangements.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+> ALTER CLUSTER arrangement_sharing SET (MANAGED = false);
+> CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;
 
@@ -821,10 +815,10 @@ ALTER SYSTEM SET enable_introspection_subscribes = true
 
 # Flipping `enable_introspection_subscribes` affects new replicas, so force a
 # restart.
-> DROP CLUSTER REPLICA distinct_arrangements.replica
-> ALTER CLUSTER distinct_arrangements SET (MANAGED = true)
-> ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 0)
-> ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 1)
+> DROP CLUSTER REPLICA arrangement_sharing.replica
+> ALTER CLUSTER arrangement_sharing SET (MANAGED = true)
+> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 0)
+> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 1)
 > RESET cluster_replica
 
 > SELECT mdod.name, count(*)
@@ -833,11 +827,8 @@ ALTER SYSTEM SET enable_introspection_subscribes = true
   GROUP BY mdod.name
   ORDER BY mdod.name
 AccumulableErrorCheck 2
-"Arrange ReduceCollation" 1
 "Arrange ReduceMinsMaxes" 1
 "ArrangeAccumulable [val: empty]" 2
 ReduceAccumulable 2
-ReduceCollation 1
-"ReduceCollation Errors" 1
 ReduceMinsMaxes 1
 "ReduceMinsMaxes Error Check" 1
