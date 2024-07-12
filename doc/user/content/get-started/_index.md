@@ -12,17 +12,27 @@ menu:
     weight: 5
 ---
 
-Materialize is a **streaming database** purpose-built for low-latency
-applications. You can use it to process data at speeds and scales not possible
-in traditional databases, but without the cost, complexity, or development time
-of most streaming engines.
+Materialize is the Operational Data Warehouse that delivers the speed of
+streaming with the ease of a data warehouse. With Materialize, organizations can
+operate on real-time data just by using SQL.
 
 If you need to speed up queries that run frequently, or trigger actions as
 soon as events happen, Materialize is a good fit. Rather than recalculate
 results from scratch, or serve stale cached results, Materialize continually
 ingests data and keeps results up-to-date as new data arrives.
 
+{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
+
+## Try it out! 🚀
+
+1. Sign up for a [free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+2. Follow the quickstart guide to learn the basics.
+3. Connect your own data sources and start building.
+
+{{</ callout >}}
+
 ## Key features
+
 
 Materialize combines the accessibility of SQL databases with a streaming engine
 that is horizontally scalable, highly available, and strongly consistent.
