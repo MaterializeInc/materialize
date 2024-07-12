@@ -483,24 +483,29 @@ impl crate::coord::Coordinator {
                 }
             }
             let row_collection = RowCollection::new(&results);
+            let duration_histogram = self.metrics.row_set_finishing_seconds();
 
-            let (ret, reason) =
-                match finishing.finish(row_collection, max_result_size, max_returned_query_size) {
-                    Ok(rows) => {
-                        let rows_returned = u64::cast_from(rows.count());
-                        (
-                            Ok(Self::send_immediate_rows(rows)),
-                            StatementEndedExecutionReason::Success {
-                                rows_returned: Some(rows_returned),
-                                execution_strategy: Some(StatementExecutionStrategy::Constant),
-                            },
-                        )
-                    }
-                    Err(error) => (
-                        Err(AdapterError::ResultSize(error.clone())),
-                        StatementEndedExecutionReason::Errored { error },
-                    ),
-                };
+            let (ret, reason) = match finishing.finish(
+                row_collection,
+                max_result_size,
+                max_returned_query_size,
+                &duration_histogram,
+            ) {
+                Ok(rows) => {
+                    let rows_returned = u64::cast_from(rows.count());
+                    (
+                        Ok(Self::send_immediate_rows(rows)),
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: Some(rows_returned),
+                            execution_strategy: Some(StatementExecutionStrategy::Constant),
+                        },
+                    )
+                }
+                Err(error) => (
+                    Err(AdapterError::ResultSize(error.clone())),
+                    StatementEndedExecutionReason::Errored { error },
+                ),
+            };
             self.retire_execution(reason, std::mem::take(ctx_extra));
             return ret;
         }
@@ -641,13 +646,19 @@ impl crate::coord::Coordinator {
                 peek_target,
             )
             .unwrap_or_terminate("cannot fail to peek");
+        let duration_histogram = self.metrics.row_set_finishing_seconds();
 
         // Prepare the receiver to return as a response.
         let rows_rx = rows_rx.map_ok_or_else(
             |e| PeekResponseUnary::Error(e.to_string()),
             move |resp| match resp {
                 PeekResponse::Rows(rows) => {
-                    match finishing.finish(rows, max_result_size, max_returned_query_size) {
+                    match finishing.finish(
+                        rows,
+                        max_result_size,
+                        max_returned_query_size,
+                        &duration_histogram,
+                    ) {
                         Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
                         Err(e) => PeekResponseUnary::Error(e),
                     }
