@@ -7,9 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// TODO(parkmycar): Remove this.
-#![allow(clippy::as_conversions)]
-
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::ops::AddAssign;
@@ -45,7 +42,7 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
-use crate::adt::numeric::PackedNumeric;
+use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::stats2::{
@@ -58,15 +55,21 @@ use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 //
 // `FixedSizeBinaryArray`s push empty bytes when a value is null which for larger binary types
 // could result in poor performance.
-const TIME_FIXED_BYTES: i32 = PackedNaiveTime::SIZE as i32;
-const TIMESTAMP_FIXED_BYTES: i32 = PackedNaiveDateTime::SIZE as i32;
-const INTERVAL_FIXED_BYTES: i32 = PackedInterval::SIZE as i32;
-const ACL_ITEM_FIXED_BYTES: i32 = PackedAclItem::SIZE as i32;
-const _MZ_ACL_ITEM_FIXED_BYTES: i32 = PackedMzAclItem::SIZE as i32;
-const ARRAY_DIMENSION_FIXED_BYTES: i32 = PackedArrayDimension::SIZE as i32;
+#[allow(clippy::as_conversions)]
+mod fixed_binary_sizes {
+    use super::*;
 
-const UUID_FIXED_BYTES: i32 = 16;
-static_assertions::const_assert_eq!(UUID_FIXED_BYTES as usize, std::mem::size_of::<Uuid>());
+    pub const TIME_FIXED_BYTES: i32 = PackedNaiveTime::SIZE as i32;
+    pub const TIMESTAMP_FIXED_BYTES: i32 = PackedNaiveDateTime::SIZE as i32;
+    pub const INTERVAL_FIXED_BYTES: i32 = PackedInterval::SIZE as i32;
+    pub const ACL_ITEM_FIXED_BYTES: i32 = PackedAclItem::SIZE as i32;
+    pub const _MZ_ACL_ITEM_FIXED_BYTES: i32 = PackedMzAclItem::SIZE as i32;
+    pub const ARRAY_DIMENSION_FIXED_BYTES: i32 = PackedArrayDimension::SIZE as i32;
+
+    pub const UUID_FIXED_BYTES: i32 = 16;
+    static_assertions::const_assert_eq!(UUID_FIXED_BYTES as usize, std::mem::size_of::<Uuid>());
+}
+use fixed_binary_sizes::*;
 
 /// An encoder for a column of [`Datum`]s.
 #[derive(Debug)]
@@ -132,6 +135,8 @@ enum DatumColumnEncoder {
         binary_values: BinaryBuilder,
         /// Also maintain a float64 approximation for sorting.
         approx_values: Float64Builder,
+        /// Re-usable `libdecimal` context for conversions.
+        numeric_context: Context<Numeric>,
     },
     Bytes(BinaryBuilder),
     String(StringBuilder),
@@ -226,11 +231,12 @@ impl DatumColumnEncoder {
                 DatumColumnEncoder::Numeric {
                     approx_values,
                     binary_values,
+                    numeric_context,
                 },
                 Datum::Numeric(val),
             ) => {
-                let mut ctx = Context::default();
-                let float_approx = ctx.try_into_f64(val.0).unwrap_or_else(|_| {
+                let float_approx = numeric_context.try_into_f64(val.0).unwrap_or_else(|_| {
+                    numeric_context.clear_status();
                     if val.0.is_negative() {
                         f64::NEG_INFINITY
                     } else {
@@ -422,7 +428,7 @@ impl DatumColumnEncoder {
                 builder.append_value(true);
             }
             (encoder, Datum::Null) => encoder.push_invalid(),
-            (encoder, datum) => unimplemented!("can't encode {datum:?} into {encoder:?}"),
+            (encoder, datum) => panic!("can't encode {datum:?} into {encoder:?}"),
         }
     }
 
@@ -441,6 +447,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Numeric {
                 approx_values,
                 binary_values,
+                numeric_context: _,
             } => {
                 approx_values.append_null();
                 binary_values.append_null();
@@ -594,6 +601,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Numeric {
                 mut approx_values,
                 mut binary_values,
+                numeric_context: _,
             } => {
                 let approx_array = approx_values.finish();
                 let binary_array = binary_values.finish();
@@ -1022,16 +1030,24 @@ impl DatumColumnDecoder {
                     return;
                 }
 
-                let start = dim_offsets[idx] as usize;
-                let end = dim_offsets[idx + 1] as usize;
+                let start: usize = dim_offsets[idx]
+                    .try_into()
+                    .expect("unexpected negative offset");
+                let end: usize = dim_offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
                 let dimensions = (start..end).map(|idx| {
                     PackedArrayDimension::from_bytes(dims.value(idx))
                         .expect("failed to roundtrip ArrayDimension")
                         .into_value()
                 });
 
-                let start = val_offsets[idx] as usize;
-                let end = val_offsets[idx + 1] as usize;
+                let start: usize = val_offsets[idx]
+                    .try_into()
+                    .expect("unexpected negative offset");
+                let end: usize = val_offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
                 packer
                     .push_array_with_row_major(dimensions, |packer| {
                         for x in start..end {
@@ -1056,8 +1072,10 @@ impl DatumColumnDecoder {
                     return;
                 }
 
-                let start = offsets[idx] as usize;
-                let end = offsets[idx + 1] as usize;
+                let start: usize = offsets[idx].try_into().expect("unexpected negative offset");
+                let end: usize = offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
 
                 packer.push_list_with(|packer| {
                     for idx in start..end {
@@ -1080,8 +1098,10 @@ impl DatumColumnDecoder {
                     return;
                 }
 
-                let start = offsets[idx] as usize;
-                let end = offsets[idx + 1] as usize;
+                let start: usize = offsets[idx].try_into().expect("unexpected negative offset");
+                let end: usize = offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
 
                 packer.push_dict_with(|packer| {
                     for idx in start..end {
@@ -1503,7 +1523,9 @@ fn array_to_decoder(
 
             let mut decoders = Vec::with_capacity(fields.len());
             for (tag, (_name, col_type)) in fields.iter().enumerate() {
-                let inner_array = record_array.column_by_name(&tag.to_string()).expect("TODO");
+                let inner_array = record_array
+                    .column_by_name(&tag.to_string())
+                    .ok_or_else(|| anyhow::anyhow!("no column named '{tag}'"))?;
                 let inner_decoder = array_to_decoder(inner_array, &col_type.scalar_type)?;
 
                 decoders.push(Box::new(inner_decoder));
@@ -1514,7 +1536,11 @@ fn array_to_decoder(
                 nulls: record_array.nulls().cloned(),
             }
         }
-        (x, y) => unimplemented!("column type {x:?}, datum type {y:?}"),
+        (x, y) => {
+            let msg = format!("can't decode column of {x:?} for scalar type {y:?}");
+            mz_ore::soft_panic_or_log!("{msg}");
+            anyhow::bail!("{msg}");
+        }
     };
 
     Ok(decoder)
@@ -1540,6 +1566,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
             approx_values: Float64Builder::new(),
             binary_values: BinaryBuilder::new(),
+            numeric_context: crate::adt::numeric::cx_datum().clone(),
         },
         ScalarType::String
         | ScalarType::PgLegacyName
