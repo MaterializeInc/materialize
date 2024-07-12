@@ -228,14 +228,17 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
-    /// Listen and return all updates in the catalog up to and including `ts`.
+    // TODO(jkosh44) The fact that the timestamp argument is an exclusive upper bound makes
+    // it difficult to use for readers. For now it's correct and easy to implement, but we should
+    // consider a better API.
+    /// Listen and return all updates in the catalog up to `target_upper`.
     ///
     /// IMPORTANT: This exlcudes updates to storage usage.
     ///
     /// Returns an error if this instance has been fenced out.
     async fn sync_updates(
         &mut self,
-        ts: Timestamp,
+        target_upper: Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 }
 
@@ -249,8 +252,12 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
     /// Commits a durable catalog state transaction.
-    async fn commit_transaction(&mut self, txn_batch: TransactionBatch)
-        -> Result<(), CatalogError>;
+    ///
+    /// Returns the upper that the transaction was committed at.
+    async fn commit_transaction(
+        &mut self,
+        txn_batch: TransactionBatch,
+    ) -> Result<Timestamp, CatalogError>;
 
     /// Confirms that this catalog is connected as the current leader.
     ///
