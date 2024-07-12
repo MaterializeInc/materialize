@@ -19,7 +19,7 @@ improvements.
 
 ## Indexes and views
 
-In Materialize, indexing a [non-materialize
+In Materialize, indexing a [non-materialized
 view](/concepts/views/#non-materialized-views) causes view results to be
 **maintained and incrementally updated in memory** within the
 [cluster](/concepts/clusters/). The in-memory up-to-date results are accessible
