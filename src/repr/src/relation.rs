@@ -638,3 +638,10 @@ impl fmt::Display for NotNullViolation {
         )
     }
 }
+
+/// Describes a [`RelationDesc`] at a specific version of a [`VersionedRelationDesc`].
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RelationVersion {
+    Specific(u64),
+    Latest,
+}

@@ -315,6 +315,7 @@ pub(crate) fn add_materialize_comments(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 ),
+                version: RelationVersion::Latest,
             };
 
             if let Some(comments_map) = catalog.get_item_comments(&object_id) {
@@ -1114,6 +1115,7 @@ async fn purify_alter_source(
         qualifiers: item.name().qualifiers.clone(),
         full_name,
         print_id: true,
+        version: RelationVersion::Latest,
     };
     let connection_name = desc.connection.name();
 
@@ -1675,6 +1677,7 @@ pub fn purify_create_materialized_view_options(
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: catalog.resolve_full_name(item.name()),
                     print_id: false,
+                    version: RelationVersion::Latest,
                 },
                 args: FunctionArgs::Args {
                     args: Vec::new(),

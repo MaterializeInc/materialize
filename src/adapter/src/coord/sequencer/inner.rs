@@ -36,7 +36,9 @@ use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, RowIterator, Timestamp};
+use mz_repr::{
+    Datum, Diff, GlobalId, IntoRowIterator, RelationVersion, Row, RowArena, RowIterator, Timestamp,
+};
 use mz_sql::ast::{
     CreateSubsourceStatement, Ident, MySqlConfigOptionName, UnresolvedItemName, Value,
 };
@@ -436,6 +438,7 @@ impl Coordinator {
             qualifiers: progress_plan.plan.name.qualifiers.clone(),
             full_name: progress_full_name,
             print_id: true,
+            version: RelationVersion::Latest,
         };
 
         create_source_plans.push(progress_plan);
@@ -466,6 +469,7 @@ impl Coordinator {
             qualifiers: source_plan.name.qualifiers.clone(),
             full_name: source_full_name,
             print_id: true,
+            version: RelationVersion::Latest,
         };
 
         create_source_plans.push(CreateSourcePlanBundle {

@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationVersion, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
     RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
@@ -631,6 +631,7 @@ impl<'a> StatementContext<'a> {
             qualifiers: qualified.qualifiers,
             full_name,
             print_id: true,
+            version: RelationVersion::Latest,
         })
     }
 
@@ -976,6 +977,7 @@ impl<'a> StatementContext<'a> {
             qualifiers: entry.name().qualifiers.clone(),
             full_name,
             print_id: true,
+            version: RelationVersion::Latest,
         }
     }
 }
