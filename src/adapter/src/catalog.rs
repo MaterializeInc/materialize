@@ -54,9 +54,9 @@ use mz_sql::catalog::{
     SystemObjectType,
 };
 use mz_sql::names::{
-    DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
-    SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
+    PartialItemName, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
@@ -1209,6 +1209,26 @@ pub fn is_public_role(name: &str) -> bool {
 
 pub(crate) fn catalog_type_to_audit_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
     object_type_to_audit_object_type(sql_type.into())
+}
+
+pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType {
+    match id {
+        CommentObjectId::Table(_) => ObjectType::Table,
+        CommentObjectId::View(_) => ObjectType::View,
+        CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
+        CommentObjectId::Source(_) => ObjectType::Source,
+        CommentObjectId::Sink(_) => ObjectType::Sink,
+        CommentObjectId::Index(_) => ObjectType::Index,
+        CommentObjectId::Func(_) => ObjectType::Func,
+        CommentObjectId::Connection(_) => ObjectType::Connection,
+        CommentObjectId::Type(_) => ObjectType::Type,
+        CommentObjectId::Secret(_) => ObjectType::Secret,
+        CommentObjectId::Role(_) => ObjectType::Role,
+        CommentObjectId::Database(_) => ObjectType::Database,
+        CommentObjectId::Schema(_) => ObjectType::Schema,
+        CommentObjectId::Cluster(_) => ObjectType::Cluster,
+        CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+    }
 }
 
 pub(crate) fn object_type_to_audit_object_type(

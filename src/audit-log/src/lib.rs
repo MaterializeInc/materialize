@@ -82,6 +82,7 @@ pub enum EventType {
     Alter,
     Grant,
     Revoke,
+    Comment,
 }
 
 impl EventType {
@@ -92,6 +93,7 @@ impl EventType {
             EventType::Alter => "Altered",
             EventType::Grant => "Granted",
             EventType::Revoke => "Revoked",
+            EventType::Comment => "Comment",
         }
     }
 }
@@ -178,6 +180,21 @@ pub enum EventDetails {
     AlterRetainHistoryV1(AlterRetainHistoryV1),
     ToNewIdV1(ToNewIdV1),
     FromPreviousIdV1(FromPreviousIdV1),
+    SetV1(SetV1),
+    ResetAllV1,
+    RotateKeysV1(RotateKeysV1),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct SetV1 {
+    pub name: String,
+    pub value: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RotateKeysV1 {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -506,6 +523,9 @@ impl EventDetails {
             }
             EventDetails::ToNewIdV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FromPreviousIdV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::SetV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::ResetAllV1 => serde_json::Value::Null,
+            EventDetails::RotateKeysV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
