@@ -304,14 +304,12 @@ sqlfunc!(
     #[preserves_uniqueness = false]
     fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
         let mut cx = numeric::cx_datum();
-
-        let divisor = Numeric::from(1024);
         let units = ["bytes", "kB", "MB", "GB", "TB", "PB"];
 
         for (pos, unit) in units[..units.len() - 1].iter().enumerate() {
-            // only convert a to the next unit if abs(round(a)) >= 10 in that unit
+            // return if abs(round(a)) < 10 in the next unit it would be converted to
             if Numeric::from(-10239.5) < a && a < Numeric::from(10239.5) {
-                // do not round bytes, as no conversion has happened
+                // do not round a when the unit is still bytes, as no conversion has happened yet
                 if pos > 0 {
                     cx.round(&mut a);
                 }
@@ -319,7 +317,7 @@ sqlfunc!(
                 return Ok(format!("{} {unit}", a.to_standard_notation_string()));
             }
 
-            cx.div(&mut a, &divisor);
+            cx.div(&mut a, &Numeric::from(1024));
             numeric::munge_numeric(&mut a).unwrap();
         }
 
