@@ -342,7 +342,7 @@ fn assign_new_user_global_ids(
 
     impl<'a> VisitMut<'_, Raw> for IdUpdater<'a> {
         fn visit_item_name_mut(&mut self, node: &'_ mut <Raw as mz_sql::ast::AstInfo>::ItemName) {
-            if let RawItemName::Id(id, _) = node {
+            if let RawItemName::Id(id, _, _) = node {
                 match GlobalId::from_str(id.as_str()) {
                     Ok(curr_id) => {
                         if let Some(new_id) = self.new_id_mapping.get(&curr_id) {
@@ -475,7 +475,7 @@ fn ast_rewrite_create_source_pg_database_details(
                                 .resolve_item(&connection)
                                 .expect("PG source connection must exist")
                         }
-                        RawItemName::Id(id, _) => {
+                        RawItemName::Id(id, _, _) => {
                             let gid = id
                                 .parse()
                                 .expect("RawItenName::Id must be uncorrupted GlobalId");

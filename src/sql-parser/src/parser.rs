@@ -4360,6 +4360,15 @@ impl<'a> Parser<'a> {
             let expr = self.parse_expr()?;
             self.expect_token(&Token::RParen)?;
             ColumnOption::Check(expr)
+        } else if self.parse_keyword(VERSION) {
+            let action = match self.expect_one_of_keywords(&[ADDED, DROPPED])? {
+                ADDED => ColumnVersioned::Added,
+                DROPPED => ColumnVersioned::Dropped,
+                _ => unreachable!("checked above"),
+            };
+            let version = self.parse_number_value()?;
+
+            ColumnOption::Versioned { action, version }
         } else {
             return self.expected(self.peek_pos(), "column option", self.peek_token());
         };
@@ -6085,8 +6094,23 @@ impl<'a> Parser<'a> {
                     "table name in square brackets must be fully qualified"
                 );
             }
+
+            let version = if self.parse_keywords(&[WITH, VERSION]) {
+                let position = self.peek_pos();
+                let version = self.parse_number_value()?;
+                let Value::Number(version) = version else {
+                    panic!("checked type above");
+                };
+                let version: u64 = version.parse().map_err(|_| {
+                    ParserError::new(position, format!("failed to parse {version} as Version"))
+                })?;
+                Some(Version::new(version))
+            } else {
+                None
+            };
+
             self.expect_token(&Token::RBracket)?;
-            Ok(RawItemName::Id(id, name))
+            Ok(RawItemName::Id(id, name, version))
         } else {
             Ok(RawItemName::Name(self.parse_item_name()?))
         }
@@ -6105,7 +6129,7 @@ impl<'a> Parser<'a> {
                 }
                 identifiers.pop().unwrap()
             }
-            RawItemName::Id(_, _) => {
+            RawItemName::Id(_, _, _) => {
                 self.expect_token(&Token::Dot)?;
                 self.parse_identifier()?
             }

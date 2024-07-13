@@ -85,21 +85,21 @@ impl AstInfo for Raw {
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum RawItemName {
     Name(UnresolvedItemName),
-    Id(String, UnresolvedItemName),
+    Id(String, UnresolvedItemName, Option<Version>),
 }
 
 impl RawItemName {
     pub fn name(&self) -> &UnresolvedItemName {
         match self {
             RawItemName::Name(name) => name,
-            RawItemName::Id(_, name) => name,
+            RawItemName::Id(_, name, _) => name,
         }
     }
 
     pub fn name_mut(&mut self) -> &mut UnresolvedItemName {
         match self {
             RawItemName::Name(name) => name,
-            RawItemName::Id(_, name) => name,
+            RawItemName::Id(_, name, _) => name,
         }
     }
 }
@@ -108,9 +108,13 @@ impl AstDisplay for RawItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             RawItemName::Name(o) => f.write_node(o),
-            RawItemName::Id(id, o) => {
+            RawItemName::Id(id, o, v) => {
                 f.write_str(format!("[{} AS ", id));
                 f.write_node(o);
+                if let Some(v) = v {
+                    f.write_str(" WITH VERSION ");
+                    f.write_node(v);
+                }
                 f.write_str("]");
             }
         }
@@ -231,3 +235,26 @@ where
         f.fold_data_type(self)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Version(u64);
+
+impl Version {
+    pub fn new(val: u64) -> Self {
+        Version(val)
+    }
+
+    pub fn into_inner(self) -> u64 {
+        self.0
+    }
+}
+
+impl AstDisplay for Version {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_node(&self.0);
+    }
+}
+impl_display!(Version);

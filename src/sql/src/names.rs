@@ -1285,10 +1285,12 @@ impl<'a> NameResolver<'a> {
                         let full_name = self.catalog.resolve_full_name(item.name());
                         (full_name, item)
                     }
-                    RawItemName::Id(id, name) => {
+                    RawItemName::Id(id, name, version) => {
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item(&gid);
                         let full_name = normalize::full_name(name)?;
+                        assert!(version.is_none(), "no support for versioning data types");
+
                         (full_name, item)
                     }
                 };
@@ -1322,7 +1324,9 @@ impl<'a> NameResolver<'a> {
     ) -> ResolvedItemName {
         match item_name {
             RawItemName::Name(name) => self.resolve_item_name_name(name, config),
-            RawItemName::Id(id, raw_name) => self.resolve_item_name_id(id, raw_name),
+            RawItemName::Id(id, raw_name, version) => {
+                self.resolve_item_name_id(id, raw_name, version)
+            }
         }
     }
 

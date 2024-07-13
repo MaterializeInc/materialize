@@ -709,7 +709,7 @@ impl<'a> StatementContext<'a> {
                 let name = normalize::unresolved_item_name(name)?;
                 Ok(self.catalog.resolve_item(&name)?)
             }
-            RawItemName::Id(id, _) => {
+            RawItemName::Id(id, _, _) => {
                 let gid = id.parse()?;
                 Ok(self.catalog.get_item(&gid))
             }

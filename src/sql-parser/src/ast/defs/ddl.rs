@@ -25,7 +25,7 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
-    AstInfo, ColumnName, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOptionValue,
+    AstInfo, ColumnName, Expr, Ident, OrderByExpr, UnresolvedItemName, Value, WithOptionValue,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1532,17 +1532,20 @@ pub enum ColumnOption<T: AstInfo> {
     /// `DEFAULT <restricted-expr>`
     Default(Expr<T>),
     /// `{ PRIMARY KEY | UNIQUE }`
-    Unique {
-        is_primary: bool,
-    },
+    Unique { is_primary: bool },
     /// A referential integrity constraint (`[FOREIGN KEY REFERENCES
     /// <foreign_table> (<referred_columns>)`).
     ForeignKey {
         foreign_table: UnresolvedItemName,
         referred_columns: Vec<Ident>,
     },
-    // `CHECK (<expr>)`
+    /// `CHECK (<expr>)`
     Check(Expr<T>),
+    /// `VERSION <action> <version>`
+    Versioned {
+        action: ColumnVersioned,
+        version: Value,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for ColumnOption<T> {
@@ -1577,10 +1580,39 @@ impl<T: AstInfo> AstDisplay for ColumnOption<T> {
                 f.write_node(expr);
                 f.write_str(")");
             }
+            Versioned { action, version } => {
+                f.write_str("VERSION ");
+                f.write_node(action);
+                f.write_str(" ");
+
+                // Unredact the value since it isn't sensitive.
+                let mode = f.unredact();
+                f.write_node(version);
+                f.set_mode(mode);
+            }
         }
     }
 }
 impl_display_t!(ColumnOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ColumnVersioned {
+    Added,
+    Dropped,
+}
+
+impl AstDisplay for ColumnVersioned {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        match self {
+            ColumnVersioned::Added => f.write_str("ADDED"),
+            ColumnVersioned::Dropped => f.write_str("DROPPED"),
+        }
+    }
+}
+impl_display!(ColumnVersioned);
 
 fn display_constraint_name<'a>(name: &'a Option<Ident>) -> impl AstDisplay + 'a {
     struct ConstraintName<'a>(&'a Option<Ident>);
