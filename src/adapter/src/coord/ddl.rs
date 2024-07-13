@@ -35,7 +35,7 @@ use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::session::metadata::SessionMetadata;
@@ -1194,10 +1194,13 @@ impl Coordinator {
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
-                .desc(&self.catalog().resolve_full_name(
-                    storage_sink_from_entry.name(),
-                    storage_sink_from_entry.conn_id(),
-                ))
+                .desc(
+                    &self.catalog().resolve_full_name(
+                        storage_sink_from_entry.name(),
+                        storage_sink_from_entry.conn_id(),
+                    ),
+                    RelationVersion::Latest,
+                )
                 .expect("indexes can only be built on items with descs")
                 .into_owned(),
             connection: sink

@@ -50,7 +50,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationVersion, Row, RowPacker, ScalarType, Timestamp};
 use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
@@ -590,7 +590,8 @@ impl CatalogState {
             }
         }
 
-        if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
+        let name = self.resolve_full_name(entry.name(), entry.conn_id());
+        if let Ok(desc) = entry.desc(&name, RelationVersion::Latest) {
             let defaults = match entry.item() {
                 CatalogItem::Table(table) => Some(&table.defaults),
                 _ => None,
@@ -1332,10 +1333,11 @@ impl CatalogState {
 
         for (i, key) in index.keys.iter().enumerate() {
             let on_entry = self.get_entry(&index.on);
+            let name = self.resolve_full_name(on_entry.name(), on_entry.conn_id());
             let nullable = key
                 .typ(
                     &on_entry
-                        .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
+                        .desc(&name, RelationVersion::Latest)
                         .expect("can only create indexes on items with a valid description")
                         .typ()
                         .column_types,

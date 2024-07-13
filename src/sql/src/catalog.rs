@@ -28,7 +28,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationVersion};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -573,7 +573,11 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
+    fn desc(
+        &self,
+        name: &FullItemName,
+        version: RelationVersion,
+    ) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///

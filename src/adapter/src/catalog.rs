@@ -45,7 +45,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, ScalarType};
+use mz_repr::{Diff, GlobalId, RelationVersion, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -1413,7 +1413,8 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 let Some(on_entry) = self.state.entry_by_id.get(&index.on) else {
                     return None;
                 };
-                let Ok(on_desc) = on_entry.desc(&self.resolve_full_name(on_entry.name())) else {
+                let name = self.resolve_full_name(on_entry.name());
+                let Ok(on_desc) = on_entry.desc(&name, RelationVersion::Latest) else {
                     return None;
                 };
 
@@ -1440,7 +1441,8 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 Some(ix_names) // Return the updated ix_names vector.
             }
             None => {
-                let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name())) else {
+                let name = self.resolve_full_name(entry.name());
+                let Ok(desc) = entry.desc(&name, RelationVersion::Latest) else {
                     return None;
                 };
 
@@ -1459,7 +1461,8 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .entry_by_id
             .get(&id)
             .try_map(|entry| {
-                let desc = entry.desc(&self.resolve_full_name(entry.name()))?;
+                let name = self.resolve_full_name(entry.name());
+                let desc = entry.desc(&name, RelationVersion::Latest)?;
                 let column_name = desc.get_name(column);
                 Ok::<_, SqlCatalogError>(column_name.to_string())
             })
@@ -1930,7 +1933,9 @@ mod tests {
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
-    use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
+    use mz_repr::{
+        Datum, GlobalId, RelationType, RelationVersion, RowArena, ScalarType, Timestamp,
+    };
     use mz_sql::catalog::{CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
@@ -3041,7 +3046,7 @@ mod tests {
                     .expect("unable to resolve view");
                 let full_name = conn_catalog.resolve_full_name(item.name());
                 for col_type in item
-                    .desc(&full_name)
+                    .desc(&full_name, RelationVersion::Latest)
                     .expect("invalid item type")
                     .iter_types()
                 {

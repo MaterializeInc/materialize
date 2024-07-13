@@ -20,7 +20,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeS
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, RelationVersion, Timestamp};
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -194,13 +194,12 @@ impl Optimize<SubscribeFrom> for Optimizer {
         match plan {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
+                let name = self
+                    .catalog
+                    .state()
+                    .resolve_full_name(from.name(), self.conn_id.as_ref());
                 let from_desc = from
-                    .desc(
-                        &self
-                            .catalog
-                            .state()
-                            .resolve_full_name(from.name(), self.conn_id.as_ref()),
-                    )
+                    .desc(&name, RelationVersion::Latest)
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
 

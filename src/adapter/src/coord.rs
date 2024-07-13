@@ -115,7 +115,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, RelationVersion, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -2267,7 +2267,7 @@ impl Coordinator {
                     CatalogItem::Source(source) => Some((id, source_desc(source))),
                     CatalogItem::Table(table) => {
                         let collection_desc = CollectionDescription::from_desc(
-                            table.desc.clone(),
+                            table.desc.at_version(RelationVersion::Latest),
                             DataSourceOther::TableWrites,
                         );
                         Some((id, collection_desc))

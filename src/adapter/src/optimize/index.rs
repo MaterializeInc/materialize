@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_repr::explain::trace_plan;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, RelationVersion};
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -152,7 +152,7 @@ impl Optimize<Index> for Optimizer {
         let on_entry = state.get_entry(&index.on);
         let full_name = state.resolve_full_name(&index.name, on_entry.conn_id());
         let on_desc = on_entry
-            .desc(&full_name)
+            .desc(&full_name, RelationVersion::Latest)
             .expect("can only create indexes on items with a valid description");
 
         let mut df_builder = {

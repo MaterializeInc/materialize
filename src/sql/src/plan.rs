@@ -43,7 +43,9 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
+use mz_repr::{
+    ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp, VersionedRelationDesc,
+};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
     SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
@@ -1307,7 +1309,7 @@ pub struct CommentPlan {
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
-    pub desc: RelationDesc,
+    pub desc: VersionedRelationDesc,
     pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,

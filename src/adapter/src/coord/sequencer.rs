@@ -17,7 +17,7 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, RowCollection};
+use mz_repr::{Diff, GlobalId, RelationVersion, RowCollection};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
@@ -702,7 +702,8 @@ impl Coordinator {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match catalog.try_get_entry(&id) {
             Some(table) => {
-                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
+                let name = catalog.resolve_full_name(table.name(), Some(session.conn_id()));
+                table.desc(&name, RelationVersion::Latest)?
             }
             None => {
                 return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {

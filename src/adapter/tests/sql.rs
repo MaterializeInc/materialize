@@ -94,7 +94,7 @@ async fn datadriven() {
                                                 schema_name,
                                                 test_case.input.trim_end()
                                             )),
-                                            desc: RelationDesc::empty(),
+                                            desc: RelationDesc::empty().into(),
                                             defaults: vec![],
                                             conn_id: None,
                                             resolved_ids: ResolvedIds(BTreeSet::new()),

@@ -29,7 +29,7 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
-use mz_repr::{strconv, Timestamp};
+use mz_repr::{strconv, RelationVersion, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -336,7 +336,7 @@ pub(crate) fn add_materialize_comments(
                 }
 
                 // Getting comments on columns in the item
-                if let Ok(desc) = item.desc(&full_name) {
+                if let Ok(desc) = item.desc(&full_name, RelationVersion::Latest) {
                     for (pos, column_name) in desc.iter_names().enumerate() {
                         let comment = comments_map.get(&Some(pos + 1));
                         if let Some(comment_str) = comment {

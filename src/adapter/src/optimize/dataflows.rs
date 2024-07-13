@@ -35,7 +35,7 @@ use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimit
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, RelationVersion, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -193,12 +193,11 @@ impl<'a> DataflowBuilder<'a> {
                         key: idx.keys.to_vec(),
                     };
                     let entry = self.catalog.get_entry(id);
+                    let name = self
+                        .catalog
+                        .resolve_full_name(entry.name(), entry.conn_id());
                     let desc = entry
-                        .desc(
-                            &self
-                                .catalog
-                                .resolve_full_name(entry.name(), entry.conn_id()),
-                        )
+                        .desc(&name, RelationVersion::Latest)
                         .expect("indexes can only be built on items with descs");
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }
@@ -207,7 +206,8 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc.typ().clone(), monotonic);
+                        let table_desc = table.desc.at_version(RelationVersion::Latest);
+                        dataflow.import_source(*id, table_desc.typ().clone(), monotonic);
                     }
                     CatalogItem::Source(source) => {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);

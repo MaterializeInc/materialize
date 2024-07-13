@@ -1319,7 +1319,8 @@ mod builtin_migration_tests {
                     create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
                     desc: RelationDesc::empty()
                         .with_column("a", ScalarType::Int32.nullable(true))
-                        .with_key(vec![0]),
+                        .with_key(vec![0])
+                        .into(),
                     defaults: vec![Expr::null(); 1],
                     conn_id: None,
                     resolved_ids: ResolvedIds(BTreeSet::new()),

@@ -905,7 +905,7 @@ impl Coordinator {
                 }
 
                 let collection_desc = CollectionDescription::from_desc(
-                    table.desc.clone(),
+                    table.desc.at_version(RelationVersion::Latest),
                     DataSourceOther::TableWrites,
                 );
                 let storage_metadata = coord.catalog.state().storage_metadata();
@@ -2284,7 +2284,7 @@ impl Coordinator {
             let name = format!("{}", full_name);
             let relation_desc = catalog_entry
                 .item
-                .desc_opt()
+                .desc_opt(RelationVersion::Latest)
                 .expect("source should have a proper desc")
                 .into_owned();
             let stats_future = self
@@ -2409,14 +2409,15 @@ impl Coordinator {
             // All non-constant values must be planned as read-then-writes.
             _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
-                    Some(table) => table
-                        .desc(
-                            &self
-                                .catalog()
-                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                        )
-                        .expect("desc called on table")
-                        .arity(),
+                    Some(table) => {
+                        let name = self
+                            .catalog()
+                            .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                        table
+                            .desc(&name, RelationVersion::Latest)
+                            .expect("desc called on table")
+                            .arity()
+                    }
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
                             mz_catalog::memory::error::Error {
@@ -2476,14 +2477,15 @@ impl Coordinator {
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => table
-                .desc(
-                    &self
-                        .catalog()
-                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                )
-                .expect("desc called on table")
-                .into_owned(),
+            Some(table) => {
+                let name = self
+                    .catalog()
+                    .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                table
+                    .desc(&name, RelationVersion::Latest)
+                    .expect("desc called on table")
+                    .into_owned()
+            }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
                     mz_catalog::memory::error::Error {
@@ -3184,7 +3186,7 @@ impl Coordinator {
         let storage_sink_desc = StorageSinkDesc {
             from: sink.from,
             from_desc: from_entry
-                .desc_opt()
+                .desc_opt(RelationVersion::Latest)
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink

@@ -41,7 +41,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, Timestamp, VersionedRelationDesc};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
@@ -574,7 +574,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Table(Table {
                         create_sql: None,
-                        desc: table.desc.clone(),
+                        desc: VersionedRelationDesc::new(table.desc.clone()),
                         defaults: vec![Expr::null(); table.desc.arity()],
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::new()),

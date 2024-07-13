@@ -27,7 +27,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Timestamp, VersionedRelationDesc};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
 use mz_sql::catalog::{
@@ -528,7 +528,7 @@ impl From<CatalogEntry> for durable::Item {
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
     pub create_sql: Option<String>,
-    pub desc: RelationDesc,
+    pub desc: VersionedRelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
     #[serde(skip)]
@@ -933,18 +933,23 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc_opt().ok_or(SqlCatalogError::InvalidDependency {
-            name: name.to_string(),
-            typ: self.typ(),
-        })
+    pub fn desc(
+        &self,
+        name: &FullItemName,
+        version: RelationVersion,
+    ) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.desc_opt(version)
+            .ok_or(SqlCatalogError::InvalidDependency {
+                name: name.to_string(),
+                typ: self.typ(),
+            })
     }
 
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
+    pub fn desc_opt(&self, version: RelationVersion) -> Option<Cow<RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
-            CatalogItem::Table(tbl) => Some(Cow::Borrowed(&tbl.desc)),
+            CatalogItem::Table(tbl) => Some(Cow::Owned(tbl.desc.at_version(version))),
             CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
             CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
@@ -1504,19 +1509,23 @@ impl CatalogItem {
 impl CatalogEntry {
     /// Like [`CatalogEntry::desc_opt`], but returns an error if the catalog
     /// entry is not of a type that has a description.
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.item.desc(name)
+    pub fn desc(
+        &self,
+        name: &FullItemName,
+        version: RelationVersion,
+    ) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.item.desc(name, version)
     }
 
     /// Reports the description of the rows produced by this catalog entry, if
     /// this catalog entry produces rows.
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
-        self.item.desc_opt()
+    pub fn desc_opt(&self, version: RelationVersion) -> Option<Cow<RelationDesc>> {
+        self.item.desc_opt(version)
     }
 
     /// Reports if the item has columns.
-    pub fn has_columns(&self) -> bool {
-        self.item.desc_opt().is_some()
+    pub fn has_columns(&self, version: RelationVersion) -> bool {
+        self.item.desc_opt(version).is_some()
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -2292,8 +2301,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.oid()
     }
 
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc(name)
+    fn desc(
+        &self,
+        name: &FullItemName,
+        version: RelationVersion,
+    ) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.desc(name, version)
     }
 
     fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {

@@ -38,7 +38,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, RelationVersion,
+    ScalarType, Timestamp,
 };
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
@@ -392,7 +393,7 @@ pub fn plan_create_table(
 
     let table = Table {
         create_sql,
-        desc,
+        desc: desc.into(),
         defaults,
         temporary,
         compaction_window,
@@ -2631,7 +2632,10 @@ fn plan_sink(
     if from.id().is_system() {
         bail_unsupported!("creating a sink directly on a catalog object");
     }
-    let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
+    let desc = from.desc(
+        &scx.catalog.resolve_full_name(from.name()),
+        RelationVersion::Latest,
+    )?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
@@ -3191,21 +3195,27 @@ pub fn plan_create_index(
         )
     }
 
-    let on_desc = on.desc(&scx.catalog.resolve_full_name(on.name()))?;
+    let on_desc = on.desc(
+        &scx.catalog.resolve_full_name(on.name()),
+        RelationVersion::Latest,
+    )?;
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
             // `key_parts` is None if we're creating a "default" index.
-            on.desc(&scx.catalog.resolve_full_name(on.name()))?
-                .typ()
-                .default_key()
-                .iter()
-                .map(|i| match on_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![n.clone().into()]),
-                    _ => Expr::Value(Value::Number((i + 1).to_string())),
-                })
-                .collect()
+            on.desc(
+                &scx.catalog.resolve_full_name(on.name()),
+                RelationVersion::Latest,
+            )?
+            .typ()
+            .default_key()
+            .iter()
+            .map(|i| match on_desc.get_unambiguous_name(*i) {
+                Some(n) => Expr::Identifier(vec![n.clone().into()]),
+                _ => Expr::Value(Value::Number((i + 1).to_string())),
+            })
+            .collect()
         }
     };
     let keys = query::plan_index_exprs(scx, &on_desc, filled_key_parts.clone())?;
@@ -6139,7 +6149,7 @@ pub fn plan_alter_table_add_column(
         match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
             Some(item) => {
                 let item_name = scx.catalog.resolve_full_name(item.name());
-                let desc = item.desc(&item_name)?;
+                let desc = item.desc(&item_name, RelationVersion::Latest)?;
                 (item.id(), item_name, desc)
             }
             None => {
