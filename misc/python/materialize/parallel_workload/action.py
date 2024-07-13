@@ -153,6 +153,7 @@ class Action:
                 [
                     "cannot write in read-only mode",
                     "500: internal storage failure! ReadOnly",
+                    "was at a timestamp before its since",  # TODO: #28219
                 ]
             )
         if exe.db.scenario in (
