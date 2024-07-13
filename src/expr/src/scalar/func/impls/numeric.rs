@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use dec::{Decimal, OrderedDecimal, Rounding};
+use dec::{OrderedDecimal, Rounding};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{strconv, ColumnType, ScalarType};
@@ -305,12 +305,12 @@ sqlfunc!(
     fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
         let mut cx = numeric::cx_datum();
 
-        let divisor = Decimal::<13>::from(1024);
+        let divisor = Numeric::from(1024);
         let units = ["bytes", "kB", "MB", "GB", "TB", "PB"];
 
         for (pos, unit) in units[..units.len() - 1].iter().enumerate() {
             // only convert a to the next unit if abs(round(a)) >= 10 in that unit
-            if Decimal::from(-10239.5) < a && a < Decimal::from(10239.5) {
+            if Numeric::from(-10239.5) < a && a < Numeric::from(10239.5) {
                 // do not round bytes, as no conversion has happened
                 if pos > 0 {
                     cx.round(&mut a);
