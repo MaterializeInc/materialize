@@ -763,6 +763,8 @@ impl Value for ClientSeverity {
 pub enum TimeZone {
     /// UTC
     UTC,
+    /// GMT
+    GMT,
     /// Fixed offset from UTC, currently only "+00:00" is supported.
     /// A string representation is kept here for compatibility with Postgres.
     FixedOffset(&'static str),
@@ -772,6 +774,7 @@ impl TimeZone {
     fn as_str(&self) -> &'static str {
         match self {
             TimeZone::UTC => "UTC",
+            TimeZone::GMT => "GMT",
             TimeZone::FixedOffset(s) => s,
         }
     }
@@ -795,6 +798,8 @@ impl Value for TimeZone {
 
         if s == TimeZone::UTC.as_str() {
             Ok(TimeZone::UTC)
+        } else if s == TimeZone::GMT.as_str() {
+            Ok(TimeZone::GMT)
         } else if s == "+00:00" {
             Ok(TimeZone::FixedOffset("+00:00"))
         } else {
