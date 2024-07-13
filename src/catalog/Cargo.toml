@@ -17,6 +17,7 @@ bytesize = "1.1.0"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 derivative = "2.2.0"
 differential-dataflow = "0.12.0"
+enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 itertools = "0.10.5"

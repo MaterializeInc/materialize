@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::BitOrAssign;
 use std::{fmt, mem};
 
+use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
@@ -2378,8 +2379,20 @@ impl RustType<ProtoDomainLimit> for DomainLimit {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    EnumKind,
 )]
+#[enum_kind(EvalErrorKind)]
 pub enum EvalError {
     CharacterNotValidForEncoding(i32),
     CharacterTooLargeForEncoding(i32),
@@ -2695,6 +2708,12 @@ impl fmt::Display for EvalError {
 }
 
 impl EvalError {
+    pub fn redacted(&self) -> String {
+        match self {
+            _ => format!("{:?}", EvalErrorKind::from(self)),
+        }
+    }
+
     pub fn detail(&self) -> Option<String> {
         match self {
             EvalError::IncompatibleArrayDimensions { dims: None } => Some(

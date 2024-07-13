@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{fmt, io};
 
+use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_expr::EvalError;
 use mz_mysql_util::MySqlError;
@@ -46,7 +47,8 @@ use crate::pure::error::{
 };
 use crate::session::vars::VarError;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, EnumKind)]
+#[enum_kind(PlanErrorKind)]
 pub enum PlanError {
     /// This feature is not yet supported, but may be supported at some point in the future.
     Unsupported {
@@ -269,6 +271,12 @@ pub enum PlanError {
 }
 
 impl PlanError {
+    pub fn redacted(&self) -> String {
+        match self {
+            _ => format!("{:?}", PlanErrorKind::from(self)),
+        }
+    }
+
     pub(crate) fn ungrouped_column(item: &ScopeItem) -> PlanError {
         PlanError::UngroupedColumn {
             table: item.table_name.clone(),

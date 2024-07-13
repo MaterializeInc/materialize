@@ -2692,7 +2692,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::ne
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, database_name, search_path, transaction_isolation, execution_timestamp, transaction_id,
 transient_index_id, mz_version, began_at, finished_at, finished_status,
-rows_returned, execution_strategy
+rows_returned, execution_strategy, error_message_redacted
 FROM mz_internal.mz_statement_execution_history",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 }
@@ -2778,7 +2778,7 @@ pub static MZ_ACTIVITY_LOG_THINNED: Lazy<BuiltinView> = Lazy::new(|| {
         sql: "
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name, database_name, search_path,
 transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
-error_message, rows_returned, execution_strategy, transaction_id,
+error_message, error_message_redacted, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
 mpsh.session_id, prepared_at, statement_type, throttled_count,
 initial_application_name, authenticated_user
@@ -2826,7 +2826,7 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| {
     sql: "SELECT mralt.execution_id, mralt.sample_rate, mralt.cluster_id, mralt.application_name,
     mralt.cluster_name, mralt.database_name, mralt.search_path, mralt.transaction_isolation, mralt.execution_timestamp,
     mralt.transient_index_id, mralt.params, mralt.mz_version, mralt.began_at, mralt.finished_at,
-    mralt.finished_status, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
+    mralt.finished_status, mralt.error_message_redacted, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
     mralt.prepared_statement_id, mralt.sql_hash, mralt.prepared_statement_name, mralt.session_id,
     mralt.prepared_at, mralt.statement_type, mralt.throttled_count,
     mralt.initial_application_name, mralt.authenticated_user,

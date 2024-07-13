@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use enum_kinds::EnumKind;
 use mz_ore::str::StrExt;
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
@@ -21,7 +22,8 @@ pub struct Error {
     pub kind: ErrorKind,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EnumKind)]
+#[enum_kind(CatalogErrorKind)]
 pub enum ErrorKind {
     #[error("corrupt catalog: {detail}")]
     Corruption { detail: String },
@@ -103,6 +105,12 @@ pub enum ErrorKind {
 impl Error {
     pub fn new(kind: ErrorKind) -> Error {
         Error { kind }
+    }
+
+    pub fn redacted(&self) -> String {
+        match self {
+            _ => format!("{:?}", CatalogErrorKind::from(&self.kind)),
+        }
     }
 
     /// Reports additional details about the error, if any are available.

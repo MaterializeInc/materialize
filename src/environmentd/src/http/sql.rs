@@ -642,6 +642,7 @@ impl ResultSender for SqlResponse {
                     Some((
                         StatementEndedExecutionReason::Errored {
                             error: message.into(),
+                            error_redacted: message.into(),
                         },
                         ctx_extra,
                     )),
@@ -764,7 +765,10 @@ impl ResultSender for WebSocket {
                                     true,
                                     vec![WebSocketResponse::Error(err.into())],
                                     Some((
-                                        StatementEndedExecutionReason::Errored { error },
+                                        StatementEndedExecutionReason::Errored {
+                                            error,
+                                            error_redacted: "verify_datum_desc".into(),
+                                        },
                                         ctx_extra,
                                     )),
                                 );
@@ -804,7 +808,13 @@ impl ResultSender for WebSocket {
                                 vec![WebSocketResponse::Error(
                                     Error::Unstructured(anyhow!(error.clone())).into(),
                                 )],
-                                Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
+                                Some((
+                                    StatementEndedExecutionReason::Errored {
+                                        error,
+                                        error_redacted: "PeekResponseUnary::Error".into(),
+                                    },
+                                    ctx_extra,
+                                )),
                             )
                         }
                         Some(PeekResponseUnary::Canceled) => {

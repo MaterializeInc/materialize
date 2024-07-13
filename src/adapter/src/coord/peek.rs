@@ -496,10 +496,17 @@ impl crate::coord::Coordinator {
                             },
                         )
                     }
-                    Err(error) => (
-                        Err(AdapterError::ResultSize(error.clone())),
-                        StatementEndedExecutionReason::Errored { error },
-                    ),
+                    Err(error) => {
+                        let adapter_err = AdapterError::ResultSize(error.clone());
+                        let error_redacted = adapter_err.redacted();
+                        (
+                            Err(adapter_err),
+                            StatementEndedExecutionReason::Errored {
+                                error,
+                                error_redacted,
+                            },
+                        )
+                    }
                 };
             self.retire_execution(reason, std::mem::take(ctx_extra));
             return ret;
@@ -735,9 +742,10 @@ impl crate::coord::Coordinator {
                         }),
                     }
                 }
-                PeekResponse::Error(e) => {
-                    StatementEndedExecutionReason::Errored { error: e.clone() }
-                }
+                PeekResponse::Error(e) => StatementEndedExecutionReason::Errored {
+                    error: e.clone(),
+                    error_redacted: "PeekResponse::Error".into(),
+                },
                 PeekResponse::Canceled => StatementEndedExecutionReason::Canceled,
             };
             self.retire_execution(reason, ctx_extra);

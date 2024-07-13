@@ -13,6 +13,7 @@ use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
@@ -38,7 +39,8 @@ use tokio_postgres::error::SqlState;
 use crate::optimize::OptimizerError;
 
 /// Errors that can occur in the coordinator.
-#[derive(Debug)]
+#[derive(Debug, EnumKind)]
+#[enum_kind(AdapterErrorKind)]
 pub enum AdapterError {
     /// A `SUBSCRIBE` was requested whose `UP TO` bound precedes its `as_of` timestamp
     AbsurdSubscribeBounds {
@@ -554,6 +556,16 @@ impl AdapterError {
 
     pub fn internal<E: std::fmt::Display>(context: &str, e: E) -> AdapterError {
         AdapterError::Internal(format!("{context}: {e}"))
+    }
+
+    pub fn redacted(&self) -> String {
+        match self {
+            AdapterError::Catalog(e) => format!("Catalog({})", e.redacted()),
+            AdapterError::Eval(e) => format!("Eval({})", e.redacted()),
+            AdapterError::Optimizer(e) => format!("Optimizer({})", e.redacted()),
+            AdapterError::PlanError(e) => format!("Plan({})", e.redacted()),
+            _ => format!("{:?}", AdapterErrorKind::from(self)),
+        }
     }
 }
 
