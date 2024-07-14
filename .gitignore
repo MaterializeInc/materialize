@@ -54,6 +54,7 @@ flake.lock
 /bazel-materialize
 /bazel-out
 /bazel-testlogs
+/bazel-explain.log
 
 /src/testdrive/ci/protobuf-bin
 /src/testdrive/ci/protobuf-include
