@@ -744,7 +744,7 @@ impl MirScalarExpr {
                     match e {
                         MirScalarExpr::CallUnary { func, expr } => {
                             if *func == UnaryFunc::IsNull(func::IsNull) {
-                                if !expr.typ(column_types).nullable && !expr.could_error() {
+                                if !expr.typ(column_types).nullable {
                                     *e = MirScalarExpr::literal_false();
                                 } else {
                                     // Try to at least decompose IsNull into a disjunction
