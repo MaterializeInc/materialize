@@ -29,6 +29,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -40,6 +41,7 @@ use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch};
 use timely::{Container, PartialOrder};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::controller::error::{CollectionMissing, ERROR_TARGET_REPLICA_FAILED};
@@ -219,6 +221,16 @@ pub(super) struct Instance<T> {
     wallclock_lag: WallclockLagFn<T>,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+
+    /// Sender for updates to collection read holds.
+    ///
+    /// Copies of this sender are given to [`ReadHold`]s that are created in
+    /// [`Instance::acquire_read_hold`].
+    read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+    /// Receiver for updates to collection read holds.
+    ///
+    /// Received updates are applied by [`Instance::apply_read_hold_changes`].
+    read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
 }
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
@@ -731,6 +743,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             metrics: _,
             wallclock_lag: _,
             dyncfg: _,
+            read_holds_tx: _,
+            read_holds_rx: _,
         } = self;
 
         fn field(
@@ -794,6 +808,8 @@ where
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
+        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
+
         let collections = arranged_logs
             .iter()
             .map(|(_, id)| {
@@ -823,6 +839,8 @@ where
             metrics,
             wallclock_lag,
             dyncfg,
+            read_holds_tx,
+            read_holds_rx,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -873,6 +891,7 @@ where
     /// Panics if the compute instance still has collections installed.
     pub fn drop(mut self) {
         // Collections might have been dropped but not cleaned up yet.
+        self.apply_read_hold_changes();
         self.cleanup_collections();
 
         assert!(
@@ -1595,6 +1614,19 @@ where
         Ok(())
     }
 
+    /// Acquires a [`ReadHold`] for the identified compute collection.
+    pub fn acquire_read_hold(&mut self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        let collection = self.collection_mut(id)?;
+        let since = collection.implied_capability.clone();
+
+        let mut updates = ChangeBatch::new();
+        updates.extend(since.iter().map(|t| (t.clone(), 1)));
+        self.update_read_capabilities([(id, updates)].into());
+
+        let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
+        Ok(hold)
+    }
+
     /// Accept write frontier updates from the compute layer.
     ///
     /// # Panics
@@ -1777,6 +1809,12 @@ where
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends
     /// appropriate compaction commands.
+    ///
+    /// NOTE: The only caller of this method should be `apply_read_hold_changes`. Nobody else
+    /// should modify read capabilities directly. Instead, collection users should manage read
+    /// holds through [`ReadHold`] objects acquired through [`Instance::acquire_read_hold`].
+    ///
+    /// TODO(teskje): Restructure the code to enforce the above in the type system.
     #[mz_ore::instrument(level = "debug")]
     fn update_read_capabilities(&mut self, mut updates: BTreeMap<GlobalId, ChangeBatch<T>>) {
         // Records storage read capability updates.
@@ -1854,6 +1892,32 @@ where
             self.storage_collections
                 .update_read_capabilities(&mut storage_updates);
         }
+    }
+
+    /// Apply collection read hold changes pending in `read_holds_rx`.
+    fn apply_read_hold_changes(&mut self) {
+        use std::collections::btree_map::Entry;
+
+        let mut updates = BTreeMap::new();
+        while let Ok((id, mut changes)) = self.read_holds_rx.try_recv() {
+            if !self.collections.contains_key(&id) {
+                soft_panic_or_log!(
+                    "read hold change for absent collection (id={id}, changes={changes:?})"
+                );
+                continue;
+            }
+
+            match updates.entry(id) {
+                Entry::Vacant(e) => {
+                    e.insert(changes);
+                }
+                Entry::Occupied(mut e) => {
+                    e.get_mut().extend(changes.drain());
+                }
+            }
+        }
+
+        self.update_read_capabilities(updates);
     }
 
     /// Removes a registered peek and clean up associated state.
@@ -2210,6 +2274,7 @@ where
     pub fn maintain(&mut self) {
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
+        self.apply_read_hold_changes();
         self.schedule_collections();
         self.cleanup_collections();
         self.refresh_state_metrics();

@@ -50,6 +50,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
@@ -814,6 +815,18 @@ where
     ) -> Result<(), ReadPolicyError> {
         self.instance_mut(instance_id)?.set_read_policy(policies)?;
         Ok(())
+    }
+
+    /// Acquires a [`ReadHold`] for the identified compute collection.
+    pub fn acquire_read_hold(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<ReadHold<T>, CollectionUpdateError> {
+        let hold = self
+            .instance_mut(instance_id)?
+            .acquire_read_hold(collection_id)?;
+        Ok(hold)
     }
 
     #[mz_ore::instrument(level = "debug")]
