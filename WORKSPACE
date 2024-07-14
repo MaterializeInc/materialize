@@ -237,12 +237,18 @@ RUST_VERSION = "1.79.0"
 load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
 rust_toolchains(
     RUST_VERSION,
-    [
-        "aarch64-apple-darwin",
-        "aarch64-unknown-linux-gnu",
-        "x86_64-unknown-linux-gnu",
-        "x86_64-apple-darwin",
-    ]
+    {
+        "aarch64-apple-darwin": {
+            "rustc": "0d7890d57a879fdde1866049beb5d47319d9d7acc1968ec0b92d719917c137b3",
+            "clippy": "33e8feb81e31b991ad0e934c83ccd2b1acdafd944a3203e4afb7c7cbacbe41fc",
+            "cargo": "2cc674f17c18b0c01e0e5a8e5caedc26b0f499d2cc10605cf1a838e2cad9ef7d",
+            "llvm-tools": "326166f8862d2ecc10198f9c8bba89dfe64028187ddf417e916dc08c5d3deac7",
+            "rust-std": "89f16f3a6e8705c314c2f59186e0f8695ba43a58805c8450825888371fceaa25",
+        },
+        "aarch64-unknown-linux-gnu": {},
+        "x86_64-unknown-linux-gnu": {},
+        "x86_64-apple-darwin": {},
+    }
 )
 
 # Load all dependencies for crate_universe.
