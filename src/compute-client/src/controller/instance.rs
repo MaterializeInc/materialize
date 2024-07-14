@@ -124,6 +124,12 @@ impl From<ReadHoldError> for PeekError {
     }
 }
 
+impl From<CollectionMissing> for ReadHoldError {
+    fn from(error: CollectionMissing) -> Self {
+        ReadHoldError::CollectionMissing(error.0)
+    }
+}
+
 #[derive(Error, Debug)]
 pub(super) enum ReadPolicyError {
     #[error("collection does not exist: {0}")]
@@ -1471,24 +1477,15 @@ where
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
-        // When querying persist directly, we acquire read holds and verify that
-        // we can actually acquire them at the right time.
-        let mut maybe_storage_read_hold = None;
-        match &peek_target {
+        // Install a compaction hold on `id` at `timestamp`.
+        let read_hold = match &peek_target {
             PeekTarget::Index { .. } => {
-                let since = self.collection(id)?.read_capabilities.frontier();
-                if !since.less_equal(&timestamp) {
-                    return Err(PeekError::SinceViolation(id));
-                }
+                self.acquire_read_hold_at(id, Antichain::from_elem(timestamp.clone()))?
             }
-
             PeekTarget::Persist { .. } => {
-                let storage_read_hold =
-                    self.acquire_storage_read_hold_at(id, Antichain::from_elem(timestamp.clone()))?;
-
-                maybe_storage_read_hold = Some(storage_read_hold);
+                self.acquire_storage_read_hold_at(id, Antichain::from_elem(timestamp.clone()))?
             }
-        }
+        };
 
         if let Some(target) = target_replica {
             if !self.replica_exists(target) {
@@ -1496,30 +1493,15 @@ where
             }
         }
 
-        // Install a compaction hold on `id` at `timestamp`.
-        let mut updates = BTreeMap::new();
-        updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
-        match &peek_target {
-            PeekTarget::Index { .. } => self.update_read_capabilities(updates),
-            PeekTarget::Persist { .. } => self
-                .storage_collections
-                .update_read_capabilities(&mut updates),
-        };
-
-        // Drop the acquired read hold after we installed our old-style, manual
-        // read capabilities.
-        drop(maybe_storage_read_hold);
-
         let otel_ctx = OpenTelemetryContext::obtain();
         self.peeks.insert(
             uuid,
             PendingPeek {
-                target: peek_target.clone(),
-                time: timestamp.clone(),
                 target_replica,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: otel_ctx.clone(),
                 requested_at: Instant::now(),
+                _read_hold: read_hold,
             },
         );
 
@@ -1598,6 +1580,18 @@ where
     /// Acquires a [`ReadHold`] for the identified compute collection.
     pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
         self.collection(id).map(|c| c.implied_read_hold.clone())
+    }
+
+    /// Acquires a [`ReadHold`] for the identified compute collection at the desired frontier.
+    fn acquire_read_hold_at(
+        &mut self,
+        id: GlobalId,
+        frontier: Antichain<T>,
+    ) -> Result<ReadHold<T>, ReadHoldError> {
+        let mut hold = self.acquire_read_hold(id)?;
+        hold.try_downgrade(frontier)
+            .map_err(|_| ReadHoldError::SinceViolation(id))?;
+        Ok(hold)
     }
 
     /// Accept write frontier updates from the compute layer.
@@ -1894,19 +1888,11 @@ where
             return;
         };
 
-        // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold,
-        // to avoid the edge case that caused #16615.
+        // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
+        // (by dropping it), to avoid the edge case that caused #16615.
         self.send(ComputeCommand::CancelPeek { uuid });
 
-        let change = ChangeBatch::new_from(peek.time, -1);
-        match &peek.target {
-            PeekTarget::Index { id } => self.update_read_capabilities([(*id, change)].into()),
-            PeekTarget::Persist { id, .. } => {
-                let mut updates = [(*id, change)].into();
-                self.storage_collections
-                    .update_read_capabilities(&mut updates);
-            }
-        }
+        drop(peek);
     }
 
     pub fn handle_response(&mut self, response: ComputeResponse<T>, replica_id: ReplicaId) {
@@ -2228,11 +2214,7 @@ where
 }
 
 #[derive(Debug)]
-struct PendingPeek<T> {
-    /// Information about the collection targeted by the peek.
-    target: PeekTarget,
-    /// The peek time.
-    time: T,
+struct PendingPeek<T: Timestamp> {
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
     ///
     /// If this value is `None`, we pass on the first response.
@@ -2243,6 +2225,8 @@ struct PendingPeek<T> {
     ///
     /// Used to track peek durations.
     requested_at: Instant,
+    /// The read hold installed to serve this peek.
+    _read_hold: ReadHold<T>,
 }
 
 #[derive(Debug, Clone)]
