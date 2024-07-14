@@ -55,7 +55,8 @@ use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
@@ -144,7 +145,7 @@ impl ComputeReplicaLogging {
 }
 
 /// A controller for the compute layer.
-pub struct ComputeController<T> {
+pub struct ComputeController<T: Timestamp> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
@@ -819,12 +820,12 @@ where
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
     pub fn acquire_read_hold(
-        &mut self,
+        &self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
     ) -> Result<ReadHold<T>, CollectionUpdateError> {
         let hold = self
-            .instance_mut(instance_id)?
+            .instance(instance_id)?
             .acquire_read_hold(collection_id)?;
         Ok(hold)
     }
@@ -912,7 +913,7 @@ where
 
 /// A read-only handle to a compute instance.
 #[derive(Clone, Copy)]
-pub struct ComputeInstanceRef<'a, T> {
+pub struct ComputeInstanceRef<'a, T: Timestamp> {
     instance_id: ComputeInstanceId,
     instance: &'a Instance<T>,
 }
@@ -939,7 +940,7 @@ impl<T: ComputeControllerTimestamp> ComputeInstanceRef<'_, T> {
 /// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
 /// compute dataflow.
 #[derive(Debug)]
-pub struct CollectionState<T> {
+pub struct CollectionState<T: Timestamp> {
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
@@ -956,23 +957,28 @@ pub struct CollectionState<T> {
 
     /// Accumulation of read capabilities for the collection.
     ///
-    /// This accumulation will always contain `implied_capability` and `warmup_capability`, but may
-    /// also contain capabilities held by others who have read dependencies on this collection.
+    /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
+    /// collection, including `implied_read_hold` and `warmup_read_hold`.
     read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.
-    implied_capability: Antichain<T>,
-    /// A capability held to enable dataflow warmup.
+    /// A read hold maintaining the implicit capability of the collection.
+    ///
+    /// This capability is kept to ensure that the collection remains readable according to its
+    /// `read_policy`. It also ensures that read holds on the collection's dependencies are kept at
+    /// some time not greater than the collection's `write_frontier`, guaranteeing that the
+    /// collection's next outputs can always be computed without skipping times.
+    implied_read_hold: ReadHold<T>,
+    /// A read hold held to enable dataflow warmup.
     ///
     /// Dataflow warmup is an optimization that allows dataflows to immediately start hydrating
     /// even when their next output time (as implied by the `write_frontier`) is in the future.
     /// By installing a read capability derived from the write frontiers of the collection's
     /// inputs, we ensure that the as-of of new dataflows installed for the collection is at a time
     /// that is immediately available, so hydration can begin immediately too.
-    warmup_capability: Antichain<T>,
-    /// The policy to use to downgrade `self.implied_capability`.
+    warmup_read_hold: ReadHold<T>,
+    /// The policy to use to downgrade `self.implied_read_hold`.
     ///
     /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
-    /// collections, the `implied_capability` is only required for maintaining read holds on the
+    /// collections, the `implied_read_hold` is only required for maintaining read holds on the
     /// inputs, so we can immediately downgrade it to the `write_frontier`.
     read_policy: Option<ReadPolicy<T>>,
 
@@ -992,10 +998,10 @@ pub struct CollectionState<T> {
     collection_introspection: CollectionIntrospection<T>,
 }
 
-impl<T> CollectionState<T> {
+impl<T: Timestamp> CollectionState<T> {
     /// Reports the current read capability.
     pub fn read_capability(&self) -> &Antichain<T> {
-        &self.implied_capability
+        self.implied_read_hold.since()
     }
 
     /// Reports the current read frontier.
@@ -1023,6 +1029,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         as_of: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
         compute_dependencies: Vec<GlobalId>,
+        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
@@ -1033,20 +1040,30 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         let upper = as_of;
 
         // Initialize all read capabilities to the `since`.
-        let implied_capability = since.clone();
-        let warmup_capability = since.clone();
+        let implied_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx.clone());
+        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx);
 
         let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(implied_capability.iter().map(|time| (time.clone(), 1)));
-        read_capabilities.update_iter(warmup_capability.iter().map(|time| (time.clone(), 1)));
+        read_capabilities.update_iter(
+            implied_read_hold
+                .since()
+                .iter()
+                .map(|time| (time.clone(), 1)),
+        );
+        read_capabilities.update_iter(
+            warmup_read_hold
+                .since()
+                .iter()
+                .map(|time| (time.clone(), 1)),
+        );
 
         Self {
             log_collection: false,
             dropped: false,
             scheduled: false,
             read_capabilities,
-            implied_capability,
-            warmup_capability,
+            implied_read_hold,
+            warmup_read_hold,
             read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
@@ -1066,6 +1083,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state for a log collection.
     pub(crate) fn new_log_collection(
         id: GlobalId,
+        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(timely::progress::Timestamp::minimum());
@@ -1074,6 +1092,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             since,
             Vec::new(),
             Vec::new(),
+            read_holds_tx,
             introspection_tx,
             None,
             None,

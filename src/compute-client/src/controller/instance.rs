@@ -39,7 +39,7 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
-use timely::progress::{Antichain, ChangeBatch};
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::{Container, PartialOrder};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -149,7 +149,7 @@ pub(super) enum SubscribeTargetError {
 }
 
 /// The state we keep for a compute instance.
-pub(super) struct Instance<T> {
+pub(super) struct Instance<T: Timestamp> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
@@ -292,6 +292,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             as_of.clone(),
             storage_dependencies,
             compute_dependencies,
+            self.read_holds_tx.clone(),
             self.introspection_tx.clone(),
             initial_as_of,
             refresh_schedule,
@@ -813,8 +814,11 @@ where
         let collections = arranged_logs
             .iter()
             .map(|(_, id)| {
-                let state =
-                    CollectionState::new_log_collection(id.clone(), introspection_tx.clone());
+                let state = CollectionState::new_log_collection(
+                    id.clone(),
+                    read_holds_tx.clone(),
+                    introspection_tx.clone(),
+                );
                 (*id, state)
             })
             .collect();
@@ -1432,22 +1436,16 @@ where
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
     pub fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), CollectionMissing> {
-        let mut read_capability_updates = BTreeMap::new();
-
         for id in &ids {
             let collection = self.collection_mut(*id)?;
 
             // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
 
-            // Drop the implied and warmup read capabilities to announce that clients are not
+            // Drop the implied and warmup read holds to announce that clients are not
             // interested in the collection anymore.
-            let implied_capability = std::mem::take(&mut collection.implied_capability);
-            let warmup_capability = std::mem::take(&mut collection.warmup_capability);
-            let mut update = ChangeBatch::new();
-            update.extend(implied_capability.iter().map(|t| (t.clone(), -1)));
-            update.extend(warmup_capability.iter().map(|t| (t.clone(), -1)));
-            read_capability_updates.insert(*id, update);
+            collection.implied_read_hold.release();
+            collection.warmup_read_hold.release();
 
             // If the collection is a subscribe, stop tracking it. This ensures that the controller
             // ceases to produce `SubscribeResponse`s for this subscribe.
@@ -1455,10 +1453,6 @@ where
             // If the collection is a copy to, stop tracking it. This ensures that the controller
             // ceases to produce `CopyToResponse`s` for this copy to.
             self.copy_tos.remove(id);
-        }
-
-        if !read_capability_updates.is_empty() {
-            self.update_read_capabilities(read_capability_updates);
         }
 
         Ok(())
@@ -1591,40 +1585,19 @@ where
             }
         }
 
-        let mut read_capability_changes = BTreeMap::default();
         for (id, new_policy) in policies {
             let collection = self.expect_collection_mut(id);
-
-            let old_capability = &collection.implied_capability;
-            let new_capability = new_policy.frontier(collection.write_frontier.borrow());
-            if PartialOrder::less_than(old_capability, &new_capability) {
-                let entry = read_capability_changes
-                    .entry(id)
-                    .or_insert_with(ChangeBatch::new);
-                entry.extend(old_capability.iter().map(|t| (t.clone(), -1)));
-                entry.extend(new_capability.iter().map(|t| (t.clone(), 1)));
-                collection.implied_capability = new_capability;
-            }
-
+            let new_since = new_policy.frontier(collection.write_frontier.borrow());
+            let _ = collection.implied_read_hold.try_downgrade(new_since);
             collection.read_policy = Some(new_policy);
         }
-        if !read_capability_changes.is_empty() {
-            self.update_read_capabilities(read_capability_changes);
-        }
+
         Ok(())
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
-    pub fn acquire_read_hold(&mut self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
-        let collection = self.collection_mut(id)?;
-        let since = collection.implied_capability.clone();
-
-        let mut updates = ChangeBatch::new();
-        updates.extend(since.iter().map(|t| (t.clone(), 1)));
-        self.update_read_capabilities([(id, updates)].into());
-
-        let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
-        Ok(hold)
+    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        self.collection(id).map(|c| c.implied_read_hold.clone())
     }
 
     /// Accept write frontier updates from the compute layer.
@@ -1769,7 +1742,6 @@ where
     fn maybe_update_global_write_frontiers(&mut self, updates: &BTreeMap<GlobalId, Antichain<T>>) {
         // Compute and apply read capability downgrades that result from collection frontier
         // advancements.
-        let mut read_capability_changes = BTreeMap::new();
         for (id, new_upper) in updates {
             let collection = self.expect_collection_mut(*id);
 
@@ -1779,7 +1751,6 @@ where
 
             collection.write_frontier.clone_from(new_upper);
 
-            let old_since = &collection.implied_capability;
             let new_since = match &collection.read_policy {
                 Some(read_policy) => {
                     // For readable collections the read frontier is determined by applying the
@@ -1794,16 +1765,7 @@ where
                 }
             };
 
-            if PartialOrder::less_than(old_since, &new_since) {
-                let mut update = ChangeBatch::new();
-                update.extend(old_since.iter().map(|t| (t.clone(), -1)));
-                update.extend(new_since.iter().map(|t| (t.clone(), 1)));
-                read_capability_changes.insert(*id, update);
-                collection.implied_capability = new_since;
-            }
-        }
-        if !read_capability_changes.is_empty() {
-            self.update_read_capabilities(read_capability_changes);
+            let _ = collection.implied_read_hold.try_downgrade(new_since);
         }
     }
 
@@ -2211,10 +2173,7 @@ where
             // For write-only collections that have advanced to the empty frontier, we can drop the
             // warmup capability entirely. There is no reason why we would need to hydrate those
             // collections again, so being able to warm them up is not useful.
-            if collection.read_policy.is_none()
-                && collection.write_frontier.is_empty()
-                && !collection.warmup_capability.is_empty()
-            {
+            if collection.read_policy.is_none() && collection.write_frontier.is_empty() {
                 new_capabilities.insert(*id, Antichain::new());
                 continue;
             }
@@ -2244,25 +2203,12 @@ where
                 }
             }
 
-            if PartialOrder::less_than(&collection.warmup_capability, &new_capability) {
-                new_capabilities.insert(*id, new_capability);
-            }
+            new_capabilities.insert(*id, new_capability);
         }
 
-        let mut read_capability_changes = BTreeMap::new();
         for (id, new_capability) in new_capabilities {
             let collection = self.expect_collection_mut(id);
-            let old_capability = &collection.warmup_capability;
-
-            let mut update = ChangeBatch::new();
-            update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
-            update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
-            read_capability_changes.insert(id, update);
-            collection.warmup_capability = new_capability;
-        }
-
-        if !read_capability_changes.is_empty() {
-            self.update_read_capabilities(read_capability_changes);
+            let _ = collection.warmup_read_hold.try_downgrade(new_capability);
         }
     }
 
