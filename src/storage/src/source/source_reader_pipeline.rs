@@ -170,11 +170,6 @@ where
 {
     let worker_id = config.worker_id;
     let id = config.id;
-    info!(
-        %id,
-        as_of = %config.as_of.pretty(),
-        "timely-{worker_id} building source pipeline",
-    );
 
     let mut tokens = vec![];
 
@@ -549,7 +544,11 @@ where
                         Event::Messages(_, _) => unreachable!(),
                     });
                     source_upper.update_iter(progress);
-                    trace!("timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
+                    if source_upper.is_empty() {
+                        info!("timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
+                    } else {
+                        trace!("timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
+                    }
                 }
             }
         }
@@ -678,11 +677,20 @@ where
                         // orders, and simply write "classic" timely code here, whereby we store
                         // messages until we see frontiers progress.
                         source_upper.update_iter(changes);
-                        trace!(
-                            "timely-{worker_id} reclock({id}) \
-                            received source progress: source_upper={}",
-                            source_upper.pretty()
-                        );
+                        if source_upper.is_empty() {
+                            info!(
+                                "timely-{worker_id} reclock({id}) \
+                                received source progress: source_upper={}",
+                                source_upper.pretty()
+                            );
+
+                        } else {
+                            trace!(
+                                "timely-{worker_id} reclock({id}) \
+                                received source progress: source_upper={}",
+                                source_upper.pretty()
+                            );
+                        }
                         work_to_do.notify_one();
                     }
                     Event::Messages(time, mut batch) => {
@@ -782,15 +790,20 @@ where
                     let into_ready_upper = timestamper
                         .reclock_frontier(ready_upper.borrow())
                         .expect("uninitialized reclock follower");
-                    trace!(
-                        "timely-{worker_id} reclock({id}) downgrading timestamper: since={}",
-                        into_ready_upper.pretty()
-                    );
 
                     cap_set.downgrade(into_ready_upper.elements());
                     timestamper.compact(into_ready_upper.clone());
                     if into_ready_upper.is_empty() {
+                        info!(
+                            "timely-{worker_id} reclock({id}) downgrading timestamper: since={}",
+                            into_ready_upper.pretty()
+                        );
                         return;
+                    } else {
+                        trace!(
+                            "timely-{worker_id} reclock({id}) downgrading timestamper: since={}",
+                            into_ready_upper.pretty()
+                        );
                     }
                 }
             }
