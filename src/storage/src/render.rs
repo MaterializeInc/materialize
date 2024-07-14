@@ -199,6 +199,7 @@
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
@@ -212,6 +213,7 @@ use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
@@ -259,6 +261,14 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 "timely-{worker_id} building {} source pipeline", connection.name(),
             );
 
+            let busy_signal = if dyncfgs::SUSPENDABLE_SOURCES
+                .get(storage_state.storage_configuration.config_set())
+            {
+                Arc::new(Semaphore::new(1))
+            } else {
+                Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
+            };
+
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
                 id: primary_source_id,
@@ -284,6 +294,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 // This might quite a large clone, but its just during rendering
                 config: storage_state.storage_configuration.clone(),
                 remap_collection_id: description.remap_collection_id.clone(),
+                busy_signal: Arc::clone(&busy_signal),
             };
 
             let (mut outputs, source_health, source_tokens) = match connection {

@@ -11,9 +11,7 @@
 //!
 //! See [`render_source`] for more details.
 
-use std::collections::BTreeMap;
 use std::iter;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection};
