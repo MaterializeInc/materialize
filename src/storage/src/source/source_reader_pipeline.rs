@@ -69,6 +69,7 @@ use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, PartialOrder};
+use tokio::sync::Semaphore;
 use tokio_stream::wrappers::WatchStream;
 use tracing::{info, trace};
 
@@ -124,6 +125,9 @@ pub struct RawSourceCreationConfig {
     pub config: StorageConfiguration,
     /// The ID of this source remap/progress collection.
     pub remap_collection_id: GlobalId,
+    // A semaphore that should be acquired by async operators in order to signal that upstream
+    // operators should slow down.
+    pub busy_signal: Arc<Semaphore>,
 }
 
 impl RawSourceCreationConfig {
@@ -447,6 +451,7 @@ where
         shared_remap_upper,
         config: _,
         remap_collection_id,
+        busy_signal: _,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -605,6 +610,7 @@ where
         shared_remap_upper: _,
         config: _,
         remap_collection_id: _,
+        busy_signal: _,
     } = config;
 
     // TODO(guswynn): expose function
