@@ -40,7 +40,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::{Container, PartialOrder};
+use timely::PartialOrder;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -286,8 +286,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         &mut self,
         id: GlobalId,
         as_of: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
-        compute_dependencies: Vec<GlobalId>,
+        storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
+        compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         write_only: bool,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
@@ -713,7 +713,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// List compute collections that depend on the given collection.
     pub fn collection_reverse_dependencies(&self, id: GlobalId) -> impl Iterator<Item = &GlobalId> {
         self.collections_iter().filter_map(move |(id2, state)| {
-            if state.compute_dependencies.contains(&id) {
+            if state.compute_dependencies.contains_key(&id) {
                 Some(id2)
             } else {
                 None
@@ -1147,40 +1147,20 @@ where
         // is a valid read capability for all inputs, which is the join of all input `since`s.
         let mut replica_input_frontier = Antichain::from_elem(T::minimum());
 
-        // Record all transitive dependencies of the outputs.
-        let mut storage_dependencies = Vec::new();
-        let mut compute_dependencies = Vec::new();
+        // Collect all dependencies of the dataflow, and read holds on them.
+        let mut storage_dependencies = BTreeMap::new();
+        let mut compute_dependencies = BTreeMap::new();
 
-        // Any potentially acquired STORAGE read holds. We acquire them and
-        // check whether our as_of is valid. They are dropped once we installed
-        // read capabilities manually.
-        //
-        // TODO: Instead of acquiring these and then dropping later, we should
-        // instead store them and don't "manually" acquire read holds using
-        // `update_read_capabilities`.
-        let mut storage_read_holds = Vec::new();
-
-        // Validate sources have `since.less_equal(as_of)`.
         for source_id in dataflow.source_imports.keys() {
-            let storage_read_hold = self.acquire_storage_read_hold_at(*source_id, as_of.clone())?;
-
-            storage_dependencies.push(*source_id);
-            replica_input_frontier.join_assign(storage_read_hold.since());
-
-            storage_read_holds.push(storage_read_hold);
+            let read_hold = self.acquire_storage_read_hold_at(*source_id, as_of.clone())?;
+            replica_input_frontier.join_assign(read_hold.since());
+            storage_dependencies.insert(*source_id, read_hold);
         }
 
-        // Validate indexes have `since.less_equal(as_of)`.
-        // TODO(mcsherry): Instead, return an error from the constructing method.
         for index_id in dataflow.index_imports.keys() {
-            let collection = self.collection(*index_id)?;
-            let since = collection.read_capabilities.frontier();
-            if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
-                Err(DataflowCreationError::SinceViolation(*index_id))?;
-            }
-
-            compute_dependencies.push(*index_id);
-            replica_input_frontier.join_assign(&since.to_owned());
+            let read_hold = self.acquire_read_hold_at(*index_id, as_of.clone())?;
+            replica_input_frontier.join_assign(read_hold.since());
+            compute_dependencies.insert(*index_id, read_hold);
         }
 
         // If the `as_of` is empty, we are not going to create a dataflow, so replicas won't read
@@ -1188,39 +1168,6 @@ where
         if as_of.is_empty() {
             replica_input_frontier = Antichain::new();
         }
-
-        // Canonicalize dependencies.
-        // Probably redundant based on key structure, but doing for sanity.
-        storage_dependencies.sort();
-        storage_dependencies.dedup();
-        compute_dependencies.sort();
-        compute_dependencies.dedup();
-
-        // We will bump the internals of each input by the number of dependents (outputs).
-        let outputs = dataflow.sink_exports.len() + dataflow.index_exports.len();
-        let mut changes = ChangeBatch::new();
-        for time in as_of.iter() {
-            // TODO(benesch): fix this dangerous use of `as`.
-            #[allow(clippy::as_conversions)]
-            changes.update(time.clone(), outputs as i64);
-        }
-        // Update storage read capabilities for inputs.
-        let mut storage_read_updates = storage_dependencies
-            .iter()
-            .map(|id| (*id, changes.clone()))
-            .collect();
-        self.storage_collections
-            .update_read_capabilities(&mut storage_read_updates);
-        // Drop the acquired read holds after we installed our old-style, manual
-        // read capabilities.
-        drop(storage_read_holds);
-
-        // Update compute read capabilities for inputs.
-        let compute_read_updates = compute_dependencies
-            .iter()
-            .map(|id| (*id, changes.clone()))
-            .collect();
-        self.update_read_capabilities(compute_read_updates);
 
         // Install collection state for each of the exports.
         for export_id in dataflow.export_ids() {
@@ -1406,14 +1353,14 @@ where
             // available. An input is available when its frontier is greater
             // than the `as_of`, i.e., all input data up to and including the
             // `as_of` has been sealed.
-            let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
-                let dep = &self.expect_collection(*id);
+            let compute_frontiers = collection.compute_dependency_ids().map(|id| {
+                let dep = &self.expect_collection(id);
                 &dep.write_frontier
             });
 
             let storage_frontiers = self
                 .storage_collections
-                .collections_frontiers(collection.storage_dependencies.clone())
+                .collections_frontiers(collection.storage_dependency_ids().collect())
                 .expect("must exist");
             let storage_frontiers = storage_frontiers.iter().map(|f| &f.write_frontier);
 
@@ -1675,9 +1622,9 @@ where
             }
 
             // Update per-replica read holds on storage dependencies.
-            for storage_id in &collection.storage_dependencies {
+            for storage_id in collection.storage_dependency_ids() {
                 let update = storage_read_capability_changes
-                    .entry(*storage_id)
+                    .entry(storage_id)
                     .or_insert_with(|| ChangeBatch::new());
                 if let Some(old) = &old_cap {
                     update.extend(old.iter().map(|time| (time.clone(), -1)));
@@ -1709,9 +1656,9 @@ where
             let last_cap = collection.replica_input_frontiers.remove(&replica_id);
             if let Some(frontier) = last_cap {
                 if !frontier.is_empty() {
-                    for storage_id in &collection.storage_dependencies {
+                    for storage_id in collection.storage_dependency_ids() {
                         let update = storage_read_capability_changes
-                            .entry(*storage_id)
+                            .entry(storage_id)
                             .or_insert_with(ChangeBatch::new);
                         update.extend(frontier.iter().map(|time| (time.clone(), -1)));
                     }
@@ -1772,16 +1719,8 @@ where
     ///
     /// TODO(teskje): Restructure the code to enforce the above in the type system.
     #[mz_ore::instrument(level = "debug")]
-    fn update_read_capabilities(&mut self, mut updates: BTreeMap<GlobalId, ChangeBatch<T>>) {
-        // Records storage read capability updates.
-        let mut storage_updates = BTreeMap::default();
-        // Records compute collections with downgraded read frontiers.
-        let mut compute_downgraded = BTreeSet::default();
-
-        // We must not rely on any specific relative ordering of `GlobalId`s.
-        // That said, it is reasonable to assume that collections generally have greater IDs than
-        // their dependencies, so starting with the largest is a useful optimization.
-        while let Some((id, mut update)) = updates.pop_last() {
+    fn update_read_capabilities(&mut self, updates: BTreeMap<GlobalId, ChangeBatch<T>>) {
+        for (id, mut update) in updates {
             let Some(collection) = self.collections.get_mut(&id) else {
                 tracing::error!(
                     %id, ?update,
@@ -1813,40 +1752,29 @@ where
             // Apply read capability updates and learn about resulting changes to the read
             // frontier.
             let changes = collection.read_capabilities.update_iter(update.drain());
-            update.extend(changes);
-
-            if update.is_empty() {
+            if changes.count() == 0 {
                 continue; // read frontier did not change
             }
 
-            compute_downgraded.insert(id);
+            let new_since = collection.read_frontier().to_owned();
 
-            // Propagate read frontier updates to dependencies.
-            for dep_id in &collection.compute_dependencies {
-                updates
-                    .entry(*dep_id)
-                    .or_insert_with(ChangeBatch::new)
-                    .extend(update.iter().cloned());
+            // Propagate read frontier update to dependencies.
+            for read_hold in collection.compute_dependencies.values_mut() {
+                read_hold
+                    .try_downgrade(new_since.clone())
+                    .expect("frontiers don't regress");
             }
-            for dep_id in &collection.storage_dependencies {
-                storage_updates
-                    .entry(*dep_id)
-                    .or_insert_with(ChangeBatch::new)
-                    .extend(update.iter().cloned());
+            for read_hold in collection.storage_dependencies.values_mut() {
+                read_hold
+                    .try_downgrade(new_since.clone())
+                    .expect("frontiers don't regress");
             }
-        }
 
-        // Produce `AllowCompaction` commands for collections that had read frontier downgrades.
-        for id in compute_downgraded {
-            let collection = self.expect_collection(id);
-            let frontier = collection.read_frontier().to_owned();
-            self.send(ComputeCommand::AllowCompaction { id, frontier });
-        }
-
-        // Report storage read capability updates.
-        if !storage_updates.is_empty() {
-            self.storage_collections
-                .update_read_capabilities(&mut storage_updates);
+            // Produce `AllowCompaction` command.
+            self.send(ComputeCommand::AllowCompaction {
+                id,
+                frontier: new_since,
+            });
         }
     }
 
@@ -2164,16 +2092,14 @@ where
                 continue;
             }
 
-            let compute_frontiers = collection.compute_dependencies.iter().flat_map(|dep_id| {
-                let collection = self.collections.get(dep_id);
+            let compute_frontiers = collection.compute_dependency_ids().flat_map(|dep_id| {
+                let collection = self.collections.get(&dep_id);
                 collection.map(|c| c.write_frontier.clone())
             });
 
             let existing_storage_dependencies = collection
-                .storage_dependencies
-                .iter()
-                .filter(|id| self.storage_collections.check_exists(**id).is_ok())
-                .copied()
+                .storage_dependency_ids()
+                .filter(|id| self.storage_collections.check_exists(*id).is_ok())
                 .collect::<Vec<_>>();
             let storage_frontiers = self
                 .storage_collections

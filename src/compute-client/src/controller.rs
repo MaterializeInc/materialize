@@ -982,10 +982,12 @@ pub struct CollectionState<T: Timestamp> {
     /// inputs, so we can immediately downgrade it to the `write_frontier`.
     read_policy: Option<ReadPolicy<T>>,
 
-    /// Storage identifiers on which this collection depends.
-    storage_dependencies: Vec<GlobalId>,
-    /// Compute identifiers on which this collection depends.
-    compute_dependencies: Vec<GlobalId>,
+    /// Storage identifiers on which this collection depends, and read holds this collection
+    /// requires on them.
+    storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
+    /// Compute identifiers on which this collection depends, and read holds this collection
+    /// requires on them.
+    compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
 
     /// The write frontier of this collection.
     write_frontier: Antichain<T>,
@@ -1014,11 +1016,18 @@ impl<T: Timestamp> CollectionState<T> {
         self.write_frontier.borrow()
     }
 
+    fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.storage_dependencies.keys().copied()
+    }
+
+    fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.compute_dependencies.keys().copied()
+    }
+
     /// Reports the IDs of the dependencies of this collection.
     fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        let compute = self.compute_dependencies.iter().copied();
-        let storage = self.storage_dependencies.iter().copied();
-        compute.chain(storage)
+        self.compute_dependency_ids()
+            .chain(self.storage_dependency_ids())
     }
 }
 
@@ -1027,8 +1036,8 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     pub(crate) fn new(
         collection_id: GlobalId,
         as_of: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
-        compute_dependencies: Vec<GlobalId>,
+        storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
+        compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         initial_as_of: Option<Antichain<T>>,
@@ -1090,8 +1099,8 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         let mut state = Self::new(
             id,
             since,
-            Vec::new(),
-            Vec::new(),
+            Default::default(),
+            Default::default(),
             read_holds_tx,
             introspection_tx,
             None,
