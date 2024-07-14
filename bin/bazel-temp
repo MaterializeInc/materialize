@@ -20,12 +20,8 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-# 1. Run cargo-gazelle to generate BUILD files.
-try cargo run --release --no-default-features --manifest-path=misc/bazel/cargo-gazelle/Cargo.toml -- --path Cargo.toml
-
-# 2. Re-pin Bazel's notion of our external dependencies.
-export CARGO_BAZEL_REPIN=1
-try bazel sync --only=crates_io
+# 1. Regenerate Bazel files.
+bin/bazel gen
 
 # 3. Build `environmentd`, `clusterd`, and `balancerd` with optimizations.
-try bazel build //src/environmentd:environmentd //src/clusterd:clusterd //src/balancerd:mz_balancerd_bin -c opt --remote_cache=https://bazel-remote.dev.materialize.com
+bin/bazel build //src/environmentd:environmentd //src/clusterd:clusterd //src/balancerd:mz_balancerd_bin -c opt --remote_cache=https://bazel-remote.dev.materialize.com
