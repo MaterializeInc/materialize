@@ -12,6 +12,7 @@
 import argparse
 import atexit
 import os
+import pathlib
 import shlex
 import shutil
 import signal
@@ -122,8 +123,8 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
-        "--disable-mac-codesigning",
-        help="Disables the limited codesigning we do on macOS to support Instruments",
+        "--enable-mac-codesigning",
+        help="Enables the limited codesigning we do on macOS to support Instruments",
         action="store_true",
     )
     parser.add_argument(
@@ -148,6 +149,12 @@ def main() -> int:
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--bazel",
+        help="Build with Bazel (not supported by all options)",
+        default=False,
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -158,41 +165,54 @@ def main() -> int:
 
     env = dict(os.environ)
     if args.program in KNOWN_PROGRAMS:
-        (build_retcode, built_programs) = _build(args, extra_programs=[args.program])
+        if args.bazel:
+            build_func = _bazel_build
+        else:
+            build_func = _cargo_build
+
+        (build_retcode, built_programs) = build_func(
+            args, extra_programs=[args.program]
+        )
+
         if args.build_only:
             return build_retcode
 
-        if args.release:
-            if args.sanitizer != "none":
-                artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "release"
-            else:
-                artifact_path = MZ_ROOT / "target" / "release"
-        else:
-            if args.sanitizer != "none":
-                artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "debug"
-            else:
-                artifact_path = MZ_ROOT / "target" / "debug"
-
-        if args.disable_mac_codesigning:
-            if sys.platform != "darwin":
-                print("Ignoring --disable-mac-codesigning since we're not on macOS")
-            else:
-                print("Disabled macOS Codesigning")
-        elif sys.platform == "darwin":
+        if args.enable_mac_codesigning:
             for program in built_programs:
-                path = artifact_path / program
-                _macos_codesign(str(path))
+                if sys.platform == "darwin":
+                    _macos_codesign(program)
+            if sys.platform != "darwin":
+                print("Ignoring --enable-mac-codesigning since we're not on macOS")
+        else:
+            print("Disabled macOS Codesigning")
 
         if args.wrapper:
             command = shlex.split(args.wrapper)
         else:
             command = []
-        command.append(str(artifact_path / args.program))
+
+        mzdata = MZ_ROOT / "mzdata"
+        mzdata.mkdir(exist_ok=True)
+
+        # Move all built programs into the same directory to make it easier for
+        # downstream consumers.
+        binaries_dir = mzdata / "binaries"
+        binaries_dir.mkdir(exist_ok=True)
+        binaries = []
+        for program in built_programs:
+            src_path = pathlib.Path(program)
+            dst_path = binaries_dir / src_path.name
+            if os.path.lexists(dst_path) and os.path.islink(dst_path):
+                os.unlink(dst_path)
+            os.symlink(src_path, dst_path)
+            binaries.append(str(dst_path))
+
+        # HACK(parkmycar): The last program is the one requested by the user.
+        command.append(binaries[-1])
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
-            mzdata = MZ_ROOT / "mzdata"
             scratch = MZ_ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
@@ -221,7 +241,6 @@ def main() -> int:
                     else:
                         path.unlink()
 
-            mzdata.mkdir(exist_ok=True)
             scratch.mkdir(exist_ok=True)
             environment_file = mzdata / "environment-id"
             try:
@@ -259,7 +278,12 @@ def main() -> int:
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             command += [f"--postgres-url={args.postgres}", *args.args]
     elif args.program == "test":
-        (build_retcode, _) = _build(args)
+        if args.bazel:
+            raise UIError(
+                "testing with Bazel is not yet supported, go bug Parker about it"
+            )
+
+        (build_retcode, _) = _cargo_build(args)
         if args.build_only:
             return build_retcode
 
@@ -336,7 +360,49 @@ def main() -> int:
     exit(proc.returncode)
 
 
-def _build(
+def _bazel_build(
+    args: argparse.Namespace, extra_programs: list[str] = []
+) -> tuple[int, list[str]]:
+    dict(os.environ)
+    command = _bazel_command(args, ["build"])
+
+    programs = [*REQUIRED_SERVICES, *extra_programs]
+    targets = [_bazel_target(program) for program in programs]
+    command += targets
+
+    completed_proc = spawn.runv(command)
+    artifacts = [str(_bazel_artifact_path(args, t)) for t in targets]
+
+    return (completed_proc.returncode, artifacts)
+
+
+def _bazel_target(program: str) -> str:
+    if program == "environmentd":
+        return "//src/environmentd:environmentd"
+    elif program == "clusterd":
+        return "//src/clusterd:clusterd"
+    elif program == "sqllogictest":
+        return "//src/sqllogictest:sqllogictest"
+    else:
+        raise UIError(f"unknown program {program}")
+
+
+def _bazel_command(args: argparse.Namespace, subcommands: list[str]) -> list[str]:
+    command = ["bazel"] + subcommands
+
+    if args.release:
+        command += ["-c", "opt"]
+    return command
+
+
+def _bazel_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
+    cmd = _bazel_command(args, ["cquery", "--output=files"]) + [program]
+    raw_path = subprocess.check_output(cmd, text=True)
+    relative_path = pathlib.Path(raw_path.strip())
+    return MZ_ROOT / relative_path
+
+
+def _cargo_build(
     args: argparse.Namespace, extra_programs: list[str] = []
 ) -> tuple[int, list[str]]:
     env = dict(os.environ)
@@ -378,23 +444,9 @@ def _build(
         command += ["--bin", program]
     completed_proc = spawn.runv(command, env=env)
 
-    return (completed_proc.returncode, programs)
+    artifacts = [str(_cargo_artifact_path(args, program)) for program in programs]
 
-
-def _macos_codesign(path: str) -> None:
-    env = dict(os.environ)
-    command = ["codesign"]
-    command.extend(["-s", "-", "-f", "--entitlements"])
-
-    # write our entitlements file to a temp path
-    temp = tempfile.NamedTemporaryFile()
-    temp.write(bytes(MACOS_ENTITLEMENTS_DATA, "utf-8"))
-    temp.flush()
-
-    command.append(temp.name)
-    command.append(path)
-
-    spawn.runv(command, env=env)
+    return (completed_proc.returncode, artifacts)
 
 
 def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
@@ -411,6 +463,37 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
     if args.sanitizer != "none":
         command += ["-Zbuild-std", "--target", SANITIZER_TARGET]
     return command
+
+
+def _cargo_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
+    if args.release:
+        if args.sanitizer != "none":
+            artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "release"
+        else:
+            artifact_path = MZ_ROOT / "target" / "release"
+    else:
+        if args.sanitizer != "none":
+            artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "debug"
+        else:
+            artifact_path = MZ_ROOT / "target" / "debug"
+
+    return artifact_path / program
+
+
+def _macos_codesign(path: str) -> None:
+    env = dict(os.environ)
+    command = ["codesign"]
+    command.extend(["-s", "-", "-f", "--entitlements"])
+
+    # write our entitlements file to a temp path
+    temp = tempfile.NamedTemporaryFile()
+    temp.write(bytes(MACOS_ENTITLEMENTS_DATA, "utf-8"))
+    temp.flush()
+
+    command.append(temp.name)
+    command.append(path)
+
+    spawn.runv(command, env=env)
 
 
 def _run_sql(url: str, sql: str) -> None:
