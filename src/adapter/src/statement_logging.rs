@@ -95,6 +95,7 @@ pub enum StatementEndedExecutionReason {
     Canceled,
     Errored {
         error: String,
+        error_redacted: String,
     },
     Aborted,
 }
@@ -140,6 +141,7 @@ impl From<&Result<ExecuteResponse, AdapterError>> for StatementEndedExecutionRea
             Ok(resp) => resp.into(),
             Err(e) => StatementEndedExecutionReason::Errored {
                 error: e.to_string(),
+                error_redacted: e.redacted(),
             },
         }
     }

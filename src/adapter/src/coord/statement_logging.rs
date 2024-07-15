@@ -495,6 +495,8 @@ impl Coordinator {
             Datum::Null,
             // error_message
             Datum::Null,
+            // error_message_redacted
+            Datum::Null,
             // rows_returned
             Datum::Null,
             // execution_status
@@ -560,23 +562,31 @@ impl Coordinator {
         let mut row = Row::default();
         let mut packer = row.packer();
         Self::pack_statement_execution_inner(began_record, &mut packer);
-        let (status, error_message, rows_returned, execution_strategy) = match &ended_record.reason
-        {
-            StatementEndedExecutionReason::Success {
-                rows_returned,
-                execution_strategy,
-            } => (
-                "success",
-                None,
-                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
-                execution_strategy.map(|es| es.name()),
-            ),
-            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
-            StatementEndedExecutionReason::Errored { error } => {
-                ("error", Some(error.as_str()), None, None)
-            }
-            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
-        };
+        let (status, error_message, error_message_redacted, rows_returned, execution_strategy) =
+            match &ended_record.reason {
+                StatementEndedExecutionReason::Success {
+                    rows_returned,
+                    execution_strategy,
+                } => (
+                    "success",
+                    None,
+                    None,
+                    rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                    execution_strategy.map(|es| es.name()),
+                ),
+                StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
+                StatementEndedExecutionReason::Errored {
+                    error,
+                    error_redacted,
+                } => (
+                    "error",
+                    Some(error.as_str()),
+                    Some(error_redacted.as_str()),
+                    None,
+                    None,
+                ),
+                StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
+            };
         packer.extend([
             Datum::TimestampTz(
                 to_datetime(ended_record.ended_at)
@@ -585,6 +595,7 @@ impl Coordinator {
             ),
             status.into(),
             error_message.into(),
+            error_message_redacted.into(),
             rows_returned.into(),
             execution_strategy.into(),
         ]);

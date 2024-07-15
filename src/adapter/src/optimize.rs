@@ -63,6 +63,7 @@ pub mod view;
 
 use std::panic::AssertUnwindSafe;
 
+use enum_kinds::EnumKind;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
@@ -256,7 +257,8 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
 // ===============
 
 /// Error types that can be generated during optimization.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, EnumKind)]
+#[enum_kind(OptimizerErrorKind)]
 pub enum OptimizerError {
     #[error("{0}")]
     PlanError(#[from] PlanError),
@@ -284,6 +286,12 @@ impl From<String> for OptimizerError {
 }
 
 impl OptimizerError {
+    pub fn redacted(&self) -> String {
+        match self {
+            _ => format!("{:?}", OptimizerErrorKind::from(self)),
+        }
+    }
+
     pub fn detail(&self) -> Option<String> {
         match self {
             Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {

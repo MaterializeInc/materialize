@@ -989,7 +989,10 @@ where
                     if let Some(outer_ctx_extra) = outer_ctx_extra {
                         self.adapter_client.retire_execute(
                             outer_ctx_extra,
-                            StatementEndedExecutionReason::Errored { error: msg.clone() },
+                            StatementEndedExecutionReason::Errored {
+                                error: msg.clone(),
+                                error_redacted: msg.clone(),
+                            },
                         );
                     }
                     return self
@@ -1006,6 +1009,7 @@ where
                         outer_ctx_extra,
                         StatementEndedExecutionReason::Errored {
                             error: ABORTED_TXN_MSG.to_string(),
+                            error_redacted: ABORTED_TXN_MSG.to_string(),
                         },
                     );
                 }
@@ -1087,9 +1091,13 @@ where
                                 execution_strategy: None,
                             },
                         ),
-                        Ok((ok, SendRowsEndedReason::Errored { error })) => {
-                            (Ok(ok), StatementEndedExecutionReason::Errored { error })
-                        }
+                        Ok((ok, SendRowsEndedReason::Errored { error })) => (
+                            Ok(ok),
+                            StatementEndedExecutionReason::Errored {
+                                error,
+                                error_redacted: "SendRowsEndedReason::Error".into(),
+                            },
+                        ),
                     };
                     if let Some(outer_ctx_extra) = outer_ctx_extra {
                         self.adapter_client
@@ -1127,6 +1135,7 @@ where
                             outer_ctx_extra,
                             StatementEndedExecutionReason::Errored {
                                 error: error.clone(),
+                                error_redacted: error.clone(),
                             },
                         );
                     }
@@ -1251,6 +1260,7 @@ where
                         ctx_extra,
                         StatementEndedExecutionReason::Errored {
                             error: msg.to_string(),
+                            error_redacted: msg.to_string(),
                         },
                     );
                     return self
@@ -1265,6 +1275,7 @@ where
                     ctx_extra,
                     StatementEndedExecutionReason::Errored {
                         error: msg.to_string(),
+                        error_redacted: msg.to_string(),
                     },
                 );
                 return self
@@ -1554,9 +1565,13 @@ where
                             execution_strategy: None,
                         },
                     ),
-                    Ok((ok, SendRowsEndedReason::Errored { error })) => {
-                        (Ok(ok), StatementEndedExecutionReason::Errored { error })
-                    }
+                    Ok((ok, SendRowsEndedReason::Errored { error })) => (
+                        Ok(ok),
+                        StatementEndedExecutionReason::Errored {
+                            error,
+                            error_redacted: "SendRowsEndedReason::Errored".into(),
+                        },
+                    ),
                 };
                 self.adapter_client
                     .retire_execute(ctx_extra, statement_ended_execution_reason);
@@ -1597,9 +1612,13 @@ where
                                     execution_strategy: None,
                                 },
                             ),
-                            Ok((state, SendRowsEndedReason::Errored { error })) => {
-                                (Ok(state), StatementEndedExecutionReason::Errored { error })
-                            }
+                            Ok((state, SendRowsEndedReason::Errored { error })) => (
+                                Ok(state),
+                                StatementEndedExecutionReason::Errored {
+                                    error,
+                                    error_redacted: "SendRowsEndedReason::Errored".into(),
+                                },
+                            ),
                             Ok((state, SendRowsEndedReason::Canceled)) => {
                                 (Ok(state), StatementEndedExecutionReason::Canceled)
                             }
@@ -2058,6 +2077,7 @@ where
                     ctx_extra,
                     StatementEndedExecutionReason::Errored {
                         error: format!("{e}"),
+                        error_redacted: "copy_from_inner error".into(),
                     },
                 );
             }
@@ -2133,6 +2153,7 @@ where
                         std::mem::take(ctx_extra),
                         StatementEndedExecutionReason::Errored {
                             error: msg.to_string(),
+                            error_redacted: msg.to_string(),
                         },
                     );
                     return self
@@ -2159,6 +2180,7 @@ where
                     std::mem::take(ctx_extra),
                     StatementEndedExecutionReason::Errored {
                         error: e.to_string(),
+                        error_redacted: "decode_copy_format error".into(),
                     },
                 );
                 return self
@@ -2181,6 +2203,7 @@ where
                 std::mem::take(ctx_extra),
                 StatementEndedExecutionReason::Errored {
                     error: e.to_string(),
+                    error_redacted: "insert_rows error".into(),
                 },
             );
             return self.error(e.into_response(Severity::Error)).await;
