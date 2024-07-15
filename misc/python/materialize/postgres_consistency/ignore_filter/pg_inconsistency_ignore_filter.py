@@ -670,6 +670,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#28169: JSONB with large number")
 
+        if (
+            "function casting double precision to numeric is only defined for finite arguments"
+            in mz_error_msg
+        ):
+            return YesIgnore("#28240: infinity to decimal")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
