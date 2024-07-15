@@ -24,6 +24,7 @@ use parquet::basic::{Compression, Encoding};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
 
 use crate::error::Error;
 use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
@@ -181,6 +182,9 @@ pub fn decode_parquet_file_kvtd(
             for batch in reader {
                 let batch = batch.map_err(|e| Error::String(e.to_string()))?;
                 ret.push(decode_arrow_batch_kvtd(batch.columns(), metrics)?);
+            }
+            if ret.len() != 1 {
+                warn!("unexpected number of row groups: {}", ret.len());
             }
             Ok(BlobTraceUpdates::Row(ColumnarRecords::concat(
                 &ret, metrics,

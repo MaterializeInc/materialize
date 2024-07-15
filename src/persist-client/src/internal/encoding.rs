@@ -1420,15 +1420,6 @@ impl ProtoInlineBatchPart {
         lgbytes: &ColumnarMetrics,
         proto: Self,
     ) -> Result<BlobTraceBatchPart<T>, TryFromProtoError> {
-        // BlobTraceBatchPart has a Vec<ColumnarRecords>. Inline writes only
-        // needs one and it's nice to only have to model one at the
-        // ProtoInlineBatchPart level. I'm _pretty_ sure that the actual
-        // BlobTraceBatchPart we've serialized into parquet always have exactly
-        // one (_maaaaaybe_ zero or one), but that's a scary thing to start
-        // enforcing, so separate it out (so we can e.g. use sentry errors! to
-        // confirm before rolling anything out). In the meantime, just construct
-        // the ProtoInlineBatchPart directly in BatchParts where it still knows
-        // that it has exactly one ColumnarRecords.
         let updates = proto
             .updates
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoInlineBatchPart::updates"))?;
