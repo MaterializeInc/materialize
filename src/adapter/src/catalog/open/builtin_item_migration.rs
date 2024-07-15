@@ -203,7 +203,7 @@ async fn migrate_builtin_items_0dt(
     let migrated_tables: BTreeSet<_> = migrated_builtins
         .into_iter()
         .filter_map(|id| {
-            if state.get_entry(&id).is_table() {
+            if state.get_entry(&id).item().is_storage_collection() {
                 match id {
                     GlobalId::System(id) => Some(id),
                     _ => unreachable!("builtin objects must have system ID, found: {id:?}"),
