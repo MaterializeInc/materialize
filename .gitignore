@@ -16,6 +16,7 @@
 .mtrlz.log
 *.rs.bk
 mzdata
+mzbuild
 __pycache__
 .mypy_cache
 venv

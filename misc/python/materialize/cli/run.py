@@ -191,12 +191,12 @@ def main() -> int:
         else:
             command = []
 
-        mzdata = MZ_ROOT / "mzdata"
-        mzdata.mkdir(exist_ok=True)
+        mzbuild = MZ_ROOT / "mzbuild"
+        mzbuild.mkdir(exist_ok=True)
 
         # Move all built programs into the same directory to make it easier for
         # downstream consumers.
-        binaries_dir = mzdata / "binaries"
+        binaries_dir = mzbuild / "bin"
         binaries_dir.mkdir(exist_ok=True)
         binaries = []
         for program in built_programs:
@@ -213,6 +213,7 @@ def main() -> int:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
+            mzdata = MZ_ROOT / "mzdata"
             scratch = MZ_ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
@@ -241,6 +242,7 @@ def main() -> int:
                     else:
                         path.unlink()
 
+            mzdata.mkdir(exist_ok=True)
             scratch.mkdir(exist_ok=True)
             environment_file = mzdata / "environment-id"
             try:
