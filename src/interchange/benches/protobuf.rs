@@ -15,7 +15,7 @@ use prost::Message;
 use self::gen::benchmark::{Connector, Record, Value};
 
 mod gen {
-    include!(concat!(env!("OUT_DIR"), "/mod.rs"));
+    include!(concat!(env!("OUT_DIR"), "/benchproto.rs"));
 }
 
 pub fn bench_protobuf(c: &mut Criterion) {
