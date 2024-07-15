@@ -480,6 +480,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
 
+    if len(scenarios_scheduled_to_run) == 0 and buildkite.is_in_buildkite():
+        raise FailedTestExecutionError(
+            error_summary="No scenarios were selected", errors=[]
+        )
+
     scenarios_with_regressions = []
     latest_report_by_scenario_name: dict[str, Report] = dict()
 
