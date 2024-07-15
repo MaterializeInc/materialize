@@ -270,7 +270,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
         let mut pop_batch =
             |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
-                let mut batch = hollow_batches
+                let batch = hollow_batches
                     .remove(&id)
                     .or_else(|| legacy_batches.pop())
                     .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
@@ -343,7 +343,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
 
-        let mut trace = Trace {
+        let trace = Trace {
             spine: Spine {
                 effort: 1,
                 next_id,
@@ -422,12 +422,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     #[must_use]
     pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
         let mut merge_reqs = Vec::new();
-        self.spine.insert(
-            batch,
-            &mut SpineLog::Enabled {
-                merge_reqs: &mut merge_reqs,
-            },
-        );
+        self.spine.insert(batch, &mut merge_reqs);
         debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
         // Spine::roll_up (internally used by insert) clears all batches out of
         // levels below a target by walking up from level 0 and merging each
@@ -447,12 +442,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 break;
             }
         }
-    }
-
-    /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
-    /// account for a surprising amount of cpu in prod. #18368
-    pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
-        self.spine.insert(batch, &mut SpineLog::Disabled);
     }
 
     /// Validates invariants.
@@ -544,12 +533,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
 /// A log of what transitively happened during a Spine operation: e.g.
 /// FueledMergeReqs were generated.
-enum SpineLog<'a, T> {
-    Enabled {
-        merge_reqs: &'a mut Vec<FueledMergeReq<T>>,
-    },
-    Disabled,
-}
+type SpineLog<'a, T> = Vec<FueledMergeReq<T>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SpineId(pub usize, pub usize);
@@ -908,13 +892,11 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         // Sanity check the pre-size code.
         debug_assert_eq!(merged_parts.len(), merged_parts_len);
 
-        if let SpineLog::Enabled { merge_reqs } = log {
-            merge_reqs.push(FueledMergeReq {
-                id,
-                desc: desc.clone(),
-                inputs: merged_parts.clone(),
-            });
-        }
+        log.push(FueledMergeReq {
+            id,
+            desc: desc.clone(),
+            inputs: merged_parts.clone(),
+        });
 
         Some(SpineBatch {
             id,
