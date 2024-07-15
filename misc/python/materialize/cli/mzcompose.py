@@ -36,7 +36,7 @@ import junit_xml
 from humanize import naturalsize
 from semver.version import Version
 
-from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
+from materialize import MZ_ROOT, ci_util, git, mzbuild, spawn, ui
 from materialize.mzcompose.composition import Composition, UnknownCompositionError
 from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
@@ -106,6 +106,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
         metavar="COMMAND", parser_class=ArgumentSubparser
     )
     BuildCommand.register(parser, subparsers)
+    BisectCommand().register(parser, subparsers)
     ConfigCommand.register(parser, subparsers)
     CpCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
@@ -708,6 +709,165 @@ To see the available workflows, run:
             junit_xml.to_xml_report_file(f, [junit_suite])
 
         return junit_report
+
+
+class BisectCommand(RunCommand):
+    def __init__(self) -> None:
+        super().__init__()
+        self.name = "bisect"
+        self.help = "bisect a workflow"
+        self.help_epilog = "bisect"
+        self.runs_containers = True
+
+    def configure(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--older-commit", type=str, required=True)
+        parser.add_argument("--newer-commit", type=str, required=True)
+        parser.add_argument("--tag-param-instead-checkout", type=str)
+        parser.add_argument("--error-message-must-contain", type=str)
+
+    def shall_generate_junit_report(self, composition: str | None) -> bool:
+        return False
+
+    def run(self, args: argparse.Namespace) -> Any:
+        if git.is_dirty():
+            raise UIError("working directory is dirty, please commit or stash changes")
+
+        original_revision = git.get_branch_name() or git.rev_parse("HEAD")
+
+        oldest_commit_hash = args.older_commit
+        newest_commit_hash = args.newer_commit
+        tag_param_instead_checkout = args.tag_param_instead_checkout
+        change_git_revision = tag_param_instead_checkout is None
+        error_message_must_contain = args.error_message_must_contain
+
+        log = []
+
+        try:
+            oldest_commit_success = self._run_revision(
+                args,
+                oldest_commit_hash,
+                tag_param_instead_checkout,
+                error_message_must_contain,
+                log,
+            )
+            newest_commit_success = self._run_revision(
+                args,
+                newest_commit_hash,
+                tag_param_instead_checkout,
+                error_message_must_contain,
+                log,
+            )
+
+            if oldest_commit_success == newest_commit_success:
+                raise UIError(
+                    f"both commits {'succeeded' if oldest_commit_success else 'failed'}, no need to bisect"
+                )
+
+            detected_commit = self.run_bisect(
+                args,
+                older_commit_hash=oldest_commit_hash,
+                newer_commit_hash=newest_commit_hash,
+                older_commit_success=oldest_commit_success,
+                newer_commit_success=newest_commit_success,
+                tag_param_instead_checkout=tag_param_instead_checkout,
+                error_message_must_contain=error_message_must_contain,
+                log=log,
+            )
+            log.append(f"Detected commit: {detected_commit}")
+
+            print("\n".join(log))
+        finally:
+            if change_git_revision:
+                # go back to the original state
+                git.checkout(original_revision)
+
+    def run_bisect(
+        self,
+        args: argparse.Namespace,
+        older_commit_hash: str,
+        newer_commit_hash: str,
+        older_commit_success: bool,
+        newer_commit_success: bool,
+        tag_param_instead_checkout: str | None,
+        error_message_must_contain: str | None,
+        log: list[str],
+    ) -> str:
+        commits_in_between = git.get_commits_in_between(
+            older_commit_hash, newer_commit_hash
+        )
+        log.append(
+            f"Commits between {older_commit_hash} and {newer_commit_hash}: {commits_in_between}"
+        )
+
+        if len(commits_in_between) == 0:
+            assert older_commit_success != newer_commit_success
+            return newer_commit_hash
+
+        middle_commit_hash = self._pick_middle_commit(commits_in_between)
+
+        middle_commit_success = self._run_revision(
+            args,
+            middle_commit_hash,
+            tag_param_instead_checkout,
+            error_message_must_contain,
+            log,
+        )
+
+        if middle_commit_success == older_commit_success:
+            older_commit_hash = newer_commit_hash
+        else:
+            newer_commit_hash = middle_commit_hash
+
+        return self.run_bisect(
+            args,
+            older_commit_hash=older_commit_hash,
+            newer_commit_hash=newer_commit_hash,
+            older_commit_success=older_commit_success,
+            newer_commit_success=newer_commit_success,
+            tag_param_instead_checkout=tag_param_instead_checkout,
+            error_message_must_contain=error_message_must_contain,
+            log=log,
+        )
+
+    def _pick_middle_commit(self, commits: list[str]) -> str:
+        assert len(commits) > 0
+        return commits[len(commits) // 2]
+
+    def _run_revision(
+        self,
+        args: argparse.Namespace,
+        commit: str,
+        tag_param_instead_checkout: str | None,
+        error_message_must_contain: str | None,
+        log: list[str],
+    ) -> bool:
+        log.append(f"Trying {commit}")
+
+        if tag_param_instead_checkout is None:
+            git.checkout(commit)
+        else:
+            setattr(args, tag_param_instead_checkout, f"unstable-{commit}")
+
+        success = self._conduct_test_run(args, error_message_must_contain)
+        log.append(f"Commit {commit} {'succeeded' if success else 'failed'}")
+
+        return success
+
+    def _conduct_test_run(
+        self,
+        args: argparse.Namespace,
+        error_message_must_contain: str | None,
+    ) -> bool:
+        # TODO: filter err msg with error_message_must_contain
+        try:
+            # TODO: no upload to test-analytics
+            super().run(args)
+            return True
+        except UIError:
+            return False
+        except Exception as e:
+            print(e)
+            return False
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")
