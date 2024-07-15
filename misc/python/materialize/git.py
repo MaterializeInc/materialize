@@ -341,8 +341,11 @@ def create_branch(name: str) -> None:
     spawn.runv(["git", "checkout", "-b", name])
 
 
-def checkout(rev: str, branch: str | None = None) -> None:
+def checkout(rev: str, fetch_from_remote: bool = True) -> None:
     """Git checkout the rev"""
+    if fetch_from_remote:
+        fetch(include_tags=YesNoOnce.YES)
+
     spawn.runv(["git", "checkout", rev])
 
 
