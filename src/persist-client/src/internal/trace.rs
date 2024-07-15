@@ -251,12 +251,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
             mut merges,
         } = value;
 
-        // If the flattened representation has spine batches, we know to preserve the structure for
-        // this trace.
-        // Note that for empty spines, roundtrip_structure will default to false. This is done for
-        // backwards-compatability.
-        let roundtrip_structure = true;
-
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.
         // Our timestamp type may not be totally ordered, so we need to implement our own comparator
@@ -291,42 +285,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         batch.desc.lower().elements(),
                         expected_desc.lower().elements()
                     ));
-                }
-
-                // Empty legacy batches are not deterministic: different nodes may split them up
-                // in different ways. For now, we rearrange them such to match the spine data.
-                if batch.parts.is_empty() && batch.run_splits.is_empty() && batch.len == 0 {
-                    let mut new_upper = batch.desc.upper().clone();
-
-                    // While our current batch is too small, and there's another empty batch
-                    // in the list, roll it in.
-                    while PartialOrder::less_than(&new_upper, expected_desc.upper()) {
-                        let Some(next_batch) = legacy_batches.pop() else {
-                            break;
-                        };
-                        if next_batch.is_empty() {
-                            new_upper.clone_from(next_batch.desc.upper());
-                        } else {
-                            legacy_batches.push(next_batch);
-                            break;
-                        }
-                    }
-
-                    // If our current batch is too large, split it by the expected upper
-                    // and preserve the remainder.
-                    if PartialOrder::less_than(expected_desc.upper(), &new_upper) {
-                        legacy_batches.push(Arc::new(HollowBatch::empty(Description::new(
-                            expected_desc.upper().clone(),
-                            new_upper.clone(),
-                            batch.desc.since().clone(),
-                        ))));
-                        new_upper.clone_from(expected_desc.upper());
-                    }
-                    batch = Arc::new(HollowBatch::empty(Description::new(
-                        batch.desc.lower().clone(),
-                        new_upper,
-                        expected_desc.since().clone(),
-                    )))
                 }
 
                 if expected_desc.upper() != batch.desc.upper() {
@@ -402,15 +360,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 Ok(())
             }
         }
-
-        if roundtrip_structure {
-            check_empty("legacy batches", legacy_batches.len())?;
-        } else {
-            // If the structure wasn't actually serialized, we may have legacy batches left over.
-            for batch in legacy_batches.into_iter().rev() {
-                trace.push_batch_no_merge_reqs(Arc::unwrap_or_clone(batch));
-            }
-        }
+        check_empty("legacy batches", legacy_batches.len())?;
         check_empty("hollow batches", hollow_batches.len())?;
         check_empty("merges", merges.len())?;
 
