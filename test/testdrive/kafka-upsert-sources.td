@@ -688,6 +688,7 @@ contains: column "error" specified more than once
 
 #
 # Test Inline error handling with value decode failures for an AVRO source
+# that also uses a custom error column name
 #
 
 $ kafka-create-topic topic=inline-value-errors-2 partitions=1
@@ -709,11 +710,11 @@ ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
   IN CLUSTER inline_error_cluster_avro
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE AS decode_error));
 
 # there is now an additional 'error' column that should store the inline decoding errors, if any
 
-> SELECT key, f1, f2, error::text from value_decode_error_avro ORDER BY key
+> SELECT key, f1, f2, decode_error::text from value_decode_error_avro ORDER BY key
 birdmore      geese    2         <null>
 fish          fish     1000      <null>
 mammal1       moose    1         <null>
@@ -722,7 +723,7 @@ mammal1       moose    1         <null>
 $ kafka-ingest format=bytes key-format=avro key-schema=${keyschema} topic=inline-value-errors-2
 {"key": "birdmore"} "notvalidavro"
 
-> SELECT key, f1, f2, error::text from value_decode_error_avro ORDER BY key
+> SELECT key, f1, f2, decode_error::text from value_decode_error_avro ORDER BY key
 birdmore      <null>   <null>    "(\"Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 32 (original bytes: [20, 22, 6e, 6f, 74, 76, 61, 6c, 69, 64, 61, 76, 72, 6f, 22])\")"
 fish          fish     1000      <null>
 mammal1       moose    1         <null>

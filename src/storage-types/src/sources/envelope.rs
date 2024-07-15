@@ -145,10 +145,13 @@ pub enum UpsertStyle {
     Default(KeyEnvelope),
     /// `ENVELOPE DEBEZIUM UPSERT`
     Debezium { after_idx: usize },
-    /// `ENVELOPE UPSERT`, where any decoded value will get packed into a ScalarType::Record
-    /// named `value`, and any decode errors will get serialized into a ScalarType::Record
-    /// named `error`. The key shape depends on the independent `KeyEnvelope`.
-    ValueErrInline { key_envelope: KeyEnvelope },
+    /// `ENVELOPE UPSERT` where any decode errors will get serialized into a
+    /// ScalarType::Record column named `error_column`, and all value columns are
+    /// nullable. The key shape depends on the independent `KeyEnvelope`.
+    ValueErrInline {
+        key_envelope: KeyEnvelope,
+        error_column: String,
+    },
 }
 
 impl RustType<ProtoUpsertStyle> for UpsertStyle {
@@ -160,11 +163,13 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
                 UpsertStyle::Debezium { after_idx } => Kind::Debezium(ProtoDebezium {
                     after_idx: after_idx.into_proto(),
                 }),
-                UpsertStyle::ValueErrInline { key_envelope } => {
-                    Kind::ValueErrorInline(ProtoValueErrInline {
-                        key_envelope: Some(key_envelope.into_proto()),
-                    })
-                }
+                UpsertStyle::ValueErrInline {
+                    key_envelope,
+                    error_column,
+                } => Kind::ValueErrorInline(ProtoValueErrInline {
+                    key_envelope: Some(key_envelope.into_proto()),
+                    error_column: error_column.clone(),
+                }),
             }),
         }
     }
@@ -186,6 +191,7 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
                         TryFromProtoError::missing_field("ProtoValueErrInline::key_envelope")
                     })?
                     .into_rust()?,
+                error_column: e.error_column.clone(),
             },
         })
     }
@@ -268,7 +274,11 @@ impl UnplannedSourceEnvelope {
                 ..
             }
             | UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::ValueErrInline { key_envelope, .. },
+                style:
+                    UpsertStyle::ValueErrInline {
+                        key_envelope,
+                        error_column: _,
+                    },
             } => {
                 let (key_arity, key_desc) = match key_desc {
                     Some(desc) if !desc.is_empty() => (Some(desc.arity()), Some(desc)),
@@ -433,10 +443,14 @@ fn compute_envelope_value_desc(
 ) -> RelationDesc {
     match &source_envelope {
         UnplannedSourceEnvelope::Upsert {
-            style: UpsertStyle::ValueErrInline { .. },
+            style:
+                UpsertStyle::ValueErrInline {
+                    key_envelope: _,
+                    error_column,
+                },
         } => {
             let mut names = Vec::with_capacity(value_desc.arity() + 1);
-            names.push("error".into());
+            names.push(error_column.as_str().into());
             names.extend(value_desc.iter_names().cloned());
 
             let mut types = Vec::with_capacity(value_desc.arity() + 1);
