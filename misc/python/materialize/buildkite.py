@@ -202,6 +202,9 @@ def _upload_shard_info_metadata(items: list[str]) -> None:
 
 
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
+    if len(items) == 0:
+        return []
+
     parallelism_index = get_parallelism_index()
     parallelism_count = get_parallelism_count()
 
