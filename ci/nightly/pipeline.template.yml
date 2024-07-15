@@ -790,18 +790,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-toggle-persist-roundtrip-spine
-        label: "Checks toggling persist roundtrip spine"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TogglePersistRoundtripSpine, "--seed=$BUILDKITE_JOB_ID"]
+              args: [ --scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID" ]
 
       - id: checks-toggle-persist-batch-columnar-format
         label: "Checks toggling persist batch columnar format"

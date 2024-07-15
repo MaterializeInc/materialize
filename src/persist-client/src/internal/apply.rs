@@ -84,7 +84,7 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
 /// If set, we round-trip the spine structure through Proto.
 pub(crate) const ROUNDTRIP_SPINE: Config<bool> = Config::new(
     "persist_roundtrip_spine",
-    false,
+    true,
     "Roundtrip the structure of Spine through Proto.",
 );
 

@@ -320,22 +320,6 @@ class SystemVarChange(Scenario):
         ]
 
 
-class TogglePersistRoundtripSpine(SystemVarChange):
-    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
-        super().__init__(
-            checks,
-            executor,
-            seed,
-            [
-                SystemVarChangeEntry(
-                    name="persist_roundtrip_spine",
-                    value_for_manipulate_phase_1="FALSE",
-                    value_for_manipulate_phase_2="TRUE",
-                )
-            ],
-        )
-
-
 class TogglePersistBatchColumnarFormat(SystemVarChange):
     def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
         super().__init__(
