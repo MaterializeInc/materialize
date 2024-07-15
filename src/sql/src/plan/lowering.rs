@@ -2009,7 +2009,8 @@ fn attempt_outer_equijoin(
     let rt = output_type.drain(0..ra).collect_vec();
     assert!(output_type.len() == sa);
 
-    let on_predicates = OnPredicates::new(oa, la, ra, sa, on.clone());
+    let on_predicates =
+        OnPredicates::new(oa, la, ra, sa, on.clone(), enable_outer_join_null_filter);
     if !on_predicates.is_equijoin(enable_new_outer_join_lowering) {
         return Ok(None);
     }
@@ -2059,7 +2060,7 @@ fn attempt_outer_equijoin(
                                 get_left
                                     .clone()
                                     // Push local predicates.
-                                    .filter(on_predicates.lhs(enable_outer_join_null_filter)),
+                                    .filter(on_predicates.lhs()),
                                 get_both.clone(),
                             ],
                             itertools::zip_eq(
@@ -2093,7 +2094,7 @@ fn attempt_outer_equijoin(
                                 get_right
                                     .clone()
                                     // Push local predicates.
-                                    .filter(on_predicates.rhs(enable_outer_join_null_filter)),
+                                    .filter(on_predicates.rhs()),
                                 get_both,
                             ],
                             itertools::zip_eq(
@@ -2170,7 +2171,14 @@ impl OnPredicates {
     /// 2. The `on` parameter is already adjusted to assume that schema.
     /// 3. The `on` parameter is obtained by canonicalizing the original `on:
     ///    MirScalarExpr` with `canonicalize_predicates`.
-    fn new(oa: usize, la: usize, ra: usize, sa: usize, on: Vec<MirScalarExpr>) -> Self {
+    fn new(
+        oa: usize,
+        la: usize,
+        ra: usize,
+        sa: usize,
+        on: Vec<MirScalarExpr>,
+        enable_outer_join_null_filter: bool,
+    ) -> Self {
         use mz_expr::BinaryFunc::Eq;
 
         // Re-bind those locally for more compact pattern matching.
@@ -2227,14 +2235,22 @@ impl OnPredicates {
                         let lhs = expr1.take();
                         let mut rhs = expr2.take();
                         rhs.permute(&rhs_permutation);
-                        predicates.push(OnPredicate::Eq(lhs, rhs));
+                        predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
+                        if enable_outer_join_null_filter {
+                            predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
+                            predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
+                        }
                     }
                     // Both sides reference different inputs (swapped).
                     ([I_RHS], [I_LHS]) => {
                         let lhs = expr2.take();
                         let mut rhs = expr1.take();
                         rhs.permute(&rhs_permutation);
-                        predicates.push(OnPredicate::Eq(lhs, rhs));
+                        predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
+                        if enable_outer_join_null_filter {
+                            predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
+                            predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
+                        }
                     }
                     // Both sides reference the left input or no input.
                     ([I_LHS], [I_LHS]) | ([I_LHS], []) | ([], [I_LHS]) => {
@@ -2371,64 +2387,63 @@ impl OnPredicates {
         )
     }
 
-    /// Return an iterator over the [`OnPredicate::Lhs`] and [`OnPredicate::Const`] conditions in
-    /// the predicates list, plus some consequences of the predicates. The consequences can be
-    /// applied to the left input before it is fed into the join.
-    fn lhs(&self, enable_outer_join_null_filter: bool) -> impl Iterator<Item = MirScalarExpr> + '_ {
-        // Predicates that are directly present.
-        let direct = self.predicates.iter().filter_map(|p| match p {
+    /// Return an iterator over the [`OnPredicate::Lhs`], [`OnPredicate::LhsConsequence`] and
+    /// [`OnPredicate::Const`] conditions in the predicates list.
+    fn lhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        self.predicates.iter().filter_map(|p| match p {
             // We treat Const predicates local to both inputs.
             OnPredicate::Const(p) => Some(p.clone()),
             OnPredicate::Lhs(p) => Some(p.clone()),
+            OnPredicate::LhsConsequence(p) => Some(p.clone()),
             _ => None,
-        });
-
-        // When we have an `x = y` predicate with `x` referring to the lhs, this has the consequence
-        // `x IS NOT NULL`. We can add this consequence as an extra filter on the lhs.
-        // This prevents null skew, and also makes more CSE opportunities when the left input's key
-        // doesn't have a NOT NULL constraint, saving us an arrangement.
-        let consequence = self.eq_lhs().map(|e| e.call_is_null().not());
-
-        if enable_outer_join_null_filter {
-            direct.chain(consequence).collect_vec().into_iter()
-        } else {
-            direct.collect_vec().into_iter()
-        }
+        })
     }
 
-    /// Return an iterator over the [`OnPredicate::Rhs`] and [`OnPredicate::Const`] conditions in
-    /// the predicates list, plus some consequences of the predicates. The consequences can be
-    /// applied to the right input before it is fed into the join.
-    fn rhs(&self, enable_outer_join_null_filter: bool) -> impl Iterator<Item = MirScalarExpr> + '_ {
-        // Predicates that are directly present.
-        let direct = self.predicates.iter().filter_map(|p| match p {
+    /// Return an iterator over the [`OnPredicate::Rhs`], [`OnPredicate::RhsConsequence`] and
+    /// [`OnPredicate::Const`] conditions in the predicates list.
+    fn rhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        self.predicates.iter().filter_map(|p| match p {
             // We treat Const predicates local to both inputs.
             OnPredicate::Const(p) => Some(p.clone()),
             OnPredicate::Rhs(p) => Some(p.clone()),
+            OnPredicate::RhsConsequence(p) => Some(p.clone()),
             _ => None,
-        });
-
-        // When we have an `x = y` predicate with `y` referring to the rhs, this has the consequence
-        // `y IS NOT NULL`. We can add this consequence as an extra filter on the rhs.
-        // This prevents null skew, and also makes more CSE opportunities when the right input's key
-        // doesn't have a NOT NULL constraint, saving us an arrangement.
-        let consequence = self.eq_rhs().map(|e| e.call_is_null().not());
-
-        if enable_outer_join_null_filter {
-            direct.chain(consequence).collect_vec().into_iter()
-        } else {
-            direct.collect_vec().into_iter()
-        }
+        })
     }
 }
 
 enum OnPredicate {
     // A predicate that is either constant or references only outer columns.
     Const(MirScalarExpr),
-    // A local predicate on the left-hand side of the join.
+    // A local predicate on the left-hand side of the join, i.e., it references only the left input
+    // and possibly outer columns.
+    //
+    // This is one of the original predicates from the ON clause.
+    //
+    // One _must_ apply this predicate.
     Lhs(MirScalarExpr),
+    // A local predicate on the left-hand side of the join, i.e., it references only the left input
+    // and possibly outer columns.
+    //
+    // This is not one of the original predicates from the ON clause, but is just a consequence
+    // of an original predicate in the ON clause, where the original predicate references both
+    // inputs, but the consequence references only the left input.
+    //
+    // For example, the original predicate `input1.x = input2.a` has the consequence
+    // `input1.x IS NOT NULL`. Applying such a consequence before the input is fed into the join
+    // prevents null skew, and also makes more CSE opportunities available when the left input's key
+    // doesn't have a NOT NULL constraint, saving us an arrangement.
+    //
+    // Applying the predicate is optional, because the original predicate will be applied anyway.
+    LhsConsequence(MirScalarExpr),
     // A local predicate on the right-hand side of the join.
+    //
+    // This is one of the original predicates from the ON clause.
+    //
+    // One _must_ apply this predicate.
     Rhs(MirScalarExpr),
+    // A consequence of an original ON predicate, see above.
+    RhsConsequence(MirScalarExpr),
     // An equality predicate between the two sides.
     Eq(MirScalarExpr, MirScalarExpr),
     // a non-equality predicate between the two sides.
