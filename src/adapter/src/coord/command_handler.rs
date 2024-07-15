@@ -621,6 +621,7 @@ impl Coordinator {
                     | Statement::CreateSource(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
+                    | Statement::CreateTableFromSource(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateWebhookSource(_)
