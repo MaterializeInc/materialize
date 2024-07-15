@@ -334,6 +334,19 @@ def get_branch_name() -> str:
     return spawn.capture(command).strip()
 
 
+def get_commits_in_between(from_commit: str, to_commit: str) -> list[str]:
+    # exclude the to_commit
+    to_commit = f"{to_commit}~1"
+    command = [
+        "git",
+        "rev-list",
+        f"{from_commit}...{to_commit}",
+        "--first-parent",
+        to_commit,
+    ]
+    return spawn.capture(command).strip().split("\n")
+
+
 # Work tree mutation
 
 
