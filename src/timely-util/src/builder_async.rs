@@ -16,9 +16,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::task::{ready, Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
+use futures_util::Stream;
 use timely::communication::{Message, Pull, Push};
 use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
@@ -154,31 +155,46 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, C: InputConnection<T>> {
 }
 
 impl<T: Timestamp, D: Container, C: InputConnection<T>> AsyncInputHandle<T, D, C> {
-    /// Produces a future that will resolve to the next event of this input stream.
-    ///
-    /// # Cancel safety
-    ///
-    /// The returned future is cancel-safe
-    pub async fn next(&mut self) -> Option<Event<T, C::Capability, D>> {
-        std::future::poll_fn(|cx| {
-            if self.done {
-                return Poll::Ready(None);
+    pub fn next_sync(&mut self) -> Option<Event<T, C::Capability, D>> {
+        let mut queue = self.queue.borrow_mut();
+        match queue.pop_front()? {
+            Event::Data(cap, data) => Some(Event::Data(cap, data)),
+            Event::Progress(frontier) => {
+                self.done = frontier.is_empty();
+                Some(Event::Progress(frontier))
             }
-            let mut queue = self.queue.borrow_mut();
-            match queue.pop_front() {
-                Some(event @ Event::Data(_, _)) => Poll::Ready(Some(event)),
-                Some(Event::Progress(frontier)) => {
-                    self.done = frontier.is_empty();
-                    Poll::Ready(Some(Event::Progress(frontier)))
-                }
-                None => {
-                    // Nothing else to produce so install the provided waker
-                    self.waker.set(Some(cx.waker().clone()));
-                    Poll::Pending
-                }
-            }
-        })
-        .await
+        }
+    }
+
+    /// Waits for the handle to have data. After this function returns it is guaranteed that at
+    /// least one call to `next_sync` will be `Some(_)`.
+    pub async fn ready(&self) {
+        std::future::poll_fn(|cx| self.poll_ready(cx)).await
+    }
+
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
+        if self.queue.borrow().is_empty() {
+            self.waker.set(Some(cx.waker().clone()));
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+
+impl<T: Timestamp, D: Container, C: InputConnection<T>> Stream for AsyncInputHandle<T, D, C> {
+    type Item = Event<T, C::Capability, D>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+        ready!(self.poll_ready(cx));
+        Poll::Ready(self.next_sync())
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.queue.borrow().len(), None)
     }
 }
 
@@ -754,6 +770,7 @@ impl Drop for PressOnDropButton {
 
 #[cfg(test)]
 mod test {
+    use futures_util::StreamExt;
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};

@@ -98,6 +98,8 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use either::Either;
+use futures::StreamExt;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, ProtoBatch};
@@ -119,6 +121,7 @@ use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect}
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tokio::sync::Semaphore;
 use tracing::trace;
 
 use crate::metrics::source::SourcePersistSinkMetrics;
@@ -316,6 +319,7 @@ pub(crate) fn render<G>(
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     output_index: usize,
+    busy_signal: Arc<Semaphore>,
 ) -> (
     Stream<G, ()>,
     Stream<G, Rc<anyhow::Error>>,
@@ -346,6 +350,7 @@ where
         &passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
         storage_state,
+        Arc::clone(&busy_signal),
     );
 
     let (upper_stream, append_errors, append_token) = append_batches(
@@ -359,6 +364,7 @@ where
         storage_state,
         output_index,
         metrics,
+        Arc::clone(&busy_signal),
     );
 
     (
@@ -567,6 +573,7 @@ fn write_batches<G>(
     desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
+    busy_signal: Arc<Semaphore>,
 ) -> (
     Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
     PressOnDropButton,
@@ -629,7 +636,10 @@ where
                 Arc::new(UnitSchema),
                 Diagnostics {
                     shard_name: collection_id.to_string(),
-                    handle_purpose: format!("storage::persist_sink::write_batches {}", collection_id),
+                    handle_purpose: format!(
+                        "storage::persist_sink::write_batches {}",
+                        collection_id
+                    ),
                 },
             )
             .await
@@ -646,126 +656,126 @@ where
         // A "safe" choice for the lower of new batches we are creating.
         let mut operator_batch_lower = Antichain::from_elem(Timestamp::minimum());
 
-        loop {
+        while !(batch_descriptions_frontier.is_empty() && desired_frontier.is_empty()) {
+            // Wait for either inputs to become ready
             tokio::select! {
-                Some(event) = descriptions_input.next() => {
-                    match event {
-                        Event::Data(cap, data) => {
-                            // Ingest new batch descriptions.
-                            for description in data {
-                                if collection_id.is_user() {
-                                    trace!(
-                                        "persist_sink {collection_id}/{shard_id}: \
-                                            write_batches: \
-                                            new_description: {:?}, \
-                                            desired_frontier: {:?}, \
-                                            batch_descriptions_frontier: {:?}",
-                                        description,
-                                        desired_frontier,
-                                        batch_descriptions_frontier,
-                                    );
-                                }
-                                match in_flight_batches.entry(
-                                    description,
-                                ){
-                                    std::collections::hash_map::Entry::Vacant(v) => {
-                                        // This _should_ be `.retain`, but rust
-                                        // currently thinks we can't use `cap`
-                                        // as an owned value when using the
-                                        // match guard `Some(event)`
-                                        v.insert(cap.delayed(cap.time()));
-                                    }
-                                    std::collections::hash_map::Entry::Occupied(o) => {
-                                        let (description, _) = o.remove_entry();
-                                        panic!(
-                                            "write_batches: sink {} got more than one \
-                                                batch for description {:?}, in-flight: {:?}",
-                                            collection_id,
-                                            description,
-                                            in_flight_batches
-                                        );
-                                    }
-                                }
-                            }
+                _ = descriptions_input.ready() => {},
+                _ = desired_input.ready() => {},
+            }
 
-                            continue;
-                        }
-                        Event::Progress(frontier) => {
-                            batch_descriptions_frontier = frontier;
-                        }
-                    }
-                }
-                Some(event) = desired_input.next() => {
-                    match event {
-                        Event::Data(_cap, data) => {
-                            // Extract desired rows as positive contributions to `correction`.
-                            if collection_id.is_user() && !data.is_empty() {
+            // Collect ready work from both inputs
+            while let Some(event) = descriptions_input.next_sync() {
+                match event {
+                    Event::Data(cap, data) => {
+                        // Ingest new batch descriptions.
+                        for description in data {
+                            if collection_id.is_user() {
                                 trace!(
                                     "persist_sink {collection_id}/{shard_id}: \
-                                        updates: {:?}, \
-                                        in-flight-batches: {:?}, \
+                                        write_batches: \
+                                        new_description: {:?}, \
                                         desired_frontier: {:?}, \
                                         batch_descriptions_frontier: {:?}",
-                                    data,
-                                    in_flight_batches,
+                                    description,
                                     desired_frontier,
                                     batch_descriptions_frontier,
                                 );
                             }
-
-                            let minimum_batch_updates = persist_clients.cfg().storage_sink_minimum_batch_updates();
-                            for (row, ts, diff) in data {
-                                if write.upper().less_equal(&ts){
-                                    let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                        BatchBuilderAndMetadata::new()
-                                    });
-
-                                    let is_value = row.is_ok();
-                                    builder
-                                        .add(
-                                            minimum_batch_updates,
-                                            || write.builder(operator_batch_lower.clone()),
-                                            SourceData(row),
-                                            (),
-                                            ts,
-                                            diff
-                                        ).await;
-
-                                    source_statistics.inc_updates_staged_by(1);
-
-                                    // Note that we assume `diff` is either +1 or -1 here, being anything
-                                    // else is a logic bug we can't handle at the metric layer. We also
-                                    // assume this addition doesn't overflow.
-                                    match (is_value, diff.is_positive()) {
-                                        (true, true) => {
-                                            builder.metrics.inserts += diff.unsigned_abs()
-                                        },
-                                        (true, false) => {
-                                            builder.metrics.retractions += diff.unsigned_abs()
-                                        },
-                                        (false, true) => {
-                                            builder.metrics.error_inserts += diff.unsigned_abs()
-                                        },
-                                        (false, false) => {
-                                            builder.metrics.error_retractions += diff.unsigned_abs()
-                                        },
-                                    }
+                            match in_flight_batches.entry(description) {
+                                std::collections::hash_map::Entry::Vacant(v) => {
+                                    // This _should_ be `.retain`, but rust
+                                    // currently thinks we can't use `cap`
+                                    // as an owned value when using the
+                                    // match guard `Some(event)`
+                                    v.insert(cap.delayed(cap.time()));
+                                }
+                                std::collections::hash_map::Entry::Occupied(o) => {
+                                    let (description, _) = o.remove_entry();
+                                    panic!(
+                                        "write_batches: sink {} got more than one \
+                                            batch for description {:?}, in-flight: {:?}",
+                                        collection_id, description, in_flight_batches
+                                    );
                                 }
                             }
-
-                            continue;
-                        }
-                        Event::Progress(frontier) => {
-                            desired_frontier = frontier;
                         }
                     }
-                }
-                else => {
-                    // All inputs are exhausted, so we can shut down.
-                    return;
+                    Event::Progress(frontier) => {
+                        batch_descriptions_frontier = frontier;
+                    }
                 }
             }
 
+            let ready_events = std::iter::from_fn(|| desired_input.next_sync()).collect_vec();
+
+            // We know start the async work for the input we received. Until we finish the dataflow
+            // should be marked as busy.
+            let permit = busy_signal.acquire().await;
+
+            for event in ready_events {
+                match event {
+                    Event::Data(_cap, data) => {
+                        // Extract desired rows as positive contributions to `correction`.
+                        if collection_id.is_user() && !data.is_empty() {
+                            trace!(
+                                "persist_sink {collection_id}/{shard_id}: \
+                                    updates: {:?}, \
+                                    in-flight-batches: {:?}, \
+                                    desired_frontier: {:?}, \
+                                    batch_descriptions_frontier: {:?}",
+                                data,
+                                in_flight_batches,
+                                desired_frontier,
+                                batch_descriptions_frontier,
+                            );
+                        }
+
+                        let minimum_batch_updates =
+                            persist_clients.cfg().storage_sink_minimum_batch_updates();
+                        for (row, ts, diff) in data {
+                            if write.upper().less_equal(&ts) {
+                                let builder = stashed_batches
+                                    .entry(ts)
+                                    .or_insert_with(BatchBuilderAndMetadata::new);
+
+                                let is_value = row.is_ok();
+
+                                builder
+                                    .add(
+                                        minimum_batch_updates,
+                                        || write.builder(operator_batch_lower.clone()),
+                                        SourceData(row),
+                                        (),
+                                        ts,
+                                        diff,
+                                    )
+                                    .await;
+
+                                source_statistics.inc_updates_staged_by(1);
+
+                                // Note that we assume `diff` is either +1 or -1 here, being anything
+                                // else is a logic bug we can't handle at the metric layer. We also
+                                // assume this addition doesn't overflow.
+                                match (is_value, diff.is_positive()) {
+                                    (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
+                                    (true, false) => {
+                                        builder.metrics.retractions += diff.unsigned_abs()
+                                    }
+                                    (false, true) => {
+                                        builder.metrics.error_inserts += diff.unsigned_abs()
+                                    }
+                                    (false, false) => {
+                                        builder.metrics.error_retractions += diff.unsigned_abs()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Event::Progress(frontier) => {
+                        desired_frontier = frontier;
+                    }
+                }
+            }
             // We may have the opportunity to commit updates, if either frontier
             // has moved
             if PartialOrder::less_equal(&processed_desired_frontier, &desired_frontier)
@@ -888,6 +898,7 @@ where
                     desired_frontier
                 );
             }
+            drop(permit);
         }
     });
 
@@ -918,6 +929,7 @@ fn append_batches<G>(
     storage_state: &StorageState,
     output_index: usize,
     metrics: SourcePersistSinkMetrics,
+    busy_signal: Arc<Semaphore>,
 ) -> (
     Stream<G, ()>,
     Stream<G, Rc<anyhow::Error>>,
@@ -1209,14 +1221,16 @@ where
                     futures::future::pending().await
                 }
 
-                let result = write
-                    .compare_and_append_batch(
+                let result = {
+                    let _permit = busy_signal.acquire().await;
+                    write.compare_and_append_batch(
                         &mut to_append[..],
                         batch_lower.clone(),
                         batch_upper.clone(),
                     )
                     .await
-                    .expect("Invalid usage");
+                    .expect("Invalid usage")
+                };
 
                 source_statistics
                     .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);

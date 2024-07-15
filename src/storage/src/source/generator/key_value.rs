@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
@@ -26,7 +27,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, StackedCollection};
+use crate::source::types::{ProgressStatisticsUpdate, SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 pub fn render<G: Scope<Timestamp = MzOffset>>(
@@ -51,140 +52,143 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
-    let button = builder.build(move |caps| async move {
-        let [mut cap, mut progress_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
+    let busy_signal = Arc::clone(&config.busy_signal);
+    let button = builder.build(move |caps| {
+        SignaledFuture::new(busy_signal, async move {
+            let [mut cap, mut progress_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
 
-        let resume_upper = Antichain::from_iter(
-            config.source_resume_uppers[&config.id]
-                .iter()
-                .map(MzOffset::decode_row),
-        );
-
-        let Some(resume_offset) = resume_upper.into_option() else {
-            return;
-        };
-
-        cap.downgrade(&resume_offset);
-        progress_cap.downgrade(&resume_offset);
-        start_signal.await;
-
-        let snapshotting = resume_offset.offset == 0;
-
-        let mut local_partitions: Vec<_> = (0..key_value.partitions)
-            .into_iter()
-            .filter_map(|p| {
-                config
-                    .responsible_for(p)
-                    .then(|| TransactionalSnapshotProducer::new(p, key_value.clone()))
-            })
-            .collect();
-
-        let stats_worker = config.responsible_for(0);
-
-        if local_partitions.is_empty() {
-            stats_output.give(
-                &stats_cap,
-                ProgressStatisticsUpdate::Snapshot {
-                    records_known: 0,
-                    records_staged: 0,
-                },
+            let resume_upper = Antichain::from_iter(
+                config.source_resume_uppers[&config.id]
+                    .iter()
+                    .map(MzOffset::decode_row),
             );
-            return;
-        }
 
-        let local_snapshot_size = (u64::cast_from(local_partitions.len()))
-            * key_value.keys
-            * key_value.transactional_snapshot_rounds()
-            / key_value.partitions;
-
-        // Re-usable buffers.
-        let mut value_buffer: Vec<u8> = vec![0; usize::cast_from(key_value.value_size)];
-
-        // snapshotting
-        let mut upper_offset = if snapshotting {
-            let snapshot_rounds = key_value.transactional_snapshot_rounds();
-
-            if stats_worker {
-                stats_output.give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: snapshot_rounds,
-                        offset_committed: 0,
-                    },
-                );
+            let Some(resume_offset) = resume_upper.into_option() else {
+                return;
             };
 
-            // Downgrade to the snapshot frontier.
-            progress_cap.downgrade(&MzOffset::from(snapshot_rounds));
-
-            let mut emitted = 0;
-            stats_output.give(
-                &stats_cap,
-                ProgressStatisticsUpdate::Snapshot {
-                    records_known: local_snapshot_size,
-                    records_staged: emitted,
-                },
-            );
-            while local_partitions.iter().any(|si| !si.finished()) {
-                for sp in local_partitions.iter_mut() {
-                    for u in sp.produce_batch(&mut value_buffer) {
-                        data_output.give_fueled(&cap, u).await;
-                        emitted += 1;
-                    }
-
-                    stats_output.give(
-                        &stats_cap,
-                        ProgressStatisticsUpdate::Snapshot {
-                            records_known: local_snapshot_size,
-                            records_staged: emitted,
-                        },
-                    );
-                }
-            }
-
-            cap.downgrade(&MzOffset::from(snapshot_rounds));
-            snapshot_rounds
-        } else {
             cap.downgrade(&resume_offset);
             progress_cap.downgrade(&resume_offset);
-            resume_offset.offset
-        };
+            start_signal.await;
 
-        let mut local_partitions: Vec<_> = (0..key_value.partitions)
-            .into_iter()
-            .filter_map(|p| {
-                config
-                    .responsible_for(p)
-                    .then(|| UpdateProducer::new(p, upper_offset, key_value.clone()))
-            })
-            .collect();
-        if !local_partitions.is_empty()
-            && (key_value.tick_interval.is_some() || !key_value.transactional_snapshot)
-        {
-            let mut interval = key_value.tick_interval.map(tokio::time::interval);
+            let snapshotting = resume_offset.offset == 0;
 
-            loop {
-                if local_partitions.iter().all(|si| si.finished_quick()) {
-                    if let Some(interval) = &mut interval {
-                        interval.tick().await;
-                    } else {
-                        break;
-                    }
-                }
+            let mut local_partitions: Vec<_> = (0..key_value.partitions)
+                .into_iter()
+                .filter_map(|p| {
+                    config
+                        .responsible_for(p)
+                        .then(|| TransactionalSnapshotProducer::new(p, key_value.clone()))
+                })
+                .collect();
 
-                for up in local_partitions.iter_mut() {
-                    let (new_upper, iter) = up.produce_batch(&mut value_buffer);
-                    upper_offset = new_upper;
-                    for u in iter {
-                        data_output.give_fueled(&cap, u).await;
-                    }
-                }
-                cap.downgrade(&MzOffset::from(upper_offset));
-                progress_cap.downgrade(&MzOffset::from(upper_offset));
+            let stats_worker = config.responsible_for(0);
+
+            if local_partitions.is_empty() {
+                stats_output.give(
+                    &stats_cap,
+                    ProgressStatisticsUpdate::Snapshot {
+                        records_known: 0,
+                        records_staged: 0,
+                    },
+                );
+                return;
             }
-        }
 
-        std::future::pending::<()>().await;
+            let local_snapshot_size = (u64::cast_from(local_partitions.len()))
+                * key_value.keys
+                * key_value.transactional_snapshot_rounds()
+                / key_value.partitions;
+
+            // Re-usable buffers.
+            let mut value_buffer: Vec<u8> = vec![0; usize::cast_from(key_value.value_size)];
+
+            // snapshotting
+            let mut upper_offset = if snapshotting {
+                let snapshot_rounds = key_value.transactional_snapshot_rounds();
+
+                if stats_worker {
+                    stats_output.give(
+                        &stats_cap,
+                        ProgressStatisticsUpdate::SteadyState {
+                            offset_known: snapshot_rounds,
+                            offset_committed: 0,
+                        },
+                    );
+                };
+
+                // Downgrade to the snapshot frontier.
+                progress_cap.downgrade(&MzOffset::from(snapshot_rounds));
+
+                let mut emitted = 0;
+                stats_output.give(
+                    &stats_cap,
+                    ProgressStatisticsUpdate::Snapshot {
+                        records_known: local_snapshot_size,
+                        records_staged: emitted,
+                    },
+                );
+                while local_partitions.iter().any(|si| !si.finished()) {
+                    for sp in local_partitions.iter_mut() {
+                        for u in sp.produce_batch(&mut value_buffer) {
+                            data_output.give_fueled(&cap, u).await;
+                            emitted += 1;
+                        }
+
+                        stats_output.give(
+                            &stats_cap,
+                            ProgressStatisticsUpdate::Snapshot {
+                                records_known: local_snapshot_size,
+                                records_staged: emitted,
+                            },
+                        );
+                    }
+                }
+
+                cap.downgrade(&MzOffset::from(snapshot_rounds));
+                snapshot_rounds
+            } else {
+                cap.downgrade(&resume_offset);
+                progress_cap.downgrade(&resume_offset);
+                resume_offset.offset
+            };
+
+            let mut local_partitions: Vec<_> = (0..key_value.partitions)
+                .into_iter()
+                .filter_map(|p| {
+                    config
+                        .responsible_for(p)
+                        .then(|| UpdateProducer::new(p, upper_offset, key_value.clone()))
+                })
+                .collect();
+            if !local_partitions.is_empty()
+                && (key_value.tick_interval.is_some() || !key_value.transactional_snapshot)
+            {
+                let mut interval = key_value.tick_interval.map(tokio::time::interval);
+
+                loop {
+                    if local_partitions.iter().all(|si| si.finished_quick()) {
+                        if let Some(interval) = &mut interval {
+                            interval.tick().await;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    for up in local_partitions.iter_mut() {
+                        let (new_upper, iter) = up.produce_batch(&mut value_buffer);
+                        upper_offset = new_upper;
+                        for u in iter {
+                            data_output.give_fueled(&cap, u).await;
+                        }
+                    }
+                    cap.downgrade(&MzOffset::from(upper_offset));
+                    progress_cap.downgrade(&MzOffset::from(upper_offset));
+                }
+            }
+
+            std::future::pending::<()>().await;
+        })
     });
 
     let status = [HealthStatusMessage {

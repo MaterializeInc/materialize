@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use differential_dataflow::capture::{Message, Progress};
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use futures::StreamExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_repr::{Datum, Diff, Row};

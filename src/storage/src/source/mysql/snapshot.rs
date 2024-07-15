@@ -86,6 +86,7 @@
 //! occur before the GTID frontier in the Rewind Request for that table.
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::TryStreamExt;
@@ -109,7 +110,9 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
-use crate::source::types::{ProgressStatisticsUpdate, SourceMessage, StackedCollection};
+use crate::source::types::{
+    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
+};
 use crate::source::RawSourceCreationConfig;
 
 use super::schemas::verify_schemas;
@@ -166,7 +169,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let (button, transient_errors): (_, Stream<G, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
-            Box::pin(async move {
+            let busy_signal = Arc::clone(&config.busy_signal);
+            Box::pin(SignaledFuture::new(busy_signal, async move {
                 let [data_cap_set, rewind_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
                     caps.try_into().unwrap();
 
@@ -482,7 +486,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     },
                 );
                 Ok(())
-            })
+            }))
         });
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers

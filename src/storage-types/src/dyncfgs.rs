@@ -36,6 +36,15 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
         (namely, upsert) till after rehydration is finished",
 );
 
+/// Whether storage dataflows should suspend execution while downstream operators are still
+/// processing data.
+pub const SUSPENDABLE_SOURCES: Config<bool> = Config::new(
+    "storage_dataflow_suspendable_sources",
+    true,
+    "Whether storage dataflows should suspend execution while downstream operators are still \
+        processing data.",
+);
+
 // Controller
 
 /// When enabled, force-downgrade the controller's since handle on the shard
@@ -187,6 +196,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
+        .add(&SUSPENDABLE_SOURCES)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
