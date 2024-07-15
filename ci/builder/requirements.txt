@@ -34,7 +34,7 @@ parameterized==0.8.1
 paramiko==3.4.0
 pdoc3==0.10.0
 pg8000==1.30.3
-prettytable==3.10.0
+prettytable==3.10.2
 psutil==5.9.4
 psycopg==3.1.12
 psycopg-binary==3.1.12
