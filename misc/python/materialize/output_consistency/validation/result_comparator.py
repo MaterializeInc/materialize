@@ -350,7 +350,8 @@ class ResultComparator:
                         strategy=result2.strategy, value=result_value2, sql=result2.sql
                     ),
                     col_index=col_index,
-                    concerned_expression=expression_as_sql,
+                    concerned_expression_str=expression_as_sql,
+                    concerned_expression_hash=expression.hash(),
                     location=f"row index {row_index}, column index {col_index} ('{expression_as_sql}')",
                 ),
             )
