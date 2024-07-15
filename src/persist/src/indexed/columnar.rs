@@ -11,16 +11,15 @@
 //! reads and persistent storage.
 
 use std::cmp::Ordering;
-use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
+use std::{fmt, iter};
 
-use ::arrow::array::{
-    Array, AsArray, BinaryArray, BinaryBuilder, Int64Array, UInt32Array,
-};
+use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array, UInt32Array};
 use ::arrow::buffer::OffsetBuffer;
 use ::arrow::compute::FilterBuilder;
 use ::arrow::datatypes::ToByteSlice;
+use ::arrow::row::{RowConverter, SortField};
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -110,6 +109,57 @@ impl ColumnarRecords {
     /// stored in Self.
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn with_ext(&self, ext: ColumnarRecordsStructuredExt) -> Self {
+        let key_data = match ext.key {
+            None => BinaryArray::from_iter_values(iter::repeat(&[]).take(self.len)),
+            Some(s) => {
+                let fields: Vec<_> = s
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .map(|f| SortField::new(f.data_type().clone()))
+                    .collect();
+                let converter = RowConverter::new(fields).expect("normal");
+                let rows = converter
+                    .convert_columns(s.as_struct().columns())
+                    .expect("good");
+                let mut builder = BinaryBuilder::new();
+                for row in rows.iter() {
+                    builder.append_value(row.as_ref());
+                }
+                builder.finish()
+            }
+        };
+        let val_data = match ext.val {
+            None => BinaryArray::from_iter_values(iter::repeat(&[]).take(self.len)),
+            Some(s) => {
+                let fields: Vec<_> = s
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .map(|f| SortField::new(f.data_type().clone()))
+                    .collect();
+                let converter = RowConverter::new(fields).expect("normal");
+                let rows = converter
+                    .convert_columns(s.as_struct().columns())
+                    .expect("good");
+                let mut builder = BinaryBuilder::new();
+                for row in rows.iter() {
+                    builder.append_value(row.as_ref());
+                }
+                builder.finish()
+            }
+        };
+
+        Self {
+            len: self.len,
+            key_data,
+            val_data,
+            timestamps: self.timestamps.clone(),
+            diffs: self.diffs.clone(),
+        }
     }
 
     /// The keys in this columnar records as an array.

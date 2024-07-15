@@ -5519,6 +5519,7 @@ dependencies = [
  "anyhow",
  "arrayvec 0.7.4",
  "arrow",
+ "arrow-row",
  "async-stream",
  "async-trait",
  "bytes",

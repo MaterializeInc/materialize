@@ -22,8 +22,11 @@ use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_panic_no_log, soft_panic_or_log};
+use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
@@ -1086,6 +1089,49 @@ where
         // At time of writing, only user parts may be unconsolidated, and they are always
         // written with a since of [T::minimum()].
         self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
+    }
+
+    pub(crate) fn to_columnar(
+        self,
+        filter: &FetchBatchFilter<T>,
+        metrics: &ColumnarMetrics,
+    ) -> ColumnarRecords {
+        let Self {
+            metrics: _,
+            registered_desc,
+            part,
+            needs_truncation,
+            ts_rewrite,
+        } = self;
+        // let (records, ext) = part
+        //     .updates
+        //     .clone()
+        //     .upgrade::<(), _, (), _>(UnitSchema, UnitSchema);
+        let records = part.updates.records().clone();
+
+        records.filter_map_ts(
+            |ts| {
+                let mut t = T::decode(ts);
+
+                if needs_truncation
+                    && (!registered_desc.lower().less_equal(&t)
+                        || registered_desc.upper().less_equal(&t))
+                {
+                    return None;
+                }
+
+                if let Some(rewrite) = ts_rewrite.as_ref() {
+                    t.advance_by(rewrite.borrow());
+                }
+
+                if filter.filter_ts(&mut t) {
+                    Some(T::encode(&t))
+                } else {
+                    None
+                }
+            },
+            metrics,
+        )
     }
 }
 

@@ -923,6 +923,7 @@ where
             .next()
             .await
             .expect("fetching a leased part")?;
+
         let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
         Some(iter)
     }
