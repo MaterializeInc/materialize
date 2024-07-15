@@ -32,6 +32,7 @@ class DbOperationOrFunctionStats:
     count_top_level_expression_generated: int = 0
     count_nested_expression_generated: int = 0
     count_expression_generation_failed: int = 0
+    count_included_in_executed_queries: int = 0
     count_included_in_successfully_executed_queries: int = 0
 
     def to_description(self) -> str:
@@ -42,15 +43,14 @@ class DbOperationOrFunctionStats:
                 self.count_top_level_expression_generated
                 + self.count_nested_expression_generated
             )
-            success_experienced_info = (
-                "never generated"
-                if count_generated == 0
-                else (
-                    "not included in any query that was successfully executed in all strategies!"
-                    if count_generated < 10
-                    else "not included in any query that was successfully executed in all strategies (possibly invalid operation specification)!"
-                )
-            )
+            if count_generated == 0:
+                success_experienced_info = "expression never generated"
+            elif self.count_included_in_executed_queries == 0:
+                success_experienced_info = "query with this expression never generated"
+            elif self.count_included_in_executed_queries < 10:
+                success_experienced_info = "not included in any query that was successfully executed in all strategies!"
+            else:
+                success_experienced_info = "not included in any query that was successfully executed in all strategies (possibly invalid operation specification)!"
 
         return (
             f"{self.count_top_level_expression_generated} top level, "
@@ -229,21 +229,23 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         if test_outcome.has_warnings():
             self.count_with_warning_query_templates += 1
 
-        if test_outcome.query_execution_succeeded_in_all_strategies:
-            self._accept_query_with_successful_execution_in_all_strategies(query)
+        self._accept_executed_query(
+            query, test_outcome.query_execution_succeeded_in_all_strategies
+        )
 
-    def _accept_query_with_successful_execution_in_all_strategies(
-        self, query: QueryTemplate
+    def _accept_executed_query(
+        self, query: QueryTemplate, successfully_executed_in_all_strategies: bool
     ) -> None:
         # only consider expressions in the SELECT part for now
 
         for expression in query.select_expressions:
-            self._accept_expression_with_successful_execution_in_all_strategies(
-                expression
+            self._accept_expression_in_executed_query(
+                expression,
+                successfully_executed_in_all_strategies,
             )
 
-    def _accept_expression_with_successful_execution_in_all_strategies(
-        self, expression: Expression
+    def _accept_expression_in_executed_query(
+        self, expression: Expression, successfully_executed_in_all_strategies: bool
     ) -> None:
         if not isinstance(expression, ExpressionWithArgs):
             return
@@ -256,9 +258,16 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             stats is not None
         ), f"no stats for {operation_variant.to_description()} found"
 
-        stats.count_included_in_successfully_executed_queries = (
-            stats.count_included_in_successfully_executed_queries + 1
+        stats.count_included_in_executed_queries = (
+            stats.count_included_in_executed_queries + 1
         )
 
+        if successfully_executed_in_all_strategies:
+            stats.count_included_in_successfully_executed_queries = (
+                stats.count_included_in_successfully_executed_queries + 1
+            )
+
         for arg in expression.args:
-            self._accept_expression_with_successful_execution_in_all_strategies(arg)
+            self._accept_expression_in_executed_query(
+                arg, successfully_executed_in_all_strategies
+            )
