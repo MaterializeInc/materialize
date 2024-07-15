@@ -440,7 +440,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             return Ok(());
         }
 
-        let mut flat = if trace.roundtrip_structure {
+        let mut flat = if true {
             metrics.state.apply_spine_flattened.inc();
             let mut flat = trace.flatten();
             apply_diffs_single("since", diff_since, &mut flat.since)?;
@@ -1286,7 +1286,7 @@ mod tests {
             .boxed()
         };
 
-        fn run(actions: Vec<(Action, bool)>, metrics: &Metrics) {
+        fn run(actions: Vec<Action>, metrics: &Metrics) {
             let version = Version::new(0, 100, 0);
             let writer_key = WriterKey::Version(version.to_string());
             let id = ShardId::new();
@@ -1306,10 +1306,9 @@ mod tests {
                     encoded_size_bytes: None,
                 },
             );
-            leader.collections.trace.roundtrip_structure = false;
             let mut follower = leader.clone();
 
-            for (action, roundtrip_structure) in actions {
+            for action in actions {
                 // Apply the given action and the new roundtrip_structure setting and take a diff.
                 let mut old_leader = leader.clone();
                 match action {
@@ -1351,7 +1350,6 @@ mod tests {
                         }
                     }
                 }
-                leader.collections.trace.roundtrip_structure = roundtrip_structure;
                 leader.seqno.0 += 1;
                 let diff = StateDiff::from_diff(&old_leader, &leader);
 
@@ -1373,7 +1371,7 @@ mod tests {
         let metrics_registry = MetricsRegistry::new();
         let metrics: Metrics = Metrics::new(&config, &metrics_registry);
 
-        proptest!(|(actions in prop::collection::vec((action_gen, any::<bool>()), 1..20))| {
+        proptest!(|(actions in prop::collection::vec(action_gen, 1..20))| {
             run(actions, &metrics)
         })
     }

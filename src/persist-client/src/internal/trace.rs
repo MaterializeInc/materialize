@@ -85,7 +85,6 @@ pub struct FueledMergeRes<T> {
 #[derive(Debug, Clone)]
 pub struct Trace<T> {
     spine: Spine<T>,
-    pub(crate) roundtrip_structure: bool,
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -93,14 +92,8 @@ impl<T: PartialEq> PartialEq for Trace<T> {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
-        let Trace {
-            spine: _,
-            roundtrip_structure: _,
-        } = self;
-        let Trace {
-            spine: _,
-            roundtrip_structure: _,
-        } = other;
+        let Trace { spine: _ } = self;
+        let Trace { spine: _ } = other;
 
         // Intentionally use HollowBatches for this comparison so we ignore
         // differences in spine layers.
@@ -112,7 +105,6 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     fn default() -> Self {
         Self {
             spine: Spine::new(),
-            roundtrip_structure: false,
         }
     }
 }
@@ -242,12 +234,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
 
-        if !self.roundtrip_structure {
-            assert!(hollow_batches.is_empty());
-            spine_batches.clear();
-            merges.clear();
-        }
-
         FlatTrace {
             since,
             legacy_batches,
@@ -265,9 +251,11 @@ impl<T: Timestamp + Lattice> Trace<T> {
             mut merges,
         } = value;
 
-        // If the flattened representation has spine batches (or is empty)
-        // we know to preserve the structure for this trace.
-        let roundtrip_structure = !spine_batches.is_empty() || legacy_batches.is_empty();
+        // If the flattened representation has spine batches, we know to preserve the structure for
+        // this trace.
+        // Note that for empty spines, roundtrip_structure will default to false. This is done for
+        // backwards-compatability.
+        let roundtrip_structure = true;
 
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.
@@ -405,7 +393,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 upper,
                 merging,
             },
-            roundtrip_structure,
         };
 
         fn check_empty(name: &str, len: usize) -> Result<(), String> {
@@ -1732,10 +1719,9 @@ pub(crate) mod tests {
             (
                 any::<Option<T>>(),
                 proptest::collection::vec(any_hollow_batch::<T>(), num_batches),
-                any::<bool>(),
                 any::<u64>(),
             ),
-            |(since, mut batches, roundtrip_structure, timeout_ms)| {
+            |(since, mut batches, timeout_ms)| {
                 let mut trace = Trace::<T>::default();
                 trace.downgrade_since(&since.map_or_else(Antichain::new, Antichain::from_elem));
 
@@ -1760,7 +1746,6 @@ pub(crate) mod tests {
                 for req in reqs {
                     trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }
-                trace.roundtrip_structure = roundtrip_structure;
                 trace
             },
         )
