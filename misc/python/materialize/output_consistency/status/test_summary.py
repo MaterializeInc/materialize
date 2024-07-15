@@ -29,9 +29,9 @@ from materialize.output_consistency.validation.validation_outcome import (
 
 @dataclass
 class DbOperationOrFunctionStats:
-    count_top_level_generated: int = 0
-    count_nested_generated: int = 0
-    count_generation_failed: int = 0
+    count_top_level_expression_generated: int = 0
+    count_nested_expression_generated: int = 0
+    count_expression_generation_failed: int = 0
     count_included_in_successfully_executed_queries: int = 0
 
     def to_description(self) -> str:
@@ -39,7 +39,8 @@ class DbOperationOrFunctionStats:
             success_experienced_info = "successfully executed at least once"
         else:
             count_generated = (
-                self.count_top_level_generated + self.count_nested_generated
+                self.count_top_level_expression_generated
+                + self.count_nested_expression_generated
             )
             success_experienced_info = (
                 "never generated"
@@ -52,9 +53,9 @@ class DbOperationOrFunctionStats:
             )
 
         return (
-            f"{self.count_top_level_generated} top level, "
-            f"{self.count_nested_generated} nested, "
-            f"{self.count_generation_failed} generation failed, "
+            f"{self.count_top_level_expression_generated} top level, "
+            f"{self.count_nested_expression_generated} nested, "
+            f"{self.count_expression_generation_failed} generation failed, "
             f"{success_experienced_info}"
         )
 
@@ -163,7 +164,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
 
         return "\n".join(output)
 
-    def accept_generation_statistics(
+    def accept_expression_generation_statistics(
         self,
         operation: DbOperationOrFunction,
         expression: ExpressionWithArgs | None,
@@ -179,17 +180,23 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
 
         if expression is None:
             assert is_top_level, "expressions at nested levels must not be None"
-            stats.count_generation_failed = stats.count_generation_failed + 1
+            stats.count_expression_generation_failed = (
+                stats.count_expression_generation_failed + 1
+            )
             return
 
         if is_top_level:
-            stats.count_top_level_generated = stats.count_top_level_generated + 1
+            stats.count_top_level_expression_generated = (
+                stats.count_top_level_expression_generated + 1
+            )
         else:
-            stats.count_nested_generated = stats.count_nested_generated + 1
+            stats.count_nested_expression_generated = (
+                stats.count_nested_expression_generated + 1
+            )
 
         for arg in expression.args:
             if isinstance(arg, ExpressionWithArgs):
-                self.accept_generation_statistics(
+                self.accept_expression_generation_statistics(
                     operation=arg.operation,
                     expression=arg,
                     number_of_args=arg.count_args(),
