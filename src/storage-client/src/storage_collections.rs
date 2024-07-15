@@ -1102,17 +1102,8 @@ where
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
-        let new_collections: BTreeSet<GlobalId> = init_ids
-            .iter()
-            .filter(|id| !existing_metadata.contains(id))
-            .cloned()
-            .collect();
-
-        mz_ore::soft_assert_or_log!(
-                new_collections.iter().all(|id| id.is_system()),
-                "initializing collections should only be missing metadata for new system objects, but got {:?}",
-                new_collections
-            );
+        let new_collections: BTreeSet<GlobalId> =
+            init_ids.difference(&existing_metadata).cloned().collect();
 
         self.prepare_state(txn, new_collections, drop_ids).await?;
 
@@ -1523,7 +1514,7 @@ where
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
             // Ensure that the ingestion has an export for its primary source.
-            // This is done in an akward spot to appease the borrow checker.
+            // This is done in an awkward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
                 ingestion.source_exports.insert(
                     id,
@@ -1541,7 +1532,7 @@ where
             let storage_dependencies = self
                 .determine_collection_dependencies(&*self_collections, &description.data_source)?;
 
-            // Determine the intial since of the collection.
+            // Determine the initial since of the collection.
             let initial_since = match storage_dependencies
                 .iter()
                 .at_most_one()
@@ -2320,7 +2311,7 @@ where
             let collection = if let Some(c) = self_collections.get_mut(id) {
                 c
             } else {
-                warn!("Reference to absent collection {id}");
+                trace!("Reference to absent collection {id}, due to concurrent removal of that collection");
                 continue;
             };
 

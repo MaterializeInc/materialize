@@ -36,7 +36,7 @@ For listed tools that are not yet production-ready, you can register your intere
 
 ### Kafka
 
-Kafka is supported as a [**source**](/get-started/key-concepts/#sources), with features like **upserts** and **Debezium** CDC, and as a [**sink**](/get-started/key-concepts/#sinks) with **exactly-once** semantics.
+Kafka is supported as a [**source**](/concepts/sources), with features like **upserts** and **Debezium** CDC, and as a [**sink**](/concepts/sinks) with **exactly-once** semantics.
 
 | Service                               | Support level                   | Notes                                                                                                                                                                                                                                                                                                                                                      |             |
 | ------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
@@ -49,7 +49,7 @@ Kafka is supported as a [**source**](/get-started/key-concepts/#sources), with f
 
 ### Redpanda
 
-Being Kafka API-compatible, Redpanda is supported as a [**source**](/get-started/key-concepts/#sources) and as a [**sink**](/get-started/key-concepts/#sinks) at the same level and with the same features as Kafka.
+Being Kafka API-compatible, Redpanda is supported as a [**source**](/concepts/sources) and as a [**sink**](/concepts/sinks) at the same level and with the same features as Kafka.
 
 | Service        | Support level             | Notes                                                                                                                                                                                                                                                                                                                                 |             |
 | -------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
@@ -78,7 +78,7 @@ Materialize can efficiently maintain real-time materialized views on top of **Ch
 
 ### PostgreSQL
 
-PostgreSQL 11+ is supported as a [**source**](/get-started/key-concepts/#sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
+PostgreSQL 11+ is supported as a [**source**](/concepts/sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
 
 | Service                         | Support level                    | Notes                                                                                                                                                                                                                                                                                         |             |
 | ------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
@@ -87,7 +87,7 @@ PostgreSQL 11+ is supported as a [**source**](/get-started/key-concepts/#sources
 
 ### MySQL
 
-MySQL 5.7+ is supported as a [**source**](/get-started/key-concepts/#sources)
+MySQL 5.7+ is supported as a [**source**](/concepts/sources)
 both through the [direct MySQL source](/sql/create-source/mysql/) and through
 [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a MySQL
 database as a source requires enabling [**GTID-based binlog replication**](/sql/create-source/mysql/#change-data-capture).

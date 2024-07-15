@@ -16,7 +16,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     prost_build::Config::new()
-        .include_file("mod.rs")
+        .include_file("benchproto.rs")
         .file_descriptor_set_path(out_dir.join("file_descriptor_set.pb"))
         .btree_map(["."])
         .compile_protos(&["interchange/testdata/benchmark.proto"], &[".."])

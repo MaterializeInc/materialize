@@ -2306,7 +2306,7 @@ impl Coordinator {
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
     /// resulting dataflow plans into the catalog state.
     ///
-    /// `ordered_catalog_entries` must by sorted in dependency order, with dependencies ordered
+    /// `ordered_catalog_entries` must be sorted in dependency order, with dependencies ordered
     /// before their dependants.
     ///
     /// This method does not perform timestamp selection for the dataflows, nor does it create them

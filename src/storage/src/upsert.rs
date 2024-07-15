@@ -708,15 +708,15 @@ where
                 // Note that these are both cancel-safe. The reason we drain the `input` is to
                 // ensure the `output_frontier` (and therefore flow control on `previous`) make
                 // progress.
-                previous_event = previous.next(), if !PartialOrder::less_equal(
+                Some(previous_event) = previous.next(), if !PartialOrder::less_equal(
                     &resume_upper,
                     &snapshot_upper,
                 ) => {
                     previous_event
                 }
-                input_event = input.next() => {
+                Some(input_event) = input.next() => {
                     match input_event {
-                        Some(AsyncEvent::Data(_cap, mut data)) => {
+                        AsyncEvent::Data(_cap, mut data) => {
                             stage_input(
                                 &mut stash,
                                 &mut data,
@@ -725,18 +725,15 @@ where
                                 upsert_config.shrink_upsert_unused_buffers_by_ratio
                             );
                         }
-                        Some(AsyncEvent::Progress(upper)) => {
+                        AsyncEvent::Progress(upper) => {
                             input_upper = upper;
-                        }
-                        None => {
-                            input_upper = Antichain::new();
                         }
                     }
                     continue;
                 }
             };
             match previous_event {
-                Some(AsyncEvent::Data(_cap, data)) => {
+                AsyncEvent::Data(_cap, data) => {
                     events.extend(data.into_iter().filter_map(|((key, value), ts, diff)| {
                         if !resume_upper.less_equal(&ts) {
                             Some((key, value, diff))
@@ -745,8 +742,7 @@ where
                         }
                     }))
                 }
-                Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
-                None => snapshot_upper = Antichain::new(),
+                AsyncEvent::Progress(upper) => snapshot_upper = upper,
             };
             while let Some(event) = previous.next().now_or_never() {
                 match event {

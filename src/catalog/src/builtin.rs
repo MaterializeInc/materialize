@@ -276,33 +276,33 @@ impl Fingerprint for &BuiltinLog {
     }
 }
 
-impl Fingerprint for &BuiltinTable {
-    fn fingerprint(&self) -> String {
-        self.desc.fingerprint()
-    }
-}
-
 /// Allows tests to inject arbitrary amounts of whitespace to forcibly change the fingerprint and
 /// trigger a builtin migration. Ideally this would be guarded by a `#[cfg(test)]` but unfortunately,
 /// the builtin migrations are in a different crate and would not be able to modify this value.
 /// There is an open issue to move builtin migrations to this crate:
 /// <https://github.com/MaterializeInc/materialize/issues/22593>
-pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE: Mutex<
+pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE: Mutex<
     Option<String>,
 > = Mutex::new(None);
 
-impl Fingerprint for &BuiltinView {
+impl Fingerprint for &BuiltinTable {
     fn fingerprint(&self) -> String {
-        // This is only called during bootstrapping so it's not that big of a deal to lock a mutex,
+        // This is only called during bootstrapping, so it's not that big of a deal to lock a mutex,
         // though it's not great.
-        let guard = REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE
+        let guard = REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
             .lock()
             .expect("lock poisoned");
         if let Some(whitespace) = &*guard {
-            format!("{}{}", self.sql, whitespace)
+            format!("{}{}", self.desc.fingerprint(), whitespace)
         } else {
-            self.sql.to_string()
+            self.desc.fingerprint()
         }
+    }
+}
+
+impl Fingerprint for &BuiltinView {
+    fn fingerprint(&self) -> String {
+        self.sql.to_string()
     }
 }
 

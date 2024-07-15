@@ -15,8 +15,8 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::ENABLE_0DT_DEPLOYMENT;
 use mz_audit_log::{
-    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, ObjectType,
-    SchedulingDecisionsWithReasonsV1, VersionedEvent,
+    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
+    ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent,
 };
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
@@ -51,9 +51,10 @@ use mz_storage_types::controller::TxnWalTablesImpl;
 use tracing::{info, trace};
 
 use crate::catalog::{
-    catalog_type_to_audit_object_type, is_reserved_name, is_reserved_role_name,
-    object_type_to_audit_object_type, system_object_type_to_audit_object_type, BuiltinTableUpdate,
-    Catalog, CatalogState, UpdatePrivilegeVariant,
+    catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
+    is_reserved_role_name, object_type_to_audit_object_type,
+    system_object_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogState,
+    UpdatePrivilegeVariant,
 };
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::ConnMeta;
@@ -197,6 +198,7 @@ pub enum Op {
     /// then another listening catalog will never know to update the builtin table.
     WeirdBuiltinTableUpdates {
         builtin_table_update: BuiltinTableUpdate,
+        audit_log: Vec<(EventType, ObjectType, EventDetails)>,
     },
     /// Performs a dry run of the commit, but errors with
     /// [`AdapterError::TransactionDryRun`].
@@ -1056,7 +1058,32 @@ impl Catalog {
                 sub_component,
                 comment,
             } => {
-                tx.update_comment(object_id, sub_component, comment.clone())?;
+                tx.update_comment(object_id, sub_component, comment)?;
+                let entry = state.get_comment_id_entry(&object_id);
+                let should_log = entry
+                    .map(|entry| Self::should_audit_log_item(entry.item()))
+                    // Things that aren't catalog entries can't be temp, so should be logged.
+                    .unwrap_or(true);
+                // TODO: We need a conn_id to resolve schema names. This means that system-initiated
+                // comments won't be logged for now.
+                if let (Some(conn_id), true) =
+                    (session.map(|session| session.conn_id()), should_log)
+                {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Comment,
+                        comment_id_to_audit_object_type(object_id),
+                        EventDetails::IdNameV1(IdNameV1 {
+                            // CommentObjectIds don't have a great string representation, but debug will do for now.
+                            id: format!("{object_id:?}"),
+                            name: state.comment_id_to_audit_log_name(object_id, conn_id),
+                        }),
+                    )?;
+                }
             }
             Op::DropObjects(drop_object_infos) => {
                 // Generate all of the objects that need to get dropped.
@@ -1856,6 +1883,20 @@ impl Catalog {
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::Cluster,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name,
+                    }),
+                )?;
             }
             Op::UpdateItem { id, name, to_item } => {
                 let mut entry = state.get_entry(&id).clone();
@@ -1908,6 +1949,20 @@ impl Catalog {
                         strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
                     tx.set_enable_0dt_deployment(enable_0dt_deployment)?;
                 }
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 {
+                        name,
+                        value: Some(value.borrow().to_vec().join(", ")),
+                    }),
+                )?;
             }
             Op::ResetSystemConfiguration { name } => {
                 tx.remove_system_config(&name);
@@ -1919,16 +1974,51 @@ impl Catalog {
                 } else if name == ENABLE_0DT_DEPLOYMENT.name() {
                     tx.reset_enable_0dt_deployment()?;
                 }
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 { name, value: None }),
+                )?;
             }
             Op::ResetAllSystemConfiguration => {
                 tx.clear_system_configs();
                 tx.reset_txn_wal_tables()?;
                 tx.reset_enable_0dt_deployment()?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::ResetAllV1,
+                )?;
             }
             Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,
+                audit_log,
             } => {
                 weird_builtin_table_update = Some(builtin_table_update);
+                for (ev_type, ob_type, ev_details) in audit_log {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        ev_type,
+                        ob_type,
+                        ev_details,
+                    )?;
+                }
             }
         };
         Ok((weird_builtin_table_update, temporary_item_updates))

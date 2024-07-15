@@ -13,7 +13,7 @@ aliases:
 
 ## Indexes
 
-Like in any standard relational database, you can use [indexes](/get-started/key-concepts/#indexes) to optimize query performance in Materialize. Improvements can be significant, reducing some query times down to single-digit milliseconds.
+Like in any standard relational database, you can use [indexes](/concepts/indexes/) to optimize query performance in Materialize. Improvements can be significant, reducing some query times down to single-digit milliseconds.
 
 Building an efficient index depends on the clauses used in your queries, as well as your expected access patterns. Use the following as a guide:
 

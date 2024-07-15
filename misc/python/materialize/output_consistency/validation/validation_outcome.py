@@ -125,8 +125,10 @@ class ValidationOutcome:
 
         for error in self.errors:
             test_case_name = f"Query {error.query_execution.query_id}"
-            if error.concerned_expression is not None:
-                test_case_name = f"{test_case_name} (`{error.concerned_expression}`)"
+            if error.concerned_expression_str is not None:
+                test_case_name = (
+                    f"{test_case_name} (`{error.concerned_expression_str}`)"
+                )
 
             failures.append(
                 TestFailureDetails(

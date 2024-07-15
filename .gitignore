@@ -16,6 +16,7 @@
 .mtrlz.log
 *.rs.bk
 mzdata
+mzbuild
 __pycache__
 .mypy_cache
 venv
@@ -54,6 +55,7 @@ flake.lock
 /bazel-materialize
 /bazel-out
 /bazel-testlogs
+/bazel-explain.log
 
 /src/testdrive/ci/protobuf-bin
 /src/testdrive/ci/protobuf-include

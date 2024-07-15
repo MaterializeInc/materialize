@@ -54,9 +54,9 @@ use mz_sql::catalog::{
     SystemObjectType,
 };
 use mz_sql::names::{
-    DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
-    SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
+    PartialItemName, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
@@ -1212,6 +1212,26 @@ pub(crate) fn catalog_type_to_audit_object_type(sql_type: SqlCatalogItemType) ->
     object_type_to_audit_object_type(sql_type.into())
 }
 
+pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType {
+    match id {
+        CommentObjectId::Table(_) => ObjectType::Table,
+        CommentObjectId::View(_) => ObjectType::View,
+        CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
+        CommentObjectId::Source(_) => ObjectType::Source,
+        CommentObjectId::Sink(_) => ObjectType::Sink,
+        CommentObjectId::Index(_) => ObjectType::Index,
+        CommentObjectId::Func(_) => ObjectType::Func,
+        CommentObjectId::Connection(_) => ObjectType::Connection,
+        CommentObjectId::Type(_) => ObjectType::Type,
+        CommentObjectId::Secret(_) => ObjectType::Secret,
+        CommentObjectId::Role(_) => ObjectType::Role,
+        CommentObjectId::Database(_) => ObjectType::Database,
+        CommentObjectId::Schema(_) => ObjectType::Schema,
+        CommentObjectId::Cluster(_) => ObjectType::Cluster,
+        CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+    }
+}
+
 pub(crate) fn object_type_to_audit_object_type(
     object_type: mz_sql::catalog::ObjectType,
 ) -> ObjectType {
@@ -1899,7 +1919,7 @@ mod tests {
 
     use mz_catalog::builtin::{
         Builtin, BuiltinType, BUILTINS,
-        REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
+        REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE,
     };
     use mz_catalog::durable::{CatalogError, DurableCatalogError};
     use mz_catalog::SYSTEM_CONN_ID;
@@ -1912,7 +1932,7 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
-    use mz_sql::catalog::{CatalogSchema, CatalogType, SessionCatalog};
+    use mz_sql::catalog::{CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -3112,23 +3132,71 @@ mod tests {
     async fn test_builtin_migrations() {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
-        let id = {
-            let catalog =
+        let mv_name = "mv";
+        let (mz_tables_id, mv_id) = {
+            let mut catalog =
                 Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
                     .await
                     .expect("unable to open debug catalog");
-            let id = catalog
+
+            // Create a materialized view over `mz_tables`.
+            let database_id = DatabaseId::User(1);
+            let database = catalog.get_database(&database_id);
+            let database_name = database.name();
+            let schemas = database.schemas();
+            let schema = schemas.first().expect("must have at least one schema");
+            let schema_spec = schema.id().clone();
+            let schema_name = &schema.name().schema;
+            let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
+            let mv = catalog
+                .state()
+                .deserialize_item(&format!(
+                    "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
+                ))
+                .expect("unable to deserialize item");
+            let mv_id = catalog
+                .allocate_user_id()
+                .await
+                .expect("unable to allocate id");
+            catalog
+                .transact(
+                    None,
+                    0.into(),
+                    None,
+                    vec![Op::CreateItem {
+                        id: mv_id,
+                        name: QualifiedItemName {
+                            qualifiers: ItemQualifiers {
+                                database_spec,
+                                schema_spec,
+                            },
+                            item: mv_name.to_string(),
+                        },
+                        item: mv,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
+                    }],
+                )
+                .await
+                .expect("unable to transact");
+
+            let mz_tables_id = catalog
                 .entries()
-                .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
-                .expect("mz_objects doesn't exist")
+                .find(|entry| &entry.name.item == "mz_tables" && entry.is_table())
+                .expect("mz_tables doesn't exist")
                 .id();
+            let check_mv_id = catalog
+                .entries()
+                .find(|entry| &entry.name.item == mv_name && entry.is_materialized_view())
+                .unwrap_or_else(|| panic!("{mv_name} doesn't exist"))
+                .id();
+            assert_eq!(check_mv_id, mv_id);
             catalog.expire().await;
-            id
+            (mz_tables_id, mv_id)
         };
-        // Forcibly migrate all views.
+        // Forcibly migrate all tables.
         {
             let mut guard =
-                REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE
+                REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
                     .lock()
                     .expect("lock poisoned");
             *guard = Some("\n".to_string());
@@ -3138,13 +3206,21 @@ mod tests {
                 .await
                 .expect("unable to open debug catalog");
 
-            let new_id = catalog
+            let new_mz_tables_id = catalog
                 .entries()
-                .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
-                .expect("mz_objects doesn't exist")
+                .find(|entry| &entry.name.item == "mz_tables" && entry.is_table())
+                .expect("mz_tables doesn't exist")
                 .id();
-            // Assert that the view was migrated and got a new ID.
-            assert_ne!(new_id, id);
+            // Assert that the table was migrated and got a new ID.
+            assert_ne!(new_mz_tables_id, mz_tables_id);
+
+            let new_mv_id = catalog
+                .entries()
+                .find(|entry| &entry.name.item == mv_name && entry.is_materialized_view())
+                .unwrap_or_else(|| panic!("{mv_name} doesn't exist"))
+                .id();
+            // Assert that the materialized view was migrated and got a new ID.
+            assert_ne!(new_mv_id, mv_id);
 
             catalog.expire().await;
         }

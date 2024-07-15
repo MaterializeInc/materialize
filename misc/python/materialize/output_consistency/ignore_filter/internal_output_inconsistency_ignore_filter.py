@@ -21,6 +21,7 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_fun_by_any_name,
+    matches_fun_by_name,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
     IgnoreVerdict,
@@ -41,6 +42,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperation,
     DbOperationOrFunction,
 )
+from materialize.output_consistency.query.query_result import QueryFailure
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
@@ -133,12 +135,12 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
-        dfr_successful = outcome_by_strategy_id[
+        dfr_outcome = outcome_by_strategy_id[
             EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
-        ].successful
-        ctf_successful = outcome_by_strategy_id[
-            EvaluationStrategyKey.MZ_CONSTANT_FOLDING
-        ].successful
+        ]
+        ctf_outcome = outcome_by_strategy_id[EvaluationStrategyKey.MZ_CONSTANT_FOLDING]
+        dfr_successful = dfr_outcome.successful
+        ctf_successful = ctf_outcome.successful
 
         dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
         dfr_succeeds_but_ctf_fails = dfr_successful and not ctf_successful
@@ -166,6 +168,21 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
 
         if self._uses_eager_evaluation(query_template):
             return YesIgnore("#17189")
+
+        if dfr_succeeds_but_ctf_fails:
+            assert isinstance(ctf_outcome, QueryFailure)
+
+            if (
+                ctf_outcome.error_message == "key cannot be null"
+                and query_template.matches_any_expression(
+                    partial(
+                        matches_fun_by_name,
+                        function_name_in_lower_case="jsonb_object_agg",
+                    ),
+                    True,
+                )
+            ):
+                return YesIgnore("#28136: jsonb_object_agg with NULL as key")
 
         return NoIgnore()
 

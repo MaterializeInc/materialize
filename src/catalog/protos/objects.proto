@@ -485,6 +485,7 @@ message AuditLogEventV1 {
     EVENT_TYPE_ALTER = 3;
     EVENT_TYPE_GRANT = 4;
     EVENT_TYPE_REVOKE = 5;
+    EVENT_TYPE_COMMENT = 6;
   }
 
   enum ObjectType {
@@ -722,6 +723,16 @@ message AuditLogEventV1 {
     string previous_id = 2;
   }
 
+  message SetV1 {
+    string name = 1;
+    optional string value = 2;
+  }
+
+  message RotateKeysV1 {
+    string id = 1;
+    string name = 2;
+  }
+
   uint64 id = 1;
   EventType event_type = 2;
   ObjectType object_type = 3;
@@ -758,6 +769,9 @@ message AuditLogEventV1 {
     AlterRetainHistoryV1 alter_retain_history_v1 = 30;
     ToNewIdV1 to_new_id_v1 = 31;
     FromPreviousIdV1 from_previous_id_v1 = 32;
+    SetV1 set_v1 = 35;
+    Empty reset_all_v1 = 36;
+    RotateKeysV1 rotate_keys_v1 = 37;
   }
 }
 

@@ -10,7 +10,6 @@ aliases:
   - /katacoda/
   - /quickstarts/
   - /install/
-  - /get-started/
 ---
 
 Materialize is a new kind of **data warehouse built for operational workloads**: the
@@ -105,7 +104,7 @@ with.
   available**. To identify potential auction flippers, you need to keep track
   of the winning bids for each completed auction.
 
-1. Create a [**view**](/get-started/key-concepts/#non-materialized-views) that
+1. Create a [**view**](/concepts/views/#non-materialized-views) that
 joins data from `auctions` and `bids` to get the bid with the highest `amount`
 for each auction at its `end_time`.
 

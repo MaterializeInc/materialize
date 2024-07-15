@@ -1826,6 +1826,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             RetainHistoryFor(value) => RetainHistoryFor(self.fold_value(value)),
             Refresh(refresh) => Refresh(self.fold_refresh_option_value(refresh)),
             ClusterScheduleOptionValue(value) => ClusterScheduleOptionValue(value),
+            ClusterAlterStrategy(value) => ClusterAlterStrategy(value),
         }
     }
 

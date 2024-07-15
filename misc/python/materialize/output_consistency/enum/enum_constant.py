@@ -26,6 +26,7 @@ from materialize.output_consistency.expression.expression_characteristics import
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.util import stable_int_hash
 
 ENUM_RETURN_TYPE_SPEC = ReturnTypeSpec(DataTypeCategory.ENUM)
 
@@ -45,6 +46,9 @@ class EnumConstant(Expression):
         self.add_quotes = add_quotes
         self.data_type = EnumDataType()
         self.tags = tags
+
+    def hash(self) -> int:
+        return stable_int_hash(self.value)
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return DataTypeCategory.ENUM

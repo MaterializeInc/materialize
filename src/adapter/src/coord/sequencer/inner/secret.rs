@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use mz_audit_log::{EventDetails, EventType, RotateKeysV1};
 use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::MirScalarExpr;
 use mz_ore::instrument;
@@ -54,7 +55,7 @@ impl Staged for SecretStage {
             SecretStage::CreateFinish(stage) => {
                 coord.create_secret_finish(ctx.session(), stage).await
             }
-            SecretStage::RotateKeysEnsure(stage) => coord.rotate_keys_ensure(stage),
+            SecretStage::RotateKeysEnsure(stage) => coord.rotate_keys_ensure(ctx.session(), stage),
             SecretStage::RotateKeysFinish(stage) => {
                 coord.rotate_keys_finish(ctx.session(), stage).await
             }
@@ -292,10 +293,13 @@ impl Coordinator {
     #[instrument]
     fn rotate_keys_ensure(
         &mut self,
+        session: &Session,
         RotateKeysSecretEnsure { validity, id }: RotateKeysSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let catalog = self.owned_catalog();
+        let entry = catalog.get_entry(&id);
+        let name = catalog.resolve_full_name(&entry.name, Some(session.conn_id()));
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "rotate keys ensure",
@@ -326,9 +330,18 @@ impl Coordinator {
                 let ops = vec![
                     catalog::Op::WeirdBuiltinTableUpdates {
                         builtin_table_update: builtin_table_retraction,
+                        audit_log: Vec::new(),
                     },
                     catalog::Op::WeirdBuiltinTableUpdates {
                         builtin_table_update: builtin_table_addition,
+                        audit_log: vec![(
+                            EventType::Alter,
+                            mz_audit_log::ObjectType::Connection,
+                            EventDetails::RotateKeysV1(RotateKeysV1 {
+                                id: id.to_string(),
+                                name: name.to_string(),
+                            }),
+                        )],
                     },
                 ];
                 let stage = SecretStage::RotateKeysFinish(RotateKeysSecretFinish { validity, ops });

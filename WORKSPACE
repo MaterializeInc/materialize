@@ -237,12 +237,30 @@ RUST_VERSION = "1.79.0"
 load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
 rust_toolchains(
     RUST_VERSION,
-    [
-        "aarch64-apple-darwin",
-        "aarch64-unknown-linux-gnu",
-        "x86_64-unknown-linux-gnu",
-        "x86_64-apple-darwin",
-    ]
+    {
+        "aarch64-apple-darwin": {
+            "rustc": "0d7890d57a879fdde1866049beb5d47319d9d7acc1968ec0b92d719917c137b3",
+            "clippy": "33e8feb81e31b991ad0e934c83ccd2b1acdafd944a3203e4afb7c7cbacbe41fc",
+            "cargo": "2cc674f17c18b0c01e0e5a8e5caedc26b0f499d2cc10605cf1a838e2cad9ef7d",
+            "llvm-tools": "326166f8862d2ecc10198f9c8bba89dfe64028187ddf417e916dc08c5d3deac7",
+            "rust-std": "89f16f3a6e8705c314c2f59186e0f8695ba43a58805c8450825888371fceaa25",
+        },
+        "aarch64-unknown-linux-gnu": {
+            "rustc": "9c847b42b81325d25a9240e33bf03fa8652f5dd321ae90a9a7a58b46bf124b17",
+            "clippy": "77803cfff2ea0342f26b59eabec353bc43a1791012aa70855ecfea0fb7ae76ac",
+            "cargo": "4ca5e9bd141b0111387ea1aa0355f87eb8d0da52fbc616cefa4ecde4997aa65b",
+            "llvm-tools": "3eabfa407fdcb894a79eb3980979d8525f7d4524896d53673ec7811629702dd6",
+            "rust-std": "519abf4757fbd8d7e3bb4e4cfdc362ded972c1d95f04675684df2d31e8c0899b"
+        },
+        "x86_64-unknown-linux-gnu": {
+            "rustc": "a04cf42022d0a5faf01c31082bfb1dde9c38409f0ca6da90a3e40faa03e797ae",
+            "clippy": "3fb282ee97626e4f25c4f6faac3997859b89f13983dd6fa111e25182dfcb91fa",
+            "cargo": "07fcadd27b645ad58ff4dae5ef166fd730311bbae8f25f6640fe1bfd2a1f3c3c",
+            "llvm-tools": "3e4a9815d882bfb0cf4d4ec1e14181c44324bb3d04e851b9b5377b6a42b75eba",
+            "rust-std": "2c914483c0882d44af2e50a181cbd2c953d672d50b31aa669ee2346cade1f108"
+        },
+        "x86_64-apple-darwin": {},
+    }
 )
 
 # Load all dependencies for crate_universe.

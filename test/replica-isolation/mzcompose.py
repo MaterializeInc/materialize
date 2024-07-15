@@ -414,6 +414,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("zookeeper", "kafka", "schema-registry", "localstack")
     for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
+        # TODO: Reenable when #28046 is fixed
+        if disruption.name == "restart-environmentd":
+            continue
+
         run_test(c, disruption, id)
 
 

@@ -25,10 +25,15 @@ def rust_toolchains(version, targets):
     abstract it away into this macro.
     """
 
-    for target in targets:
+    for (target, resources) in targets.items():
         # Support cross compiling to all other targets we specify.
-        extra_targets = [t for t in targets]
+        extra_targets = [t for t in targets.keys()]
         extra_targets.remove(target)
+
+        integrity = {}
+        for (resource, sha256) in resources.items():
+            key = "{0}-{1}-{2}.tar.xz".format(resource, version, target)
+            integrity[key] = sha256
 
         rust_repository_set(
             name = DEFAULT_TOOLCHAIN_TRIPLES[target],
@@ -36,4 +41,5 @@ def rust_toolchains(version, targets):
             exec_triple = target,
             extra_target_triples = extra_targets,
             versions = [version],
+            sha256s = integrity,
         )

@@ -69,25 +69,10 @@ const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 /// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
 /// u64::MAX]`, but realtime sources are overwhelmingly the common case.
 ///
-/// The i'th key's data is stored in
-/// `key_data[key_offsets[i]..key_offsets[i+1]]`. Similarly for val.
-///
 /// Invariants:
-/// - len < usize::MAX (so len+1 can fit in a usize)
-/// - key_offsets.len() * BYTES_PER_KEY_VAL_OFFSET + key_data.len() <= KEY_VAL_DATA_MAX_LEN
-/// - key_offsets.len() == len + 1
-/// - key_offsets are non-decreasing
-/// - Each key_offset is <= key_data.len()
-/// - key_offsets.first().unwrap() == 0
-/// - key_offsets.last().unwrap() == key_data.len()
-/// - val_offsets.len() * BYTES_PER_KEY_VAL_OFFSET + val_data.len() <= KEY_VAL_DATA_MAX_LEN
-/// - val_offsets.len() == len + 1
-/// - val_offsets are non-decreasing
-/// - Each val_offset is <= val_data.len()
-/// - val_offsets.first().unwrap() == 0
-/// - val_offsets.last().unwrap() == val_data.len()
-/// - timestamps.len() == len
-/// - diffs.len() == len
+/// - len <= u32::MAX (since we use arrow's `BinaryArray` for our binary data)
+/// - the length of all arrays should == len
+/// - all entries should be non-null
 #[derive(Clone, PartialEq)]
 pub struct ColumnarRecords {
     len: usize,
@@ -108,6 +93,11 @@ impl ColumnarRecords {
     /// stored in Self.
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// The keys in this columnar records as an array.
+    pub fn keys(&self) -> &BinaryArray {
+        &self.key_data
     }
 
     /// The number of logical bytes in the represented data, excluding offsets
@@ -166,6 +156,18 @@ impl<'a> fmt::Debug for ColumnarRecordsRef<'a> {
 
 impl<'a> ColumnarRecordsRef<'a> {
     fn validate(&self) -> Result<(), String> {
+        let validate_array = |name: &str, array: &dyn Array| {
+            let len = array.len();
+            if len != self.len {
+                return Err(format!("expected {} {name} got {len}", self.len));
+            }
+            let null_count = array.null_count();
+            if null_count > 0 {
+                return Err(format!("{null_count} unexpected nulls in {name} array"));
+            }
+            Ok(())
+        };
+
         let key_data_size =
             self.key_data.values().len() + self.key_data.offsets().inner().inner().len();
         if key_data_size > KEY_VAL_DATA_MAX_LEN {
@@ -174,13 +176,8 @@ impl<'a> ColumnarRecordsRef<'a> {
                 KEY_VAL_DATA_MAX_LEN, key_data_size
             ));
         }
-        if self.key_data.len() != self.len {
-            return Err(format!(
-                "expected {} keys got {}",
-                self.len,
-                self.key_data.len()
-            ));
-        }
+        validate_array("keys", &self.key_data)?;
+
         let val_data_size =
             self.val_data.values().len() + self.val_data.offsets().inner().inner().len();
         if val_data_size > KEY_VAL_DATA_MAX_LEN {
@@ -189,13 +186,8 @@ impl<'a> ColumnarRecordsRef<'a> {
                 KEY_VAL_DATA_MAX_LEN, val_data_size
             ));
         }
-        if self.val_data.len() != self.len {
-            return Err(format!(
-                "expected {} vals got {}",
-                self.len,
-                self.val_data.len()
-            ));
-        }
+        validate_array("vals", &self.val_data)?;
+
         if self.diffs.len() != self.len {
             return Err(format!(
                 "expected {} diffs got {}",
@@ -325,6 +317,17 @@ impl ColumnarRecordsBuilder {
         key_data_size <= limit && val_data_size <= limit
     }
 
+    /// The current size of the columnar records data, useful for bounding batches at a
+    /// target size.
+    pub fn total_bytes(&self) -> usize {
+        self.key_data.values_slice().len()
+            + self.key_data.offsets_slice().to_byte_slice().len()
+            + self.val_data.values_slice().len()
+            + self.val_data.offsets_slice().to_byte_slice().len()
+            + self.timestamps.to_byte_slice().len()
+            + self.diffs.to_byte_slice().len()
+    }
+
     /// Add a record to Self.
     ///
     /// Returns whether the record was successfully added. A record will not a
@@ -340,8 +343,6 @@ impl ColumnarRecordsBuilder {
             return false;
         }
 
-        // NB: We should never hit the following expects because we check them
-        // above.
         self.key_data.append_value(key);
         self.val_data.append_value(val);
         self.timestamps.push(i64::from_le_bytes(ts));

@@ -3860,6 +3860,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_alter_cluster_option(&mut self) -> Result<ClusterAlterOption<Raw>, ParserError> {
+        let (name, value) = match self.expect_one_of_keywords(&[WAIT])? {
+            WAIT => {
+                let _ = self.consume_token(&Token::Eq);
+                let v = match self.expect_one_of_keywords(&[FOR])? {
+                    FOR => Some(WithOptionValue::ClusterAlterStrategy(
+                        ClusterAlterOptionValue::For(self.parse_value()?),
+                    )),
+                    _ => unreachable!(),
+                };
+                (ClusterAlterOptionName::Wait, v)
+            }
+            _ => unreachable!(),
+        };
+        Ok(ClusterAlterOption { name, value })
+    }
+
     fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         self.expect_token(&Token::LParen)?;
@@ -4696,10 +4713,25 @@ impl<'a> Parser<'a> {
                     .map_parser_err(StatementKind::AlterCluster)?;
                 self.expect_token(&Token::RParen)
                     .map_parser_err(StatementKind::AlterCluster)?;
+                let with_options = if self.parse_keyword(WITH) {
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    let options = self
+                        .parse_comma_separated(Parser::parse_alter_cluster_option)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    options
+                } else {
+                    vec![]
+                };
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
-                    action: AlterClusterAction::SetOptions(options),
+                    action: AlterClusterAction::SetOptions {
+                        options,
+                        with_options,
+                    },
                 }))
             }
             SWAP => {

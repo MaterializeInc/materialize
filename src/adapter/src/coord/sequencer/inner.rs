@@ -754,6 +754,7 @@ impl Coordinator {
                 .resolve_builtin_table_update(builtin_table_update);
             ops.push(catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,
+                audit_log: Vec::new(),
             });
         }
 
@@ -1630,6 +1631,7 @@ impl Coordinator {
             .chain(ssh_tunnel_updates.into_iter().map(|builtin_table_update| {
                 catalog::Op::WeirdBuiltinTableUpdates {
                     builtin_table_update,
+                    audit_log: Vec::new(),
                 }
             }))
             .collect();

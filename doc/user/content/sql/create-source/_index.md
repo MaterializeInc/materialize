@@ -11,7 +11,7 @@ menu:
     weight: 20
 ---
 
-A [source](../../get-started/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+A [source](/concepts/sources/) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
 Like other relations, sources are [namespaced](../namespaces/) by a database and schema.
 
 [//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
@@ -81,7 +81,7 @@ Materialize can decode JSON messages into a single column named `data` with type
 supported operations on this type.
 
 If your JSON messages have a consistent shape, we recommend creating a parsing
-[view](/get-started/key-concepts/#views) that maps the individual fields to
+[view](/concepts/views) that maps the individual fields to
 columns with the required data types:
 
 ```mzsql
@@ -260,7 +260,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [Key Concepts](../../get-started/key-concepts/)
+- [Sources](/concepts/sources/)
 - [`SHOW SOURCES`](/sql/show-sources/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SOURCE`](/sql/show-create-source/)

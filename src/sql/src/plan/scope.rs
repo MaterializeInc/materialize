@@ -338,8 +338,30 @@ impl Scope {
                 })
             }
             Some(c) => {
-                if results.find(|c2| c.lat_level == c2.lat_level).is_some() {
+                if let Some(ambiguous) = results.find(|c2| c.lat_level == c2.lat_level) {
                     if let Some(table_name) = table_name {
+                        if let (
+                            ScopeCursorInner::Item {
+                                column: ColumnRef { level: c_level, .. },
+                                ..
+                            },
+                            ScopeCursorInner::Item {
+                                column:
+                                    ColumnRef {
+                                        level: ambiguous_level,
+                                        ..
+                                    },
+                                ..
+                            },
+                        ) = (c.inner, ambiguous.inner)
+                        {
+                            // ColumnRefs with identical levels indicate multiple columns of the
+                            // same name in relation. If the levels differ then it is instead two
+                            // tables with the same name, both having a column with this name.
+                            if c_level == ambiguous_level {
+                                return Err(PlanError::AmbiguousColumn(column_name.clone()));
+                            }
+                        }
                         return Err(PlanError::AmbiguousTable(table_name.clone()));
                     } else {
                         return Err(PlanError::AmbiguousColumn(column_name.clone()));
