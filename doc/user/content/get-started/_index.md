@@ -45,8 +45,15 @@ to make a compromise between the freshness of the results, the cost of
 refreshing the view, and the complexity of the SQL statements you can use.
 
 In Materialize, you don't have to make such compromises. Materialize supports
-incrementally updated materialized views that are **always fresh**, even when
-using complex SQL statements, like multi-way joins with aggregations. How?
+incrementally updated view results that are **always fresh** (even when using
+complex SQL statements, like multi-way joins with aggregations) for *both*:
+
+- [Non-materialized views **with an
+index**](/concepts/views/#indexes-and-non-materialized-views) and
+
+- [Materialized views](/concepts/views/#materialized-views).
+
+How?
 Its engine is built on [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow)
 and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow)
 — data processing frameworks backed by many years of research and optimized for
