@@ -6,12 +6,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
 import math
 import re
 from decimal import Decimal
+from functools import partial
 from typing import Any
 
+from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.ignore_filter.expression_matchers import (
+    matches_fun_by_name,
+)
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -23,7 +27,16 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 # * 2038-01-19 03:14:18.123
 # * 2038-01-19 03:14:18.123+00
 # * 2038-01-19 03:14:18+00
-TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?")
+# * 2038-01-19T03:14:18+00 (when used in JSONB)
+TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?")
+
+# Examples:
+# * NaN
+# * 1
+# * -1.23
+# * 1.23e-3
+# * 1.23e+3
+DECIMAL_PATTERN = re.compile(r"NaN|[+-]?\d+(\.\d+)?(e[+-]?\d+)?")
 
 # Examples:
 # * ["1","2"]
@@ -49,9 +62,13 @@ class PostgresResultComparator(ResultComparator):
         return False
 
     def is_value_equal(
-        self, value1: Any, value2: Any, is_tolerant: bool = False
+        self,
+        value1: Any,
+        value2: Any,
+        expression: Expression,
+        is_tolerant: bool = False,
     ) -> bool:
-        if super().is_value_equal(value1, value2, is_tolerant=is_tolerant):
+        if super().is_value_equal(value1, value2, expression, is_tolerant=is_tolerant):
             return True
 
         if isinstance(value1, Decimal):
@@ -82,7 +99,7 @@ class PostgresResultComparator(ResultComparator):
         return math.isclose(value1, value2, rel_tol=self.floating_precision)
 
     def is_str_equal(self, value1: str, value2: str, is_tolerant: bool) -> bool:
-        if self.is_timestamp(value1):
+        if self.is_timestamp(value1) and self.is_timestamp(value2):
             return self.is_timestamp_equal(value1, value2)
 
         if (
@@ -107,10 +124,7 @@ class PostgresResultComparator(ResultComparator):
         return value1 == value2
 
     def is_decimal(self, value: str):
-        if value == "NaN":
-            return True
-
-        return value.replace(".", "", 1).isdigit()
+        return DECIMAL_PATTERN.match(value) is not None
 
     def is_timestamp(self, value: str) -> bool:
         return TIMESTAMP_PATTERN.match(value) is not None
@@ -130,6 +144,36 @@ class PostgresResultComparator(ResultComparator):
             value1 = last_second_and_milliseconds_pattern.sub("0", value1)
             value2 = last_second_and_milliseconds_pattern.sub("0", value2)
 
+        value1 = self._normalize_jsonb_timestamp(value1)
+        value2 = self._normalize_jsonb_timestamp(value2)
+
         assert self.is_timestamp(value1)
         assert self.is_timestamp(value2)
         return value1 == value2
+
+    def _normalize_jsonb_timestamp(self, value: str) -> str:
+        # this is due to #28137
+
+        pattern_for_date = r"\d+-\d+-\d+"
+        pattern_for_time = r"\d+:\d+:\d+[+-]\d+"
+        pattern_for_value_without_t_sep_and_timezone_mins = (
+            rf"({pattern_for_date})T({pattern_for_time}):\d+"
+        )
+        match = re.match(pattern_for_value_without_t_sep_and_timezone_mins, value)
+
+        if match is None:
+            return value
+
+        return match.group(1) + " " + match.group(2)
+
+    def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
+        if expression.matches(
+            partial(
+                matches_fun_by_name, function_name_in_lower_case="jsonb_object_agg"
+            ),
+            True,
+        ):
+            # this is because of #28192
+            return True
+
+        return False
