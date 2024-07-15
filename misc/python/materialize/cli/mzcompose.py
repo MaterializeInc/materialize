@@ -831,6 +831,10 @@ class BisectCommand(RunCommand):
             log=log,
         )
 
+    def handle_result_after_test_run(self, composition: Composition, find: str) -> None:
+        # TODO: extract error infos from test results
+        composition.test_results.clear()
+
     def _pick_middle_commit(self, commits: list[str]) -> str:
         assert len(commits) > 0
         return commits[len(commits) // 2]
