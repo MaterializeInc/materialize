@@ -101,6 +101,8 @@ pub struct TransformCtx<'a> {
     pub df_meta: &'a mut DataflowMetainfo,
 }
 
+const FOLD_CONSTANTS_LIMIT: usize = 10000;
+
 impl<'a> TransformCtx<'a> {
     /// Generates a [`TransformCtx`] instance for the local MIR optimization
     /// stage.
@@ -465,7 +467,9 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+                Box::new(fold_constants::FoldConstants {
+                    limit: Some(FOLD_CONSTANTS_LIMIT),
+                }),
             ],
         }
     }
@@ -645,7 +649,9 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     Box::new(column_knowledge::ColumnKnowledge::default()),
-                    Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+                    Box::new(fold_constants::FoldConstants {
+                        limit: Some(FOLD_CONSTANTS_LIMIT),
+                    }),
                     Box::new(demand::Demand::default()),
                     Box::new(literal_lifting::LiteralLifting::default()),
                 ],
@@ -659,7 +665,9 @@ impl Optimizer {
             Box::new(canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
-            Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+            Box::new(fold_constants::FoldConstants {
+                limit: Some(FOLD_CONSTANTS_LIMIT),
+            }),
             // Remove threshold operators which have no effect.
             // Must be done at the very end of the physical pass, because before
             // that (at least at the moment) we cannot be sure that all trees
@@ -717,7 +725,9 @@ impl Optimizer {
                     // The last RelationCSE before JoinImplementation should be with
                     // inline_mfp = true.
                     Box::new(cse::relation_cse::RelationCSE::new(true)),
-                    Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+                    Box::new(fold_constants::FoldConstants {
+                        limit: Some(FOLD_CONSTANTS_LIMIT),
+                    }),
                 ],
             }),
             Box::new(
