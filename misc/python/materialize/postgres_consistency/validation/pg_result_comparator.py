@@ -27,6 +27,14 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?")
 
 # Examples:
+# * NaN
+# * 1
+# * -1.23
+# * 1.23e-3
+# * 1.23e+3
+DECIMAL_PATTERN = re.compile(r"NaN|[+-]?\d+(\.\d+)?(e[+-]?\d+)?")
+
+# Examples:
 # * ["1","2"]
 # * [1,2]
 # * [1, 2]
@@ -112,10 +120,7 @@ class PostgresResultComparator(ResultComparator):
         return value1 == value2
 
     def is_decimal(self, value: str):
-        if value == "NaN":
-            return True
-
-        return value.replace(".", "", 1).isdigit()
+        return DECIMAL_PATTERN.match(value) is not None
 
     def is_timestamp(self, value: str) -> bool:
         return TIMESTAMP_PATTERN.match(value) is not None
