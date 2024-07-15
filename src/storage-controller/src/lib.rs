@@ -481,7 +481,7 @@ where
     ///    separating concerns.
     /// 2. Generate write and read persist handles for the collection.
     /// 3. Store the collection's metadata in the appropriate field.
-    /// 4. "Execte" the collection. What that means is contingent on the type of
+    /// 4. "Execute" the collection. What that means is contingent on the type of
     ///    collection. so consult the code for more details.
     ///
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
@@ -489,14 +489,20 @@ where
     // that a number of these operations could be moved into fns on
     // `DataSource`.
     #[instrument(name = "storage::create_collections")]
-    async fn create_collections(
+    async fn create_collections_for_bootstrap(
         &mut self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.storage_collections
-            .create_collections(storage_metadata, register_ts.clone(), collections.clone())
+            .create_collections_for_bootstrap(
+                storage_metadata,
+                register_ts.clone(),
+                collections.clone(),
+                migrated_storage_collections,
+            )
             .await?;
 
         // Validate first, to avoid corrupting state.
@@ -543,7 +549,11 @@ where
                 // If the shard is being managed by txn-wal (initially, tables), then we need to
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => {
+                    DataSource::Other(DataSourceOther::TableWrites)
+                    // In read-only mode we cannot register migrated storage collections in the
+                    // txn-shard, so they must be excluded.
+                        if !(self.read_only && migrated_storage_collections.contains(&id)) =>
+                    {
                         Some(*self.txns_read.txns_id())
                     }
                     DataSource::Ingestion(_)
@@ -551,6 +561,7 @@ where
                     | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
+                    | DataSource::Other(DataSourceOther::TableWrites)
                     | DataSource::Other(DataSourceOther::Compute) => None,
                 };
 
@@ -1475,14 +1486,13 @@ where
         StorageError<Self::Timestamp>,
     > {
         if self.read_only {
-            if !commands.iter().all(|(id, _)| id.is_system()) {
-                // TODO: we need to drop writes for non-migrated system tables,
-                // or very bad things will happen, as we'll be writing directly
-                // to shards that are still managed by txn-wal in the old
-                // generation.
-                //
-                // Alternatively, we could guarantee that all system tables have
-                // new shards minted on every deploy.
+            if !commands.iter().all(|(id, _)| {
+                let collection = self
+                    .collections
+                    .get(id)
+                    .unwrap_or_else(|| panic!("unknown collection: {id:?}"));
+                id.is_system() && collection.collection_metadata.txns_shard.is_none()
+            }) {
                 return Err(StorageError::ReadOnly);
             }
         }

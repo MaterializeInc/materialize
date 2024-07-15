@@ -202,7 +202,27 @@ pub trait StorageCollections: Debug {
         &self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
-        mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        self.create_collections_for_bootstrap(
+            storage_metadata,
+            register_ts,
+            collections,
+            &BTreeSet::new(),
+        )
+        .await
+    }
+
+    /// Like [`Self::create_collections`], except used specifically for bootstrap.
+    ///
+    /// `migrated_storage_collections` is a set of migrated storage collections to be excluded
+    /// from the txn-wal sub-system.
+    async fn create_collections_for_bootstrap(
+        &self,
+        storage_metadata: &StorageMetadata,
+        register_ts: Option<Self::Timestamp>,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alters the identified ingestion to use the provided [`SourceDesc`].
@@ -337,9 +357,9 @@ pub struct StorageCollectionsImpl<
     /// upper of created/registered tables to make sure that their uppers are at
     /// least not less than the initially known txn upper.
     ///
-    /// NOTE: This works around a quirk in how the adapter choses the as_of of
+    /// NOTE: This works around a quirk in how the adapter chooses the as_of of
     /// existing indexes when bootstrapping, where tables that have an upper
-    /// that is less then the initially known txn upper can lead to indexes that
+    /// that is less than the initially known txn upper can lead to indexes that
     /// cannot hydrate in read-only mode.
     initial_txn_upper: Antichain<T>,
 
@@ -1316,11 +1336,12 @@ where
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
     #[instrument(level = "debug")]
-    async fn create_collections(
+    async fn create_collections_for_bootstrap(
         &self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -1384,7 +1405,11 @@ where
                 // tables), then we need to pass along the shard id for the txns
                 // shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => {
+                    DataSource::Other(DataSourceOther::TableWrites)
+                    // In read-only mode we cannot register migrated storage collections in the
+                    // txn-shard, so they must be excluded.
+                    if !(self.read_only && migrated_storage_collections.contains(&id)) =>
+                    {
                         Some(*self.txns_read.txns_id())
                     }
                     DataSource::Ingestion(_)
@@ -1392,6 +1417,7 @@ where
                     | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
+                    | DataSource::Other(DataSourceOther::TableWrites)
                     | DataSource::Other(DataSourceOther::Compute) => None,
                 };
 
@@ -1461,7 +1487,7 @@ where
                     | DataSource::Other(DataSourceOther::Compute) => {},
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
-                        if since_handle.since().elements() == &[T::minimum()] {
+                        if since_handle.since().elements() == &[T::minimum()] && !migrated_storage_collections.contains(&id) {
                             debug!("advancing {} to initial since of {:?}", id, register_ts);
                             let token = since_handle.opaque();
                             let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
@@ -1619,7 +1645,11 @@ where
                     if PartialOrder::less_than(
                         &collection_state.write_frontier,
                         &self.initial_txn_upper,
-                    ) {
+                    )
+                        // Shards not registered with a txn_shard should not have their uppers
+                        // advanced with the txn shard.
+                        && collection_state.collection_metadata.txns_shard.is_some()
+                    {
                         // We could try and be cute and use the join of the txn
                         // upper and the table upper. But that has more
                         // complicated reasoning for why it is or isn't correct,

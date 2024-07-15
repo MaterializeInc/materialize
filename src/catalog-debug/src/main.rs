@@ -21,7 +21,7 @@ use std::time::Instant;
 use anyhow::Context;
 use clap::Parser;
 use futures::future::FutureExt;
-use mz_adapter::catalog::Catalog;
+use mz_adapter::catalog::{Catalog, InitializeStateResult};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
@@ -525,7 +525,13 @@ async fn upgrade_check(
     // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
     // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    let (_catalog, _, _, last_catalog_version) = Catalog::initialize_state(
+    let InitializeStateResult {
+        state: _state,
+        storage_collections_to_drop: _,
+        migrated_storage_collections_0dt: _,
+        builtin_table_updates: _,
+        last_seen_version,
+    } = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
             all_features: false,
@@ -561,7 +567,7 @@ async fn upgrade_check(
 
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
-        last_catalog_version,
+        last_seen_version,
         &BUILD_INFO.human_version(),
         dur.as_millis(),
     );

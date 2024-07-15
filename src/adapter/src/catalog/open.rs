@@ -160,6 +160,30 @@ impl CatalogItemRebuilder {
     }
 }
 
+pub struct InitializeStateResult {
+    /// An initialized [`CatalogState`].
+    pub state: CatalogState,
+    /// A set of storage collections to drop (only used by legacy migrations).
+    pub storage_collections_to_drop: BTreeSet<GlobalId>,
+    /// A set of new shards that may need to be initialized (only used by 0dt migration).
+    pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    /// A list of builtin table updates corresponding to the initialized state.
+    pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    /// The version of the catalog that existed before initializing the catalog.
+    pub last_seen_version: String,
+}
+
+pub struct OpenCatalogResult {
+    /// An opened [`Catalog`].
+    pub catalog: Catalog,
+    /// A set of storage collections to drop (only used by legacy migrations).
+    pub storage_collections_to_drop: BTreeSet<GlobalId>,
+    /// A set of new shards that may need to be initialized (only used by 0dt migration).
+    pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    /// A list of builtin table updates corresponding to the initialized state.
+    pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+}
+
 impl Catalog {
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
     /// external to a [mz_catalog::durable::DurableCatalogState]
@@ -167,15 +191,7 @@ impl Catalog {
     pub async fn initialize_state<'a>(
         config: StateConfig,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
-    ) -> Result<
-        (
-            CatalogState,
-            BTreeSet<GlobalId>,
-            Vec<BuiltinTableUpdate>,
-            String,
-        ),
-        AdapterError,
-    > {
+    ) -> Result<InitializeStateResult, AdapterError> {
         /// Convert `updates` into a `Vec` that can be consolidated by doing the following:
         ///
         ///   - Convert each update into a type that implements [`std::cmp::Ord`].
@@ -425,6 +441,7 @@ impl Catalog {
         let BuiltinItemMigrationResult {
             builtin_table_updates: builtin_table_update,
             storage_collections_to_drop,
+            migrated_storage_collections_0dt,
             cleanup_action,
         } = migrate_builtin_items(
             &mut state,
@@ -440,12 +457,13 @@ impl Catalog {
 
         cleanup_action.await;
 
-        Ok((
+        Ok(InitializeStateResult {
             state,
             storage_collections_to_drop,
+            migrated_storage_collections_0dt,
             builtin_table_updates,
             last_seen_version,
-        ))
+        })
     }
 
     /// Opens or creates a catalog that stores data at `path`.
@@ -462,13 +480,16 @@ impl Catalog {
     pub fn open(
         config: Config<'_>,
         boot_ts: mz_repr::Timestamp,
-    ) -> BoxFuture<
-        'static,
-        Result<(Catalog, BTreeSet<GlobalId>, Vec<BuiltinTableUpdate>, String), AdapterError>,
-    > {
+    ) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
         async move {
             let mut storage = config.storage;
-            let (state, storage_collections_to_drop, mut builtin_table_updates, last_seen_version) =
+            let InitializeStateResult {
+                state,
+                storage_collections_to_drop,
+                migrated_storage_collections_0dt,
+                mut builtin_table_updates,
+                last_seen_version: _,
+            } =
                 // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
                 // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
                 // Because of that we purposefully move this Future onto the heap (i.e. Box it).
@@ -550,12 +571,12 @@ impl Catalog {
                 );
             }
 
-            Ok((
+            Ok(OpenCatalogResult {
                 catalog,
                 storage_collections_to_drop,
+                migrated_storage_collections_0dt,
                 builtin_table_updates,
-                last_seen_version,
-            ))
+            })
         }
         .instrument(tracing::info_span!("catalog::open"))
         .boxed()

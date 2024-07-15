@@ -26,6 +26,7 @@ use futures::FutureExt;
 use http::{Request, StatusCode};
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use mz_catalog::builtin::REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE;
 use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -4487,4 +4488,173 @@ async fn test_cert_reloading() {
     let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
     assert_eq!(resp_x509, next_x509);
     check_pgwire(&conn_str, &ca.ca_cert_path(), next_x509.clone()).await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_builtin_migrations() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+
+    let mv_name = "mv";
+    let first_generation = 1;
+    let second_generation = 2;
+
+    let (mz_tables_id, mz_tables_shard, mv_id, mv_shard, _gen_1_server) = {
+        let server = harness
+            .clone()
+            .with_deploy_generation(first_generation)
+            .start()
+            .await;
+
+        let system_client = server.connect().internal().await.unwrap();
+        system_client
+            .execute("ALTER SYSTEM SET enable_0dt_deployment = true", &[])
+            .await
+            .unwrap();
+        system_client
+            .execute("ALTER SYSTEM SET with_0dt_deployment_max_wait = '3s'", &[])
+            .await
+            .unwrap();
+
+        let client = server.connect().await.unwrap();
+        client
+            .execute(
+                &format!("CREATE MATERIALIZED VIEW {mv_name} AS SELECT name FROM mz_tables;"),
+                &[],
+            )
+            .await
+            .expect("failed to create materialized view");
+        let mz_tables_id: String = client
+            .query_one("SELECT id FROM mz_tables WHERE name = 'mz_tables'", &[])
+            .await
+            .expect("failed to query")
+            .get(0);
+        let mz_tables_shard: String = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_state| async {
+                client
+                    .query_one(&format!("SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_id}'"), &[])
+                    .await
+                    .map(|row| row.get(0))
+            })
+            .await
+            .unwrap();
+        let mv_id: String = client
+            .query_one(
+                &format!("SELECT id FROM mz_materialized_views WHERE name = '{mv_name}'"),
+                &[],
+            )
+            .await
+            .expect("failed to query")
+            .get(0);
+        let mv_shard: String = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_state| async {
+                client
+                    .query_one(&format!("SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_id}'"), &[])
+                    .await
+                    .map(|row| row.get(0))
+            })
+            .await
+            .unwrap();
+        (mz_tables_id, mz_tables_shard, mv_id, mv_shard, server)
+    };
+
+    // Forcibly migrate all tables.
+    {
+        let mut guard =
+            REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
+                .lock()
+                .expect("lock poisoned");
+        *guard = Some("\n".to_string());
+    }
+
+    {
+        let server = harness
+            .clone()
+            .with_deploy_generation(second_generation)
+            .start()
+            .await;
+        let client = server.connect().await.unwrap();
+
+        client
+            .execute("SET transaction_isolation = 'serializable'", &[])
+            .await
+            .unwrap();
+        let new_mz_tables_id: String = client
+            .query_one("SELECT id FROM mz_tables WHERE name = 'mz_tables'", &[])
+            .await
+            .expect("failed to query")
+            .get(0);
+        // Assert that the table did not get a new ID.
+        assert_eq!(new_mz_tables_id, mz_tables_id);
+        let new_mv_id: String = client
+            .query_one(
+                &format!("SELECT id FROM mz_materialized_views WHERE name = '{mv_name}'"),
+                &[],
+            )
+            .await
+            .expect("failed to query")
+            .get(0);
+        // Assert that the materialized view did not get a new ID.
+        assert_eq!(new_mv_id, mv_id);
+
+        // TODO(jkosh44) This does not work, the old server halting will terminate the entire
+        // process. We could fork the process and run the read-only server in the forked process,
+        // but that's probably not worth it. A better fix is to re-write this as a platform check.
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_state| async {
+                let response = server.promote().await;
+                if response.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(response)
+                }
+            })
+            .await
+            .unwrap();
+    }
+
+    // We need to promote and restart the server to see the new shard IDs, because the read-only
+    // instance cannot write to mz_internal.mz_storage_shards to update the shard mapping.
+    {
+        let server = harness
+            .clone()
+            .with_deploy_generation(second_generation)
+            .start()
+            .await;
+        let client = server.connect().await.unwrap();
+
+        let new_mz_tables_shard: String = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_state| async {
+                let new_mz_tables_shard: Result<String, _> = client
+                    .query_one(&format!("SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_id}'"), &[])
+                    .await
+                    .map(|row| row.get(0));
+                match new_mz_tables_shard {
+                    Ok(new_mz_tables_shard) if new_mz_tables_shard == mz_tables_shard => Err("mz_tables shard was not updated".to_string()),
+                    Ok(new_mz_tables_shard) => Ok(new_mz_tables_shard),
+                    Err(e) => Err(e.to_string()),
+                }
+            })
+            .await
+            .unwrap();
+        // Assert that the table did get a new shard.
+        assert_ne!(new_mz_tables_shard, mz_tables_shard);
+        let new_mv_shard: String = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_state| async {
+                client
+                    .query_one(&format!("SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_id}'"), &[])
+                    .await
+                    .map(|row| row.get(0))
+            })
+            .await
+            .unwrap();
+        // Assert that the materialized view did not get a new shard.
+        assert_eq!(new_mv_shard, mv_shard);
+    }
 }
