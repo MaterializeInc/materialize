@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroU64;
+use std::time::Instant;
 
 use bytesize::ByteSize;
 use itertools::Itertools;
@@ -21,6 +22,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
+use mz_ore::metrics::Histogram;
 use mz_ore::num::NonNeg;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
@@ -3090,10 +3092,25 @@ impl<L> RowSetFinishing<L> {
 }
 
 impl RowSetFinishing {
-    /// Applies finishing actions to a [`RowCollection`].
-    ///
-    ///
+    /// Applies finishing actions to a [`RowCollection`], and reports the total
+    /// time it took to run.
     pub fn finish(
+        &self,
+        rows: RowCollection,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
+        duration_histogram: &Histogram,
+    ) -> Result<SortedRowCollectionIter, String> {
+        let now = Instant::now();
+        let result = self.finish_inner(rows, max_result_size, max_returned_query_size);
+        let duration = now.elapsed();
+        duration_histogram.observe(duration.as_secs_f64());
+
+        result
+    }
+
+    /// Implementation for [`RowSetFinishing::finish`].
+    fn finish_inner(
         &self,
         rows: RowCollection,
         max_result_size: u64,

@@ -130,6 +130,7 @@ mod tests {
     use mz_adapter_types::connection::ConnectionId;
     use mz_cluster_client::ReplicaId;
     use mz_controller_types::ClusterId;
+    use mz_ore::metrics::MetricsRegistry;
     use mz_ore::{assert_contains, assert_ok};
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, Timestamp};
@@ -138,6 +139,7 @@ mod tests {
 
     use crate::catalog::{Catalog, Op};
     use crate::coord::validity::PlanValidity;
+    use crate::metrics::Metrics;
     use crate::session::{Session, SessionConfig};
     use crate::AdapterError;
 
@@ -148,6 +150,9 @@ mod tests {
             let conn_id = ConnectionId::Static(1);
             let user = String::from("validity_user");
             let role = "validity_role";
+            let metrics_registry = MetricsRegistry::new();
+            let metrics = Metrics::register_into(&metrics_registry);
+
             catalog
                 .transact(
                     None,
@@ -169,6 +174,7 @@ mod tests {
                     user,
                     external_metadata_rx: None,
                 },
+                metrics.session_metrics(),
             );
             session.initialize_role_metadata(role.id);
             let empty = PlanValidity::new(
