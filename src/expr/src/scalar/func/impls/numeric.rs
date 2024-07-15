@@ -306,10 +306,10 @@ sqlfunc!(
         let mut cx = numeric::cx_datum();
         let units = ["bytes", "kB", "MB", "GB", "TB", "PB"];
 
-        for (pos, unit) in units[..units.len() - 1].iter().enumerate() {
+        for (pos, unit) in units.iter().rev().skip(1).rev().enumerate() {
             // return if abs(round(a)) < 10 in the next unit it would be converted to.
             if Numeric::from(-10239.5) < a && a < Numeric::from(10239.5) {
-                // do not round a when the unit is still bytes, as no conversion has happened yet.
+                // do not round a when the unit is bytes, as no conversion has happened.
                 if pos > 0 {
                     cx.round(&mut a);
                 }
