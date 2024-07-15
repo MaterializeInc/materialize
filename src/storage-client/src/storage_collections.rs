@@ -23,9 +23,9 @@ use futures::{Future, FutureExt, StreamExt};
 use itertools::Itertools;
 
 use mz_ore::collections::CollectionExt;
-use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
+use mz_ore::{assert_none, instrument};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
@@ -464,6 +464,7 @@ where
                 finalized_shards: Arc::clone(&finalized_shards),
                 persist_location: persist_location.clone(),
                 persist: Arc::clone(&persist_clients),
+                read_only,
             }),
         );
 
@@ -1072,17 +1073,8 @@ where
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
-        let new_collections: BTreeSet<GlobalId> = init_ids
-            .iter()
-            .filter(|id| !existing_metadata.contains(id))
-            .cloned()
-            .collect();
-
-        mz_ore::soft_assert_or_log!(
-                new_collections.iter().all(|id| id.is_system()),
-                "initializing collections should only be missing metadata for new system objects, but got {:?}",
-                new_collections
-            );
+        let new_collections: BTreeSet<GlobalId> =
+            init_ids.difference(&existing_metadata).cloned().collect();
 
         self.prepare_state(txn, new_collections, drop_ids).await?;
 
@@ -1493,7 +1485,7 @@ where
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
             // Ensure that the ingestion has an export for its primary source.
-            // This is done in an akward spot to appease the borrow checker.
+            // This is done in an awkward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
                 ingestion.source_exports.insert(
                     id,
@@ -1511,7 +1503,7 @@ where
             let storage_dependencies = self
                 .determine_collection_dependencies(&*self_collections, &description.data_source)?;
 
-            // Determine the intial since of the collection.
+            // Determine the initial since of the collection.
             let initial_since = match storage_dependencies
                 .iter()
                 .at_most_one()
@@ -1925,7 +1917,7 @@ where
             Self::Critical(handle) => handle.compare_and_downgrade_since(expected, new).await,
             Self::Leased(handle) => {
                 let (opaque, since) = new;
-                assert!(opaque.0.is_none());
+                assert_none!(opaque.0);
 
                 handle.downgrade_since(since).await;
 
@@ -1947,7 +1939,7 @@ where
             }
             Self::Leased(handle) => {
                 let (opaque, since) = new;
-                assert!(opaque.0.is_none());
+                assert_none!(opaque.0);
 
                 handle.maybe_downgrade_since(since).await;
 
@@ -2287,7 +2279,7 @@ where
             let collection = if let Some(c) = self_collections.get_mut(id) {
                 c
             } else {
-                warn!("Reference to absent collection {id}");
+                trace!("Reference to absent collection {id}, due to concurrent removal of that collection");
                 continue;
             };
 
@@ -2409,6 +2401,7 @@ struct FinalizeShardsTaskConfig {
     finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
     persist_location: PersistLocation,
     persist: Arc<PersistClientCache>,
+    read_only: bool,
 }
 
 async fn finalize_shards_task<T>(
@@ -2419,10 +2412,16 @@ async fn finalize_shards_task<T>(
         finalized_shards,
         persist_location,
         persist,
+        read_only,
     }: FinalizeShardsTaskConfig,
 ) where
     T: TimelyTimestamp + Lattice + Codec64,
 {
+    if read_only {
+        info!("disabling shard finalization in read only mode");
+        return;
+    }
+
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
@@ -2618,6 +2617,7 @@ mod tests {
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigSet;
+    use mz_ore::assert_err;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
@@ -2694,11 +2694,11 @@ mod tests {
         // No stats for unknown GlobalId.
         let stats =
             snapshot_stats(&cmds_tx, GlobalId::User(2), Antichain::from_elem(0.into())).await;
-        assert!(stats.is_err());
+        assert_err!(stats);
 
         // Stats don't resolve for as_of past the upper.
         let stats_fut = snapshot_stats(&cmds_tx, GlobalId::User(1), Antichain::from_elem(1.into()));
-        assert!(stats_fut.now_or_never().is_none());
+        assert_none!(stats_fut.now_or_never());
 
         // // Call it again because now_or_never consumed our future and it's not clone-able.
         let stats_ts1_fut =

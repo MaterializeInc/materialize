@@ -9,24 +9,25 @@
 
 //! A handle to a batch of updates
 
+use arrow::array::Array;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{Deref, Range};
+use std::mem;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{
     ColumnarRecords, ColumnarRecordsBuilder, ColumnarRecordsStructuredExt,
 };
@@ -352,7 +353,7 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
 pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
     "persist_batch_columnar_format",
     BatchColumnarFormat::default().as_str(),
-    "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v1' (Materialize).",
+    "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v2' (Materialize).",
 );
 
 pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(
@@ -468,6 +469,12 @@ where
     // split the `add` and `finish` methods into versions that could override
     // the stats schema, but there are ownership issues with that approach that
     // I think are unresolvable.
+
+    // Reusable buffers for encoding data. Should be cleared after use!
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) key_buf: Vec<u8>,
+    pub(crate) val_buf: Vec<u8>,
+
     pub(crate) stats_schemas: Schemas<K, V>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
@@ -503,9 +510,21 @@ where
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
-        self.builder
-            .add(&self.stats_schemas, key, val, ts, diff)
-            .await
+        self.metrics
+            .codecs
+            .key
+            .encode(|| K::encode(key, &mut self.key_buf));
+        self.metrics
+            .codecs
+            .val
+            .encode(|| V::encode(val, &mut self.val_buf));
+        let result = self
+            .builder
+            .add(&self.stats_schemas, &self.key_buf, &self.val_buf, ts, diff)
+            .await;
+        self.key_buf.clear();
+        self.val_buf.clear();
+        result
     }
 }
 
@@ -523,10 +542,9 @@ where
     version: Version,
     blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
-    _schemas: Schemas<K, V>,
-    consolidate: bool,
+    expect_consolidated: bool,
 
-    buffer: BatchBuffer<T, D>,
+    buffer: BatchBuffer,
 
     max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, T)>,
     runs: Vec<usize>,
@@ -540,7 +558,7 @@ where
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
-    _phantom: PhantomData<(K, V, T, D)>,
+    _phantom: PhantomData<fn(K, V, T, D)>,
 }
 
 impl<K, V, T, D> BatchBuilderInternal<K, V, T, D>
@@ -554,7 +572,6 @@ where
         cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
-        schemas: Schemas<K, V>,
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
         blob: Arc<dyn Blob>,
@@ -563,7 +580,7 @@ where
         version: Version,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
-        consolidate: bool,
+        expect_consolidated: bool,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.clone(),
@@ -579,15 +596,9 @@ where
             lower,
             inclusive_upper: Antichain::new(),
             blob,
-            buffer: BatchBuffer::new(
-                Arc::clone(&metrics),
-                batch_write_metrics,
-                cfg.blob_target_size,
-                consolidate,
-            ),
+            buffer: BatchBuffer::new(Arc::clone(&metrics), cfg.blob_target_size),
             metrics,
-            _schemas: schemas,
-            consolidate,
+            expect_consolidated,
             max_kvt_in_run: None,
             parts_written: 0,
             runs: Vec::new(),
@@ -612,9 +623,9 @@ where
     /// This fails if any of the updates in this batch are beyond the given
     /// `upper`.
     #[instrument(level = "debug", name = "batch::finish", fields(shard = %self.shard_id))]
-    pub async fn finish<StatsK: Codec, StatsV: Codec>(
+    pub async fn finish(
         mut self,
-        stats_schemas: &Schemas<StatsK, StatsV>,
+        stats_schemas: &Schemas<K, V>,
         registered_upper: Antichain<T>,
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if PartialOrder::less_than(&registered_upper, &self.lower) {
@@ -638,8 +649,8 @@ where
             }
         }
 
-        let (key_lower, remainder) = self.buffer.drain();
-        self.flush_part(stats_schemas, key_lower, remainder).await;
+        let remainder = self.buffer.drain();
+        self.flush_part(stats_schemas, remainder).await;
 
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
@@ -665,8 +676,8 @@ where
     pub async fn add<StatsK: Codec, StatsV: Codec>(
         &mut self,
         stats_schemas: &Schemas<StatsK, StatsV>,
-        key: &K,
-        val: &V,
+        key: &[u8],
+        val: &[u8],
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
@@ -680,9 +691,8 @@ where
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
         match self.buffer.push(key, val, ts.clone(), diff.clone()) {
-            Some((key_lower, part_to_flush)) => {
-                self.flush_part(stats_schemas, key_lower, part_to_flush)
-                    .await;
+            Some(part_to_flush) => {
+                self.flush_part(stats_schemas, part_to_flush).await;
                 Ok(Added::RecordAndParts)
             }
             None => Ok(Added::Record),
@@ -697,16 +707,28 @@ where
     async fn flush_part<StatsK: Codec, StatsV: Codec>(
         &mut self,
         stats_schemas: &Schemas<StatsK, StatsV>,
-        key_lower: Vec<u8>,
         columnar: ColumnarRecords,
     ) {
+        let key_lower = {
+            let keys = columnar.keys();
+            if keys.is_empty() {
+                &[]
+            } else if self.expect_consolidated {
+                columnar.keys().value(0)
+            } else {
+                ::arrow::compute::min_binary(columnar.keys()).expect("min of nonempty array")
+            }
+        };
+        let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound always exists");
+
         let num_updates = columnar.len();
         if num_updates == 0 {
             return;
         }
         let diffs_sum = diffs_sum::<D>(std::iter::once(&columnar)).expect("part is non empty");
 
-        if self.consolidate {
+        if self.expect_consolidated {
             // if our parts are consolidated, we can rely on their sorted order to
             // appropriately determine runs of ordered parts
             let ((min_part_k, min_part_v), min_part_t, _d) =
@@ -718,9 +740,11 @@ where
             let max_part_t = T::decode(max_part_t);
 
             if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
-                // start a new run if our part contains an update that exists in the
-                // range already covered by the existing parts of the current run
+                // Our caller has promised to provide us data in sorted order. Verify that
+                // the smallest data in the part is not regressing... but for now, keep splitting
+                // runs as before.
                 if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
+                    soft_panic_or_log!("expected data in sorted order");
                     self.runs.push(self.parts_written);
                 }
 
@@ -765,141 +789,48 @@ where
 }
 
 #[derive(Debug)]
-struct BatchBuffer<T, D> {
+struct BatchBuffer {
     metrics: Arc<Metrics>,
-    batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
-    consolidate: bool,
-
-    key_buf: Vec<u8>,
-    val_buf: Vec<u8>,
-
-    current_part: Vec<((Range<usize>, Range<usize>), T, D)>,
-    current_part_total_bytes: usize,
-    current_part_key_bytes: usize,
-    current_part_value_bytes: usize,
+    records_builder: ColumnarRecordsBuilder,
 }
 
-impl<T, D> BatchBuffer<T, D>
-where
-    T: Ord + Codec64,
-    D: Semigroup + Codec64,
-{
-    fn new(
-        metrics: Arc<Metrics>,
-        batch_write_metrics: BatchWriteMetrics,
-        blob_target_size: usize,
-        should_consolidate: bool,
-    ) -> Self {
+impl BatchBuffer {
+    fn new(metrics: Arc<Metrics>, blob_target_size: usize) -> Self {
         BatchBuffer {
             metrics,
-            batch_write_metrics,
             blob_target_size,
-            consolidate: should_consolidate,
-            key_buf: Default::default(),
-            val_buf: Default::default(),
-            current_part: Default::default(),
-            current_part_total_bytes: Default::default(),
-            current_part_key_bytes: Default::default(),
-            current_part_value_bytes: Default::default(),
+            records_builder: ColumnarRecordsBuilder::default(),
         }
     }
 
-    fn push<K: Codec, V: Codec>(
+    fn push<T: Codec64, D: Codec64>(
         &mut self,
-        key: &K,
-        val: &V,
+        key: &[u8],
+        val: &[u8],
         ts: T,
         diff: D,
-    ) -> Option<(Vec<u8>, ColumnarRecords)> {
-        let initial_key_buf_len = self.key_buf.len();
-        let initial_val_buf_len = self.val_buf.len();
-        self.metrics
-            .codecs
-            .key
-            .encode(|| K::encode(key, &mut self.key_buf));
-        self.metrics
-            .codecs
-            .val
-            .encode(|| V::encode(val, &mut self.val_buf));
-        let k_range = initial_key_buf_len..self.key_buf.len();
-        let v_range = initial_val_buf_len..self.val_buf.len();
-        let size = ColumnarRecordsBuilder::columnar_record_size(k_range.len(), v_range.len());
-
-        self.current_part_total_bytes += size;
-        self.current_part_key_bytes += k_range.len();
-        self.current_part_value_bytes += v_range.len();
-        self.current_part.push(((k_range, v_range), ts, diff));
+    ) -> Option<ColumnarRecords> {
+        let update = ((key, val), ts.encode(), diff.encode());
+        assert!(
+            self.records_builder.push(update),
+            "single update overflowed an i32"
+        );
 
         // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if self.current_part_total_bytes >= self.blob_target_size {
+        if self.records_builder.total_bytes() >= self.blob_target_size {
             Some(self.drain())
         } else {
             None
         }
     }
 
-    fn drain(&mut self) -> (Vec<u8>, ColumnarRecords) {
-        let mut updates = Vec::with_capacity(self.current_part.len());
-        for ((k_range, v_range), t, d) in self.current_part.drain(..) {
-            updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
-        }
-
-        if self.consolidate {
-            let start = Instant::now();
-            consolidate_updates(&mut updates);
-            self.batch_write_metrics
-                .step_consolidation
-                .inc_by(start.elapsed().as_secs_f64());
-        }
-
-        if updates.is_empty() {
-            self.key_buf.clear();
-            self.val_buf.clear();
-            return (
-                vec![],
-                ColumnarRecordsBuilder::default().finish(&self.metrics.columnar),
-            );
-        }
-
-        let ((mut key_lower, _), _, _) = &updates[0];
-        let start = Instant::now();
-        let mut builder = ColumnarRecordsBuilder::default();
-        builder.reserve_exact(
-            self.current_part.len(),
-            self.current_part_key_bytes,
-            self.current_part_value_bytes,
-        );
-        for ((k, v), t, d) in updates {
-            if self.consolidate {
-                debug_assert!(
-                    key_lower <= k,
-                    "consolidated data should be presented in order"
-                )
-            } else {
-                key_lower = k.min(key_lower);
-            }
-            // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
-            // The limits are big, so this is a pretty extreme case that we intentionally don't handle
-            // right now.
-            assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
-        }
-        let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound always exists");
-        let columnar = builder.finish(&self.metrics.columnar);
-
-        self.batch_write_metrics
-            .step_columnar_encoding
-            .inc_by(start.elapsed().as_secs_f64());
-
-        self.key_buf.clear();
-        self.val_buf.clear();
-        self.current_part_total_bytes = 0;
-        self.current_part_key_bytes = 0;
-        self.current_part_value_bytes = 0;
-        assert_eq!(self.current_part.len(), 0);
-
-        (key_lower, columnar)
+    fn drain(&mut self) -> ColumnarRecords {
+        // TODO: we're in a position to do a very good estimate here, instead of using the default.
+        let builder = mem::take(&mut self.records_builder);
+        let records = builder.finish(&self.metrics.columnar);
+        assert_eq!(self.records_builder.len(), 0);
+        records
     }
 }
 
@@ -1044,13 +975,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 // Only encode our updates in a structured format if required, it's expensive.
                 let stats = 'collect_stats: {
                     if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured() {
-                        let result = metrics_
-                            .columnar
-                            .arrow()
-                            .measure_part_build(|| encode_updates(&schemas, &updates.updates));
+                        let result = metrics_.columnar.arrow().measure_part_build(|| {
+                            encode_updates(&schemas, &updates.updates, &cfg.batch_columnar_format)
+                        });
 
                         // We can't collect stats if we failed to encode in a columnar format.
-                        let Ok((columnar_part, stats)) = result else {
+                        let Ok(((key_col, val_col), stats)) = result else {
                             tracing::error!(?result, "failed to encode in columnar format!");
                             break 'collect_stats None;
                         };
@@ -1061,8 +991,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             if records.len() == 1 && cfg.batch_columnar_format.is_structured() {
                                 let record = records.pop().expect("checked length above");
                                 let record_ext = ColumnarRecordsStructuredExt {
-                                    key: columnar_part.to_key_arrow().map(|(_, array)| array),
-                                    val: columnar_part.to_val_arrow().map(|(_, array)| array),
+                                    key: key_col,
+                                    val: val_col,
                                 };
                                 updates.updates = BlobTraceUpdates::Both(record, record_ext)
                             }
@@ -1309,14 +1239,11 @@ mod tests {
 
         // We set blob_target_size to 0, so the first update gets forced out
         // into a batch.
+        let ((k, v), t, d) = &data[0];
+        let key = k.encode_to_vec();
+        let val = v.encode_to_vec();
         builder
-            .add(
-                &schemas,
-                &data[0].0 .0,
-                &data[0].0 .1,
-                &data[0].1,
-                &data[0].2,
-            )
+            .add(&schemas, &key, &val, t, d)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 1);
@@ -1324,14 +1251,11 @@ mod tests {
 
         // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
+        let ((k, v), t, d) = &data[1];
+        let key = k.encode_to_vec();
+        let val = v.encode_to_vec();
         builder
-            .add(
-                &schemas,
-                &data[1].0 .0,
-                &data[1].0 .1,
-                &data[1].1,
-                &data[1].2,
-            )
+            .add(&schemas, &key, &val, t, d)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
@@ -1339,14 +1263,11 @@ mod tests {
 
         // But now that we have 3 parts, the add call back-pressures until the
         // first one finishes.
+        let ((k, v), t, d) = &data[2];
+        let key = k.encode_to_vec();
+        let val = v.encode_to_vec();
         builder
-            .add(
-                &schemas,
-                &data[2].0 .0,
-                &data[2].0 .1,
-                &data[2].1,
-                &data[2].2,
-            )
+            .add(&schemas, &key, &val, t, d)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);

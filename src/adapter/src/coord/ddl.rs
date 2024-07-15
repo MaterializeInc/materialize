@@ -48,7 +48,7 @@ use mz_sql::session::vars::{
 };
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::controller::StorageError;
+use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
@@ -198,7 +198,7 @@ impl Coordinator {
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
+        let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
@@ -239,28 +239,11 @@ impl Coordinator {
                                                     let conn = conn.clone().into_inline_connection(
                                                         self.catalog().state(),
                                                     );
-                                                    let config = conn
-                                                    .connection
-                                                    .config(
-                                                        self.secrets_reader(),
-                                                        self.controller.storage.config(),
-                                                        InTask::No,
-                                                    )
-                                                    .await
-                                                    .map_err(|e| {
-                                                        AdapterError::Storage(StorageError::Generic(
-                                                            anyhow::anyhow!(
-                                                                "error creating Postgres client for \
-                                                                dropping acquired slots: {}",
-                                                                e.display_with_causes()
-                                                            ),
-                                                        ))
-                                                    })?;
-
-                                                    replication_slots_to_drop.push((
-                                                        config,
+                                                    let pending_drop = (
+                                                        conn.connection.clone(),
                                                         conn.publication_details.slot.clone(),
-                                                    ));
+                                                    );
+                                                    replication_slots_to_drop.push(pending_drop);
                                                 }
                                                 _ => {}
                                             }
@@ -696,21 +679,50 @@ impl Coordinator {
             // catalog, and so we wouldn't be able to retry anyway.
             let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
             if !replication_slots_to_drop.is_empty() {
+                let secrets_reader = Arc::clone(self.secrets_reader());
+                let storage_config = self.controller.storage.config().clone();
+
                 // TODO(guswynn): see if there is more relevant info to add to this name
                 task::spawn(|| "drop_replication_slots", async move {
-                    for (config, slot_name) in replication_slots_to_drop {
+                    for (connection, replication_slot_name) in replication_slots_to_drop {
+                        tracing::info!(?replication_slot_name, "dropping replication slot");
+
                         // Try to drop the replication slots, but give up after a while.
-                        let _ = Retry::default()
+                        let result: Result<(), anyhow::Error> = Retry::default()
                             .max_duration(Duration::from_secs(60))
                             .retry_async(|_state| async {
+                                let config = connection
+                                    .config(&secrets_reader, &storage_config, InTask::No)
+                                    .await
+                                    .map_err(|e| {
+                                        anyhow::anyhow!(
+                                            "error creating Postgres client for \
+                                            dropping acquired slots: {}",
+                                            e.display_with_causes()
+                                        )
+                                    })?;
+
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
                                     config.clone(),
-                                    &[&slot_name],
+                                    &[&replication_slot_name],
                                 )
-                                .await
+                                .await?;
+
+                                Ok(())
                             })
                             .await;
+
+                        // TODO(14551): Safer cleanup for non-Materialize resources.
+                        //
+                        // See <https://github.com/MaterializeInc/materialize/issues/14551>
+                        if let Err(err) = result {
+                            tracing::warn!(
+                                ?replication_slot_name,
+                                ?err,
+                                "failed to drop replication slot"
+                            );
+                        }
                     }
                 });
             }

@@ -51,6 +51,7 @@ use mz_repr::namespaces::{
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
+use mz_sql::ast::Ident;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
@@ -2016,6 +2017,69 @@ impl CatalogState {
             }
         }
         cws
+    }
+
+    pub fn comment_id_to_global_id(id: &CommentObjectId) -> Option<GlobalId> {
+        match id {
+            CommentObjectId::Table(id)
+            | CommentObjectId::View(id)
+            | CommentObjectId::MaterializedView(id)
+            | CommentObjectId::Source(id)
+            | CommentObjectId::Sink(id)
+            | CommentObjectId::Index(id)
+            | CommentObjectId::Func(id)
+            | CommentObjectId::Connection(id)
+            | CommentObjectId::Type(id)
+            | CommentObjectId::Secret(id) => Some(*id),
+            CommentObjectId::Role(_)
+            | CommentObjectId::Database(_)
+            | CommentObjectId::Schema(_)
+            | CommentObjectId::Cluster(_)
+            | CommentObjectId::ClusterReplica(_) => None,
+        }
+    }
+
+    pub fn get_comment_id_entry(&self, id: &CommentObjectId) -> Option<&CatalogEntry> {
+        Self::comment_id_to_global_id(id).map(|id| self.get_entry(&id))
+    }
+
+    pub fn comment_id_to_audit_log_name(
+        &self,
+        id: CommentObjectId,
+        conn_id: &ConnectionId,
+    ) -> String {
+        match id {
+            CommentObjectId::Table(id)
+            | CommentObjectId::View(id)
+            | CommentObjectId::MaterializedView(id)
+            | CommentObjectId::Source(id)
+            | CommentObjectId::Sink(id)
+            | CommentObjectId::Index(id)
+            | CommentObjectId::Func(id)
+            | CommentObjectId::Connection(id)
+            | CommentObjectId::Type(id)
+            | CommentObjectId::Secret(id) => {
+                let item = self.get_entry(&id);
+                let name = self.resolve_full_name(item.name(), Some(conn_id));
+                name.to_string()
+            }
+            CommentObjectId::Role(id) => self.get_role(&id).name.clone(),
+            CommentObjectId::Database(id) => self.get_database(&id).name.clone(),
+            CommentObjectId::Schema((spec, schema_id)) => {
+                let schema = self.get_schema(&spec, &schema_id, conn_id);
+                self.resolve_full_schema_name(&schema.name).to_string()
+            }
+            CommentObjectId::Cluster(id) => self.get_cluster(id).name.clone(),
+            CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                let cluster = self.get_cluster(cluster_id);
+                let replica = self.get_cluster_replica(cluster_id, replica_id);
+                QualifiedReplica {
+                    cluster: Ident::new_unchecked(cluster.name.clone()),
+                    replica: Ident::new_unchecked(replica.name.clone()),
+                }
+                .to_string()
+            }
+        }
     }
 }
 

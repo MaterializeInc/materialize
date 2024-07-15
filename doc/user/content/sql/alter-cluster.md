@@ -35,6 +35,18 @@ Alter cluster to size `100cc`:
 ALTER CLUSTER c1 SET (SIZE '100cc');
 ```
 
+### Schedule
+
+{{< private-preview />}}
+
+```sql
+ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
+```
+
+See the reference documentation for [`CREATE CLUSTER`](../create-cluster/#scheduling)
+or [`CREATE MATERIALIZED VIEW`](../create-materialized-view/#refresh-strategies)
+for more details on scheduled clusters.
+
 ## Converting unmanaged to managed clusters
 
 {{< warning >}}

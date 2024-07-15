@@ -14,15 +14,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     WithOptionValue,
 };
-use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
+use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::sources::SubsourceResolver;
 use tokio_postgres::types::Oid;
+use tokio_postgres::Client;
 
+use crate::catalog::SessionCatalog;
 use crate::names::{Aug, PartialItemName, ResolvedItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
@@ -35,11 +37,11 @@ use super::RequestedSubsource;
 /// snapshotting, we break the entire source.
 pub(super) async fn validate_requested_subsources_privileges(
     config: &Config,
-    ssh_tunnel_manager: &SshTunnelManager,
+    client: &Client,
     table_oids: &[Oid],
 ) -> Result<(), PlanError> {
-    privileges::check_table_privileges(config, ssh_tunnel_manager, table_oids).await?;
-    replica_identity::check_replica_identity_full(config, ssh_tunnel_manager, table_oids).await?;
+    privileges::check_table_privileges(config, client, table_oids).await?;
+    replica_identity::check_replica_identity_full(client, table_oids).await?;
 
     Ok(())
 }
@@ -53,7 +55,6 @@ pub(super) fn generate_text_columns(
     subsource_resolver: &SubsourceResolver,
     references: &[PostgresTableDesc],
     text_columns: &mut [UnresolvedItemName],
-    option_name: &str,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
     let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
 
@@ -61,7 +62,7 @@ pub(super) fn generate_text_columns(
         let (qual, col) = match name.0.split_last().expect("must have at least one element") {
             (col, qual) if qual.is_empty() => {
                 return Err(PlanError::InvalidOptionValue {
-                    option_name: option_name.to_string(),
+                    option_name: "TEXT COLUMNS".to_string(),
                     err: Box::new(PlanError::UnderqualifiedColumnName(
                         col.as_str().to_string(),
                     )),
@@ -75,7 +76,7 @@ pub(super) fn generate_text_columns(
         let (mut fully_qualified_name, idx) =
             subsource_resolver.resolve(&qual_name.0, 3).map_err(|e| {
                 PlanError::InvalidOptionValue {
-                    option_name: option_name.to_string(),
+                    option_name: "TEXT COLUMNS".to_string(),
                     err: Box::new(e.into()),
                 }
             })?;
@@ -93,7 +94,7 @@ pub(super) fn generate_text_columns(
                 })
                 .collect();
             return Err(PlanError::InvalidOptionValue {
-                option_name: option_name.to_string(),
+                option_name: "TEXT COLUMNS".to_string(),
                 err: Box::new(PlanError::UnknownColumn {
                     table: Some(
                         normalize::unresolved_item_name(fully_qualified_name)
@@ -117,7 +118,7 @@ pub(super) fn generate_text_columns(
 
         if !new {
             return Err(PlanError::InvalidOptionValue {
-                option_name: option_name.to_string(),
+                option_name: "TEXT COLUMNS".to_string(),
                 err: Box::new(PlanError::UnexpectedDuplicateReference { name: name.clone() }),
             });
         }
@@ -287,6 +288,154 @@ pub(crate) fn generate_targeted_subsources(
     Ok((subsources, referenced_tables))
 }
 
+pub(super) struct PurifiedSubsources {
+    pub(super) new_subsources: Vec<CreateSubsourceStatement<Aug>>,
+    pub(super) referenced_tables: Vec<PostgresTableDesc>,
+    pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
+}
+
+// Purify the referenced subsources, return the list of subsource statements,
+// corresponding tables, and and additional fields necessary to update the source
+// options
+pub(super) async fn purify_subsources(
+    client: &Client,
+    config: &mz_postgres_util::Config,
+    publication: &str,
+    connection: &PostgresConnection,
+    referenced_subsources: &mut Option<ReferencedSubsources>,
+    mut text_columns: Vec<UnresolvedItemName>,
+    resolved_source_name: Option<ResolvedItemName>,
+    unresolved_source_name: &UnresolvedItemName,
+    catalog: &impl SessionCatalog,
+) -> Result<PurifiedSubsources, PlanError> {
+    let publication_tables = mz_postgres_util::publication_info(client, publication).await?;
+
+    if publication_tables.is_empty() {
+        Err(PgSourcePurificationError::EmptyPublication(
+            publication.to_string(),
+        ))?;
+    }
+
+    let subsource_resolver = SubsourceResolver::new(&connection.database, &publication_tables)?;
+
+    let mut validated_requested_subsources = vec![];
+    match referenced_subsources
+        .as_mut()
+        .ok_or(PgSourcePurificationError::RequiresReferencedSubsources)?
+    {
+        ReferencedSubsources::All => {
+            for table in &publication_tables {
+                let upstream_name = UnresolvedItemName::qualified(&[
+                    Ident::new(&connection.database)?,
+                    Ident::new(&table.namespace)?,
+                    Ident::new(&table.name)?,
+                ]);
+                let subsource_name =
+                    super::subsource_name_gen(unresolved_source_name, &table.name)?;
+                validated_requested_subsources.push(RequestedSubsource {
+                    upstream_name,
+                    subsource_name,
+                    table,
+                });
+            }
+        }
+        ReferencedSubsources::SubsetSchemas(schemas) => {
+            let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(client)
+                .await?
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+
+            let requested_schemas: BTreeSet<_> =
+                schemas.iter().map(|s| s.as_str().to_string()).collect();
+
+            let missing_schemas: Vec<_> = requested_schemas
+                .difference(&available_schemas)
+                .map(|s| s.to_string())
+                .collect();
+
+            if !missing_schemas.is_empty() {
+                Err(PgSourcePurificationError::DatabaseMissingFilteredSchemas {
+                    database: connection.database.clone(),
+                    schemas: missing_schemas,
+                })?;
+            }
+
+            for table in &publication_tables {
+                if !requested_schemas.contains(table.namespace.as_str()) {
+                    continue;
+                }
+
+                let upstream_name = UnresolvedItemName::qualified(&[
+                    Ident::new(&connection.database)?,
+                    Ident::new(&table.namespace)?,
+                    Ident::new(&table.name)?,
+                ]);
+                let subsource_name =
+                    super::subsource_name_gen(unresolved_source_name, &table.name)?;
+                validated_requested_subsources.push(RequestedSubsource {
+                    upstream_name,
+                    subsource_name,
+                    table,
+                });
+            }
+        }
+        ReferencedSubsources::SubsetTables(subsources) => {
+            // The user manually selected a subset of upstream tables so we need to
+            // validate that the names actually exist and are not ambiguous
+            validated_requested_subsources.extend(super::subsource_gen(
+                subsources,
+                &subsource_resolver,
+                &publication_tables,
+                3,
+                unresolved_source_name,
+            )?);
+        }
+    };
+
+    if validated_requested_subsources.is_empty() {
+        sql_bail!(
+            "[internal error]: Postgres source must ingest at least one table, but {} matched none",
+            referenced_subsources.as_ref().unwrap().to_ast_string()
+        );
+    }
+
+    super::validate_subsource_names(&validated_requested_subsources)?;
+
+    let table_oids: Vec<_> = validated_requested_subsources
+        .iter()
+        .map(|r| r.table.oid)
+        .collect();
+
+    validate_requested_subsources_privileges(config, client, &table_oids).await?;
+
+    let text_cols_dict =
+        generate_text_columns(&subsource_resolver, &publication_tables, &mut text_columns)?;
+
+    // Normalize options to contain full qualified values.
+    text_columns.sort();
+    text_columns.dedup();
+    let normalized_text_columns: Vec<_> = text_columns
+        .into_iter()
+        .map(WithOptionValue::UnresolvedItemName)
+        .collect();
+
+    let scx = StatementContext::new(None, catalog);
+    let (new_subsources, referenced_tables) = generate_targeted_subsources(
+        &scx,
+        resolved_source_name,
+        validated_requested_subsources,
+        text_cols_dict,
+        &publication_tables,
+    )?;
+
+    Ok(PurifiedSubsources {
+        new_subsources,
+        referenced_tables,
+        normalized_text_columns,
+    })
+}
+
 mod privileges {
     use mz_postgres_util::{Config, PostgresError};
 
@@ -296,13 +445,9 @@ mod privileges {
 
     async fn check_schema_privileges(
         config: &Config,
-        ssh_tunnel_manager: &SshTunnelManager,
+        client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        let client = config
-            .connect("check_schema_privileges", ssh_tunnel_manager)
-            .await?;
-
         let invalid_schema_privileges_rows = client
             .query(
                 "
@@ -356,14 +501,10 @@ mod privileges {
     /// If `config` does not specify a user.
     pub async fn check_table_privileges(
         config: &Config,
-        ssh_tunnel_manager: &SshTunnelManager,
+        client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        check_schema_privileges(config, ssh_tunnel_manager, table_oids).await?;
-
-        let client = config
-            .connect("check_table_privileges", ssh_tunnel_manager)
-            .await?;
+        check_schema_privileges(config, client, table_oids).await?;
 
         let invalid_table_privileges_rows = client
             .query(
@@ -405,7 +546,7 @@ mod privileges {
 }
 
 mod replica_identity {
-    use mz_postgres_util::{Config, PostgresError};
+    use mz_postgres_util::PostgresError;
 
     use super::*;
     use crate::plan::PlanError;
@@ -413,14 +554,9 @@ mod replica_identity {
 
     /// Ensures that all provided OIDs are tables with `REPLICA IDENTITY FULL`.
     pub async fn check_replica_identity_full(
-        config: &Config,
-        ssh_tunnel_manager: &SshTunnelManager,
+        client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        let client = config
-            .connect("check_replica_identity_full", ssh_tunnel_manager)
-            .await?;
-
         let invalid_replica_identity_rows = client
             .query(
                 "

@@ -88,12 +88,14 @@ impl PostgresSourceConnection {
                 mz_ore::future::InTask::No,
             )
             .await?;
+        let client = config
+            .connect(
+                "postgres_wal_lsn",
+                &storage_configuration.connection_context.ssh_tunnel_manager,
+            )
+            .await?;
 
-        let lsn = mz_postgres_util::get_current_wal_lsn(
-            &storage_configuration.connection_context.ssh_tunnel_manager,
-            config,
-        )
-        .await?;
+        let lsn = mz_postgres_util::get_current_wal_lsn(&client).await?;
 
         let current_upper = Antichain::from_elem(MzOffset::from(u64::from(lsn)));
         Ok(current_upper)

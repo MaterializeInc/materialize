@@ -2722,9 +2722,9 @@ impl<'a> Parser<'a> {
                 let key = self.parse_format()?;
                 self.expect_keywords(&[VALUE, FORMAT])?;
                 let value = self.parse_format()?;
-                Some(CreateSourceFormat::KeyValue { key, value })
+                Some(FormatSpecifier::KeyValue { key, value })
             }
-            Some(FORMAT) => Some(CreateSourceFormat::Bare(self.parse_format()?)),
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => None,
         };
@@ -3045,10 +3045,18 @@ impl<'a> Parser<'a> {
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
         let connection = self.parse_create_sink_connection()?;
-        let format = if self.parse_keyword(FORMAT) {
-            Some(self.parse_format()?)
-        } else {
-            None
+
+        let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
+            Some(KEY) => {
+                self.expect_keyword(FORMAT)?;
+                let key = self.parse_format()?;
+                self.expect_keywords(&[VALUE, FORMAT])?;
+                let value = self.parse_format()?;
+                Some(FormatSpecifier::KeyValue { key, value })
+            }
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
+            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
+            None => None,
         };
         let envelope = if self.parse_keyword(ENVELOPE) {
             Some(self.parse_sink_envelope()?)
@@ -3852,6 +3860,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_alter_cluster_option(&mut self) -> Result<ClusterAlterOption<Raw>, ParserError> {
+        let (name, value) = match self.expect_one_of_keywords(&[WAIT])? {
+            WAIT => {
+                let _ = self.consume_token(&Token::Eq);
+                let v = match self.expect_one_of_keywords(&[FOR])? {
+                    FOR => Some(WithOptionValue::ClusterAlterStrategy(
+                        ClusterAlterOptionValue::For(self.parse_value()?),
+                    )),
+                    _ => unreachable!(),
+                };
+                (ClusterAlterOptionName::Wait, v)
+            }
+            _ => unreachable!(),
+        };
+        Ok(ClusterAlterOption { name, value })
+    }
+
     fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         self.expect_token(&Token::LParen)?;
@@ -3881,9 +3906,12 @@ impl<'a> Parser<'a> {
             MANUAL => ClusterScheduleOptionValue::Manual,
             ON => {
                 self.expect_keyword(REFRESH)?;
-                // Parse optional `(REHYDRATION TIME ESTIMATE ...)`
-                let rehydration_time_estimate = if self.consume_token(&Token::LParen) {
-                    self.expect_keywords(&[REHYDRATION, TIME, ESTIMATE])?;
+                // Parse optional `(HYDRATION TIME ESTIMATE ...)`
+                let hydration_time_estimate = if self.consume_token(&Token::LParen) {
+                    // `REHYDRATION` is the legacy way of writing this. We'd like to eventually
+                    // remove this, and allow only `HYDRATION`. (Dbt needs to be updated for this.)
+                    self.expect_one_of_keywords(&[HYDRATION, REHYDRATION])?;
+                    self.expect_keywords(&[TIME, ESTIMATE])?;
                     let _ = self.consume_token(&Token::Eq);
                     let interval = self.parse_interval_value()?;
                     self.expect_token(&Token::RParen)?;
@@ -3892,7 +3920,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 ClusterScheduleOptionValue::Refresh {
-                    rehydration_time_estimate,
+                    hydration_time_estimate,
                 }
             }
             _ => unreachable!(),
@@ -4685,10 +4713,25 @@ impl<'a> Parser<'a> {
                     .map_parser_err(StatementKind::AlterCluster)?;
                 self.expect_token(&Token::RParen)
                     .map_parser_err(StatementKind::AlterCluster)?;
+                let with_options = if self.parse_keyword(WITH) {
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    let options = self
+                        .parse_comma_separated(Parser::parse_alter_cluster_option)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    options
+                } else {
+                    vec![]
+                };
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
-                    action: AlterClusterAction::SetOptions(options),
+                    action: AlterClusterAction::SetOptions {
+                        options,
+                        with_options,
+                    },
                 }))
             }
             SWAP => {
@@ -5333,8 +5376,14 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_item_name().map_no_statement_parser_err()?;
+        let keywords = if object_type == ObjectType::Table {
+            [SET, RENAME, OWNER, RESET, ADD].as_slice()
+        } else {
+            [SET, RENAME, OWNER, RESET].as_slice()
+        };
+
         let action = self
-            .expect_one_of_keywords(&[SET, RENAME, OWNER, RESET])
+            .expect_one_of_keywords(keywords)
             .map_no_statement_parser_err()?;
         match action {
             RENAME => {
@@ -5395,6 +5444,31 @@ impl<'a> Parser<'a> {
                     name: UnresolvedObjectName::Item(name),
                     new_owner,
                 }))
+            }
+            ADD => {
+                assert_eq!(object_type, ObjectType::Table, "checked object_type above");
+
+                self.expect_keyword(COLUMN)
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let if_col_not_exist = self
+                    .parse_if_not_exists()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let column_name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let data_type = self
+                    .parse_data_type()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+
+                Ok(Statement::AlterTableAddColumn(
+                    AlterTableAddColumnStatement {
+                        if_exists,
+                        name,
+                        if_col_not_exist,
+                        column_name,
+                        data_type,
+                    },
+                ))
             }
             _ => unreachable!(),
         }

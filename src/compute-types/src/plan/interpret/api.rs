@@ -23,8 +23,8 @@ use mz_expr::{
     RECURSION_LIMIT,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::{assert_none, soft_panic_or_log};
 use mz_repr::{Diff, Row};
 
 use crate::plan::join::JoinPlan;
@@ -275,7 +275,7 @@ where
                         .ctx
                         .bindings
                         .insert(*id, ContextEntry::of_let(res_value));
-                    assert!(old_entry.is_none(), "No shadowing");
+                    assert_none!(old_entry, "No shadowing");
 
                     // Descend into `body` with the extended context.
                     let res_body = self.apply_rec(body, rg);
@@ -300,7 +300,7 @@ where
                     for id in ids.iter() {
                         let new_entry = ContextEntry::of_let_rec(I::Domain::bottom());
                         let old_entry = self.ctx.bindings.insert(*id, new_entry);
-                        assert!(old_entry.is_none());
+                        assert_none!(old_entry);
                     }
 
                     let min_max_iter = LetRecLimit::min_max_iter(limits);
@@ -563,7 +563,7 @@ where
                         .ctx
                         .bindings
                         .insert(*id, ContextEntry::of_let(res_value));
-                    assert!(old_entry.is_none(), "No shadowing");
+                    assert_none!(old_entry, "No shadowing");
 
                     // Descend into `body` with the extended context.
                     let res_body = self.apply_rec(body, rg);
@@ -588,7 +588,7 @@ where
                     for id in ids.iter() {
                         let new_entry = ContextEntry::of_let_rec(I::Domain::bottom());
                         let old_entry = self.ctx.bindings.insert(*id, new_entry);
-                        assert!(old_entry.is_none());
+                        assert_none!(old_entry);
                     }
 
                     let min_max_iter = LetRecLimit::min_max_iter(limits);

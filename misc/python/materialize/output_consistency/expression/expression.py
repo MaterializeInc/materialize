@@ -26,6 +26,7 @@ from materialize.output_consistency.selection.selection import (
     ALL_ROWS_SELECTION,
     DataRowSelection,
 )
+from materialize.util import stable_int_hash
 
 
 class Expression:
@@ -45,6 +46,12 @@ class Expression:
         self.is_expect_error = is_expect_error
 
     def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+        raise NotImplementedError
+
+    def hash(self) -> int:
+        """
+        The primary purpose of this method is to allow conditional breakpoints when debugging.
+        """
         raise NotImplementedError
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
@@ -148,6 +155,9 @@ class LeafExpression(Expression):
         super().__init__(characteristics, storage_layout, is_aggregate, is_expect_error)
         self.column_name = column_name
         self.data_type = data_type
+
+    def hash(self) -> int:
+        return stable_int_hash(self.column_name)
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category

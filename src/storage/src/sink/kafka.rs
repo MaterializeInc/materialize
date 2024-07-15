@@ -80,9 +80,10 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use maplit::btreemap;
-use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
+use mz_interchange::avro::AvroEncoder;
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
+use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
 };
@@ -97,7 +98,7 @@ use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkEnvelope, StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -875,6 +876,8 @@ async fn determine_sink_progress(
         // transactions, there might even be a lot of garbage at the end of the
         // topic or in between.
 
+        metrics.consumed_progress_records.set(0);
+
         // First, determine the current high water mark for the progress topic.
         // This is the position our `progress_client` consumer *must* reach
         // before we can conclude that we've seen the latest progress record for
@@ -1012,6 +1015,8 @@ async fn determine_sink_progress(
                 continue;
             }
 
+            metrics.consumed_progress_records.inc();
+
             let Some(payload) = message.payload() else {
                 continue
             };
@@ -1142,13 +1147,63 @@ fn encode_collection<G: Scope>(
                 .map(|(desc, _indices)| desc.clone());
             let value_desc = connection.value_desc;
 
-            let encoder: Box<dyn Encode> = match connection.format {
-                KafkaSinkFormat::Avro {
-                    key_schema,
-                    value_schema,
+            let key_encoder: Option<Box<dyn Encode>> =
+                match (key_desc, connection.format.key_format) {
+                    (Some(desc), Some(KafkaSinkFormatType::Bytes)) => {
+                        Some(Box::new(BinaryEncoder::new(desc, false)))
+                    }
+                    (Some(desc), Some(KafkaSinkFormatType::Text)) => {
+                        Some(Box::new(TextEncoder::new(desc, false)))
+                    }
+                    (Some(desc), Some(KafkaSinkFormatType::Json)) => {
+                        Some(Box::new(JsonEncoder::new(desc, false)))
+                    }
+                    (Some(desc), Some(KafkaSinkFormatType::Avro {
+                        schema,
+                        compatibility_level,
+                        csr_connection,
+                    })) => {
+                        // Ensure that schemas are registered with the schema registry.
+                        //
+                        // Note that where this lies in the rendering cycle means that we will publish the
+                        // schemas each time the sink is rendered.
+                        let ccsr = csr_connection
+                            .connect(&storage_configuration, InTask::Yes)
+                            .await?;
+
+                        let schema_id = mz_storage_client::sink::publish_kafka_schema(
+                            ccsr,
+                            format!("{}-key", connection.topic),
+                            schema.clone(),
+                            mz_ccsr::SchemaType::Avro,
+                            compatibility_level,
+                        )
+                        .await
+                        .context("error publishing kafka schemas for sink")?;
+
+                        Some(Box::new(AvroEncoder::new(desc, false, &schema, schema_id)))
+                    }
+                    (None, None) => None,
+                    (desc, format) => {
+                        return Err(anyhow!(
+                            "key_desc and key_format must be both set or both unset, but key_desc: {:?}, key_format: {:?}",
+                            desc,
+                            format
+                        ))
+                    }
+                };
+
+            // whether to apply the debezium envelope to the value encoding
+            let debezium = matches!(envelope, SinkEnvelope::Debezium);
+
+            let value_encoder: Box<dyn Encode> = match connection.format.value_format {
+                KafkaSinkFormatType::Bytes => Box::new(BinaryEncoder::new(value_desc, debezium)),
+                KafkaSinkFormatType::Text => Box::new(TextEncoder::new(value_desc, debezium)),
+                KafkaSinkFormatType::Json => Box::new(JsonEncoder::new(value_desc, debezium)),
+                KafkaSinkFormatType::Avro {
+                    schema,
+                    compatibility_level,
                     csr_connection,
-                    key_compatibility_level,
-                    value_compatibility_level,
                 } => {
                     // Ensure that schemas are registered with the schema registry.
                     //
@@ -1157,38 +1212,19 @@ fn encode_collection<G: Scope>(
                     let ccsr = csr_connection
                         .connect(&storage_configuration, InTask::Yes)
                         .await?;
-                    let (key_schema_id, value_schema_id) =
-                        mz_storage_client::sink::publish_kafka_schemas(
-                            ccsr,
-                            connection.topic.clone(),
-                            key_schema,
-                            Some(mz_ccsr::SchemaType::Avro),
-                            value_schema,
-                            mz_ccsr::SchemaType::Avro,
-                            key_compatibility_level,
-                            value_compatibility_level,
-                        )
-                        .await
-                        .context("error publishing kafka schemas for sink")?;
 
-                    let options = AvroSchemaOptions {
-                        is_debezium: matches!(envelope, SinkEnvelope::Debezium),
-                        ..Default::default()
-                    };
+                    let schema_id = mz_storage_client::sink::publish_kafka_schema(
+                        ccsr,
+                        format!("{}-value", connection.topic),
+                        schema.clone(),
+                        mz_ccsr::SchemaType::Avro,
+                        compatibility_level,
+                    )
+                    .await
+                    .context("error publishing kafka schemas for sink")?;
 
-                    let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
-                        .expect("avro schema validated");
-                    Box::new(AvroEncoder::new(
-                        schema_generator,
-                        key_schema_id,
-                        value_schema_id,
-                    ))
+                    Box::new(AvroEncoder::new(value_desc, debezium, &schema, schema_id))
                 }
-                KafkaSinkFormat::Json => Box::new(JsonEncoder::new(
-                    key_desc,
-                    value_desc,
-                    matches!(envelope, SinkEnvelope::Debezium),
-                )),
             };
 
             // !IMPORTANT!
@@ -1205,8 +1241,13 @@ fn encode_collection<G: Scope>(
                             (Some(i), Some(v)) => encode_headers(v.iter().nth(i).unwrap()),
                             _ => vec![],
                         };
-                        let key = key.map(|key| encoder.encode_key_unchecked(key));
-                        let value = value.map(|value| encoder.encode_value_unchecked(value));
+                        let key = key.map(|key| {
+                            key_encoder
+                                .as_ref()
+                                .expect("key present")
+                                .encode_unchecked(key)
+                        });
+                        let value = value.map(|value| value_encoder.encode_unchecked(value));
                         let message = KafkaMessage {
                             key,
                             value,
@@ -1250,11 +1291,13 @@ fn encode_headers(datum: Datum) -> Vec<KafkaHeader> {
 
 #[cfg(test)]
 mod test {
+    use mz_ore::assert_err;
+
     use super::*;
 
     #[mz_ore::test]
     fn progress_record_migration() {
-        assert!(parse_progress_record(b"{}").is_err());
+        assert_err!(parse_progress_record(b"{}"));
 
         assert_eq!(
             parse_progress_record(b"{\"timestamp\":1}").unwrap(),
@@ -1296,6 +1339,6 @@ mod test {
             }
         );
 
-        assert!(parse_progress_record(b"{\"frontier\":null}").is_err());
+        assert_err!(parse_progress_record(b"{\"frontier\":null}"));
     }
 }

@@ -127,7 +127,7 @@ pub enum VarInput<'a> {
 
 impl<'a> VarInput<'a> {
     /// Converts the variable input to an owned vector of strings.
-    fn to_vec(&self) -> Vec<String> {
+    pub fn to_vec(&self) -> Vec<String> {
         match self {
             VarInput::Flat(v) => vec![v.to_string()],
             VarInput::SqlSet(values) => values.into_iter().map(|v| v.to_string()).collect(),

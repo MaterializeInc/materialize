@@ -222,6 +222,27 @@ $ schema-registry-verify schema-type=avro subject=testdrive-compat-level-sink-${
 $ kafka-verify-data format=avro sink=materialize.public.compat_level_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
+# Test a sink with an Avro value format and Json key format
+> CREATE MATERIALIZED VIEW mixed_format_data (a, b) AS SELECT * FROM (VALUES (1, 2));
+
+> CREATE CLUSTER mixed_format_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK mixed_format_sink
+  IN CLUSTER mixed_format_sink_cluster
+  FROM mixed_format_data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mixed-format-sink-${testdrive.seed}')
+  KEY (b)
+  KEY FORMAT JSON
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (
+    VALUE COMPATIBILITY LEVEL 'FORWARD_TRANSITIVE'
+  )
+  ENVELOPE DEBEZIUM
+
+$ schema-registry-verify schema-type=avro subject=testdrive-mixed-format-sink-${testdrive.seed}-value compatibility-level=FORWARD_TRANSITIVE
+{"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
+
+$ kafka-verify-data key-format=json value-format=avro sink=materialize.public.mixed_format_sink sort-messages=true
+{"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
+
 # Test a sink over a view whose column names are not directly usable as
 # Avro schema names.
 

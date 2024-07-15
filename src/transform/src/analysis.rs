@@ -82,6 +82,7 @@ pub mod common {
 
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
+    use mz_ore::assert_none;
     use mz_repr::optimize::OptimizerFeatures;
 
     use super::subtree::SubtreeSize;
@@ -106,17 +107,6 @@ pub mod common {
             if let Some(bundle) = self.analyses.get(&type_id) {
                 if let Some(bundle) = bundle.as_any().downcast_ref::<Bundle<A>>() {
                     return Some(&bundle.results[..]);
-                }
-            }
-            None
-        }
-        /// Return an owned version of analysis results derived so far,
-        /// replacing them with an empty vector.
-        pub fn take_results<A: Analysis>(&mut self) -> Option<Vec<A::Value>> {
-            let type_id = TypeId::of::<Bundle<A>>();
-            if let Some(bundle) = self.analyses.get_mut(&type_id) {
-                if let Some(bundle) = bundle.as_any_mut().downcast_mut::<Bundle<A>>() {
-                    return Some(std::mem::take(&mut bundle.results));
                 }
             }
             None
@@ -351,7 +341,7 @@ pub mod common {
                     Err(local_id) => {
                         // Capture the *remaining* work, which we'll need to flip around.
                         let prior = self.result.bindings.insert(local_id, rev_post_order.len());
-                        assert!(prior.is_none(), "Shadowing not allowed");
+                        assert_none!(prior, "Shadowing not allowed");
                     }
                 }
             }
@@ -384,10 +374,6 @@ pub mod common {
         ///
         /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
         fn as_any(&self) -> &dyn std::any::Any;
-        /// Upcasts `self` to a `&mut dyn Any`.
-        ///
-        /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
     }
 
     /// A wrapper for analysis state.
@@ -425,9 +411,6 @@ pub mod common {
             update
         }
         fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
             self
         }
     }
@@ -770,11 +753,40 @@ mod non_negative {
                 MirRelationExpr::Negate { .. } => false,
                 // Threshold ensures non-negativity.
                 MirRelationExpr::Threshold { .. } => true,
-                MirRelationExpr::Join { .. } | MirRelationExpr::Union { .. } => {
-                    // These two cases require all of their inputs to be non-negative.
+                MirRelationExpr::Join { .. } => {
+                    // If all inputs are non-negative, the join is non-negative.
                     depends
                         .children_of_rev(index, expr.children().count())
                         .all(|off| results[off])
+                }
+                MirRelationExpr::Union { base, inputs } => {
+                    // If all inputs are non-negative, the union is non-negative.
+                    let all_non_negative = depends
+                        .children_of_rev(index, expr.children().count())
+                        .all(|off| results[off]);
+
+                    if all_non_negative {
+                        return true;
+                    }
+
+                    // We look for the pattern `Union { base, Negate(Subset(base)) }`.
+                    // TODO: take some care to ensure that union fusion does not introduce a regression.
+                    if inputs.len() == 1 {
+                        if let MirRelationExpr::Negate { input } = &inputs[0] {
+                            // If `base` is non-negative, and `is_superset_of(base, input)`, return true.
+                            // TODO: this is not correct until we have `is_superset_of` validate non-negativity
+                            // as it goes, but it matches the current implementation.
+                            let mut children = depends.children_of_rev(index, 2);
+                            let _negate = children.next().unwrap();
+                            let base_id = children.next().unwrap();
+                            debug_assert_eq!(children.next(), None);
+                            if results[base_id] && is_superset_of(&*base, &*input) {
+                                return true;
+                            }
+                        }
+                    }
+
+                    false
                 }
                 _ => results[index - 1],
             }
@@ -796,6 +808,74 @@ mod non_negative {
             *into = *into && item;
             changed
         }
+    }
+
+    /// Returns true only if `rhs.negate().union(lhs)` contains only non-negative multiplicities
+    /// once consolidated.
+    ///
+    /// Informally, this happens when `rhs` is a multiset subset of `lhs`, meaning the multiplicity
+    /// of any record in `rhs` is at most the multiplicity of the same record in `lhs`.
+    ///
+    /// This method recursively descends each of `lhs` and `rhs` and performs a great many equality
+    /// tests, which has the potential to be quadratic. We should consider restricting its attention
+    /// to `Get` identifiers, under the premise that equal AST nodes would necessarily be identified
+    /// by common subexpression elimination. This requires care around recursively bound identifiers.
+    ///
+    /// These rules are .. somewhat arbitrary, and likely reflect observed opportunities. For example,
+    /// while we do relate `distinct(filter(A)) <= distinct(A)`, we do not relate `distinct(A) <= A`.
+    /// Further thoughts about the class of optimizations, and whether there should be more or fewer,
+    /// can be found here: <https://github.com/MaterializeInc/materialize/issues/14142>.
+    fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
+        // This implementation is iterative.
+        // Before converting this implementation to recursive (e.g. to improve its accuracy)
+        // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.
+        while lhs != rhs {
+            match rhs {
+                MirRelationExpr::Filter { input, .. } => rhs = &**input,
+                MirRelationExpr::TopK { input, .. } => rhs = &**input,
+                // Descend in both sides if the current roots are
+                // projections with the same `outputs` vector.
+                MirRelationExpr::Project {
+                    input: rhs_input,
+                    outputs: rhs_outputs,
+                } => match lhs {
+                    MirRelationExpr::Project {
+                        input: lhs_input,
+                        outputs: lhs_outputs,
+                    } if lhs_outputs == rhs_outputs => {
+                        rhs = &**rhs_input;
+                        lhs = &**lhs_input;
+                    }
+                    _ => return false,
+                },
+                // Descend in both sides if the current roots are reduces with empty aggregates
+                // on the same set of keys (that is, a distinct operation on those keys).
+                MirRelationExpr::Reduce {
+                    input: rhs_input,
+                    group_key: rhs_group_key,
+                    aggregates: rhs_aggregates,
+                    monotonic: _,
+                    expected_group_size: _,
+                } if rhs_aggregates.is_empty() => match lhs {
+                    MirRelationExpr::Reduce {
+                        input: lhs_input,
+                        group_key: lhs_group_key,
+                        aggregates: lhs_aggregates,
+                        monotonic: _,
+                        expected_group_size: _,
+                    } if lhs_aggregates.is_empty() && lhs_group_key == rhs_group_key => {
+                        rhs = &**rhs_input;
+                        lhs = &**lhs_input;
+                    }
+                    _ => return false,
+                },
+                _ => {
+                    // TODO: Imagine more complex reasoning here!
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 

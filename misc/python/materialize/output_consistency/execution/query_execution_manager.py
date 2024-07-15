@@ -16,7 +16,6 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 from materialize.output_consistency.execution.sql_executor import SqlExecutionError
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -31,6 +30,7 @@ from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
 )
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
@@ -98,24 +98,11 @@ class QueryExecutionManager:
         all_comparisons_passed = True
 
         for test_outcome in test_outcomes:
-            summary_to_update.count_executed_query_templates += 1
-            verdict = test_outcome.verdict()
-
-            if verdict in {
-                ValidationVerdict.SUCCESS,
-                ValidationVerdict.SUCCESS_WITH_WARNINGS,
-            }:
-                summary_to_update.count_successful_query_templates += 1
-            elif verdict == ValidationVerdict.IGNORED_FAILURE:
-                summary_to_update.count_ignored_error_query_templates += 1
-            elif verdict == ValidationVerdict.FAILURE:
-                summary_to_update.add_failures(test_outcome.to_failure_details())
+            if test_outcome.verdict() == ValidationVerdict.FAILURE:
                 all_comparisons_passed = False
-            else:
-                raise RuntimeError(f"Unexpected verdict: {verdict}")
-
-            if test_outcome.has_warnings():
-                summary_to_update.count_with_warning_query_templates += 1
+            summary_to_update.accept_execution_result(
+                query, test_outcome, self.output_printer.reproduction_code_printer
+            )
 
         return all_comparisons_passed
 

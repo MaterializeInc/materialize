@@ -17,6 +17,9 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
     YesIgnore,
 )
 from materialize.output_consistency.output.format_constants import LI_PREFIX
+from materialize.output_consistency.output.reproduction_code_printer import (
+    ReproductionCodePrinter,
+)
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
     ValidationMessage,
@@ -54,6 +57,8 @@ class ValidationOutcome:
         self.errors: list[ValidationError] = []
         self.warnings: list[ValidationWarning] = []
         self.remarks: list[ValidationRemark] = []
+        self.query_execution_succeeded_in_all_strategies: bool = False
+        """Whether the query was executed successfully in all strategies. This provides no info about the validity of the results."""
 
     def add_error(
         self, ignore_filter: GenericInconsistencyIgnoreFilter, error: ValidationError
@@ -113,19 +118,27 @@ class ValidationOutcome:
 
         return "\n".join(f"{LI_PREFIX}{str(entry)}" for entry in entries)
 
-    def to_failure_details(self) -> list[TestFailureDetails]:
+    def to_failure_details(
+        self, reproduction_code_printer: ReproductionCodePrinter
+    ) -> list[TestFailureDetails]:
         failures = []
 
         for error in self.errors:
             test_case_name = f"Query {error.query_execution.query_id}"
-            if error.concerned_expression is not None:
-                test_case_name = f"{test_case_name} (`{error.concerned_expression}`)"
+            if error.concerned_expression_str is not None:
+                test_case_name = (
+                    f"{test_case_name} (`{error.concerned_expression_str}`)"
+                )
 
             failures.append(
                 TestFailureDetails(
                     test_case_name_override=test_case_name,
                     message=error.message,
                     details=str(error),
+                    additional_details_header="Code to reproduce",
+                    additional_details=reproduction_code_printer.get_reproduction_code_of_error(
+                        error
+                    ),
                 )
             )
 

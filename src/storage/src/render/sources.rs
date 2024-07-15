@@ -16,7 +16,7 @@ use std::iter;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::{collection, AsCollection, Collection, Hashable};
+use differential_dataflow::{collection, AsCollection, Collection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -35,7 +35,7 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr};
+use timely::dataflow::operators::{Concat, ConnectLoop, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp};
@@ -431,7 +431,7 @@ where
         }
     };
 
-    let (stream, errors, health) = (
+    let (collection, errors, health) = (
         envelope_ok,
         envelope_err,
         decode_health.concat(&envelope_health),
@@ -440,11 +440,6 @@ where
     if let Some(errors) = errors {
         error_collections.push(errors);
     }
-
-    // Perform various additional transformations on the collection.
-
-    // Force a shuffling of data in case sources are not uniformly distributed.
-    let collection = stream.inner.exchange(|x| x.hashed()).as_collection();
 
     // Flatten the error collections.
     let err_collection = match error_collections.len() {
@@ -507,7 +502,7 @@ fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
                 if !res.metadata.is_empty() {
-                    RowPacker::for_existing_row(&mut val).extend(&res.metadata);
+                    RowPacker::for_existing_row(&mut val).extend_by_row(&res.metadata);
                 }
                 val
             })
@@ -575,7 +570,9 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             Some(Ok(ref row)) => match upsert_envelope.style {
                 UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
                     Datum::List(after) => {
-                        row_buf.packer().extend(after.iter().chain(metadata.iter()));
+                        let mut packer = row_buf.packer();
+                        packer.extend(after.iter());
+                        packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }
                     Datum::Null => None,
@@ -583,32 +580,42 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                 },
                 UpsertStyle::Default(_) => {
                     let mut packer = row_buf.packer();
-                    packer.extend(key_row.iter().chain(row.iter()).chain(metadata.iter()));
+                    packer.extend_by_row(&key_row);
+                    packer.extend_by_row(row);
+                    packer.extend_by_row(&metadata);
                     Some(Ok(row_buf.clone()))
                 }
                 UpsertStyle::ValueErrInline { .. } => {
                     let mut packer = row_buf.packer();
-                    packer.extend(key_row.iter());
-                    // The 'value' record contains all value columns
-                    packer.push_list(row.iter());
+                    packer.extend_by_row(&key_row);
                     // The 'error' column is null
                     packer.push(Datum::Null);
-                    packer.extend(metadata.iter());
+                    packer.extend_by_row(row);
+                    packer.extend_by_row(&metadata);
                     Some(Ok(row_buf.clone()))
                 }
             },
             Some(Err(inner)) => {
                 match upsert_envelope.style {
                     UpsertStyle::ValueErrInline { .. } => {
+                        let mut count = 0;
                         // inline the error in the data output
                         let err_string = inner.to_string();
                         let mut packer = row_buf.packer();
-                        packer.extend(key_row.iter());
-                        // The 'value' column is null
-                        packer.push(Datum::Null);
+                        for datum in key_row.iter() {
+                            packer.push(datum);
+                            count += 1;
+                        }
                         // The 'error' column is a record with a 'description' column
                         packer.push_list(iter::once(Datum::String(&err_string)));
-                        packer.extend(metadata.iter());
+                        count += 1;
+                        let metadata_len = metadata.as_row_ref().iter().count();
+                        // push nulls for all value columns
+                        packer.extend(
+                            iter::repeat(Datum::Null)
+                                .take(upsert_envelope.source_arity - count - metadata_len),
+                        );
+                        packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }
                     _ => Some(Err(UpsertError::Value(UpsertValueError {

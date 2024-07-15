@@ -86,7 +86,10 @@ mammalmore    moosemoose   2
 $ set-sql-timeout duration=2minutes
 
 # Also test a source with multiple sub-sources.
-> CREATE SOURCE auction_house
+# NOTE: We give this source a unique name because we want to query for it with
+# a `SUBSCRIBE ... AS OF AT LEAST 0` below and want to avoid receiving results
+# for sources created by previous tests.
+> CREATE SOURCE auction_house_in_source_statistics_td
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
@@ -112,11 +115,11 @@ metrics_test_source true 2 2 2 true true
   SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
+  WHERE s.name IN ('accounts', 'auction_house_in_source_statistics_td', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
 accounts       true      false   true  true  false   true
-auction_house  true      true    false false true    true
+auction_house_in_source_statistics_td true true false false true true
 auctions       true      false   true  true  false   true
 bids           true      false   true  true  false   true
 organizations  true      false   true  true  false   true
@@ -131,7 +134,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
     SELECT u.messages_received
       FROM mz_sources s
       JOIN mz_internal.mz_source_statistics_with_history u ON s.id = u.id
-      WHERE s.name = 'auction_house'
+      WHERE s.name = 'auction_house_in_source_statistics_td'
     )
   AS OF AT LEAST 0
 
@@ -140,7 +143,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > COMMIT
 
-> DROP SOURCE auction_house CASCADE
+> DROP SOURCE auction_house_in_source_statistics_td CASCADE
 
 # Test upsert
 

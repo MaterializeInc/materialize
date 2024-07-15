@@ -16,8 +16,8 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::{
-    ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Ident, KafkaBroker,
-    RefreshOptionValue, ReplicaDefinition,
+    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Ident,
+    KafkaBroker, RefreshOptionValue, ReplicaDefinition,
 };
 use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
@@ -604,6 +604,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::ClusterReplicas(_)
             | WithOptionValue::ConnectionKafkaBroker(_)
             | WithOptionValue::ConnectionAwsPrivatelink(_)
+            | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
             | WithOptionValue::ClusterScheduleOptionValue(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
@@ -611,6 +612,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     // The first few are unreachable because they are handled at the top of the outer match.
                     WithOptionValue::Value(_) => unreachable!(),
                     WithOptionValue::RetainHistoryFor(_) => unreachable!(),
+                    WithOptionValue::ClusterAlterStrategy(_) => "cluster alter strategy",
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Map(_) => "maps",
                     WithOptionValue::Item(_) => "object references",
@@ -767,6 +769,12 @@ impl ImpliedValue for ClusterScheduleOptionValue {
     }
 }
 
+impl ImpliedValue for ClusterAlterOptionValue {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value")
+    }
+}
+
 impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         if let WithOptionValue::ClusterScheduleOptionValue(r) = v {
@@ -817,5 +825,23 @@ impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>>
 
     fn name() -> String {
         format!("map of string to {}", V::name())
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ClusterAlterOptionValue {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ClusterAlterStrategy(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a cluster alter strategy", v)
+        }
+    }
+
+    fn name() -> String {
+        "cluster alter strategyoption value".to_string()
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterAlterStrategy(self))
     }
 }

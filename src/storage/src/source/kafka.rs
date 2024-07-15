@@ -20,6 +20,7 @@ use differential_dataflow::AsCollection;
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
+use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
@@ -144,6 +145,14 @@ pub struct KafkaResumeUpperProcessor {
     progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
 }
 
+/// Computes whether this worker is responsible for consuming a partition. It assigns partitions to
+/// workers in a round-robin fashion, starting at an arbitrary worker based on the hash of the
+/// source id.
+fn responsible_for_pid(config: &RawSourceCreationConfig, pid: i32) -> bool {
+    let pid = usize::try_from(pid).expect("positive pid");
+    ((config.responsible_worker(config.id) + pid) % config.worker_count) == config.worker_id
+}
+
 impl SourceRender for KafkaSourceConnection {
     // TODO(petrosagg): The type used for the partition (RangeBound<PartitionId>) doesn't need to
     // be so complicated and we could instead use `Partitioned<PartitionId, Option<u64>>` where all
@@ -200,7 +209,7 @@ impl SourceRender for KafkaSourceConnection {
             let mut start_offsets: BTreeMap<_, i64> = start_offsets
                 .clone()
                 .into_iter()
-                .filter(|(pid, _offset)| config.responsible_for(pid))
+                .filter(|(pid, _offset)| responsible_for_pid(&config, *pid))
                 .map(|(k, v)| (k, v))
                 .collect();
 
@@ -219,7 +228,7 @@ impl SourceRender for KafkaSourceConnection {
                 if let Some(pid) = ts.interval().singleton() {
                     let pid = pid.unwrap_exact();
                     max_pid = std::cmp::max(max_pid, Some(*pid));
-                    if config.responsible_for(pid) {
+                    if responsible_for_pid(&config, *pid) {
                         let restored_offset = i64::try_from(ts.timestamp().offset)
                             .expect("restored kafka offsets must fit into i64");
                         if let Some(start_offset) = start_offsets.get_mut(pid) {
@@ -573,7 +582,7 @@ impl SourceRender for KafkaSourceConnection {
 
                     let mut upstream_stat = 0;
                     for (&pid, watermarks) in &partitions {
-                        if config.responsible_for(pid) {
+                        if responsible_for_pid(&config, pid) {
                             upstream_stat += watermarks.high;
                             reader.ensure_partition(pid);
                             if let Entry::Vacant(entry) = reader.partition_capabilities.entry(pid) {
@@ -861,7 +870,7 @@ impl KafkaResumeUpperProcessor {
         for ts in frontier.iter() {
             if let Some(pid) = ts.interval().singleton() {
                 let pid = pid.unwrap_exact();
-                if self.config.responsible_for(pid) {
+                if responsible_for_pid(&self.config, *pid) {
                     offsets.push((pid.clone(), *ts.timestamp()));
 
                     // Note that we do not subtract 1 from the frontier. Imagine
@@ -907,8 +916,7 @@ impl KafkaSourceReader {
         self.create_partition_queue(pid, Offset::Offset(start_offset));
 
         let prev = self.last_offsets.insert(pid, start_offset - 1);
-
-        assert!(prev.is_none());
+        assert_none!(prev);
     }
 
     /// Creates a new partition queue for `partition_id`.

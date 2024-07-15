@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::zip_eq;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::{TransformCtx, TransformError};
@@ -151,7 +152,7 @@ impl ProjectionPushdown {
                     // Seed the gets map with empty demand for each non-recursive ID.
                     for id in ids.iter().filter(|id| !rec_ids.contains(id)) {
                         let prior = gets.insert(Id::Local(*id), BTreeSet::new());
-                        assert!(prior.is_none());
+                        assert_none!(prior);
                     }
 
                     // Descend into the body with the supplied desired_projection.

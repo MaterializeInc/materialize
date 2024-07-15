@@ -72,7 +72,7 @@ LIST_OPERATION_TYPES.append(
     DbOperation(
         "$ || $",
         [
-            AnyOperationParam(),
+            AnyOperationParam(include_record_type=False),
             ListOfOtherElementOperationParam(index_of_previous_param=0),
         ],
         ListReturnTypeSpec(),
@@ -96,7 +96,7 @@ LIST_OPERATION_TYPES.append(
     DbFunction(
         "list_agg",
         [
-            AnyOperationParam(),
+            AnyOperationParam(include_record_type=False),
             AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
             AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
             AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),

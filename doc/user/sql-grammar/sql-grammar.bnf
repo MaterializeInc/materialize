@@ -171,7 +171,7 @@ sink_definition ::=
     'INTO' kafka_sink_connection
     ('KEY' '(' key_column ( ',' key_column )* ')' 'NOT ENFORCED'?)?
     ('HEADERS' headers_column)?
-    ('FORMAT' sink_format_spec)?
+    ('FORMAT' sink_format_spec | 'KEY FORMAT' sink_format_spec 'VALUE FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?
 create_sink_doc_on_option ::=
@@ -187,7 +187,9 @@ create_source_kafka ::=
          ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? | 'HEADER' key 'AS' name ('BYTES')? )
     (',' ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? | 'HEADER' key 'AS' name ('BYTES')? ) )*
   )?
-  ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
+  ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'
+    ( '(' 'VALUE DECODING ERRORS = INLINE'  ')' )?
+  ))?
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   with_options?
 create_source_load_generator ::=
@@ -373,7 +375,7 @@ strat ::=
   'LATEST'
 sink_format_spec ::=
   'AVRO USING' csr_connection |
-  'JSON'
+  'JSON' | 'TEXT' | 'BYTES'
 compression ::= 'COMPRESSION' ('NONE' | 'GZIP')
 func_at_time_zone ::=
     'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'

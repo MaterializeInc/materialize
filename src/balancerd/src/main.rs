@@ -66,8 +66,7 @@ fn main() {
     };
 
     if let Err(err) = res {
-        eprintln!("balancer: fatal: {}", err.display_with_causes());
-        std::process::exit(1);
+        panic!("balancer: fatal: {}", err.display_with_causes());
     }
     drop(_tracing_guard);
 }

@@ -42,6 +42,7 @@ class StartMz(MzcomposeAction):
         mz_service: str | None = None,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
+        deploy_generation: int | None = None,
     ) -> None:
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
@@ -52,6 +53,7 @@ class StartMz(MzcomposeAction):
         self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
+        self.deploy_generation = deploy_generation
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -70,18 +72,18 @@ class StartMz(MzcomposeAction):
             sanity_restart=False,
             platform=self.platform,
             healthcheck=self.healthcheck,
+            deploy_generation=self.deploy_generation,
         )
 
-        with c.override(mz):
+        # Don't fail since we are careful to explicitly kill and collect logs
+        # of the services thus started
+        with c.override(mz, fail_on_new_service=False):
             c.up("materialized" if self.mz_service is None else self.mz_service)
 
-            # If we start up Materialize with MZ_DEPLOY_GENERATION, then it
+            # If we start up Materialize with a deploy-generation , then it
             # stays in a stuck state when the preflight-check is completed. So
             # we can't connect to it yet to run any commands.
-            if any(
-                env.startswith("MZ_DEPLOY_GENERATION=")
-                for env in self.environment_extra
-            ):
+            if self.deploy_generation:
                 return
 
             # This should live in ssh.py and alter_connection.py, but accessing the
@@ -212,7 +214,9 @@ class KillMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        with c.override(Materialized(name=self.mz_service)):
+        # Don't fail since we are careful to explicitly kill and collect logs
+        # of the services thus started
+        with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
             c.kill(self.mz_service, wait=True)
 
             if self.capture_logs:

@@ -34,19 +34,22 @@ from materialize.output_consistency.operation.operation import (
 
 RECORD_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
+TAG_RECORD_CREATION = "record_creation"
+
 
 RECORD_OPERATION_TYPES.append(
     DbFunction(
-        "record",
+        "row",
         [StringOperationParam(), AnyOperationParam()],
         RecordReturnTypeSpec(),
+        tags={TAG_RECORD_CREATION},
         comment="variant useful for map_build",
     )
 )
 
 RECORD_OPERATION_TYPES.append(
     DbFunction(
-        "record",
+        "row",
         [
             AnyOperationParam(),
             AnyOperationParam(optional=True),
@@ -54,14 +57,16 @@ RECORD_OPERATION_TYPES.append(
             AnyOperationParam(optional=True),
         ],
         RecordReturnTypeSpec(),
-        comment="generic variant",
+        tags={TAG_RECORD_CREATION},
         relevance=OperationRelevance.LOW,
+        comment="generic variant",
     )
 )
 
 RECORD_OPERATION_TYPES.append(
     DbOperation(
-        "$.$",
+        # the parentheses are necessary for Postgres only
+        "($).$",
         [RecordOperationParam(), RECORD_FIELD_PARAM],
         UndeterminedReturnTypeSpec(),
     )

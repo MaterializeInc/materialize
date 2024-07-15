@@ -12,6 +12,7 @@ use aws_types::sdk_config::SdkConfig;
 use mz_aws_util::s3_uploader::{
     CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
 };
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_pgcopy::{encode_copy_format, encode_copy_format_header, CopyFormatParams};
@@ -124,7 +125,7 @@ impl PgCopyUploader {
     /// Creates the uploader for the next file and starts the multi part upload.
     async fn start_new_file_upload(&mut self) -> Result<(), anyhow::Error> {
         self.finish().await?;
-        assert!(self.current_file_uploader.is_none());
+        assert_none!(self.current_file_uploader);
 
         self.file_index += 1;
         let object_key =

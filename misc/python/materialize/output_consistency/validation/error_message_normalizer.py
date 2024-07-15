@@ -35,4 +35,17 @@ class ErrorMessageNormalizer:
             # tracked with https://github.com/MaterializeInc/materialize/issues/23497
             normalized_message = normalized_message[0 : normalized_message.index(" (")]
 
+        if (
+            "not found in data type record" in normalized_message
+            or (
+                re.search(
+                    r"function .*?record\(.*\) does not exist", normalized_message
+                )
+            )
+            or (re.search(r"operator does not exist: .*?record", normalized_message))
+            or "CAST does not support casting from record" in normalized_message
+        ):
+            # tracked with https://github.com/MaterializeInc/materialize/issues/28129
+            normalized_message = normalized_message.replace("?", "")
+
         return normalized_message

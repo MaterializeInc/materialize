@@ -196,6 +196,7 @@ impl FromStr for BytesUnit {
 #[cfg(test)]
 mod tests {
     use crate::bytes::ByteSize;
+    use mz_ore::assert_err;
     use proptest::prelude::*;
     use proptest::proptest;
 
@@ -241,13 +242,13 @@ mod tests {
         assert_eq!(parse("521  TB"), ByteSize::tb(521));
 
         // parsing errors
-        assert!("".parse::<ByteSize>().is_err());
-        assert!("a124GB".parse::<ByteSize>().is_err());
-        assert!("1K".parse::<ByteSize>().is_err());
-        assert!("B".parse::<ByteSize>().is_err());
+        assert_err!("".parse::<ByteSize>());
+        assert_err!("a124GB".parse::<ByteSize>());
+        assert_err!("1K".parse::<ByteSize>());
+        assert_err!("B".parse::<ByteSize>());
         // postgres is strict about matching capitalization
-        assert!("1gb".parse::<ByteSize>().is_err());
-        assert!("1KB".parse::<ByteSize>().is_err());
+        assert_err!("1gb".parse::<ByteSize>());
+        assert_err!("1KB".parse::<ByteSize>());
     }
 
     #[mz_ore::test]

@@ -933,7 +933,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_columnar_format"] = ["row", "both"]
+        self.flags_with_values["persist_batch_columnar_format"] = ["row", "both_v2"]
         self.flags_with_values["persist_batch_record_part_format"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
@@ -1474,6 +1474,40 @@ class KillAction(Action):
         return True
 
 
+class ZeroDowntimeDeployAction(Action):
+    def __init__(
+        self,
+        rng: random.Random,
+        composition: Composition | None,
+        sanity_restart: bool,
+        system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
+    ):
+        super().__init__(rng, composition)
+        self.system_param_fn = system_param_fn
+        self.system_parameters = {}
+        self.sanity_restart = sanity_restart
+
+    def run(self, exe: Executor) -> bool:
+        assert self.composition
+        self.composition.kill("materialized")
+        # Otherwise getting failure on "up" locally
+        time.sleep(1)
+        self.system_parameters = self.system_param_fn(self.system_parameters)
+        with self.composition.override(
+            Materialized(
+                restart="on-failure",
+                external_minio="toxiproxy",
+                external_cockroach="toxiproxy",
+                ports=["6975:6875", "6976:6876", "6977:6877"],
+                sanity_restart=self.sanity_restart,
+                additional_system_parameter_defaults=self.system_parameters,
+            )
+        ):
+            self.composition.up("materialized", detach=True)
+        time.sleep(self.rng.uniform(120, 240))
+        return True
+
+
 # TODO: Don't restore immediately, keep copy Database objects
 class BackupRestoreAction(Action):
     composition: Composition
@@ -1788,6 +1822,7 @@ class CreateKafkaSinkAction(Action):
         return [
             # Another replica can be created in parallel
             "cannot create sink in cluster with more than one replica",
+            "BYTES format with non-encodable type",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -1993,29 +2028,31 @@ dml_nontrans_action_list = ActionList(
 ddl_action_list = ActionList(
     [
         (CreateIndexAction, 2),
-        (DropIndexAction, 1),
+        (DropIndexAction, 2),
         (CreateTableAction, 2),
-        (DropTableAction, 1),
+        (DropTableAction, 2),
         (CreateViewAction, 8),
-        (DropViewAction, 4),
+        (DropViewAction, 8),
         (CreateRoleAction, 2),
-        (DropRoleAction, 1),
+        (DropRoleAction, 2),
         (CreateClusterAction, 2),
-        (DropClusterAction, 1),
+        (DropClusterAction, 2),
         (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 4),
-        (DropClusterReplicaAction, 2),
+        # TODO: Reenable when #28166 is fixed
+        # (DropClusterReplicaAction, 4),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
-        (DropWebhookSourceAction, 1),
+        (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 1),
+        (DropKafkaSinkAction, 4),
         (CreateKafkaSourceAction, 4),
-        (DropKafkaSourceAction, 1),
-        (CreateMySqlSourceAction, 4),
-        (DropMySqlSourceAction, 1),
+        (DropKafkaSourceAction, 4),
+        # TODO: Reenable when #28108 is fixed
+        # (CreateMySqlSourceAction, 4),
+        # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
-        (DropPostgresSourceAction, 1),
+        (DropPostgresSourceAction, 4),
         (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),

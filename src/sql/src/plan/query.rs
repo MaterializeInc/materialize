@@ -41,6 +41,7 @@ use std::{iter, mem};
 use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LetRecLimit, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::FallibleMapExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -2987,8 +2988,8 @@ fn plan_table_function_internal(
     with_ordinality: bool,
     table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    assert!(filter.is_none(), "cannot parse table function with FILTER");
-    assert!(over.is_none(), "cannot parse table function with OVER");
+    assert_none!(filter, "cannot parse table function with FILTER");
+    assert_none!(over, "cannot parse table function with OVER");
     assert!(!*distinct, "cannot parse table function with DISTINCT");
 
     let ecx = &ExprContext {

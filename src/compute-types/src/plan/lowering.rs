@@ -16,7 +16,7 @@ use mz_expr::{
     permutation_for_arrangement, Id, JoinInputMapper, MapFilterProject, MirRelationExpr,
     MirScalarExpr, OptimizedMirRelationExpr,
 };
-use mz_ore::{soft_assert_eq_or_log, soft_panic_or_log};
+use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use timely::progress::Timestamp;
@@ -274,7 +274,7 @@ impl Context {
                 // introduce any resulting arrangements bound to `id`.
                 let (value, v_keys) = self.lower_mir_expr(value)?;
                 let pre_existing = self.arrangements.insert(Id::Local(*id), v_keys);
-                assert!(pre_existing.is_none());
+                assert_none!(pre_existing);
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
                 let (body, b_keys) = self.lower_mir_expr(body)?;
@@ -353,7 +353,7 @@ impl Context {
                         v_keys.raw = true;
                     }
                     let pre_existing = self.arrangements.insert(Id::Local(*id), v_keys);
-                    assert!(pre_existing.is_none());
+                    assert_none!(pre_existing);
                     lir_values.push(lir_value);
                 }
                 // As we exit the iterative scope, we must leave all arrangements behind,

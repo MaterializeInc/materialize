@@ -608,7 +608,8 @@ impl ExecuteResponse {
             | AlterSecret
             | AlterConnection
             | AlterSource
-            | AlterSink => &[AlteredObject],
+            | AlterSink
+            | AlterTableAddColumn => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
             AlterRole => &[AlteredRole],

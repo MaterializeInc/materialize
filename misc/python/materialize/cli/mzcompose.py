@@ -44,6 +44,8 @@ from materialize.ui import UIError
 RECOMMENDED_MIN_MEM = 7 * 1024**3  # 7GiB
 RECOMMENDED_MIN_CPUS = 2
 
+JUNIT_ERROR_DETAILS_SEPARATOR = "###---###"
+
 
 def main(argv: list[str]) -> None:
     parser = ArgumentParser(
@@ -687,7 +689,17 @@ To see the available workflows, run:
                     # do not provide the duration when multiple errors are derived from a test execution
                     elapsed_sec=None,
                 )
-                test_case.add_error_info(message=error.message, output=error.details)
+
+                error_details_data = error.details
+                if error.additional_details is not None:
+                    error_details_data = (error_details_data or "") + (
+                        f"{JUNIT_ERROR_DETAILS_SEPARATOR}{error.additional_details_header or 'Additional details'}"
+                        f"{JUNIT_ERROR_DETAILS_SEPARATOR}{error.additional_details}"
+                    )
+
+                test_case.add_error_info(
+                    message=error.message, output=error_details_data
+                )
                 junit_suite.test_cases.append(test_case)
 
     def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:

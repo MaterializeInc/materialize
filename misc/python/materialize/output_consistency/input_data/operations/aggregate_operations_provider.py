@@ -16,6 +16,9 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
+)
 from materialize.output_consistency.input_data.params.string_operation_param import (
     StringOperationParam,
 )
@@ -79,7 +82,7 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "max",
-        [AnyOperationParam()],
+        [AnyOperationParam(include_record_type=False)],
         DynamicReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
@@ -88,7 +91,7 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "min",
-        [AnyOperationParam()],
+        [AnyOperationParam(include_record_type=False)],
         DynamicReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
@@ -156,14 +159,15 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "string_agg",
-        {2: "string_agg($, $ ORDER BY row_index)"},
-        [StringOperationParam(), StringOperationParam()],
+        {3: "string_agg($, $ ORDER BY row_index, $)"},
+        [
+            StringOperationParam(),
+            StringOperationParam(),
+            SameOperationParam(index_of_previous_param=1),
+        ],
         StringReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
         comment="with ordering",
     ),
 )
-
-# TODO: requires subquery / lateral query functionality: jsonb_agg(expression)
-# TODO: requires subquery / lateral query functionality: jsonb_object_agg(keys, values)

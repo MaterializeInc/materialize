@@ -1322,6 +1322,7 @@ mod grpc {
     use bytes::Bytes;
     use futures_util::FutureExt;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::assert_none;
     use mz_ore::collections::HashMap;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::location::{SeqNo, VersionedData};
@@ -1614,8 +1615,8 @@ mod grpc {
         // these calls are race-y, since there's no guarantee on the time it
         // would take for a message to be received were one to have been sent,
         // but, better than nothing?
-        assert!(client_1.receiver.next().now_or_never().is_none());
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
+        assert_none!(client_2.receiver.next().now_or_never());
 
         // start the server
         let server_state = server_runtime.block_on(spawn_server(tcp_listener_stream));
@@ -1626,8 +1627,8 @@ mod grpc {
         }));
 
         // no messages have been broadcast yet
-        assert!(client_1.receiver.next().now_or_never().is_none());
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
+        assert_none!(client_2.receiver.next().now_or_never());
 
         // subscribe and send a diff
         let _token_client_1 = Arc::clone(&client_1.sender).subscribe(&SHARD_ID_0);
@@ -1638,7 +1639,7 @@ mod grpc {
 
         // the subscriber non-sender client receives the diff
         client_1.sender.push_diff(&SHARD_ID_0, &VERSIONED_DATA_1);
-        assert!(client_1.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
         client_runtime.block_on(async {
             assert_push(
                 client_2.receiver.next().await.expect("has diff"),
@@ -1651,8 +1652,8 @@ mod grpc {
         server_runtime.shutdown_timeout(SERVER_SHUTDOWN_TIMEOUT);
 
         // receivers can still be polled without error
-        assert!(client_1.receiver.next().now_or_never().is_none());
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_1.receiver.next().now_or_never());
+        assert_none!(client_2.receiver.next().now_or_never());
 
         // create a new server
         let server_runtime = tokio::runtime::Runtime::new().expect("server runtime");
@@ -1687,7 +1688,7 @@ mod grpc {
                 &VERSIONED_DATA_0,
             )
         });
-        assert!(client_2.receiver.next().now_or_never().is_none());
+        assert_none!(client_2.receiver.next().now_or_never());
     }
 
     async fn new_tcp_listener() -> (SocketAddr, TcpListenerStream) {

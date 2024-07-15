@@ -124,7 +124,6 @@ class Composition:
             raise UnknownCompositionError(name)
 
         self.compose: dict[str, Any] = {
-            "version": "3.7",
             "services": {},
         }
 
@@ -473,7 +472,9 @@ class Composition:
             loader.composition_path = None
 
     @contextmanager
-    def override(self, *services: "Service") -> Iterator[None]:
+    def override(
+        self, *services: "Service", fail_on_new_service: bool = True
+    ) -> Iterator[None]:
         """Temporarily update the composition with the specified services.
 
         The services must already exist in the composition. They restored to
@@ -493,6 +494,9 @@ class Composition:
         # Update the composition with the new service definitions.
         deps = self._munge_services([(s.name, cast(dict, s.config)) for s in services])
         for service in services:
+            assert (
+                not fail_on_new_service or service.name in self.compose["services"]
+            ), f"Service {service.name} not found in SERVICES: {list(self.compose['services'].keys())}"
             self.compose["services"][service.name] = service.config
 
         # Re-acquire dependencies, as the override may have swapped an `image`

@@ -67,7 +67,7 @@ pub mod union_cancel;
 use crate::dataflow::DataflowMetainfo;
 use crate::typecheck::SharedContext;
 pub use dataflow::optimize_dataflow;
-use mz_ore::soft_assert_or_log;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
@@ -318,8 +318,10 @@ impl Transform for Fixpoint {
         // a bug somewhere that prevents the relation from settling on a
         // stable shape.
         let mut iter_no = 0;
+        let mut seen = BTreeMap::new();
+        seen.insert(relation.clone(), iter_no);
         loop {
-            let start_size = relation.size();
+            let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
                 let original = relation.clone();
                 self.apply_transforms(relation, ctx, format!("{i:04}"))?;
@@ -327,35 +329,52 @@ impl Transform for Fixpoint {
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
+                let seen_i = seen.insert(relation.clone(), i);
+                if let Some(seen_i) = seen_i {
+                    // We got into an infinite loop (e.g., we are oscillating between two plans).
+                    // This is not catastrophic, because we can just say we are done now,
+                    // but it would be great to eventually find a way to prevent these loops from
+                    // happening in the first place. We have several relevant issues, see
+                    // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                    mz_repr::explain::trace_plan(relation);
+                    soft_panic_or_log!(
+                        "Fixpoint {} detected a loop of length {} after {} iterations",
+                        self.name,
+                        i - seen_i,
+                        i
+                    );
+                    return Ok(());
+                }
             }
-            let final_size = relation.size();
+            let current_size = relation.size();
 
             iter_no += self.limit;
 
-            if final_size < start_size {
+            if current_size < prev_size {
                 tracing::warn!(
-                    "fixpoint {} ran for {} iterations \
+                    "Fixpoint {} ran for {} iterations \
                      without reaching a fixpoint but reduced the relation size; \
-                     final_size ({}) < start_size ({}); \
+                     current_size ({}) < prev_size ({}); \
                      continuing for {} more iterations",
                     self.name,
                     iter_no,
-                    final_size,
-                    start_size,
+                    current_size,
+                    prev_size,
                     self.limit
                 );
             } else {
-                return Err(TransformError::Internal(format!(
-                    "fixpoint {} ran for {} iterations \
-                     without reaching a fixpoint or reducing the relation size; \
-                     final_size ({}) >= start_size ({}); \
-                     transformed relation:\n{}",
+                // We failed to reach a fixed point, or find a sufficiently short cycle.
+                // This is not catastrophic, because we can just say we are done now,
+                // but it would be great to eventually find a way to prevent these loops from
+                // happening in the first place. We have several relevant issues, see
+                // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                mz_repr::explain::trace_plan(relation);
+                soft_panic_or_log!(
+                    "Fixpoint {} failed to reach a fixed point, or cycle of length at most {}",
                     self.name,
-                    iter_no,
-                    start_size,
-                    final_size,
-                    relation.pretty()
-                )));
+                    self.limit,
+                );
+                return Ok(());
             }
         }
     }
@@ -530,7 +549,7 @@ impl Optimizer {
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(Fixpoint {
-                name: "fixpoint01",
+                name: "fixpoint_logical_01",
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
@@ -550,7 +569,7 @@ impl Optimizer {
             }),
             // 5. Reduce/Join simplifications.
             Box::new(Fixpoint {
-                name: "fixpoint02",
+                name: "fixpoint_logical_02",
                 limit: 100,
                 transforms: vec![
                     Box::new(semijoin_idempotence::SemijoinIdempotence::default()),
@@ -622,7 +641,7 @@ impl Optimizer {
             //           Constant
             //             - ()
             Box::new(Fixpoint {
-                name: "fixpoint01",
+                name: "fixpoint_physical_01",
                 limit: 100,
                 transforms: vec![
                     Box::new(column_knowledge::ColumnKnowledge::default()),
@@ -633,7 +652,7 @@ impl Optimizer {
             }),
             Box::new(literal_constraints::LiteralConstraints),
             Box::new(Fixpoint {
-                name: "fix_joins",
+                name: "fixpoint_join_impl",
                 limit: 100,
                 transforms: vec![Box::new(join_implementation::JoinImplementation::default())],
             }),
@@ -678,7 +697,7 @@ impl Optimizer {
             // Delete unnecessary maps.
             Box::new(fusion::Fusion),
             Box::new(Fixpoint {
-                name: "fixpoint01",
+                name: "fixpoint_logical_cleanup_pass_01",
                 limit: 100,
                 transforms: vec![
                     Box::new(canonicalize_mfp::CanonicalizeMfp),

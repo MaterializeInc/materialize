@@ -53,25 +53,13 @@ fn test_wal_level_max() {
     }
 }
 
-pub async fn get_wal_level(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: &Config,
-) -> Result<WalLevel, PostgresError> {
-    let client = config
-        .connect("wal_level_check", ssh_tunnel_manager)
-        .await?;
+pub async fn get_wal_level(client: &Client) -> Result<WalLevel, PostgresError> {
     let wal_level = client.query_one("SHOW wal_level", &[]).await?;
     let wal_level: String = wal_level.get("wal_level");
     Ok(WalLevel::from_str(&wal_level)?)
 }
 
-pub async fn get_max_wal_senders(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: &Config,
-) -> Result<i64, PostgresError> {
-    let client = config
-        .connect("max_wal_senders_check", ssh_tunnel_manager)
-        .await?;
+pub async fn get_max_wal_senders(client: &Client) -> Result<i64, PostgresError> {
     let max_wal_senders = client
         .query_one(
             "SELECT CAST(current_setting('max_wal_senders') AS int8) AS max_wal_senders",
@@ -81,14 +69,7 @@ pub async fn get_max_wal_senders(
     Ok(max_wal_senders.get("max_wal_senders"))
 }
 
-pub async fn available_replication_slots(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: &Config,
-) -> Result<i64, PostgresError> {
-    let client = config
-        .connect("postgres_check_replication_slots", ssh_tunnel_manager)
-        .await?;
-
+pub async fn available_replication_slots(client: &Client) -> Result<i64, PostgresError> {
     let available_replication_slots = client
         .query_one(
             "SELECT
@@ -164,14 +145,7 @@ pub async fn get_timeline_id(replication_client: &Client) -> Result<u64, Postgre
     }
 }
 
-pub async fn get_current_wal_lsn(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: Config,
-) -> Result<PgLsn, PostgresError> {
-    let client = config
-        .connect("postgres_wal_lsn", ssh_tunnel_manager)
-        .await?;
-
+pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
     let row = client.query_one("SELECT pg_current_wal_lsn()", &[]).await?;
     let lsn: PgLsn = row.get(0);
 

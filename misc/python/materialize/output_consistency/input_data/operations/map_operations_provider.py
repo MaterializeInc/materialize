@@ -24,6 +24,9 @@ from materialize.output_consistency.input_data.params.map_operation_param import
 from materialize.output_consistency.input_data.params.record_operation_param import (
     RecordOperationParam,
 )
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
+)
 from materialize.output_consistency.input_data.params.string_operation_param import (
     StringOperationParam,
 )
@@ -41,6 +44,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
 )
@@ -58,15 +62,17 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "$ @> $",
-        [MapOperationParam(), AnyOperationParam()],
+        [MapOperationParam(), MapOperationParam()],
         BooleanReturnTypeSpec(),
+        comment="LHS contains RHS",
     )
 )
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "$ <@ $",
-        [MapOperationParam(), AnyOperationParam()],
+        [MapOperationParam(), MapOperationParam()],
         BooleanReturnTypeSpec(),
+        comment="RHS contains LHS",
     )
 )
 MAP_OPERATION_TYPES.append(
@@ -103,11 +109,15 @@ MAP_OPERATION_TYPES.append(
         NumericReturnTypeSpec(only_integer=True),
     )
 )
-# TODO: use with multiple keys and values
 MAP_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "map_agg",
-        [StringOperationParam(only_type_text=True), AnyOperationParam()],
+        {3: "map_agg($, $ ORDER BY row_index, $)"},
+        [
+            StringOperationParam(only_type_text=True),
+            AnyOperationParam(),
+            SameOperationParam(index_of_previous_param=1),
+        ],
         MapReturnTypeSpec(),
     )
 )

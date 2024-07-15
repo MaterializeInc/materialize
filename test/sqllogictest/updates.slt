@@ -183,16 +183,22 @@ statement ok
 SET max_query_result_size = '8B';
 
 query error db error: ERROR: result exceeds max size of 8 B
-SELECT generate_series(1, 100)
+SELECT generate_series(1, 1000000)
 
 statement ok
-INSERT INTO t SELECT * FROM t
+CREATE TABLE t_big (a int);
+
+statement ok
+INSERT INTO t_big SELECT generate_series(1, 1000000)
+
+statement ok
+INSERT INTO t SELECT * FROM t_big
 
 # But the internal var does limit.
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET max_result_size = 1
+ALTER SYSTEM SET max_result_size = '1MB'
 ----
 COMPLETE 0
 
-statement error db error: ERROR: result exceeds max size of 1 B
-INSERT INTO t SELECT * FROM t
+statement error db error: ERROR: result exceeds max size of 1048.6 KB
+INSERT INTO t SELECT * FROM t_big

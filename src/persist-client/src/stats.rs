@@ -12,10 +12,11 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use arrow::array::Array;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::soft_panic_or_log;
-use mz_persist::indexed::encoding::BlobTraceUpdates;
-use mz_persist_types::part::{Part, PartBuilder};
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
+use mz_persist_types::part::{Part2, PartBuilder, PartBuilder2};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
 
@@ -122,15 +123,16 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
     }
 }
 
-/// Encodes a [`BlobTraceUpdates`] into a [`Part`] and calculates [`PartStats`].
+/// Encodes a [`BlobTraceUpdates`] into a `Part` and calculates [`PartStats`].
 ///
-/// Note: The [`Part`] will contain the same data as [`BlobTraceUpdates`], but
-/// the [`Part`] will have the data fully structured as opposed to an opaque
+/// Note: The `Part` will contain the same data as [`BlobTraceUpdates`], but
+/// the `Part` will have the data fully structured as opposed to an opaque
 /// binary blob.
 pub(crate) fn encode_updates<K, V>(
     schemas: &Schemas<K, V>,
     updates: &BlobTraceUpdates,
-) -> Result<(Part, PartStats), String>
+    format: &BatchColumnarFormat,
+) -> Result<((Option<Arc<dyn Array>>, Option<Arc<dyn Array>>), PartStats), String>
 where
     K: Codec,
     V: Codec,
@@ -144,21 +146,77 @@ where
         }
     };
 
-    let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
-    for update in updates {
-        for ((k, v), t, d) in update.iter() {
-            let k = K::decode(k)?;
-            let v = V::decode(v)?;
-            let t = i64::from_le_bytes(t);
-            let d = i64::from_le_bytes(d);
+    // Optionally we reuse instances of K and V and create instances of
+    // K::Storage and V::Storage to reduce allocations.
+    let mut k_reuse: Option<K> = None;
+    let mut v_reuse: Option<V> = None;
+    let mut k_storage = Some(K::Storage::default());
+    let mut v_storage = Some(V::Storage::default());
 
-            builder.push(&k, &v, t, d);
+    if format.is_structured() {
+        let mut builder = PartBuilder2::new(schemas.key.as_ref(), schemas.val.as_ref());
+        for update in updates {
+            for ((k, v), t, d) in update.iter() {
+                let t = i64::from_le_bytes(t);
+                let d = i64::from_le_bytes(d);
+
+                // Attempt to re-use allocations as much as possible.
+                match (k_reuse.as_mut(), v_reuse.as_mut()) {
+                    (Some(k_reuse), Some(v_reuse)) => {
+                        K::decode_from(k_reuse, k, &mut k_storage)?;
+                        V::decode_from(v_reuse, v, &mut v_storage)?;
+
+                        builder.push(k_reuse, v_reuse, t, d);
+                    }
+                    (_, _) => {
+                        let k = K::decode(k)?;
+                        let v = V::decode(v)?;
+
+                        builder.push(&k, &v, t, d);
+
+                        k_reuse.replace(k);
+                        v_reuse.replace(v);
+                    }
+                };
+            }
         }
-    }
-    let part = builder.finish();
-    let stats = PartStats::new(&part)?;
+        let Part2 {
+            key,
+            key_stats,
+            val,
+            ..
+        } = builder.finish();
+        let key_stats = key_stats
+            .into_struct_stats()
+            .ok_or_else(|| "found non-StructStats when encoding updates, {key_stats:?}")?;
 
-    Ok((part, stats))
+        Ok(((Some(key), Some(val)), PartStats { key: key_stats }))
+    } else {
+        let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
+        for update in updates {
+            for ((k, v), t, d) in update.iter() {
+                let k = K::decode(k)?;
+                let v = V::decode(v)?;
+                let t = i64::from_le_bytes(t);
+                let d = i64::from_le_bytes(d);
+
+                builder.push(&k, &v, t, d);
+            }
+        }
+        let part = builder.finish();
+        let stats = PartStats::new(&part)?;
+
+        let key = part.to_key_arrow().map(|(_field, array)| {
+            let array: Arc<dyn Array> = Arc::new(array);
+            array
+        });
+        let val = part.to_val_arrow().map(|(_field, array)| {
+            let array: Arc<dyn Array> = Arc::new(array);
+            array
+        });
+
+        Ok(((key, val), stats))
+    }
 }
 
 /// Statistics about the contents of a shard as_of some time.

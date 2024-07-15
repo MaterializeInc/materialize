@@ -19,6 +19,7 @@ use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
 use mz_compute_types::dyncfgs::PERSIST_SINK_OBEY_READ_ONLY;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -1182,7 +1183,7 @@ where
                 // We're not keeping this batch, make sure that the above loop
                 // cleared and deleted all the batches.
                 assert!(batch_set.finished.is_empty());
-                assert!(batch_set.incomplete.is_none());
+                assert_none!(batch_set.incomplete);
 
                 false
             });

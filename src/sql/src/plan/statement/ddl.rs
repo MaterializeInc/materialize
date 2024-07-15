@@ -23,13 +23,13 @@ use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
-use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
+use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::VecExt;
+use mz_ore::{assert_none, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -48,37 +48,38 @@ use mz_sql_parser::ast::{
     AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema, AvroSchemaOption,
-    AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
+    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
+    ClusterAlterOptionValue, ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
     ClusterScheduleOptionValue, ColumnOption, CommentObjectType, CommentStatement,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
     CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
     CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
-    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, Statement, TableConstraint, TableOption, TableOptionName,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
-    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, SinkEnvelope,
+    StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -126,12 +127,13 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
 use crate::plan::{
     literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
-    AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ClusterSchedule,
-    CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    AlterClusterReplicaRenamePlan, AlterClusterStrategyCondition, AlterClusterSwapPlan,
+    AlterConnectionPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
+    AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
+    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
@@ -139,7 +141,7 @@ use crate::plan::{
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
     VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
 };
-use crate::plan::{AlterSinkPlan, WebhookValidation};
+use crate::plan::{AlterClusterPlanStrategy, AlterSinkPlan, WebhookValidation};
 use crate::session::vars;
 use crate::session::vars::{
     ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
@@ -993,7 +995,7 @@ pub fn plan_create_source(
                     column_casts.push((cast_type, mir_cast));
                 }
                 let r = table_casts.insert(i + 1, column_casts);
-                assert!(r.is_none(), "cannot have table defined multiple times");
+                assert_none!(r, "cannot have table defined multiple times");
             }
 
             let connection =
@@ -1236,7 +1238,7 @@ pub fn plan_create_source(
             scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
-                Some(CreateSourceFormat::Bare(Format::Avro(_))) => {}
+                Some(FormatSpecifier::Bare(Format::Avro(_))) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
             UnplannedSourceEnvelope::CdcV2
@@ -1815,12 +1817,12 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize
 
 fn get_encoding(
     scx: &StatementContext,
-    format: &CreateSourceFormat<Aug>,
+    format: &FormatSpecifier<Aug>,
     envelope: &ast::SourceEnvelope,
 ) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
     let encoding = match format {
-        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
-        CreateSourceFormat::KeyValue { key, value } => {
+        FormatSpecifier::Bare(format) => get_encoding_inner(scx, format)?,
+        FormatSpecifier::KeyValue { key, value } => {
             let key = {
                 let encoding = get_encoding_inner(scx, key)?;
                 Some(encoding.key.unwrap_or(encoding.value))
@@ -2626,6 +2628,9 @@ fn plan_sink(
 
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
+    if from.id().is_system() {
+        bail_unsupported!("creating a sink directly on a catalog object");
+    }
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key, .. } => {
@@ -2931,7 +2936,7 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     connection: ResolvedItemName,
     options: Vec<KafkaSinkConfigOption<Aug>>,
-    format: Option<Format<Aug>>,
+    format: Option<FormatSpecifier<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     headers_index: Option<usize>,
@@ -2995,97 +3000,138 @@ fn kafka_sink_builder(
     let topic_replication_factor =
         assert_positive(topic_replication_factor, "TOPIC REPLICATION FACTOR")?;
 
-    let format = match format {
-        Some(Format::Avro(AvroSchema::Csr {
-            csr_connection:
-                CsrConnectionAvro {
-                    connection:
-                        CsrConnection {
-                            connection,
-                            options,
-                        },
-                    seed,
-                    key_strategy,
-                    value_strategy,
+    // Helper method to parse avro connection options for format specifiers that use avro
+    // for either key or value encoding.
+    let gen_avro_schema_options = |conn| {
+        let CsrConnectionAvro {
+            connection:
+                CsrConnection {
+                    connection,
+                    options,
                 },
-        })) => {
-            if seed.is_some() {
-                sql_bail!("SEED option does not make sense with sinks");
+            seed,
+            key_strategy,
+            value_strategy,
+        } = conn;
+        if seed.is_some() {
+            sql_bail!("SEED option does not make sense with sinks");
+        }
+        if key_strategy.is_some() {
+            sql_bail!("KEY STRATEGY option does not make sense with sinks");
+        }
+        if value_strategy.is_some() {
+            sql_bail!("VALUE STRATEGY option does not make sense with sinks");
+        }
+
+        let item = scx.get_item_by_resolved_name(&connection)?;
+        let csr_connection = match item.connection()? {
+            Connection::Csr(_) => item.id(),
+            _ => {
+                sql_bail!(
+                    "{} is not a schema registry connection",
+                    scx.catalog
+                        .resolve_full_name(item.name())
+                        .to_string()
+                        .quoted()
+                )
             }
-            if key_strategy.is_some() {
-                sql_bail!("KEY STRATEGY option does not make sense with sinks");
-            }
-            if value_strategy.is_some() {
-                sql_bail!("VALUE STRATEGY option does not make sense with sinks");
+        };
+        let extracted_options: CsrConfigOptionExtracted = options.try_into()?;
+
+        if key_desc_and_indices.is_none() && extracted_options.avro_key_fullname.is_some() {
+            sql_bail!("Cannot specify AVRO KEY FULLNAME without a corresponding KEY field");
+        }
+
+        if key_desc_and_indices.is_some()
+            && (extracted_options.avro_key_fullname.is_some()
+                ^ extracted_options.avro_value_fullname.is_some())
+        {
+            sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
+        }
+
+        Ok((csr_connection, extracted_options))
+    };
+
+    let map_format = |format: Format<Aug>, desc: &RelationDesc, is_key: bool| match format {
+        Format::Json { array: false } => Ok::<_, PlanError>(KafkaSinkFormatType::Json),
+        Format::Bytes if desc.arity() == 1 => {
+            let col_type = &desc.typ().column_types[0].scalar_type;
+            if !mz_pgrepr::Value::can_encode_binary(col_type) {
+                bail_unsupported!(format!(
+                    "BYTES format with non-encodable type: {:?}",
+                    col_type
+                ));
             }
 
-            let item = scx.get_item_by_resolved_name(&connection)?;
-            let csr_connection = match item.connection()? {
-                Connection::Csr(_) => item.id(),
-                _ => {
-                    sql_bail!(
-                        "{} is not a schema registry connection",
-                        scx.catalog
-                            .resolve_full_name(item.name())
-                            .to_string()
-                            .quoted()
-                    )
-                }
+            Ok(KafkaSinkFormatType::Bytes)
+        }
+        Format::Text if desc.arity() == 1 => Ok(KafkaSinkFormatType::Text),
+        Format::Bytes | Format::Text => {
+            bail_unsupported!("BYTES or TEXT format with multiple columns")
+        }
+        Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sinks"),
+        Format::Avro(AvroSchema::Csr { csr_connection }) => {
+            let (csr_connection, options) = gen_avro_schema_options(csr_connection)?;
+            let schema = if is_key {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    false,
+                    options.key_doc_options,
+                    options.avro_key_fullname.as_deref().unwrap_or("row"),
+                    options.null_defaults,
+                    Some(sink_from),
+                    false,
+                )?
+                .schema()
+                .to_string()
+            } else {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    matches!(envelope, SinkEnvelope::Debezium),
+                    options.value_doc_options,
+                    options.avro_value_fullname.as_deref().unwrap_or("envelope"),
+                    options.null_defaults,
+                    Some(sink_from),
+                    true,
+                )?
+                .schema()
+                .to_string()
             };
-            let CsrConfigOptionExtracted {
-                avro_key_fullname,
-                avro_value_fullname,
-                null_defaults,
-                key_doc_options,
-                value_doc_options,
-                key_compatibility_level,
-                value_compatibility_level,
-                seen: _,
-            } = options.try_into()?;
-
-            if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
-                sql_bail!("Cannot specify AVRO KEY FULLNAME without a corresponding KEY field");
-            }
-
-            if key_desc_and_indices.is_some()
-                && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
-            {
-                sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
-            }
-
-            let options = AvroSchemaOptions {
-                avro_key_fullname,
-                avro_value_fullname,
-                set_null_defaults: null_defaults,
-                is_debezium: matches!(envelope, SinkEnvelope::Debezium),
-                sink_from: Some(sink_from),
-                value_doc_options,
-                key_doc_options,
-            };
-
-            let schema_generator = AvroSchemaGenerator::new(
-                key_desc_and_indices
-                    .as_ref()
-                    .map(|(desc, _indices)| desc.clone()),
-                value_desc.clone(),
-                options,
-            )?;
-            let value_schema = schema_generator.value_writer_schema().to_string();
-            let key_schema = schema_generator
-                .key_writer_schema()
-                .map(|key_schema| key_schema.to_string());
-
-            KafkaSinkFormat::Avro {
-                key_schema,
-                value_schema,
+            Ok(KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level: if is_key {
+                    options.key_compatibility_level
+                } else {
+                    options.value_compatibility_level
+                },
                 csr_connection,
-                key_compatibility_level,
-                value_compatibility_level,
+            })
+        }
+        format => bail_unsupported!(format!("sink format {:?}", format)),
+    };
+
+    // Map from the format specifier of the statement to the individual key/value formats for the sink.
+    let format = match format {
+        Some(FormatSpecifier::KeyValue { key, value }) => {
+            let key_format = match key_desc_and_indices.as_ref() {
+                Some((desc, _indices)) => Some(map_format(key, desc, true)?),
+                None => None,
+            };
+            KafkaSinkFormat {
+                value_format: map_format(value, &value_desc, false)?,
+                key_format,
             }
         }
-        Some(Format::Json { array: false }) => KafkaSinkFormat::Json,
-        Some(Format::Json { array: true }) => bail_unsupported!("JSON ARRAY format in sinks"),
-        Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
+        Some(FormatSpecifier::Bare(format)) => {
+            let key_format = match key_desc_and_indices.as_ref() {
+                Some((desc, _indices)) => Some(map_format(format.clone(), desc, true)?),
+                None => None,
+            };
+            KafkaSinkFormat {
+                value_format: map_format(format, &value_desc, false)?,
+                key_format,
+            }
+        }
         None => bail_unsupported!("sink without format"),
     };
 
@@ -3526,6 +3572,8 @@ generate_extracted_config!(
     (Size, String),
     (Schedule, ClusterScheduleOptionValue)
 );
+
+generate_extracted_config!(ClusterAlterOption, (Wait, ClusterAlterOptionValue));
 
 generate_extracted_config!(
     ClusterFeature,
@@ -4022,20 +4070,20 @@ fn plan_cluster_schedule(
 ) -> Result<ClusterSchedule, PlanError> {
     Ok(match schedule {
         ClusterScheduleOptionValue::Manual => ClusterSchedule::Manual,
-        // If `REHYDRATION TIME ESTIMATE` is not explicitly given, we default to 0.
+        // If `HYDRATION TIME ESTIMATE` is not explicitly given, we default to 0.
         ClusterScheduleOptionValue::Refresh {
-            rehydration_time_estimate: None,
+            hydration_time_estimate: None,
         } => ClusterSchedule::Refresh {
-            rehydration_time_estimate: Duration::from_millis(0),
+            hydration_time_estimate: Duration::from_millis(0),
         },
         // Otherwise we convert the `IntervalValue` to a `Duration`.
         ClusterScheduleOptionValue::Refresh {
-            rehydration_time_estimate: Some(interval_value),
+            hydration_time_estimate: Some(interval_value),
         } => {
             let interval = Interval::try_from_value(Value::Interval(interval_value))?;
             if interval.as_microseconds() < 0 {
                 sql_bail!(
-                    "REHYDRATION TIME ESTIMATE must be non-negative; got: {}",
+                    "HYDRATION TIME ESTIMATE must be non-negative; got: {}",
                     interval
                 );
             }
@@ -4043,16 +4091,16 @@ fn plan_cluster_schedule(
                 // This limitation is because we want this interval to be cleanly convertable
                 // to a unix epoch timestamp difference. When the interval involves months, then
                 // this is not true anymore, because months have variable lengths.
-                sql_bail!("REHYDRATION TIME ESTIMATE must not involve units larger than days");
+                sql_bail!("HYDRATION TIME ESTIMATE must not involve units larger than days");
             }
             let duration = interval.duration()?;
             if u64::try_from(duration.as_millis()).is_err()
                 || Interval::from_duration(&duration).is_err()
             {
-                sql_bail!("REHYDRATION TIME ESTIMATE too large");
+                sql_bail!("HYDRATION TIME ESTIMATE too large");
             }
             ClusterSchedule::Refresh {
-                rehydration_time_estimate: duration,
+                hydration_time_estimate: duration,
             }
         }
     })
@@ -4065,13 +4113,13 @@ fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionVa
     match schedule {
         ClusterSchedule::Manual => ClusterScheduleOptionValue::Manual,
         ClusterSchedule::Refresh {
-            rehydration_time_estimate,
+            hydration_time_estimate,
         } => {
-            let interval = Interval::from_duration(&rehydration_time_estimate)
+            let interval = Interval::from_duration(&hydration_time_estimate)
                 .expect("planning ensured that this is convertible back to Interval");
             let interval_value = literal::unplan_interval(&interval);
             ClusterScheduleOptionValue::Refresh {
-                rehydration_time_estimate: Some(interval_value),
+                hydration_time_estimate: Some(interval_value),
             }
         }
     }
@@ -4906,9 +4954,13 @@ pub fn plan_alter_cluster(
     };
 
     let mut options: PlanClusterOption = Default::default();
+    let mut alter_strategy: AlterClusterPlanStrategy = Default::default();
 
     match action {
-        AlterClusterAction::SetOptions(set_options) => {
+        AlterClusterAction::SetOptions {
+            options: set_options,
+            with_options,
+        } => {
             let ClusterOptionExtracted {
                 availability_zones,
                 introspection_debugging,
@@ -4924,6 +4976,20 @@ pub fn plan_alter_cluster(
 
             match managed.unwrap_or_else(|| cluster.is_managed()) {
                 true => {
+                    let alter_strategy_extracted =
+                        ClusterAlterOptionExtracted::try_from(with_options)?;
+                    alter_strategy = AlterClusterPlanStrategy::try_from(alter_strategy_extracted)?;
+
+                    match alter_strategy.condition {
+                        AlterClusterStrategyCondition::None => {}
+                        AlterClusterStrategyCondition::For(_) => {
+                            scx.require_feature_flag(
+                                &crate::session::vars::ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION,
+                            )?;
+                            sql_bail!("ALTER CLUSTER... WITH is not yet supported")
+                        }
+                    }
+
                     if replica_defs.is_some() {
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
@@ -4963,6 +5029,9 @@ pub fn plan_alter_cluster(
                     }
                 }
                 false => {
+                    if !alter_strategy.condition.is_none() {
+                        sql_bail!("ALTER... WITH not supported for unmanaged clusters");
+                    }
                     if availability_zones.is_some() {
                         sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
                     }
@@ -5089,6 +5158,7 @@ pub fn plan_alter_cluster(
         id: cluster.id(),
         name: cluster.name().to_string(),
         options,
+        strategy: alter_strategy,
     }))
 }
 
@@ -6040,6 +6110,67 @@ pub fn plan_alter_role(
         id: name.id,
         name: name.name,
         option,
+    }))
+}
+
+pub fn describe_alter_table_add_column(
+    _: &StatementContext,
+    _: AlterTableAddColumnStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_table_add_column(
+    scx: &StatementContext,
+    stmt: AlterTableAddColumnStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let AlterTableAddColumnStatement {
+        if_exists,
+        name,
+        if_col_not_exist,
+        column_name,
+        data_type,
+    } = stmt;
+    let object_type = ObjectType::Table;
+
+    scx.require_feature_flag(&vars::ENABLE_ALTER_TABLE_ADD_COLUMN)?;
+
+    let (relation_id, item_name, desc) =
+        match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
+            Some(item) => {
+                let item_name = scx.catalog.resolve_full_name(item.name());
+                let desc = item.desc(&item_name)?;
+                (item.id(), item_name, desc)
+            }
+            None => {
+                scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                    name: name.to_ast_string(),
+                    object_type,
+                });
+                return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+            }
+        };
+
+    let column_name = ColumnName::from(column_name.as_str());
+    if desc.get_by_name(&column_name).is_some() {
+        if if_col_not_exist {
+            scx.catalog.add_notice(PlanNotice::ColumnAlreadyExists {
+                column_name: column_name.to_string(),
+                object_name: item_name.item,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+        } else {
+            return Err(PlanError::ColumnAlreadyExists {
+                column_name,
+                object_name: item_name.item,
+            });
+        }
+    }
+
+    Ok(Plan::AlterTableAddColumn(AlterTablePlan {
+        relation_id,
+        column_name,
+        column_type: data_type,
     }))
 }
 

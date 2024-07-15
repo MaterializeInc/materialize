@@ -130,7 +130,7 @@ mod tests {
     use mz_adapter_types::connection::ConnectionId;
     use mz_cluster_client::ReplicaId;
     use mz_controller_types::ClusterId;
-    use mz_ore::assert_contains;
+    use mz_ore::{assert_contains, assert_ok};
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, Timestamp};
     use mz_sql::catalog::RoleAttributes;
@@ -192,10 +192,7 @@ mod tests {
                 Box<dyn Fn(&mut PlanValidity)>,
                 Box<dyn Fn(Result<(), AdapterError>)>,
             )] = &[
-                (
-                    Box::new(|_validity| {}),
-                    Box::new(|res| assert!(res.is_ok(), "{res:?}")),
-                ),
+                (Box::new(|_validity| {}), Box::new(|res| assert_ok!(res))),
                 (
                     Box::new(|validity| {
                         validity.cluster_id = Some(ClusterId::User(3));

@@ -145,6 +145,7 @@ mod tests {
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::{assert_none, assert_ok};
     use timely::progress::Antichain;
 
     use crate::cache::StateCache;
@@ -206,7 +207,7 @@ mod tests {
         let mut w1 = StateWatch::new(Arc::clone(&state), Arc::clone(&metrics));
         let _ = w1.wait_for_seqno_ge(SeqNo(0)).await;
         let _ = w1.wait_for_seqno_ge(SeqNo(1)).await;
-        assert!(w1.wait_for_seqno_ge(SeqNo(2)).now_or_never().is_none());
+        assert_none!(w1.wait_for_seqno_ge(SeqNo(2)).now_or_never());
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
@@ -271,10 +272,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
         for watch in watches {
-            assert!(watch.await.is_ok());
+            assert_ok!(watch.await);
         }
         for write in writes {
-            assert!(write.await.is_ok());
+            assert_ok!(write.await);
         }
     }
 

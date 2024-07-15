@@ -116,7 +116,7 @@
 /src/sql/src/plan/expr.rs           @MaterializeInc/adapter @MaterializeInc/cluster
 # The lowering of HirRelationExpr to MirRelationExpr is part of the cluster
 # layer, despite being located in the `sql` crate.
-/src/sql/src/plan/lowering          @MaterializeInc/cluster
+/src/sql/src/plan/lowering.rs       @MaterializeInc/cluster
 /src/sql-lexer                      @MaterializeInc/adapter
 /src/sql-parser                     @MaterializeInc/adapter
 /src/sqllogictest                   @MaterializeInc/adapter

@@ -109,8 +109,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
-  Threshold // { arity: 2 }
-    ReadStorage materialize.public.t1 // { arity: 2 }
+  ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
 
@@ -148,8 +147,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
-  Threshold // { arity: 2 }
-    ReadStorage materialize.public.t2 // { arity: 2 }
+  ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
 
@@ -167,8 +165,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
-  Threshold // { arity: 2 }
-    ReadStorage materialize.public.t2 // { arity: 2 }
+  ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
 

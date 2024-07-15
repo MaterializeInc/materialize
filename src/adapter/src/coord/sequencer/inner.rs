@@ -62,7 +62,7 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, Type,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
+use mz_ore::{assert_none, instrument};
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::plan::{
@@ -424,7 +424,7 @@ impl Coordinator {
         // source needs to know its shard ID, and the easiest way of
         // guaranteeing that the shard ID is discoverable is to create this
         // collection first.
-        assert!(progress_stmt.of_source.is_none());
+        assert_none!(progress_stmt.of_source);
         let progress_plan = self
             .plan_subsource(ctx.session(), &params, progress_stmt)
             .await?;
@@ -754,6 +754,7 @@ impl Coordinator {
                 .resolve_builtin_table_update(builtin_table_update);
             ops.push(catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,
+                audit_log: Vec::new(),
             });
         }
 
@@ -1630,6 +1631,7 @@ impl Coordinator {
             .chain(ssh_tunnel_updates.into_iter().map(|builtin_table_update| {
                 catalog::Op::WeirdBuiltinTableUpdates {
                     builtin_table_update,
+                    audit_log: Vec::new(),
                 }
             }))
             .collect();
@@ -4469,6 +4471,20 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::ReassignOwned)
+    }
+
+    #[instrument]
+    // TODO(parkmycar): Remove this once we have an actual implementation.
+    #[allow(clippy::unused_async)]
+    pub(super) async fn sequence_alter_table(
+        &mut self,
+        _session: &Session,
+        _plan: plan::AlterTablePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        Err(AdapterError::PlanError(plan::PlanError::Unsupported {
+            feature: "ALTER TABLE ... ADD COLUMN ...".to_string(),
+            issue_no: Some(28082),
+        }))
     }
 }
 

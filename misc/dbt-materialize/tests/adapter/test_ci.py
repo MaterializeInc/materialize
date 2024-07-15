@@ -212,7 +212,7 @@ class TestClusterOps:
                 "run-operation",
                 "create_cluster",
                 "--args",
-                '{"cluster_name": "test_on_refresh_schedule", "size": "1", "schedule_type": "on-refresh", "refresh_rehydration_time_estimate": "10m", "ignore_existing_objects": true, "force_deploy_suffix": true}',
+                '{"cluster_name": "test_on_refresh_schedule", "size": "1", "schedule_type": "on-refresh", "refresh_hydration_time_estimate": "10m", "ignore_existing_objects": true, "force_deploy_suffix": true}',
             ]
         )
 
@@ -324,7 +324,7 @@ def get_cluster_properties(project, cluster_name):
         c.id AS cluster_id,
         c.name AS cluster_name,
         cs.type AS schedule_type,
-        cs.refresh_rehydration_time_estimate
+        cs.refresh_hydration_time_estimate
     FROM mz_clusters c
     LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
     WHERE c.name = '{cluster_name}'

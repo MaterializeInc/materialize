@@ -126,5 +126,6 @@ message ProtoFixedSizeBytesStats {
         google.protobuf.Empty packed_interval = 4;
         google.protobuf.Empty packed_numeric = 5;
         google.protobuf.Empty uuid = 6;
+        google.protobuf.Empty packed_date_time = 7;
     }
 }

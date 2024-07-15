@@ -17,7 +17,10 @@ from materialize.output_consistency.expression.expression_characteristics import
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.output.base_output_printer import BaseOutputPrinter
+from materialize.output_consistency.output.base_output_printer import (
+    BaseOutputPrinter,
+    OutputPrinterMode,
+)
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
@@ -32,17 +35,30 @@ MAX_ERRORS_WITH_REPRODUCTION_CODE = 5
 
 
 class ReproductionCodePrinter(BaseOutputPrinter):
-    def __init__(self, input_data: ConsistencyTestInputData):
+    def __init__(
+        self,
+        input_data: ConsistencyTestInputData,
+        mode: OutputPrinterMode = OutputPrinterMode.PRINT,
+    ):
+        super().__init__(mode=mode)
         self.input_data = input_data
+
+    def clone(self, mode: OutputPrinterMode):
+        return ReproductionCodePrinter(self.input_data, mode)
+
+    def get_reproduction_code_of_error(self, error: ValidationError) -> str:
+        reproduction_code_generator = self.clone(OutputPrinterMode.COLLECT)
+        reproduction_code_generator.print_reproduction_code_of_error(error)
+        return "\n".join(reproduction_code_generator.collected_output)
 
     def print_reproduction_code(self, errors: list[ValidationError]) -> None:
         for i, error in enumerate(errors):
             if i == MAX_ERRORS_WITH_REPRODUCTION_CODE:
                 break
 
-            self.__print_reproduction_code_of_error(error)
+            self.print_reproduction_code_of_error(error)
 
-    def __print_reproduction_code_of_error(self, error: ValidationError) -> None:
+    def print_reproduction_code_of_error(self, error: ValidationError) -> None:
         query_template = error.query_execution.query_template
 
         if error.col_index is None:
@@ -95,8 +111,9 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         characteristics = self.__get_involved_characteristics(
             query_template, query_column_selection
         )
+        characteristic_names = ", ".join([char.name for char in characteristics])
         self._print_text(
-            f"All assumed directly or indirectly involved characteristics: {characteristics}"
+            f"All assumed directly or indirectly involved characteristics: {characteristic_names}"
         )
 
     def __print_setup_code_for_error(

@@ -318,12 +318,12 @@ impl CatalogState {
                     Datum::Null,
                 ]),
                 ClusterSchedule::Refresh {
-                    rehydration_time_estimate,
+                    hydration_time_estimate,
                 } => Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::String("on-refresh"),
                     Datum::Interval(
-                        Interval::from_duration(&rehydration_time_estimate)
+                        Interval::from_duration(&hydration_time_estimate)
                             .expect("planning ensured that this is convertible back to Interval"),
                     ),
                 ]),
@@ -1275,7 +1275,7 @@ impl CatalogState {
                 // size column now deprecated w/o linked clusters
                 Datum::Null,
                 Datum::from(envelope),
-                Datum::from(format),
+                Datum::from(format.as_ref()),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&sink.create_sql),

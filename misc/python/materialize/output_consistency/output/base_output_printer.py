@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import re
+from enum import Enum
 
 from materialize.output_consistency.output.format_constants import (
     COMMENT_PREFIX,
@@ -17,9 +18,19 @@ from materialize.output_consistency.output.format_constants import (
 )
 
 
+class OutputPrinterMode(Enum):
+    PRINT = 1
+    COLLECT = 2
+
+
 class BaseOutputPrinter:
+
+    def __init__(self, mode: OutputPrinterMode = OutputPrinterMode.PRINT):
+        self.mode = mode
+        self.collected_output = []
+
     def print_empty_line(self) -> None:
-        print()
+        self._print_raw("")
 
     def start_section(self, header: str, collapsed: bool = True) -> None:
         prefix = SECTION_COLLAPSED_PREFIX if collapsed else SECTION_EXPANDED_PREFIX
@@ -38,4 +49,9 @@ class BaseOutputPrinter:
         self._print_raw(adjusted_text)
 
     def _print_raw(self, sql: str) -> None:
-        print(sql)
+        if self.mode == OutputPrinterMode.PRINT:
+            print(sql)
+        elif self.mode == OutputPrinterMode.COLLECT:
+            self.collected_output.append(sql)
+        else:
+            raise RuntimeError(f"Unsupported mode: {self.mode}")

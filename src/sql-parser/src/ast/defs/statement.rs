@@ -28,12 +28,11 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
-    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, DeferredItemName, Expr, Format, Ident,
-    IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
-    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, DeferredItemName, Expr, Format, FormatSpecifier, Ident, IntervalValue,
+    KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope, SourceEnvelope,
+    SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint, TableWithJoins,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -77,6 +76,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemResetAll(AlterSystemResetAllStatement),
     AlterConnection(AlterConnectionStatement<T>),
     AlterRole(AlterRoleStatement<T>),
+    AlterTableAddColumn(AlterTableAddColumnStatement<T>),
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
     DropOwned(DropOwnedStatement<T>),
@@ -148,6 +148,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
             Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::AlterRole(stmt) => f.write_node(stmt),
+            Statement::AlterTableAddColumn(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropOwned(stmt) => f.write_node(stmt),
@@ -222,6 +223,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterSystemResetAll => "alter_system_reset_all",
         StatementKind::AlterOwner => "alter_owner",
         StatementKind::AlterConnection => "alter_connection",
+        StatementKind::AlterTableAddColumn => "alter_table",
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
         StatementKind::DropOwned => "drop_owned",
@@ -969,7 +971,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
-    pub format: Option<CreateSourceFormat<T>>,
+    pub format: Option<FormatSpecifier<T>>,
     pub envelope: Option<SourceEnvelope>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
@@ -1218,7 +1220,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub from: T::ItemName,
     pub connection: CreateSinkConnection<T>,
-    pub format: Option<Format<T>>,
+    pub format: Option<FormatSpecifier<T>>,
     pub envelope: Option<SinkEnvelope>,
     pub with_options: Vec<CreateSinkOption<T>>,
 }
@@ -1243,7 +1245,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_str(" INTO ");
         f.write_node(&self.connection);
         if let Some(format) = &self.format {
-            f.write_str(" FORMAT ");
             f.write_node(format);
         }
         if let Some(envelope) = &self.envelope {
@@ -1799,6 +1800,58 @@ pub struct ClusterOption<T: AstInfo> {
 }
 impl_display_for_with_option!(ClusterOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClusterAlterOptionName {
+    /// The `Wait` option.
+    Wait,
+}
+
+impl AstDisplay for ClusterAlterOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterAlterOptionName::Wait => f.write_str("WAIT"),
+        }
+    }
+}
+
+impl WithOptionName for ClusterAlterOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterAlterOptionName::Wait => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ClusterAlterOptionValue {
+    For(Value),
+}
+
+impl AstDisplay for ClusterAlterOptionValue {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterAlterOptionValue::For(duration) => {
+                f.write_str("FOR ");
+                f.write_node(duration);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `ALTER CLUSTER... WITH` statement.
+pub struct ClusterAlterOption<T: AstInfo> {
+    pub name: ClusterAlterOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl_display_for_with_option!(ClusterAlterOption);
+
 // Note: the `AstDisplay` implementation and `Parser::parse_` method for this
 // enum are generated automatically by this crate's `build.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1887,7 +1940,10 @@ impl_display_t!(ReplicaDefinition);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterClusterAction<T: AstInfo> {
-    SetOptions(Vec<ClusterOption<T>>),
+    SetOptions {
+        options: Vec<ClusterOption<T>>,
+        with_options: Vec<ClusterAlterOption<T>>,
+    },
     ResetOptions(Vec<ClusterOptionName>),
 }
 
@@ -1911,10 +1967,18 @@ impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
         f.write_node(&self.name);
         f.write_str(" ");
         match &self.action {
-            AlterClusterAction::SetOptions(options) => {
+            AlterClusterAction::SetOptions {
+                options,
+                with_options,
+            } => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
             }
             AlterClusterAction::ResetOptions(options) => {
                 f.write_str("RESET (");
@@ -2597,6 +2661,40 @@ impl AstDisplay for AlterRoleOption {
     }
 }
 impl_display!(AlterRoleOption);
+
+/// `ALTER TABLE ... ADD COLUMN ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterTableAddColumnStatement<T: AstInfo> {
+    pub if_exists: bool,
+    pub name: UnresolvedItemName,
+    pub if_col_not_exist: bool,
+    pub column_name: Ident,
+    pub data_type: T::DataType,
+}
+
+impl<T: AstInfo> AstDisplay for AlterTableAddColumnStatement<T> {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("ALTER TABLE ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+
+        f.write_str(" ADD COLUMN ");
+        if self.if_col_not_exist {
+            f.write_str("IF NOT EXISTS ");
+        }
+
+        f.write_node(&self.column_name);
+        f.write_str(" ");
+        f.write_node(&self.data_type);
+    }
+}
+
+impl_display_t!(AlterTableAddColumnStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -3305,6 +3403,7 @@ pub enum ExplainPlanOptionName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
+    EnableOuterJoinNullFilter,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3338,7 +3437,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis => false,
+            | Self::EnableLetrecFixpointAnalysis
+            | Self::EnableOuterJoinNullFilter => false,
         }
     }
 }
@@ -3557,6 +3657,7 @@ pub enum WithOptionValue<T: AstInfo> {
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
+    ClusterAlterStrategy(ClusterAlterOptionValue),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -3581,7 +3682,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
                 | WithOptionValue::ClusterReplicas(_)
-                | WithOptionValue::ClusterScheduleOptionValue(_) => {
+                | WithOptionValue::ClusterScheduleOptionValue(_)
+                | WithOptionValue::ClusterAlterStrategy(_) => {
                     // These do not need redaction.
                 }
             }
@@ -3631,6 +3733,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::Refresh(opt) => f.write_node(opt),
             WithOptionValue::ClusterScheduleOptionValue(value) => f.write_node(value),
+            WithOptionValue::ClusterAlterStrategy(value) => f.write_node(value),
         }
     }
 }
@@ -3690,7 +3793,7 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
 pub enum ClusterScheduleOptionValue {
     Manual,
     Refresh {
-        rehydration_time_estimate: Option<IntervalValue>,
+        hydration_time_estimate: Option<IntervalValue>,
     },
 }
 
@@ -3708,12 +3811,12 @@ impl AstDisplay for ClusterScheduleOptionValue {
                 f.write_str("MANUAL");
             }
             ClusterScheduleOptionValue::Refresh {
-                rehydration_time_estimate,
+                hydration_time_estimate,
             } => {
                 f.write_str("ON REFRESH");
-                if let Some(rehydration_time_estimate) = rehydration_time_estimate {
-                    f.write_str(" (REHYDRATION TIME ESTIMATE = '");
-                    f.write_node(rehydration_time_estimate);
+                if let Some(hydration_time_estimate) = hydration_time_estimate {
+                    f.write_str(" (HYDRATION TIME ESTIMATE = '");
+                    f.write_node(hydration_time_estimate);
                     f.write_str(")");
                 }
             }

@@ -77,6 +77,7 @@ from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -134,6 +135,7 @@ SERVICES = [
     Materialized(),
     Clusterd(),
     Testdrive(),
+    Mz(app_password=""),
 ]
 
 
@@ -477,6 +479,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenarios_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
+
+    if len(scenarios_scheduled_to_run) == 0 and buildkite.is_in_buildkite():
+        raise FailedTestExecutionError(
+            error_summary="No scenarios were selected", errors=[]
+        )
 
     scenarios_with_regressions = []
     latest_report_by_scenario_name: dict[str, Report] = dict()

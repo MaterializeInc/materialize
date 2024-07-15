@@ -77,6 +77,10 @@ pub enum PlanError {
         max_num_columns: usize,
         req_num_columns: usize,
     },
+    ColumnAlreadyExists {
+        column_name: ColumnName,
+        object_name: String,
+    },
     AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
         column: ColumnName,
@@ -484,6 +488,11 @@ impl fmt::Display for PlanError {
                 f,
                 "attempt to create relation with too many columns, {} max: {}",
                 req_num_columns, max_num_columns
+            ),
+            Self::ColumnAlreadyExists { column_name, object_name } => write!(
+                f,
+                "column {} of relation {} already exists",
+                column_name.as_str().quoted(), object_name.quoted(),
             ),
             Self::AmbiguousTable(table) => write!(
                 f,

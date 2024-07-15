@@ -29,6 +29,7 @@ class Scenario(Enum):
     Kill = "kill"
     Rename = "rename"
     BackupRestore = "backup-restore"
+    ZeroDowntimeDeploy = "0dt-deploy"
 
     @classmethod
     def _missing_(cls, value):

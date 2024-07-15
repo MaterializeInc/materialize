@@ -10,7 +10,6 @@ aliases:
   - /katacoda/
   - /quickstarts/
   - /install/
-  - /get-started/
 ---
 
 Materialize is a new kind of **data warehouse built for operational workloads**: the
@@ -24,13 +23,15 @@ the superpowers of an operational data warehouse first-hand:
 
 * **Consistency**: results are always correct; never even transiently wrong.
 
-## Before you begin
+## Prerequisite
 
-All you need is a Materialize account. If you already have one —
-great! If not, [sign up for a playground account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) first.
+A Materialize account. If you do not have an account, you can [sign up for a free trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
-When you're ready, head over to the [Materialize console](https://console.materialize.com/),
-and pop open the SQL Shell.
+## Step 0. Sign in to Materialize
+
+Navigate to the [Materialize console](https://console.materialize.com/) and sign
+in. By default, you should land in the SQL Shell. If you're already signed in,
+you can access the SQL Shell in the left-hand menu.
 
 ## Step 1. Ingest streaming data
 
@@ -103,7 +104,7 @@ with.
   available**. To identify potential auction flippers, you need to keep track
   of the winning bids for each completed auction.
 
-1. Create a [**view**](/get-started/key-concepts/#non-materialized-views) that
+1. Create a [**view**](/concepts/views/#non-materialized-views) that
 joins data from `auctions` and `bids` to get the bid with the highest `amount`
 for each auction at its `end_time`.
 
@@ -117,8 +118,8 @@ for each auction at its `end_time`.
         -- Where all auctions have completed
       AND mz_now() >= auctions.end_time
     ORDER BY auctions.id,
-      bids.bid_time DESC,
-      bids.amount,
+      bids.amount DESC,
+      bids.bid_time,
       bids.buyer;
     ```
 
@@ -307,4 +308,7 @@ DROP TABLE fraud_accounts;
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
-To get started with your own data, [upgrade your playground to a trial account](https://materialize.com/trial/?utm_campaign=General&utm_source=documentation).
+To get started ingesting your own data from an external system like Kafka, MySQL
+or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
+navigate to **Data** > **Sources** > **New source** in the [Materialize Console](https://console.materialize.com/)
+to create your first source.

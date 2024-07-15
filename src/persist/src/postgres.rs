@@ -399,6 +399,7 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
     use tracing::info;
     use uuid::Uuid;
 
@@ -466,7 +467,7 @@ mod tests {
         // And finally, we should see the next connect time out.
         let conn3 = consensus.get_connection().await;
 
-        assert!(conn3.is_err());
+        assert_err!(conn3);
 
         Ok(())
     }

@@ -45,8 +45,9 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica, SelectStatement,
-    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
+    SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
+    WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -63,8 +64,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -104,6 +105,9 @@ pub use statement::{
     describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,
     StatementDesc,
 };
+
+use self::statement::ddl::ClusterAlterOptionExtracted;
+use self::with_options::TryFromValue;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
@@ -169,6 +173,7 @@ pub enum Plan {
     AlterSystemResetAll(AlterSystemResetAllPlan),
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
+    AlterTableAddColumn(AlterTablePlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -225,6 +230,9 @@ impl Plan {
             }
             StatementKind::AlterSystemSet => &[PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::AlterOwner => &[PlanKind::AlterNoop, PlanKind::AlterOwner],
+            StatementKind::AlterTableAddColumn => {
+                &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
+            }
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
@@ -402,6 +410,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
             },
+            Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -585,9 +594,9 @@ pub enum ClusterSchedule {
     /// The system won't automatically turn the cluster On or Off.
     Manual,
     /// The cluster will be On when a REFRESH materialized view on it needs to refresh.
-    /// `rehydration_time_estimate` determines how much time before a refresh to turn the
+    /// `hydration_time_estimate` determines how much time before a refresh to turn the
     /// cluster On, so that it can rehydrate already before the refresh time.
-    Refresh { rehydration_time_estimate: Duration },
+    Refresh { hydration_time_estimate: Duration },
 }
 
 impl Default for ClusterSchedule {
@@ -1074,6 +1083,7 @@ pub struct AlterClusterPlan {
     pub id: ClusterId,
     pub name: String,
     pub options: PlanClusterOption,
+    pub strategy: AlterClusterPlanStrategy,
 }
 
 #[derive(Debug)]
@@ -1164,6 +1174,13 @@ pub struct AlterOwnerPlan {
     pub id: ObjectId,
     pub object_type: ObjectType,
     pub new_owner: RoleId,
+}
+
+#[derive(Debug)]
+pub struct AlterTablePlan {
+    pub relation_id: GlobalId,
+    pub column_name: ColumnName,
+    pub column_type: ResolvedDataType,
 }
 
 #[derive(Debug)]
@@ -1619,6 +1636,46 @@ impl Default for PlanClusterOption {
             disk: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AlterClusterPlanStrategy {
+    pub condition: AlterClusterStrategyCondition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AlterClusterStrategyCondition {
+    None,
+    For(Duration),
+}
+
+impl AlterClusterStrategyCondition {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+impl Default for AlterClusterPlanStrategy {
+    fn default() -> Self {
+        Self {
+            condition: AlterClusterStrategyCondition::None,
+        }
+    }
+}
+
+impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
+    type Error = PlanError;
+
+    fn try_from(value: ClusterAlterOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(Self {
+            condition: match value.wait {
+                Some(ClusterAlterOptionValue::For(v)) => {
+                    AlterClusterStrategyCondition::For(Duration::try_from_value(v)?)
+                }
+                None => AlterClusterStrategyCondition::None,
+            },
+        })
     }
 }
 

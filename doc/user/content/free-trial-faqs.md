@@ -13,7 +13,7 @@ answers some frequently asked questions about free trials.
 
 ## What are the limits of a free trial?
 
-In Materialize, [clusters](/get-started/key-concepts/#clusters) are the pools of
+In Materialize, [clusters](/concepts/clusters/) are the pools of
 compute resources for running your workloads. The size and replication factor
 of each cluster determines its [credit usage](/sql/create-cluster/#credit-usage).
 

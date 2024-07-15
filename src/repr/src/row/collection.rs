@@ -426,6 +426,7 @@ impl IntoRowIterator for SortedRowCollection {
 mod tests {
     use std::borrow::Borrow;
 
+    use mz_ore::assert_none;
     use proptest::prelude::*;
     use proptest::test_runner::Config;
 
@@ -612,8 +613,8 @@ mod tests {
         assert!(mapped.next().is_some());
         assert!(mapped.next().is_some());
         assert!(mapped.next().is_some());
-        assert!(mapped.next().is_none());
-        assert!(mapped.next().is_none());
+        assert_none!(mapped.next());
+        assert_none!(mapped.next());
     }
 
     #[mz_ore::test]

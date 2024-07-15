@@ -84,10 +84,7 @@ class Scenario:
 
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
-            if isinstance(action, StartMz) and not any(
-                env.startswith("MZ_DEPLOY_GENERATION=")
-                for env in action.environment_extra
-            ):
+            if isinstance(action, StartMz) and not action.deploy_generation:
                 actions.insert(
                     index + 1, ConfigureMz(self, mz_service=action.mz_service)
                 )
@@ -349,7 +346,7 @@ class TogglePersistBatchColumnarFormat(SystemVarChange):
                 SystemVarChangeEntry(
                     name="persist_batch_columnar_format",
                     value_for_manipulate_phase_1="row",
-                    value_for_manipulate_phase_2="both",
+                    value_for_manipulate_phase_2="both_v2",
                 )
             ],
         )

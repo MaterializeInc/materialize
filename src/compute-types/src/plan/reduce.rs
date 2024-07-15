@@ -65,7 +65,7 @@ use std::collections::BTreeMap;
 use mz_expr::{
     permutation_for_arrangement, AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr,
 };
-use mz_ore::soft_assert_or_log;
+use mz_ore::{assert_none, soft_assert_or_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
@@ -638,15 +638,15 @@ impl ReducePlan {
         for expr in plan.into_iter() {
             match expr {
                 ReducePlan::Accumulable(e) => {
-                    assert!(collation.accumulable.is_none());
+                    assert_none!(collation.accumulable);
                     collation.accumulable = Some(e);
                 }
                 ReducePlan::Hierarchical(e) => {
-                    assert!(collation.hierarchical.is_none());
+                    assert_none!(collation.hierarchical);
                     collation.hierarchical = Some(e);
                 }
                 ReducePlan::Basic(e) => {
-                    assert!(collation.basic.is_none());
+                    assert_none!(collation.basic);
                     collation.basic = Some(e);
                 }
                 ReducePlan::Distinct | ReducePlan::Collation(_) => {
@@ -1003,6 +1003,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -1015,7 +1016,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

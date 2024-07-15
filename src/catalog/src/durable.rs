@@ -78,13 +78,19 @@ pub type Epoch = NonZeroI64;
 /// If a catalog is not opened, then resources should be release via [`Self::expire`].
 #[async_trait]
 pub trait OpenableDurableCatalogState: Debug + Send {
+    // TODO(jkosh44) Teaching savepoint mode how to listen to additional
+    // durable updates will be necessary for zero down time upgrades.
     /// Opens the catalog in a mode that accepts and buffers all writes,
     /// but never durably commits them. This is used to check and see if
     /// opening the catalog would be successful, without making any durable
     /// changes.
     ///
-    /// `epoch_lower_bound` is used as a lower bound for the epoch that is used by the returned
-    /// catalog.
+    /// Once a savepoint catalog reads an initial snapshot from durable
+    /// storage, it will never read another update from durable storage. As a
+    /// consequence, savepoint catalogs can never be fenced.
+    ///
+    /// `epoch_lower_bound` is used as a lower bound for the epoch that is
+    /// used by the returned catalog.
     ///
     /// Will return an error in the following scenarios:
     ///   - Catalog initialization fails.
@@ -189,13 +195,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// WARNING: This is meant for use in integration tests and has bad performance.
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError>;
 
-    /// Gets all storage usage events
-    ///
-    /// Results are guaranteed to be sorted by ID.
-    ///
-    /// WARNING: This is meant for use in integration tests and has bad performance.
-    async fn get_storage_usage(&mut self) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
-
     /// Get the next ID of `id_type`, without allocating it.
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError>;
 
@@ -214,17 +213,24 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
     /// Listen and return all updates that are currently in the catalog.
     ///
+    /// IMPORTANT: This exlcudes updates to storage usage.
+    ///
     /// Returns an error if this instance has been fenced out.
     async fn sync_to_current_updates(
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
-    /// Listen and return all updates in the catalog up to and including `ts`.
+    // TODO(jkosh44) The fact that the timestamp argument is an exclusive upper bound makes
+    // it difficult to use for readers. For now it's correct and easy to implement, but we should
+    // consider a better API.
+    /// Listen and return all updates in the catalog up to `target_upper`.
+    ///
+    /// IMPORTANT: This exlcudes updates to storage usage.
     ///
     /// Returns an error if this instance has been fenced out.
     async fn sync_updates(
         &mut self,
-        ts: Timestamp,
+        target_upper: Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 }
 
@@ -238,21 +244,27 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
     /// Commits a durable catalog state transaction.
-    async fn commit_transaction(&mut self, txn_batch: TransactionBatch)
-        -> Result<(), CatalogError>;
+    ///
+    /// Returns the upper that the transaction was committed at.
+    async fn commit_transaction(
+        &mut self,
+        txn_batch: TransactionBatch,
+    ) -> Result<Timestamp, CatalogError>;
 
     /// Confirms that this catalog is connected as the current leader.
     ///
     /// NB: We may remove this in later iterations of Pv2.
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
-    /// Permanently deletes storage usage events from the catalog
+    /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
-    async fn prune_storage_usage(
+    ///
+    /// Results are guaranteed to be sorted by ID.
+    async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError>;
+    ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     #[mz_ore::instrument(level = "debug")]

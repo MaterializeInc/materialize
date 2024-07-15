@@ -12,7 +12,6 @@
 //! representations only need to commit to implementing these traits.
 
 use std::borrow::Borrow;
-use std::iter::{empty, Empty};
 
 use crate::row::DatumListIter;
 use crate::{Datum, Row};
@@ -90,40 +89,5 @@ impl FromDatumIter for Row {
     {
         self.packer().try_extend(datum_iter)?;
         Ok(self.clone())
-    }
-}
-
-impl ToDatumIter for () {
-    /// Empty iterator for unit.
-    type DatumIter<'a> = Empty<Datum<'a>>;
-
-    /// Returns an empty iterator.
-    #[inline]
-    fn to_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
-        empty()
-    }
-}
-
-impl FromDatumIter for () {
-    /// Obtains a unit value from an empty datum iterator.
-    #[inline]
-    fn from_datum_iter<'a, I, D>(&mut self, datum_iter: I) -> Self
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        debug_assert!(datum_iter.into_iter().next().is_none());
-        ()
-    }
-
-    /// Obtains a unit value from an empty iterator of results of datums.
-    #[inline]
-    fn try_from_datum_iter<'a, I, D, E>(&mut self, datum_iter: I) -> Result<Self, E>
-    where
-        I: IntoIterator<Item = Result<D, E>>,
-        D: Borrow<Datum<'a>>,
-    {
-        debug_assert!(datum_iter.into_iter().next().is_none());
-        Ok(())
     }
 }

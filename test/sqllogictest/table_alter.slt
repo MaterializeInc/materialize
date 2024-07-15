@@ -1,0 +1,35 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for ALTER-ing tables.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int)
+
+statement error Enable ALTER TABLE ... ADD COLUMN ... is not supported
+ALTER TABLE t ADD COLUMN b int;
+
+# Enable the ALTER TABLE feature.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column TO true;
+----
+COMPLETE 0
+
+statement error column "a" of relation "t" already exists
+ALTER TABLE t ADD COLUMN a int;
+
+statement ok
+ALTER TABLE t ADD COLUMN IF NOT EXISTS a int;
+
+# Feature isn't yet implemented.
+
+statement error ALTER TABLE ... ADD COLUMN ... not yet supported
+ALTER TABLE t ADD COLUMN b int;

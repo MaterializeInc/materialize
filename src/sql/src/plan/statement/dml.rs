@@ -34,7 +34,7 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, S3SinkFormat, StorageSinkConnection,
+    KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, S3SinkFormat, StorageSinkConnection,
     MAX_S3_SINK_FILE_SIZE, MIN_S3_SINK_FILE_SIZE,
 };
 
@@ -362,7 +362,8 @@ generate_extracted_config!(
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
-    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
+    (EnableOuterJoinNullFilter, Option<bool>, Default(None))
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
@@ -402,13 +403,18 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             subtree_size: v.subtree_size,
             timing: v.timing,
             types: v.types,
+            // The ones that are initialized with `Default::default()` are not wired up to EXPLAIN.
             features: OptimizerFeatureOverrides {
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
+                enable_consolidate_after_union_negate: Default::default(),
+                enable_reduce_mfp_fusion: Default::default(),
+                enable_outer_join_null_filter: v.enable_outer_join_null_filter,
+                enable_cardinality_estimates: Default::default(),
+                persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
-                ..Default::default()
             },
         })
     }
@@ -591,17 +597,24 @@ pub fn plan_explain_schema(
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
             StorageSinkConnection::Kafka(KafkaSinkConnection {
                 format:
-                    KafkaSinkFormat::Avro {
-                        key_schema,
-                        value_schema,
+                    KafkaSinkFormat {
+                        key_format,
+                        value_format:
+                            KafkaSinkFormatType::Avro {
+                                schema: value_schema,
+                                ..
+                            },
                         ..
                     },
                 ..
             }) => {
                 let schema = match schema_for {
-                    ExplainSinkSchemaFor::Key => {
-                        key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
-                    }
+                    ExplainSinkSchemaFor::Key => key_format
+                        .and_then(|f| match f {
+                            KafkaSinkFormatType::Avro { schema, .. } => Some(schema),
+                            _ => None,
+                        })
+                        .ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?,
                     ExplainSinkSchemaFor::Value => value_schema,
                 };
 

@@ -15,8 +15,8 @@ use std::fmt::Debug;
 
 use arrow::array::Array;
 use mz_ore::cast::CastFrom;
-use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
+use mz_ore::{assert_none, metric};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
@@ -61,10 +61,27 @@ impl ColumnarStats {
     }
 
     /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
-    pub fn non_null_values(&self) -> Option<&ColumnStatKinds> {
+    pub fn as_non_null_values(&self) -> Option<&ColumnStatKinds> {
         match self.nulls {
             None => Some(&self.values),
             Some(_) => None,
+        }
+    }
+
+    /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
+    pub fn into_non_null_values(self) -> Option<ColumnStatKinds> {
+        match self.nulls {
+            None => Some(self.values),
+            Some(_) => None,
+        }
+    }
+
+    /// Returns the inner [`StructStats`] if `nulls` is [`None`] and `values`
+    /// is [`ColumnStatKinds::Struct`].
+    pub fn into_struct_stats(self) -> Option<StructStats> {
+        match self.into_non_null_values()? {
+            ColumnStatKinds::Struct(stats) => Some(stats),
+            _ => None,
         }
     }
 }
@@ -368,7 +385,7 @@ impl<T: DynStats> DynStats for OptionStats<T> {
 
     fn into_columnar_stats(self) -> ColumnarStats {
         let inner = self.some.into_columnar_stats();
-        assert!(inner.nulls.is_none(), "we don't support nested OptionStats");
+        assert_none!(inner.nulls, "we don't support nested OptionStats");
 
         ColumnarStats {
             nulls: Some(ColumnNullStats { count: self.none }),
@@ -412,7 +429,7 @@ impl<T: Data> ColumnStats<T> for NoneStats {
     where
         Self: Sized,
     {
-        match stats.non_null_values()? {
+        match stats.as_non_null_values()? {
             ColumnStatKinds::None => Some(NoneStats),
             _ => None,
         }
@@ -452,7 +469,7 @@ where
 
 impl<T: Array> StatsFrom<T> for NoneStats {
     fn stats_from(col: &T, _validity: ValidityRef) -> Self {
-        assert!(col.logical_nulls().is_none());
+        assert_none!(col.logical_nulls());
         NoneStats
     }
 }

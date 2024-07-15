@@ -1125,6 +1125,8 @@ impl_value_for_simple!(CompressionType, "rocksdb_compression_type");
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
+
     use super::*;
 
     #[mz_ore::test]
@@ -1176,7 +1178,7 @@ mod tests {
         );
 
         fn errs(t: &'static str) {
-            assert!(Duration::parse(VarInput::Flat(t)).is_err());
+            assert_err!(Duration::parse(VarInput::Flat(t)));
         }
         errs("1 m");
         errs("1 sec");

@@ -680,6 +680,7 @@ mod tests {
     use futures::stream::{FuturesUnordered, StreamExt};
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::task::spawn;
+    use mz_ore::{assert_err, assert_none};
 
     use super::*;
 
@@ -795,7 +796,7 @@ mod tests {
             .await
         })
         .await;
-        assert!(res.is_err());
+        assert_err!(res);
         assert_eq!(states.initialized_count(), 0);
 
         // Returning an error from init_fn doesn't initialize an entry in the cache.
@@ -811,7 +812,7 @@ mod tests {
                 &Diagnostics::for_tests(),
             )
             .await;
-        assert!(res.is_err());
+        assert_err!(res);
         assert_eq!(states.initialized_count(), 0);
 
         // Initialize one shard.
@@ -908,7 +909,7 @@ mod tests {
         drop(s1_state2);
         assert_eq!(states.strong_count(), 1);
         assert_eq!(states.initialized_count(), 2);
-        assert!(states.get_cached(&s1).is_none());
+        assert_none!(states.get_cached(&s1));
 
         // But we can re-init that shard if necessary.
         let s1_state1 = states

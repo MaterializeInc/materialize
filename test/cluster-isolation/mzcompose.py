@@ -26,6 +26,10 @@ SERVICES = [
     SchemaRegistry(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False),
+    Clusterd(name="clusterd_1_1"),
+    Clusterd(name="clusterd_1_2"),
+    Clusterd(name="clusterd_2_1"),
+    Clusterd(name="clusterd_2_2"),
     Testdrive(),
 ]
 
@@ -226,76 +230,69 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     print(f"+++ Running disruption scenario {disruption.name}")
 
     c.up("testdrive", persistent=True)
-    c.up("materialized")
+    c.up("materialized", "clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
 
-    nodes = [
-        Clusterd(name="clusterd_1_1"),
-        Clusterd(name="clusterd_1_2"),
-        Clusterd(name="clusterd_2_1"),
-        Clusterd(name="clusterd_2_2"),
+    c.sql(
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+            STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+            COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+            COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+        ));
+        """
+    )
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster2 CASCADE;
+        CREATE CLUSTER cluster2 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+            STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
+            COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+            COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
+        ));
+        """
+    )
+
+    with c.override(
+        Testdrive(
+            no_reset=True,
+            materialize_params={"cluster": "cluster2"},
+            seed=id,
+        )
+    ):
+        populate(c)
+
+        # Disrupt cluster1 by some means
+        disruption.disruption(c)
+
+        validate(c)
+
+    cleanup_list = [
+        "materialized",
+        "testdrive",
+        "clusterd_1_1",
+        "clusterd_1_2",
+        "clusterd_2_1",
+        "clusterd_2_2",
     ]
+    try:
+        c.kill(*cleanup_list)
+    except UIError as e:
+        print(e)
+        # Killing multiple clusterds from the same cluster may fail
+        # as the second clusterd may have already exited after the first
+        # one was killed, due to the 'shared-fate' mechanism.
+        pass
 
-    with c.override(*nodes):
-        c.up(*[n.name for n in nodes])
-
-        c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            """
-            DROP CLUSTER IF EXISTS cluster1 CASCADE;
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-            ));
-            """
-        )
-
-        c.sql(
-            """
-            DROP CLUSTER IF EXISTS cluster2 CASCADE;
-            CREATE CLUSTER cluster2 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-            ));
-            """
-        )
-
-        with c.override(
-            Testdrive(
-                no_reset=True,
-                materialize_params={"cluster": "cluster2"},
-                seed=id,
-            )
-        ):
-            populate(c)
-
-            # Disrupt cluster1 by some means
-            disruption.disruption(c)
-
-            validate(c)
-
-        cleanup_list = [
-            "materialized",
-            "testdrive",
-            *[n.name for n in nodes],
-        ]
-        try:
-            c.kill(*cleanup_list)
-        except UIError as e:
-            print(e)
-            # Killing multiple clusterds from the same cluster may fail
-            # as the second clusterd may have alredy exited after the first
-            # one was killed, due to the 'shared-fate' mechanism.
-            pass
-
-        c.rm(*cleanup_list, destroy_volumes=True)
+    c.rm(*cleanup_list, destroy_volumes=True)
 
     c.rm_volumes("mzdata")

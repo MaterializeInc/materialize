@@ -81,6 +81,9 @@ SERVICES = [
     TestCerts(),
     Toxiproxy(),
     create_postgres(pg_version=None),
+    PostgresRecvlogical(
+        replication_slot_name="", publication_name=""
+    ),  # Overriden below
 ]
 
 

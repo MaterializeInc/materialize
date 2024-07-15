@@ -113,7 +113,7 @@ const CATALOG_SEED: usize = 1;
 const UPGRADE_SEED: usize = 2;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Mode {
     /// Mutable operations are prohibited.
     Readonly,
@@ -199,8 +199,22 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
 }
 
 /// A handle for interacting with the persist catalog shard.
+///
+/// The catalog shard is used in multiple different contexts, for example pre-open and post-open,
+/// but for all contexts the majority of the durable catalog's behavior is identical. This struct
+/// implements those behaviors that are identical while allowing the user to specify the different
+/// behaviors via generic parameters.
+///
+/// The behavior of the durable catalog can be different along one of two axes. The first is the
+/// format of each individual update, i.e. raw binary, the current protobuf version, previous
+/// protobuf versions, etc. The second axis is what to do with each individual update, for example
+/// before opening we cache all config updates but don't cache them after opening. These behaviors
+/// are customizable via the `T: TryIntoStateUpdateKind` and `U: ApplyUpdate<T>` generic parameters
+/// respectively.
 #[derive(Debug)]
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
+    /// The [`Mode`] that this catalog was opened in.
+    mode: Mode,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -268,11 +282,13 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     }
 
     /// Appends `updates` iff the current global upper of the catalog is `self.upper`.
+    ///
+    /// Returns the next upper used to commit the transaction.
     #[mz_ore::instrument]
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindRaw>(
         &mut self,
         updates: Vec<(S, Diff)>,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Timestamp, CatalogError> {
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindRaw = kind.into();
             ((Into::<SourceData>::into(kind), ()), self.upper, diff)
@@ -314,7 +330,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             ),
         }
         self.sync(next_upper).await?;
-        Ok(())
+        Ok(next_upper)
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -372,6 +388,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     #[mz_ore::instrument(level = "debug")]
     async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), DurableCatalogError> {
         self.epoch.validate()?;
+
+        // Savepoint catalogs do not yet know how to update themselves in response to concurrent
+        // writes from writer catalogs.
+        if self.mode == Mode::Savepoint {
+            self.upper = max(self.upper, target_upper);
+            return Ok(());
+        }
+
         let mut updates = Vec::new();
 
         while self.upper < target_upper {
@@ -630,6 +654,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
     }
 }
 
+/// Applies updates for an unopened catalog.
 #[derive(Debug)]
 pub(crate) struct UnopenedCatalogStateInner {
     /// The organization ID of the environment.
@@ -690,7 +715,7 @@ impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
 /// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
 /// catalog, see [`OpenableDurableCatalogState::open`] for more details.
 ///
-/// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
+/// Production users should call [`Self::expire`] before dropping an [`UnopenedPersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 pub(crate) type UnopenedPersistCatalogState =
     PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
@@ -797,6 +822,8 @@ impl UnopenedPersistCatalogState {
         let epoch = FenceableEpoch::Unfenced(epoch);
 
         let mut handle = UnopenedPersistCatalogState {
+            // Unopened catalogs are always writeable until they're opened in an explicit mode.
+            mode: Mode::Writable,
             since_handle,
             write_handle,
             listen,
@@ -881,6 +908,7 @@ impl UnopenedPersistCatalogState {
             "initializing catalog state"
         );
         let mut catalog = PersistCatalogState {
+            mode: mode.clone(),
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -890,7 +918,7 @@ impl UnopenedPersistCatalogState {
             epoch: self.epoch,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
-            update_applier: CatalogStateInner::new(mode.clone()),
+            update_applier: CatalogStateInner::new(),
             metrics: self.metrics,
         };
         catalog.metrics.collection_entries.reset();
@@ -1149,10 +1177,9 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
     }
 }
 
+/// Applies updates for an opened catalog.
 #[derive(Debug)]
 struct CatalogStateInner {
-    /// The [`Mode`] that this catalog was opened in.
-    mode: Mode,
     /// A cache of storage usage events that is only populated during startup.
     storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
     /// A trace of all catalog updates that can be consumed by some higher layer.
@@ -1160,9 +1187,8 @@ struct CatalogStateInner {
 }
 
 impl CatalogStateInner {
-    fn new(mode: Mode) -> CatalogStateInner {
+    fn new() -> CatalogStateInner {
         CatalogStateInner {
-            mode,
             storage_usage_events: LargeCollectionStartupCache::new_open(),
             updates: VecDeque::new(),
         }
@@ -1183,7 +1209,8 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 .add(update.diff);
         }
 
-        {
+        // Storage usage events are skipped due to their size.
+        if !matches!(update.kind, StateUpdateKind::StorageUsage(..)) {
             let update: Option<memory::objects::StateUpdate> = (&update).try_into()?;
             if let Some(update) = update {
                 self.updates.push_back(update);
@@ -1209,7 +1236,11 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
     }
 }
 
-/// A durable store of the catalog state using Persist as an implementation.
+/// A durable store of the catalog state using Persist as an implementation. The durable store can
+/// serve any catalog data and transactionally modify catalog data.
+///
+/// Production users should call [`Self::expire`] before dropping a [`PersistCatalogState`]
+/// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 
 #[async_trait]
@@ -1250,31 +1281,6 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         Ok(audit_logs)
     }
 
-    async fn get_storage_usage(&mut self) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
-        self.sync_to_current_upper().await?;
-        let storage_usage: Vec<_> = self
-            .persist_snapshot()
-            .await
-            .filter_map(
-                |StateUpdate {
-                     kind,
-                     ts: _,
-                     diff: _,
-                 }| match kind {
-                    StateUpdateKind::StorageUsage(key, ()) => Some(key),
-                    _ => None,
-                },
-            )
-            .collect();
-        let mut storage_usage: Vec<_> = storage_usage
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|key: StorageUsageKey| key.metric)
-            .collect::<Result<_, _>>()?;
-        storage_usage.sort_by(|a, b| a.sortable_id().cmp(&b.sortable_id()));
-        Ok(storage_usage)
-    }
-
     #[mz_ore::instrument(level = "debug")]
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
         self.with_trace(|trace| {
@@ -1309,12 +1315,12 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     #[mz_ore::instrument(level = "debug")]
     async fn sync_updates(
         &mut self,
-        ts: mz_repr::Timestamp,
+        target_upper: mz_repr::Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
-        self.sync(ts.into()).await?;
+        self.sync(target_upper.into()).await?;
         let mut updates = Vec::new();
         while let Some(update) = self.update_applier.updates.front() {
-            if update.ts > ts {
+            if update.ts >= target_upper {
                 break;
             }
 
@@ -1332,7 +1338,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 #[async_trait]
 impl DurableCatalogState for PersistCatalogState {
     fn is_read_only(&self) -> bool {
-        matches!(self.update_applier.mode, Mode::Readonly)
+        matches!(self.mode, Mode::Readonly)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1347,11 +1353,11 @@ impl DurableCatalogState for PersistCatalogState {
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Timestamp, CatalogError> {
         async fn commit_transaction_inner(
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
-        ) -> Result<(), CatalogError> {
+        ) -> Result<Timestamp, CatalogError> {
             // If the transaction is empty then we don't error, even in read-only mode. This matches the
             // semantics that the stash uses.
             if !txn_batch.is_empty() && catalog.is_read_only() {
@@ -1373,18 +1379,22 @@ impl DurableCatalogState for PersistCatalogState {
             let updates = StateUpdate::from_txn_batch(txn_batch).collect();
             debug!("committing updates: {updates:?}");
 
-            if matches!(catalog.update_applier.mode, Mode::Writable) {
-                catalog.compare_and_append(updates).await?;
-            } else if matches!(catalog.update_applier.mode, Mode::Savepoint) {
-                let ts = catalog.upper;
-                let updates =
-                    updates
-                        .into_iter()
-                        .map(|(kind, diff)| StateUpdate { kind, ts, diff });
-                catalog.apply_updates(updates)?;
-            }
+            let next_upper = match catalog.mode {
+                Mode::Writable => catalog.compare_and_append(updates).await?,
+                Mode::Savepoint => {
+                    let ts = catalog.upper;
+                    let updates =
+                        updates
+                            .into_iter()
+                            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+                    catalog.apply_updates(updates)?;
+                    catalog.upper = catalog.upper.step_forward();
+                    catalog.upper
+                }
+                Mode::Readonly => catalog.upper,
+            };
 
-            Ok(())
+            Ok(next_upper)
         }
         self.metrics.transaction_commits.inc();
         let counter = self.metrics.transaction_commit_latency_seconds.clone();
@@ -1404,18 +1414,14 @@ impl DurableCatalogState for PersistCatalogState {
         Ok(())
     }
 
-    // TODO(jkosh44) For most modifications we delegate to transactions to avoid duplicate code.
-    // This is slightly inefficient because we have to clone an entire snapshot when we usually
-    // only need one part of the snapshot. A Potential mitigation against these performance hits is
-    // to utilize `CoW`s in `Transaction`s to avoid cloning unnecessary state.
-
     #[mz_ore::instrument]
-    async fn prune_storage_usage(
+    async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         self.sync_to_current_upper().await?;
+
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
         let cutoff_ts = match retention_period {
@@ -1446,11 +1452,14 @@ impl DurableCatalogState for PersistCatalogState {
             .into_iter()
             .map(RustType::from_proto)
             .map_ok(|key: StorageUsageKey| key.metric);
+        let mut events = Vec::new();
         let mut expired = Vec::new();
 
         for event in storage_usage {
             let event = event?;
-            if u128::from(event.timestamp()) < cutoff_ts {
+            if u128::from(event.timestamp()) >= cutoff_ts {
+                events.push(event);
+            } else if retention_period.is_some() {
                 debug!("pruning storage event {event:?}");
                 expired.push(event);
             }
@@ -1460,11 +1469,11 @@ impl DurableCatalogState for PersistCatalogState {
             let mut txn = self.transaction().await?;
             txn.remove_storage_usage_events(expired);
             txn.commit_internal().await?;
-        } else {
-            self.confirm_leadership().await?;
         }
 
-        Ok(())
+        events.sort_by(|event1, event2| event1.sortable_id().cmp(&event2.sortable_id()));
+
+        Ok(events)
     }
 }
 
@@ -1573,7 +1582,8 @@ async fn snapshot_binary_inner(
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
 }
 
-// Debug methods.
+// Debug methods used by the catalog-debug tool.
+
 impl Trace {
     /// Generates a [`Trace`] from snapshot.
     fn from_snapshot(snapshot: impl IntoIterator<Item = StateUpdate>) -> Trace {

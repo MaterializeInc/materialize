@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use mz_dyncfg::{Config, ConfigSet};
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
@@ -478,7 +479,7 @@ where
                     // of the inputs and independent of anything in persist
                     // state. It's handed back via a Break, so we never even try
                     // to commit it. No network, no Indeterminate.
-                    assert!(indeterminate.is_none());
+                    assert_none!(indeterminate);
                     return CompareAndAppendRes::InvalidUsage(err);
                 }
                 Err(CompareAndAppendBreak::InlineBackpressure) => {
@@ -1624,7 +1625,11 @@ pub mod datadriven {
         let target_size = args.optional("target_size");
         let parts_size_override = args.optional("parts_size_override");
         let consolidate = args.optional("consolidate").unwrap_or(true);
-        let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
+        let mut updates: Vec<_> = args
+            .input
+            .split('\n')
+            .flat_map(DirectiveArgs::parse_update)
+            .collect();
 
         let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new());
         if let Some(target_size) = target_size {
@@ -1634,11 +1639,13 @@ pub mod datadriven {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
+        if consolidate {
+            consolidate_updates(&mut updates);
+        }
         let builder = BatchBuilderInternal::new(
             cfg.clone(),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
-            schemas.clone(),
             datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
@@ -1650,8 +1657,11 @@ pub mod datadriven {
             consolidate,
         );
         let mut builder = BatchBuilder {
-            builder,
             stats_schemas: schemas.clone(),
+            builder,
+            metrics: Arc::clone(&datadriven.client.metrics),
+            key_buf: vec![],
+            val_buf: vec![],
         };
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");

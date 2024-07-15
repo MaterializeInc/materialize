@@ -40,8 +40,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
-use mz_ore::task;
 use mz_ore::{assert_contains, task::RuntimeExt};
+use mz_ore::{assert_err, assert_none, assert_ok, task};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -462,7 +462,7 @@ ORDER BY mseh.began_at",
         .as_ref()
         .unwrap()
         .contains("division by zero"));
-    assert!(sl_results[3].rows_returned.is_none());
+    assert_none!(sl_results[3].rows_returned);
 }
 
 #[mz_ore::test]
@@ -600,7 +600,7 @@ ORDER BY mseh.began_at",
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
         assert!(r.began_at <= r.finished_at);
-        assert!(r.execution_strategy.is_none());
+        assert_none!(r.execution_strategy);
     }
     assert_eq!(sl_subscribes[0].finished_status, "success");
     assert_eq!(sl_subscribes[1].finished_status, "canceled");
@@ -1547,7 +1547,7 @@ fn test_max_request_size() {
 
         let err = client.query(statement, &[&param]).unwrap_db_error();
         assert_contains!(err.message(), "request larger than");
-        assert!(client.is_valid(Duration::from_secs(2)).is_err());
+        assert_err!(client.is_valid(Duration::from_secs(2)));
     }
 
     // http
@@ -2382,10 +2382,7 @@ fn test_internal_ws_auth() {
     ]);
     // We should receive error if sending the standard bearer auth, since that is unexpected
     // for the Internal HTTP API
-    assert_eq!(
-        test_util::auth_with_ws(&mut ws, options.clone()).is_err(),
-        true
-    );
+    assert_err!(test_util::auth_with_ws(&mut ws, options.clone()));
 
     // Recreate the websocket
     let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
@@ -2872,7 +2869,7 @@ fn test_invalid_webhook_body() {
 
     // Send non-UTF8 text which will fail to get deserialized.
     let non_utf8 = vec![255, 255, 255, 255];
-    assert!(std::str::from_utf8(&non_utf8).is_err());
+    assert_err!(std::str::from_utf8(&non_utf8));
 
     let resp = http_client
         .post(webhook_url)
@@ -3486,7 +3483,7 @@ fn test_webhook_url_notice() {
         .expect("contains notice")
         .expect("contains message");
     // We should only get the one notice.
-    assert!(rx.try_next().is_err());
+    assert_err!(rx.try_next());
 
     // Print the notice to stderr for future debug-ability.
     eprintln!("notice: {}", url_notice.message());
@@ -4454,7 +4451,7 @@ async fn test_cert_reloading() {
     let (tx, rx) = oneshot::channel();
     reload_tx.try_send(Some(tx)).unwrap();
     let res = rx.await.unwrap();
-    assert!(res.is_err());
+    assert_err!(res);
 
     // We should still be on the old cert because now the cert and key mismatch.
     let resp = client
@@ -4476,7 +4473,7 @@ async fn test_cert_reloading() {
     let (tx, rx) = oneshot::channel();
     reload_tx.try_send(Some(tx)).unwrap();
     let res = rx.await.unwrap();
-    assert!(res.is_ok());
+    assert_ok!(res);
     let resp = client
         .post(&https_url)
         .header("Content-Type", "application/json")

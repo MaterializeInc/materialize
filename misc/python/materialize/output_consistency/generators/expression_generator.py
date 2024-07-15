@@ -30,6 +30,9 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -156,33 +159,41 @@ class ExpressionGenerator:
             return operation.return_type_spec.type_category == DataTypeCategory.BOOLEAN
 
         boolean_operation = self.pick_random_operation(use_aggregation, accept_op)
-        return self.generate_expression(
+        expression, _ = self.generate_expression(
             boolean_operation, storage_layout, nesting_level
         )
+        return expression
 
     def generate_expression(
         self,
         operation: DbOperationOrFunction,
         storage_layout: ValueStorageLayout | None = None,
         nesting_level: int = NESTING_LEVEL_ROOT,
-    ) -> ExpressionWithArgs | None:
+    ) -> tuple[ExpressionWithArgs | None, int]:
+        """
+        :return: the expression or None if it was not possible to create one, and the number of used operation params
+        """
         if storage_layout is None:
             storage_layout = self._select_storage_layout(operation)
 
+        number_of_args = self.randomized_picker.random_number(
+            operation.min_param_count, operation.max_param_count
+        )
+
         try:
             args = self._generate_args_for_operation(
-                operation, storage_layout, nesting_level + 1
+                operation, number_of_args, storage_layout, nesting_level + 1
             )
         except NoSuitableExpressionFound as ex:
             if self.config.verbose_output:
                 print(f"No suitable expression found: {ex.message}")
-            return None
+            return None, number_of_args
 
         is_aggregate = operation.is_aggregation or self._contains_aggregate_arg(args)
         is_expect_error = operation.is_expected_to_cause_db_error(args)
         expression = ExpressionWithArgs(operation, args, is_aggregate, is_expect_error)
 
-        return expression
+        return expression, number_of_args
 
     def _select_storage_layout(
         self, operation: DbOperationOrFunction
@@ -219,14 +230,11 @@ class ExpressionGenerator:
     def _generate_args_for_operation(
         self,
         operation: DbOperationOrFunction,
+        number_of_args: int,
         storage_layout: ValueStorageLayout,
         nesting_level: int,
         try_number: int = 1,
     ) -> list[Expression]:
-        number_of_args = self.randomized_picker.random_number(
-            operation.min_param_count, operation.max_param_count
-        )
-
         if number_of_args == 0:
             return []
 
@@ -252,6 +260,7 @@ class ExpressionGenerator:
             # retry
             return self._generate_args_for_operation(
                 operation,
+                number_of_args,
                 storage_layout,
                 nesting_level=nesting_level,
                 try_number=try_number + 1,
@@ -269,6 +278,9 @@ class ExpressionGenerator:
     ) -> Expression:
         if isinstance(param, EnumConstantOperationParam):
             return self._pick_enum_constant(param)
+
+        if isinstance(param, SameOperationParam):
+            return arg_context.args[param.index_of_previous_param]
 
         create_complex_arg = (
             arg_context.requires_aggregation()
@@ -362,7 +374,7 @@ class ExpressionGenerator:
             suitable_operations, weights
         )
 
-        nested_expression = self.generate_expression(
+        nested_expression, _ = self.generate_expression(
             operation, storage_layout, nesting_level
         )
 

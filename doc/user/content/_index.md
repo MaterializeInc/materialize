@@ -23,9 +23,9 @@ data freshness**.
 
 ## Ready to get started? 🚀
 
-1. Sign up for a Materialize account.
+1. Sign up for a [free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building with a free trial.
+3. Connect your own data sources and start building.
 
 {{</ callout >}}
 
@@ -33,12 +33,13 @@ data freshness**.
 {{< linkbox icon="bulb" title="Key Concepts" >}}
 
 -   [Materialize overview](/overview/what-is-materialize/)
--   [Key Concepts](/get-started/key-concepts/)
+-   [Key Concepts](/concepts/)
     {{</ linkbox >}}
     {{< linkbox icon="doc" title="Guides" >}}
 -   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 -   [dbt &amp; Materialize](/integrations/dbt/)
 -   [Materialize &amp; Node.js](/integrations/node-js/)
+
 -   [Time-windowed computation](/sql/patterns/temporal-filters/)
     {{</ linkbox >}}
     {{< linkbox icon="book" title="Reference" >}}

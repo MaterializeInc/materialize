@@ -7,7 +7,7 @@ menu:
     parent: commands
 ---
 
-`CREATE CLUSTER` creates a new [cluster](/get-started/key-concepts#clusters).
+`CREATE CLUSTER` creates a new [cluster](/concepts/clusters/).
 
 ## Conceptual framework
 
@@ -18,8 +18,8 @@ The following operations require compute resources in Materialize, and so need
 to be associated with a cluster:
 
 - Executing [`SELECT`] and [`SUBSCRIBE`] statements.
-- Maintaining [indexes](/get-started/key-concepts#indexes) and [materialized views](/get-started/key-concepts#materialized-views).
-- Maintaining [sources](/get-started/key-concepts#sources) and [sinks](/get-started/key-concepts#sinks).
+- Maintaining [indexes](/concepts/indexes/) and [materialized views](/concepts/views/#materialized-views).
+- Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
 
 ## Syntax
 
@@ -232,6 +232,98 @@ Cluster `c` will have consumed 0.4 credits in total:
     credits.
   * Replica `c.r2` was provisioned from 3:45:00 to 3:45:45, consuming 0.1
     credits.
+
+### Scheduling
+
+{{< private-preview />}}
+
+To support [scheduled refreshes in materialized views](../create-materialized-view/#refresh-strategies),
+you can configure a cluster to automatically turn on and off using the
+`SCHEDULE...ON REFRESH` syntax.
+
+```mzsql
+CREATE CLUSTER my_scheduled_cluster (
+  SIZE = '3200cc',
+  SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
+);
+```
+
+Scheduled clusters should **only** contain materialized views configured with a
+non-default [refresh strategy](../create-materialized-view/#refresh-strategies)
+(and any indexes built on these views). These clusters will automatically turn
+on (i.e., be provisioned with compute resources) based on the configured
+refresh strategies, and **only** consume credits for the duration of the
+refreshes.
+
+It's not possible to manually turn on a cluster with `ON REFRESH` scheduling. If
+you need to turn on a cluster outside its schedule, you can temporarily disable
+scheduling and provision compute resources using [`ALTER CLUSTER`](../alter-cluster/#schedule):
+
+```mzsql
+ALTER CLUSTER my_scheduled_cluster SET (SCHEDULE = MANUAL, REPLICATION FACTOR = 1);
+```
+
+To re-enable scheduling:
+
+```mzsql
+ALTER CLUSTER my_scheduled_cluster
+SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
+```
+
+#### Hydration time estimate
+
+<p style="font-size:14px"><b>Syntax:</b> <code>HYDRATION TIME ESTIMATE</code> <i>interval</i></p>
+
+By default, scheduled clusters will turn on at the scheduled refresh time. To
+avoid [unavailability of the objects scheduled for refresh](/sql/create-materialized-view/#querying-materialized-views-with-refresh-strategies) during the refresh
+operation, we recommend turning the cluster on ahead of the scheduled time to
+allow rehydration to complete. This can be controlled using the `HYDRATION
+TIME ESTIMATE` clause.
+
+#### Introspection
+
+To check the scheduling strategy associated with a cluster, you can query the
+[`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
+system catalog table:
+
+```mzsql
+SELECT c.id AS cluster_id,
+       c.name AS cluster_name,
+       cs.type AS schedule_type,
+       cs.refresh_hydration_time_estimate
+FROM mz_internal.mz_cluster_schedules cs
+JOIN mz_clusters c ON cs.cluster_id = c.id
+WHERE c.name = 'my_refresh_cluster';
+```
+
+To check if a scheduled cluster is turned on, you can query the
+[`mz_catalog.mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
+system catalog table:
+
+```mzsql
+SELECT cs.cluster_id,
+       -- A cluster with scheduling is "on" when it has compute resources
+       -- (i.e. a replica) attached.
+       CASE WHEN cr.id IS NOT NULL THEN true
+       ELSE false END AS is_on
+FROM mz_internal.mz_cluster_schedules cs
+JOIN mz_clusters c ON cs.cluster_id = c.id AND cs.type = 'on-refresh'
+LEFT JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id;
+```
+
+You can also use the [audit log](../system-catalog/mz_catalog/#mz_audit_events)
+to observe the commands that are automatically run when a scheduled cluster is
+turned on and off for materialized view refreshes:
+
+```mzsql
+SELECT *
+FROM mz_audit_events
+WHERE object_type = 'cluster-replica'
+ORDER BY occurred_at DESC;
+```
+
+Any commands attributed to scheduled refreshes will be marked with
+`"reason":"schedule"` under the `details` column.
 
 ### Known limitations
 

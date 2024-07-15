@@ -21,7 +21,7 @@ from materialize.test_analytics.versioning.scalability.scalability_version_skew_
 from materialize.test_analytics.versioning.versioning_config import (
     VersioningConfig,
 )
-from materialize.util import compute_sha256_of_file, compute_sha256_of_utf8_string
+from materialize.util import sha256_of_file, sha256_of_utf8_string
 
 VERSION_SKEW_CHECK_CONFIGS = [
     SCALABILITY_FRAMEWORK_VERSION_SKEW_CHECK_CONFIG,
@@ -55,7 +55,7 @@ def check_versioning(config: VersioningConfig) -> list[str]:
     hash_per_relative_path = compute_hashes(config)
 
     if config.group_hash_to_single_value():
-        merged_sha_value = compute_sha256_of_utf8_string(
+        merged_sha_value = sha256_of_utf8_string(
             "-".join(hash_per_relative_path.values())
         )
         hash_per_relative_path.clear()
@@ -91,7 +91,7 @@ def compute_hashes(
                 )
             continue
 
-        sha_value = compute_sha256_of_file(file_path)
+        sha_value = sha256_of_file(file_path)
 
         relative_path = file_path.relative_to(config.root_directory)
         hash_per_file_path[str(relative_path)] = sha_value

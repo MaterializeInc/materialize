@@ -22,7 +22,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::columnar::Schema;
+use crate::columnar::{Schema, Schema2};
 
 pub mod codec_impls;
 pub mod columnar;
@@ -43,7 +43,7 @@ pub trait Codec: Sized + PartialEq + 'static {
     /// This is a separate type because Row is not self-describing. For Row, you
     /// need a RelationDesc to determine the types of any columns that are
     /// Datum::Null.
-    type Schema: Schema<Self>;
+    type Schema: Schema<Self> + Schema2<Self>;
 
     /// Name of the codec.
     ///
@@ -58,6 +58,17 @@ pub trait Codec: Sized + PartialEq + 'static {
     fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut;
+
+    /// Encode a key or value to a Vec.
+    ///
+    /// This is a convenience function for calling [Self::encode] with a fresh
+    /// `Vec` each time. Reuse an allocation when performance matters!
+    fn encode_to_vec(&self) -> Vec<u8> {
+        let mut buf = vec![];
+        self.encode(&mut buf);
+        buf
+    }
+
     /// Decode a key or value previous encoded with this codec's
     /// [Codec::encode].
     ///
@@ -74,7 +85,7 @@ pub trait Codec: Sized + PartialEq + 'static {
 
     /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
     /// if unnecessary.
-    type Storage;
+    type Storage: Default;
     /// An alternate form of [Self::decode] which enables amortizing allocs.
     ///
     /// First, instead of returning `Self`, it takes `&mut Self` as a parameter,

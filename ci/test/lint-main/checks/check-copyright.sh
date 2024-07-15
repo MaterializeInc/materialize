@@ -23,6 +23,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
     -e '(^|/)\.(docker|git|vscode|bazel)ignore$' \
     -e '(^|/)\.bazelrc$' \
+    -e '(^|/)\.bazelversion$' \
     -e '(^|/)\.gitattributes$' \
     -e '(^|/)\.github/(dependabot\.yml|CODEOWNERS)$' \
     -e '(^|/)\.gitmodules$' \

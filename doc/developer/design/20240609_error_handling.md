@@ -161,6 +161,8 @@ discover the affected keys by running `SELECT key ... WHERE error IS NOT NULL`.
     approach to start, as this provides correctness guarantees and solves the immediate
     need of our customers who primarily encounter value-decoding errors in Kafka
     upsert sources.
+    - 7/8 Update: We have implemented `VALUE DECODING ERRORS = INLINE` as an option
+    on `ENVELOPE UPSERT` sources.
 
 #### Limitations
 

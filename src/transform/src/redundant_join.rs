@@ -27,8 +27,8 @@ use std::collections::BTreeMap;
 use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
-use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::{assert_none, soft_panic_or_log};
 
 use crate::{all, TransformCtx};
 
@@ -100,7 +100,7 @@ impl RedundantJoin {
 
                     // Extend the lets context with an entry for this binding.
                     let prov_old = ctx.insert(*id, value_prov);
-                    assert!(prov_old.is_none(), "No shadowing");
+                    assert_none!(prov_old, "No shadowing");
 
                     // Determine provenance of the body.
                     let result = self.action(body, ctx)?;
@@ -122,7 +122,7 @@ impl RedundantJoin {
                     // context with the empty vec![] for each id.
                     for id in ids.iter() {
                         let prov_old = ctx.insert(*id, vec![]);
-                        assert!(prov_old.is_none(), "No shadowing");
+                        assert_none!(prov_old, "No shadowing");
                     }
 
                     // In other words, we don't attempt to derive additional

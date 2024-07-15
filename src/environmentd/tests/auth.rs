@@ -33,10 +33,10 @@ use mz_frontegg_auth::{
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 use mz_frontegg_mock::{ApiToken, FronteggMockServer, TenantApiTokenConfig, UserConfig};
-use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
+use mz_ore::{assert_contains, assert_err, assert_none, assert_ok};
 use mz_sql::names::PUBLIC_ROLE_NAME;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use openssl::error::ErrorStack;
@@ -1286,7 +1286,7 @@ async fn test_auth_base_disable_tls() {
                     // Connecting to an HTTP server via HTTPS does not yield
                     // a graceful error message. This could plausibly change
                     // due to OpenSSL or Hyper refactorings.
-                    assert!(code.is_none());
+                    assert_none!(code);
                     assert_contains!(message, "packet length too long");
                 })),
             },
@@ -1457,7 +1457,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Err(Box::new(|code, message| {
-                    assert!(code.is_none());
+                    assert_none!(code);
                     assert_contains!(message, "unable to get local issuer certificate");
                 })),
             },
@@ -2831,7 +2831,7 @@ async fn test_transient_auth_failures() {
             Ok(b.set_verify(SslVerifyMode::NONE))
         })))
         .await;
-    assert!(result.is_err());
+    assert_err!(result);
 
     // Re-enable auth.
     frontegg_server.enable_auth.store(true, Ordering::Relaxed);
@@ -2965,7 +2965,7 @@ async fn test_transient_auth_failure_on_refresh() {
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
 
     // Our client should have been closed since auth refresh failed.
-    assert!(pg_client.query_one("SELECT 1", &[]).await.is_err());
+    assert_err!(pg_client.query_one("SELECT 1", &[]).await);
 
     // Re-enable auth.
     frontegg_server.enable_auth.store(true, Ordering::Relaxed);
@@ -2981,6 +2981,6 @@ async fn test_transient_auth_failure_on_refresh() {
         })))
         .await
         .unwrap();
-    assert!(pg_client2.query_one("SELECT 1", &[]).await.is_ok());
+    assert_ok!(pg_client2.query_one("SELECT 1", &[]).await);
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 3);
 }

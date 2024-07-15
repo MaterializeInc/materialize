@@ -11,7 +11,7 @@ menu:
     weight: 30
 ---
 
-A [sink](../../get-started/key-concepts/#sinks) describes an external system you
+A [sink](/concepts/sinks/) describes an external system you
 want Materialize to write data to, and provides details about how to encode
 that data.
 
@@ -44,6 +44,12 @@ the cluster. Colocating multiple sinks onto the same cluster can be more
 resource efficient when you have many low-traffic sinks that occasionally need
 some burst capacity.
 
+## Details
+
+A sink cannot be created directly on a catalog object. As a workaround you can
+create a materialized view on a catalog object and create a sink on the
+materialized view.
+
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
 
 ## Privileges
@@ -61,7 +67,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [Key Concepts](../../get-started/key-concepts/)
+- [Sinks](/concepts/sinks/)
 - [`SHOW SINKS`](/sql/show-sinks/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SINK`](/sql/show-create-sink/)

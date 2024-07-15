@@ -4248,7 +4248,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.108.0-dev"
+version = "0.109.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4375,7 +4375,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.108.0-dev"
+version = "0.109.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -4531,7 +4531,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.108.0-dev"
+version = "0.109.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4771,7 +4771,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.108.0-dev"
+version = "0.109.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -5110,6 +5110,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "byteorder",
+ "bytes",
  "chrono",
  "clap",
  "criterion",
@@ -5120,6 +5121,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ccsr",
  "mz-ore",
+ "mz-pgrepr",
  "mz-repr",
  "once_cell",
  "ordered-float 4.2.0",
@@ -5510,10 +5512,11 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.108.0-dev"
+version = "0.109.0-dev"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.4",
+ "arrow",
  "async-stream",
  "async-trait",
  "bytes",
@@ -6598,7 +6601,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.108.0-dev"
+version = "0.109.0-dev"
 dependencies = [
  "anyhow",
  "arrow",
@@ -7409,6 +7412,7 @@ name = "persistcli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "async-trait",
  "axum",
  "bytes",
