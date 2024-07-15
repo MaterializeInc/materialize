@@ -86,7 +86,14 @@ pub trait CollectionPlan {
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect)]
+///
+/// `derived_hash_with_manual_eq` was complaining for the wrong reason: This lint exists because
+/// it's bad when `Eq` doesn't agree with `Hash`, which is often quite likely if one of them is
+/// implemented manually. However, our manual implementation of `Eq` _will_ agree with the derived
+/// one. This is because the reason for the manual implementation is not to change the semantics
+/// from the derived one, but to avoid stack overflows.
+#[allow(clippy::derived_hash_with_manual_eq)]
+#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect, Hash)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///

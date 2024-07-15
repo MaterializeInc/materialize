@@ -26,6 +26,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::{fmt, iter};
 
+use differential_dataflow::Hashable;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
@@ -321,7 +322,7 @@ impl Transform for Fixpoint {
         // stable shape.
         let mut iter_no = 0;
         let mut seen = BTreeMap::new();
-        seen.insert(relation.clone(), iter_no);
+        seen.insert(relation.hashed(), iter_no);
         loop {
             let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
@@ -331,13 +332,16 @@ impl Transform for Fixpoint {
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
-                let seen_i = seen.insert(relation.clone(), i);
+                let seen_i = seen.insert(relation.hashed(), i);
                 if let Some(seen_i) = seen_i {
                     // We got into an infinite loop (e.g., we are oscillating between two plans).
                     // This is not catastrophic, because we can just say we are done now,
                     // but it would be great to eventually find a way to prevent these loops from
                     // happening in the first place. We have several relevant issues, see
                     // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                    //
+                    // (Technically, it's also possible that there is just a hash collision, but
+                    // the chances of this are negligible.)
                     mz_repr::explain::trace_plan(relation);
                     soft_panic_or_log!(
                         "Fixpoint {} detected a loop of length {} after {} iterations",
