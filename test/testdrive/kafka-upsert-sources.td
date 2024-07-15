@@ -727,4 +727,3 @@ $ kafka-ingest format=bytes key-format=avro key-schema=${keyschema} topic=inline
 birdmore      <null>   <null>    "(\"Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 32 (original bytes: [20, 22, 6e, 6f, 74, 76, 61, 6c, 69, 64, 61, 76, 72, 6f, 22])\")"
 fish          fish     1000      <null>
 mammal1       moose    1         <null>
-
