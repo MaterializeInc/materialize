@@ -33,7 +33,6 @@ ingests data and keeps results up-to-date as new data arrives.
 
 ## Key features
 
-
 Materialize combines the accessibility of SQL databases with a streaming engine
 that is horizontally scalable, highly available, and strongly consistent.
 
