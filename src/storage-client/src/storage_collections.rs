@@ -2311,7 +2311,7 @@ where
             let collection = if let Some(c) = self_collections.get_mut(id) {
                 c
             } else {
-                warn!("Reference to absent collection {id}");
+                trace!("Reference to absent collection {id}, due to concurrent removal of that collection");
                 continue;
             };
 
