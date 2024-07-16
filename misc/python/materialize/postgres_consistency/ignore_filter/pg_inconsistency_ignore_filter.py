@@ -683,6 +683,18 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         col_index = error.col_index
         assert col_index is not None
 
+        all_involved_characteristics = query_template.select_expressions[
+            col_index
+        ].recursively_collect_involved_characteristics(query_template.row_selection)
+
+        if query_template.where_expression is not None:
+            all_involved_characteristics = (
+                all_involved_characteristics
+                | query_template.where_expression.recursively_collect_involved_characteristics(
+                    query_template.row_selection
+                )
+            )
+
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
                 if isinstance(expression.operation, DbOperation):
@@ -802,19 +814,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                     "#24687: different representation of floating-point type"
                 )
 
-        if query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            lambda expression: expression.has_any_characteristic(
-                {ExpressionCharacteristics.STRING_WITH_ESZETT},
-            ),
-            True,
-        ) and query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            partial(
-                matches_fun_by_any_name,
-                function_names_in_lower_case={"upper", "initcap"},
-            ),
-            True,
+        if (
+            query_template.matches_specific_select_or_filter_expression(
+                col_index,
+                partial(
+                    matches_fun_by_any_name,
+                    function_names_in_lower_case={"upper", "initcap"},
+                ),
+                True,
+            )
+            and ExpressionCharacteristics.STRING_WITH_ESZETT
+            in all_involved_characteristics
         ):
             return YesIgnore("#26846: eszett in upper")
 
