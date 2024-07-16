@@ -151,6 +151,15 @@ async fn migrate_builtin_items_legacy(
 /// Since the new shards are created in read-only mode, they will be left empty and all dependent
 /// items will fail to hydrate.
 /// TODO(jkosh44) Back-fill these tables in read-only mode so they can properly hydrate.
+///
+/// While in read-only mode we write the migration changes to `txn`, which will update the
+/// in-memory catalog, which will cause the new shards to be created in storage. However, we don't
+/// have to worry about the catalog changes becoming durable because the `txn` is in savepoint
+/// mode. When we re-execute this migration as the leader (i.e. outside of read-only mode), `txn`
+/// will be writable and the migration will be made durable in the catalog. We always write
+/// directly to the migration shard, regardless of read-only mode. So we have to be careful not to
+/// remove anything from the migration shard until we're sure that its results have been made
+/// durable elsewhere.
 async fn migrate_builtin_items_0dt(
     state: &mut CatalogState,
     txn: &mut Transaction<'_>,
@@ -159,6 +168,13 @@ async fn migrate_builtin_items_0dt(
     deploy_generation: u64,
     read_only: bool,
 ) -> Result<BuiltinItemMigrationResult, Error> {
+    assert_eq!(
+        read_only,
+        txn.is_savepoint(),
+        "txn must be in savepoint mode when read_only is true, and in writable mode when \
+        read_only is false"
+    );
+
     // 1. Open migration shard.
     let organization_id = state.config.environment_id.organization_id();
     let shard_id = builtin_migration_shard_id(organization_id);
@@ -284,6 +300,8 @@ async fn migrate_builtin_items_0dt(
         }
     }
 
+    // It's very important that we use the same `upper` that was used to read in a snapshot of the
+    // shard. If someone updated the shard after we read then this write will fail.
     write_to_migration_shard(
         migrated_shard_updates,
         upper,

@@ -1343,6 +1343,10 @@ impl DurableCatalogState for PersistCatalogState {
         matches!(self.mode, Mode::Readonly)
     }
 
+    fn is_savepoint(&self) -> bool {
+        matches!(self.mode, Mode::Savepoint)
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         self.metrics.transactions_started.inc();

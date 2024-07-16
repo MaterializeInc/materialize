@@ -241,6 +241,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Returns true if the catalog is opened in read only mode, false otherwise.
     fn is_read_only(&self) -> bool;
 
+    /// Returns true if the catalog is opened is savepoint mode, false otherwise.
+    fn is_savepoint(&self) -> bool;
+
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
