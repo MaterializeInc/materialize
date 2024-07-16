@@ -99,6 +99,8 @@ case "$arch_gcc" in
     *) die "unknown host architecture \"$arch\"" ;;
 esac
 
+bazel_version=$(cat .bazelversion)
+
 uid=$(id -u)
 gid=$(id -g)
 [[ "$uid" -lt 500 ]] && uid=501
@@ -115,6 +117,7 @@ build() {
         --build-arg "RUST_COMPONENTS=$rust_components" \
         --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
         --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
+        --build-arg "BAZEL_VERSION=$bazel_version" \
         --tag materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         "$@" ci/builder
