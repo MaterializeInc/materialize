@@ -48,6 +48,22 @@ steps:
         agents:
           queue: builder-linux-aarch64
 
+      - id: build-x86_64-bazel
+        label: ":bazel: Build x86_64"
+        command: bin/ci-builder run stable bin/bazel-temp
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+
+      - id: build-aarch64-bazel
+        label: ":bazel: Build aarch64"
+        command: bin/ci-builder run stable bin/bazel-temp
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-aarch64
+
       - id: build-wasm
         label: Build WASM
         command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
