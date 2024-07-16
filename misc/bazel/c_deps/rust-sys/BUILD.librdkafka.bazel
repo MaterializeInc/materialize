@@ -57,7 +57,10 @@ cmake(
         "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=0",
         # Uncomment this if you ever need to debug what library cmake is resolving.
         # "-DCMAKE_FIND_DEBUG_MODE=TRUE",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0"],
+        "//conditions:default": [],
+    }),
     env = {
         # Note: casing here is important.
         "OpenSSL_ROOT": "$(execpath @openssl//:openssl_root)",

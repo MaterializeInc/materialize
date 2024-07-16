@@ -25,6 +25,8 @@ ISSUE_RE = re.compile(
     r"""
     ( TimelyDataflow/timely-dataflow\#(?P<timelydataflow>[0-9]+)
     | ( materialize\# | materialize/issues/ | \# ) (?P<materialize>[0-9]+)
+    | ( cloud\# | cloud/issues/ ) (?P<cloud>[0-9]+)
+    | ( incidents-and-escalations\# | incidents-and-escalations/issues/ ) (?P<incidentsandescalations>[0-9]+)
     )
     """,
     re.VERBOSE,
@@ -33,6 +35,8 @@ ISSUE_RE = re.compile(
 GROUP_REPO = {
     "timelydataflow": "TimelyDataflow/timely-dataflow",
     "materialize": "MaterializeInc/materialize",
+    "cloud": "MaterializeInc/cloud",
+    "incidentsandescalations": "MaterializeInc/incidents-and-escalations",
 }
 
 REFERENCE_RE = re.compile(
@@ -69,8 +73,6 @@ IGNORE_RE = re.compile(
     # test/sqllogictest/cockroach/*.slt
     | cockroach\#
     | Liquibase
-    # cloud repo
-    | cloud\#
     # ci/test/lint-buf/README.md
     | Ignore\ because\ of\ #99999
     # src/storage-client/src/controller.rs
@@ -161,7 +163,11 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
                 is_referenced_with_url = "issues/" in issue_match.group(0)
 
                 # Explain plans can look like issue references
-                if int(issue_id) < 100 and not is_referenced_with_url:
+                if (
+                    group == "materialize"
+                    and int(issue_id) < 100
+                    and not is_referenced_with_url
+                ):
                     continue
 
                 issue_refs.append(
@@ -182,12 +188,20 @@ def is_issue_closed_on_github(repository: str, issue_id: int) -> bool:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if token := os.getenv("GITHUB_TOKEN"):
+
+    if token := os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    ):
         headers["Authorization"] = f"Bearer {token}"
 
     url = f"https://api.github.com/repos/{repository}/issues/{issue_id}"
     response = requests.get(url, headers=headers)
 
+    if response.status_code == 404 and not os.getenv("CI"):
+        print(
+            f"Can't check issue #{issue_id} in {repository} repo, set GITHUB_TOKEN environment variable or run this check in CI"
+        )
+        return False
     if response.status_code != 200:
         raise ValueError(
             f"Bad return code from GitHub on {url}: {response.status_code}: {response.text}"

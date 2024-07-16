@@ -299,6 +299,37 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "pg_size_pretty"]
+    #[preserves_uniqueness = false]
+    fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
+        let mut cx = numeric::cx_datum();
+        let units = ["bytes", "kB", "MB", "GB", "TB", "PB"];
+
+        for (pos, unit) in units.iter().rev().skip(1).rev().enumerate() {
+            // return if abs(round(a)) < 10 in the next unit it would be converted to.
+            if Numeric::from(-10239.5) < a && a < Numeric::from(10239.5) {
+                // do not round a when the unit is bytes, as no conversion has happened.
+                if pos > 0 {
+                    cx.round(&mut a);
+                }
+
+                return Ok(format!("{} {unit}", a.to_standard_notation_string()));
+            }
+
+            cx.div(&mut a, &Numeric::from(1024));
+            numeric::munge_numeric(&mut a).unwrap();
+        }
+
+        cx.round(&mut a);
+        Ok(format!(
+            "{} {}",
+            a.to_standard_notation_string(),
+            units.last().unwrap()
+        ))
+    }
+);
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]

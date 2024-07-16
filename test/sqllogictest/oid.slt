@@ -503,6 +503,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 3142  has_type_privilege
 3143  has_type_privilege
 3159  pg_get_viewdef
+3166  pg_size_pretty
 3167  array_remove
 3207  jsonb_array_length
 3208  jsonb_each

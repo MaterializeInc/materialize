@@ -98,6 +98,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use either::Either;
+use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, ProtoBatch};

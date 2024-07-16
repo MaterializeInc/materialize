@@ -444,6 +444,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_interval_to_mz_timestamp = 321;
         google.protobuf.Empty cast_mz_timestamp_to_timestamp = 322;
         google.protobuf.Empty cast_mz_timestamp_to_timestamp_tz = 323;
+        google.protobuf.Empty pg_size_pretty = 324;
     }
 }
 
