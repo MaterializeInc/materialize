@@ -650,6 +650,14 @@ where
             tracing::info!("starting controllers in read-only mode!");
         }
 
+        let now_fn = config.now.clone();
+        let wallclock_lag = move |time: &T| {
+            let now = mz_repr::Timestamp::new(now_fn());
+            let time_ts: mz_repr::Timestamp = time.clone().into();
+            let lag_ts = now.saturating_sub(time_ts);
+            Duration::from(lag_ts)
+        };
+
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
@@ -688,6 +696,7 @@ where
             envd_epoch,
             read_only,
             config.metrics_registry.clone(),
+            Arc::new(wallclock_lag),
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 

@@ -1239,14 +1239,22 @@ pub fn plan_create_source(
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
             // If the value decode error policy is not set we use the default upsert style.
-            let style = if value_decode_err_policy.is_empty() {
-                UpsertStyle::Default(key_envelope)
-            } else if value_decode_err_policy.contains(&SourceErrorPolicy::Inline) {
-                scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_INLINE_ERRORS)?;
-                UpsertStyle::ValueErrInline { key_envelope }
-            } else {
-                bail_unsupported!("ENVELOPE UPSERT with unsupported value decode error policy")
+            let style = match value_decode_err_policy.as_slice() {
+                [] => UpsertStyle::Default(key_envelope),
+                [SourceErrorPolicy::Inline { alias }] => {
+                    scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_INLINE_ERRORS)?;
+                    UpsertStyle::ValueErrInline {
+                        key_envelope,
+                        error_column: alias
+                            .as_ref()
+                            .map_or_else(|| "error".to_string(), |a| a.to_string()),
+                    }
+                }
+                _ => {
+                    bail_unsupported!("ENVELOPE UPSERT with unsupported value decode error policy")
+                }
             };
+
             UnplannedSourceEnvelope::Upsert { style }
         }
         ast::SourceEnvelope::CdcV2 => {

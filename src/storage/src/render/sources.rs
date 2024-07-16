@@ -510,11 +510,13 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             | UpsertStyle::Default(KeyEnvelope::Flattened)
             | UpsertStyle::ValueErrInline {
                 key_envelope: KeyEnvelope::Flattened,
+                error_column: _,
             } => key,
             // named
             UpsertStyle::Default(KeyEnvelope::Named(_))
             | UpsertStyle::ValueErrInline {
                 key_envelope: KeyEnvelope::Named(_),
+                error_column: _,
             } => {
                 if key.iter().nth(1).is_none() {
                     key
@@ -526,6 +528,7 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             UpsertStyle::Default(KeyEnvelope::None)
             | UpsertStyle::ValueErrInline {
                 key_envelope: KeyEnvelope::None,
+                error_column: _,
             } => unreachable!(),
         };
 

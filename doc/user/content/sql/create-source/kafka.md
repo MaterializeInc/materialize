@@ -138,6 +138,13 @@ for the given Kafka message key cannot be decoded, this `error` column will cont
 the error message. If the most recent value for a key has been successfully decoded,
 this column will be `NULL`.
 
+To use an alternative name for the error column, use `INLINE AS ..` to specify the
+column name to use:
+
+```mzsql
+ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE AS my_error_col))
+```
+
 It might be convenient to implement a parsing view on top of your Kafka upsert source that
 excludes keys with decoding errors:
 

@@ -3045,14 +3045,21 @@ CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT 
 ----
 CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC = 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE))
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header3")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [Inline] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header3")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [Inline { alias: None }] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = INLINE)
 ----
 CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC = 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE))
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header3")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [Inline] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header3")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [Inline { alias: None }] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = INLINE AS my_col)
+----
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC = 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE AS my_col))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header3")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [Inline { alias: Some(Ident("my_col")) }] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS)

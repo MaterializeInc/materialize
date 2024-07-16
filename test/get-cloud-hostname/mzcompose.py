@@ -11,24 +11,18 @@ import os
 
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 
 SERVICES = [
-    Materialized(),
     Mz(app_password=""),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("materialized")
-
     parser.add_argument("--app-password-env-var", type=str)
     args = parser.parse_args()
 
     app_password = os.environ[args.app_password_env_var]
-
-    c.up("materialized")
 
     hostname = get_cloud_hostname(c, app_password=app_password, quiet=True)
 

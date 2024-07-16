@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -46,11 +46,10 @@ use crate::controller::error::{CollectionMissing, ERROR_TARGET_REPLICA_FAILED};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
-    ReplicaId,
+    ReplicaId, WallclockLagFn,
 };
 use crate::logging::LogVariant;
-use crate::metrics::{InstanceMetrics, ReplicaMetrics};
-use crate::metrics::{ReplicaCollectionMetrics, UIntGauge};
+use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
 use crate::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
@@ -148,7 +147,6 @@ pub(super) enum SubscribeTargetError {
 }
 
 /// The state we keep for a compute instance.
-#[derive(Debug)]
 pub(super) struct Instance<T> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
@@ -217,6 +215,8 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
+    /// A function that compute the lag between the given time and wallclock time.
+    wallclock_lag: WallclockLagFn<T>,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
 }
@@ -404,8 +404,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// mean littering the code with metric update calls. Encapsulating state metric maintenance in
     /// a single method is less noisy.
     ///
-    /// This method is invoked by `ActiveComputeController::process`, which we expect to
-    /// be periodically called during normal operation.
+    /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
+    /// per second during normal operation.
     fn refresh_state_metrics(&self) {
         let unscheduled_collections_count =
             self.collections.values().filter(|c| !c.scheduled).count();
@@ -428,6 +428,27 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.metrics
             .copy_to_count
             .set(u64::cast_from(self.copy_tos.len()));
+
+        self.refresh_wallclock_lag_metric();
+    }
+
+    /// Refresh the `wallclock_lag_seconds` metric with the current lag values.
+    fn refresh_wallclock_lag_metric(&self) {
+        for (replica_id, replica) in &self.replicas {
+            for (collection_id, replica_collection) in &replica.collections {
+                let Some(metrics) = &replica_collection.metrics else {
+                    continue;
+                };
+
+                let collection = &self.collections[collection_id];
+                let replica_frontier = &collection.replica_write_frontiers[replica_id];
+                let lag = match replica_frontier.as_option() {
+                    Some(ts) => (self.wallclock_lag)(ts),
+                    None => Duration::ZERO,
+                };
+                metrics.wallclock_lag_seconds.observe(lag.as_secs_f64());
+            }
+        }
     }
 
     /// Report updates (inserts or retractions) to the identified collection's dependencies.
@@ -592,6 +613,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             envd_epoch,
             replica_epochs,
             metrics: _,
+            wallclock_lag: _,
             dyncfg: _,
         } = self;
 
@@ -651,6 +673,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        wallclock_lag: WallclockLagFn<T>,
         dyncfg: Arc<ConfigSet>,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
@@ -682,6 +705,7 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
+            wallclock_lag,
             dyncfg,
         };
 

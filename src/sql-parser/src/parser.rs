@@ -2224,7 +2224,9 @@ impl<'a> Parser<'a> {
 
     fn parse_source_error_policy_option(&mut self) -> Result<SourceErrorPolicy, ParserError> {
         match self.expect_one_of_keywords(&[INLINE])? {
-            INLINE => Ok(SourceErrorPolicy::Inline),
+            INLINE => Ok(SourceErrorPolicy::Inline {
+                alias: self.parse_alias()?,
+            }),
             _ => unreachable!(),
         }
     }

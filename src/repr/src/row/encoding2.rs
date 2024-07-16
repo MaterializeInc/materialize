@@ -714,10 +714,10 @@ impl DatumColumnEncoder {
 
                 // TODO(parkmycar): Record these stats.
                 let (vals, _stats) = vals.finish();
-                // Note: A value being null is managed by the null buffer we manually maintain.
-                assert_none!(vals.logical_nulls());
 
-                let field = Field::new_list_field(vals.data_type().clone(), nulls.is_some());
+                // Note: Values in an Array can always be Null, regardless of whether or not the
+                // column is nullable.
+                let field = Field::new_list_field(vals.data_type().clone(), true);
                 let val_offsets = OffsetBuffer::from_lengths(val_lengths);
                 let values =
                     ListArray::new(Arc::new(field), val_offsets, Arc::new(vals), nulls.clone());
@@ -742,10 +742,10 @@ impl DatumColumnEncoder {
             } => {
                 // TODO(parkmycar): Record these stats.
                 let (values, _stats) = values.finish();
-                // Note: A value being null is managed by the null buffer we manually maintain.
-                assert_none!(values.logical_nulls());
 
-                let field = Field::new_list_field(values.data_type().clone(), nulls.is_some());
+                // Note: Values in an Array can always be Null, regardless of whether or not the
+                // column is nullable.
+                let field = Field::new_list_field(values.data_type().clone(), true);
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
@@ -761,17 +761,15 @@ impl DatumColumnEncoder {
                 let keys = keys.finish();
                 // TODO(parkmycar): Record these stats.
                 let (vals, _val_stats) = vals.finish();
-                // Note: A value being null is managed by the null buffer we manually maintain.
-                assert_none!(keys.logical_nulls());
-                assert_none!(vals.logical_nulls());
 
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
-                // The keys and values in a Map can never be null, instead a
-                // field being null is maintained by the higher level MapArray.
+                // Note: Values in an Map can always be Null, regardless of whether or not the
+                // column is nullable, but Keys cannot.
+                assert_none!(keys.logical_nulls());
                 let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
-                let val_field = Arc::new(Field::new("val", vals.data_type().clone(), false));
+                let val_field = Arc::new(Field::new("val", vals.data_type().clone(), true));
                 let fields = Fields::from(vec![Arc::clone(&key_field), Arc::clone(&val_field)]);
                 let entries = StructArray::new(fields, vec![Arc::new(keys), vals], None);
 

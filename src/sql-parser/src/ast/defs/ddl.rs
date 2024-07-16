@@ -545,14 +545,21 @@ impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceErrorPolicy {
-    Inline,
+    Inline {
+        /// The alias to use for the error column. If unspecified will be `error`.
+        alias: Option<Ident>,
+    },
 }
 
 impl AstDisplay for SourceErrorPolicy {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Inline => {
+            Self::Inline { alias } => {
                 f.write_str("INLINE");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
             }
         }
     }

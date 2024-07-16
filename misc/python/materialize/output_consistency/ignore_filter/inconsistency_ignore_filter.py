@@ -163,13 +163,33 @@ class PostExecutionInconsistencyIgnoreFilterBase:
             )
 
         if error.error_type == ValidationErrorType.CONTENT_TYPE_MISMATCH:
+            col_index = error.col_index
+            assert col_index is not None
+
+            involved_characteristics = self._load_all_involved_characteristics(
+                query_template, col_index
+            )
             return self._shall_ignore_content_type_mismatch(
-                error, query_template, contains_aggregation
+                error,
+                query_template,
+                contains_aggregation,
+                col_index,
+                involved_characteristics,
             )
 
         if error.error_type == ValidationErrorType.CONTENT_MISMATCH:
+            col_index = error.col_index
+            assert col_index is not None
+
+            involved_characteristics = self._load_all_involved_characteristics(
+                query_template, col_index
+            )
             return self._shall_ignore_content_mismatch(
-                error, query_template, contains_aggregation
+                error,
+                query_template,
+                contains_aggregation,
+                col_index,
+                involved_characteristics,
             )
 
         if error.error_type == ValidationErrorType.ROW_COUNT_MISMATCH:
@@ -178,6 +198,23 @@ class PostExecutionInconsistencyIgnoreFilterBase:
             )
 
         raise RuntimeError(f"Unexpected validation error type: {error.error_type}")
+
+    def _load_all_involved_characteristics(
+        self, query_template: QueryTemplate, col_index: int
+    ) -> set[ExpressionCharacteristics]:
+        all_involved_characteristics = query_template.select_expressions[
+            col_index
+        ].recursively_collect_involved_characteristics(query_template.row_selection)
+
+        if query_template.where_expression is not None:
+            all_involved_characteristics = (
+                all_involved_characteristics
+                | query_template.where_expression.recursively_collect_involved_characteristics(
+                    query_template.row_selection
+                )
+            )
+
+        return all_involved_characteristics
 
     def _shall_ignore_success_mismatch(
         self,
@@ -200,9 +237,15 @@ class PostExecutionInconsistencyIgnoreFilterBase:
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         return self._shall_ignore_content_mismatch(
-            error, query_template, contains_aggregation
+            error,
+            query_template,
+            contains_aggregation,
+            col_index,
+            all_involved_characteristics,
         )
 
     def _shall_ignore_content_mismatch(
@@ -210,6 +253,8 @@ class PostExecutionInconsistencyIgnoreFilterBase:
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
         # expressions in other parts of the query like, for example, the WHERE part)!
