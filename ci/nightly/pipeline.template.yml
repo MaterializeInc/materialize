@@ -163,6 +163,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-multi-broker
 
+      - id: redpanda-resumption
+        label: ":panda_face: resumption tests"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-resumption
+              args: [--redpanda]
+        agents:
+          queue: linux-aarch64
+
+
   - group: Testdrive
     key: testdrive
     steps:

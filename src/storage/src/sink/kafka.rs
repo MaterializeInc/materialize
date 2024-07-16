@@ -409,6 +409,8 @@ impl TransactionalProducer {
             .key(&self.progress_key);
         self.producer.send(record).map_err(|(e, _)| e)?;
 
+        fail::fail_point!("kafka_sink_commit_transaction");
+
         let timeout = self.socket_timeout;
         match self
             .spawn_blocking(move |p| p.commit_transaction(timeout))
