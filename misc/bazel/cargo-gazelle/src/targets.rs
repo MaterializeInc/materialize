@@ -199,11 +199,16 @@ impl ToBazelDefinition for RustLibrary {
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }
-        writeln!(w, ")\n")?;
+        writeln!(w, ")")?;
 
-        self.unit_test.format(&mut w)?;
-        writeln!(w)?;
-        self.doc_tests.format(&mut w)?;
+        if let Some(unit_test) = &self.unit_test {
+            writeln!(w)?;
+            unit_test.format(&mut w)?;
+        }
+        if let Some(doc_tests) = &self.doc_tests {
+            writeln!(w)?;
+            doc_tests.format(&mut w)?;
+        }
 
         Ok(())
     }
@@ -365,7 +370,7 @@ impl ToBazelDefinition for RustBinary {
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }
-        writeln!(w, ")\n")?;
+        writeln!(w, ")")?;
 
         Ok(())
     }
@@ -689,7 +694,7 @@ impl ToBazelDefinition for RustDocTest {
             self.crate_.format(&mut w)?;
             self.deps.format(&mut w)?;
         }
-        writeln!(w, "\n)")?;
+        writeln!(w, ")")?;
 
         Ok(())
     }

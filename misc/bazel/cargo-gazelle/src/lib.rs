@@ -33,11 +33,9 @@ pub struct BazelBuildFile<'a> {
 impl<'a> fmt::Display for BazelBuildFile<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.header.format(f)?;
-        writeln!(f)?;
-
         for target in &self.targets {
-            target.format(f)?;
             writeln!(f)?;
+            target.format(f)?;
         }
         Ok(())
     }
