@@ -911,6 +911,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("#28143: non-quoted numbers")
 
+        if (
+            ExpressionCharacteristics.DATE_WITH_SHORT_YEAR
+            in all_involved_characteristics
+        ):
+            return YesIgnore("#28284: short date format")
+
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(
