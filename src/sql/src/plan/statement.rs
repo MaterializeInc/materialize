@@ -150,6 +150,9 @@ pub fn describe(
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
+        Statement::CreateTableFromSource(stmt) => {
+            ddl::describe_create_table_from_source(&scx, stmt)?
+        }
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
         Statement::CreateMaterializedView(stmt) => {
@@ -334,6 +337,7 @@ pub fn plan(
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
+        Statement::CreateTableFromSource(stmt) => ddl::plan_create_table_from_source(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
         Statement::CreateMaterializedView(stmt) => {

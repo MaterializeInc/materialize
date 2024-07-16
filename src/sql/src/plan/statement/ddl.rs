@@ -58,20 +58,21 @@ use mz_sql_parser::ast::{
     CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
     CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
     CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
-    SourceIncludeMetadata, Statement, TableConstraint, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
+    FormatSpecifier, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption,
+    KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    Statement, TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -402,6 +403,20 @@ pub fn plan_create_table(
         table,
         if_not_exists: *if_not_exists,
     }))
+}
+
+pub fn describe_create_table_from_source(
+    _: &StatementContext,
+    _: CreateTableFromSourceStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_table_from_source(
+    _scx: &StatementContext,
+    _stmt: CreateTableFromSourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    bail_unsupported!("CREATE TABLE .. FROM SOURCE")
 }
 
 pub fn describe_create_webhook_source(

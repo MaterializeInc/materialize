@@ -55,6 +55,7 @@ pub enum Statement<T: AstInfo> {
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
+    CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
@@ -127,6 +128,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
+            Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateSecret(stmt) => f.write_node(stmt),
@@ -202,6 +204,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
         StatementKind::CreateTable => "create_table",
+        StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
         StatementKind::CreateType => "create_type",
         StatementKind::CreateRole => "create_role",
@@ -1487,6 +1490,47 @@ pub struct TableOption<T: AstInfo> {
     pub value: Option<WithOptionValue<T>>,
 }
 impl_display_for_with_option!(TableOption);
+
+/// `CREATE TABLE .. FROM SOURCE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateTableFromSourceStatement<T: AstInfo> {
+    /// Table name
+    pub name: UnresolvedItemName,
+    /// Optional set of columns to include
+    pub columns: Vec<Ident>,
+    pub if_not_exists: bool,
+    pub source: T::ItemName,
+    pub external_reference: UnresolvedItemName,
+}
+
+impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        let Self {
+            name,
+            columns,
+            source,
+            external_reference,
+            if_not_exists,
+        } = self;
+        f.write_str("CREATE TABLE ");
+        if *if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(name);
+        if !columns.is_empty() {
+            f.write_str(" (");
+
+            f.write_node(&display::comma_separated(columns));
+            f.write_str(")");
+        }
+        f.write_str(" FROM SOURCE ");
+        f.write_node(source);
+        f.write_str(" (REFERENCE = ");
+        f.write_node(external_reference);
+        f.write_str(")");
+    }
+}
+impl_display_t!(CreateTableFromSourceStatement);
 
 /// `CREATE INDEX`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
