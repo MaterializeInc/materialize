@@ -81,6 +81,8 @@ ERROR_RE = re.compile(
     # \s\S is any character including newlines, so this matches multiline strings
     # non-greedy using ? so that we don't match all the result comparison issues into one block
     | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------[\s\S]*?----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
+    # output consistency tests
+    | possibly\ invalid\ operation\ specification
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     )

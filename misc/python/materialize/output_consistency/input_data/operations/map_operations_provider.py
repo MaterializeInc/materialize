@@ -119,6 +119,7 @@ MAP_OPERATION_TYPES.append(
             SameOperationParam(index_of_previous_param=1),
         ],
         MapReturnTypeSpec(),
+        is_aggregation=True,
     )
 )
 
