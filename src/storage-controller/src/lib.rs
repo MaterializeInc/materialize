@@ -820,7 +820,7 @@ where
         // We cannot register tables at the table worker when in read-only mode.
         // When coming out of read-only mode (via `allow_writes()`), we will
         // register all tables that are known by that point.
-        if !table_registers.is_empty() && !self.read_only {
+        if !table_registers.is_empty() {
             let register_ts = register_ts
                 .expect("caller should have provided a register_ts when creating a table");
             // This register call advances the logical upper of the table. The
@@ -1503,7 +1503,16 @@ where
         StorageError<Self::Timestamp>,
     > {
         if self.read_only {
-            return Err(StorageError::ReadOnly);
+            if !commands.iter().all(|(id, _)| id.is_system()) {
+                // TODO: we need to drop writes for non-migrated system tables,
+                // or very bad things will happen, as we'll be writing directly
+                // to shards that are still managed by txn-wal in the old
+                // generation.
+                //
+                // Alternatively, we could guarantee that all system tables have
+                // new shards minted on every deploy.
+                return Err(StorageError::ReadOnly);
+            }
         }
 
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
@@ -2321,16 +2330,20 @@ where
             .await
             .expect("location should be valid");
 
-        let txns = TxnsHandle::open(
-            T::minimum(),
-            txns_client.clone(),
-            Arc::clone(&txns_metrics),
-            txns_id,
-            Arc::new(RelationDesc::empty()),
-            Arc::new(UnitSchema),
-        )
-        .await;
-        let persist_table_worker = persist_handles::PersistTableWriteWorker::new_txns(txns);
+        let persist_table_worker = if read_only {
+            persist_handles::PersistTableWriteWorker::new_read_only_mode()
+        } else {
+            let txns = TxnsHandle::open(
+                T::minimum(),
+                txns_client.clone(),
+                Arc::clone(&txns_metrics),
+                txns_id,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+            )
+            .await;
+            persist_handles::PersistTableWriteWorker::new_txns(txns)
+        };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
