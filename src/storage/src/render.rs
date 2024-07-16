@@ -205,7 +205,8 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription};
+use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
+use mz_timely_util::antichain::AntichainExt;
 use timely::communication::Allocate;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
@@ -249,6 +250,13 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
 
             let connection = description.desc.connection.clone();
+            tracing::info!(
+                id = %primary_source_id,
+                as_of = %as_of.pretty(),
+                resume_uppers = ?resume_uppers,
+                source_resume_uppers = ?source_resume_uppers,
+                "timely-{worker_id} building {} source pipeline", connection.name(),
+            );
             let (mut outputs, source_health, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
@@ -321,7 +329,11 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 );
 
                 tracing::info!(
-                    "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
+                    id = %primary_source_id,
+                    "timely-{worker_id}: persisting subsource #{} of {} into {}",
+                    export.ingestion_output,
+                    primary_source_id,
+                    export_id
                 );
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
