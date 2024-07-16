@@ -683,11 +683,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
         # expressions in other parts of the query like, for example, the WHERE part)!
-        col_index = error.col_index
-        assert col_index is not None
 
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
@@ -808,19 +808,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                     "#24687: different representation of floating-point type"
                 )
 
-        if query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            lambda expression: expression.has_any_characteristic(
-                {ExpressionCharacteristics.STRING_WITH_ESZETT},
-            ),
-            True,
-        ) and query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            partial(
-                matches_fun_by_any_name,
-                function_names_in_lower_case={"upper", "initcap"},
-            ),
-            True,
+        if (
+            query_template.matches_specific_select_or_filter_expression(
+                col_index,
+                partial(
+                    matches_fun_by_any_name,
+                    function_names_in_lower_case={"upper", "initcap"},
+                ),
+                True,
+            )
+            and ExpressionCharacteristics.STRING_WITH_ESZETT
+            in all_involved_characteristics
         ):
             return YesIgnore("#26846: eszett in upper")
 
@@ -933,6 +931,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         details_by_strategy_key = error.get_details_by_strategy_key()
 
@@ -943,7 +943,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#26306: float instead of int returned")
 
         return self._shall_ignore_content_mismatch(
-            error, query_template, contains_aggregation
+            error,
+            query_template,
+            contains_aggregation,
+            col_index,
+            all_involved_characteristics,
         )
 
 
