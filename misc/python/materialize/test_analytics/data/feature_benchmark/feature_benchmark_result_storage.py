@@ -16,6 +16,7 @@ from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 @dataclass
 class FeatureBenchmarkResultEntry:
     scenario_name: str
+    scenario_group: str
     scenario_version: str
     scale: str
     wallclock: float | None
