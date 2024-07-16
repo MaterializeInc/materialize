@@ -115,7 +115,7 @@ FROM mz_indexes i
 LEFT JOIN mz_internal.mz_object_transitive_dependencies d ON i.id = d.object_id
 LEFT JOIN mz_objects o ON o.id = d.referenced_object_id
 JOIN mz_columns co on co.id = o.id
-WHERE cluster_id =
+WHERE i.cluster_id =
   (SELECT id FROM mz_clusters WHERE name = 'mz_catalog_server')
 ORDER BY 1, 2
 ----
@@ -367,6 +367,7 @@ mz_object_lifetimes  occurred_at
 mz_object_lifetimes  previous_id
 mz_object_transitive_dependencies  object_id
 mz_object_transitive_dependencies  referenced_object_id
+mz_objects  cluster_id
 mz_objects  id
 mz_objects  name
 mz_objects  oid
@@ -428,6 +429,7 @@ mz_recent_activity_log_thinned  transient_index_id
 mz_recent_sql_text  redacted_sql
 mz_recent_sql_text  sql
 mz_recent_sql_text  sql_hash
+mz_relations  cluster_id
 mz_relations  id
 mz_relations  name
 mz_relations  oid
