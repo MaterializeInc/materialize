@@ -329,6 +329,9 @@ impl Transform for Fixpoint {
                 let prev = relation.clone();
                 self.apply_transforms(relation, ctx, format!("{i:04}"))?;
                 if *relation == prev {
+                    if prev_size > 100000 {
+                        tracing::warn!(%prev_size, "Very big MIR plan");
+                    }
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
