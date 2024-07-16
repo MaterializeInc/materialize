@@ -326,9 +326,9 @@ impl Transform for Fixpoint {
         loop {
             let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
-                let original = relation.clone();
+                let prev = relation.clone();
                 self.apply_transforms(relation, ctx, format!("{i:04}"))?;
-                if *relation == original {
+                if *relation == prev {
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
@@ -344,7 +344,7 @@ impl Transform for Fixpoint {
                     // the chances of this are negligible.)
                     mz_repr::explain::trace_plan(relation);
                     soft_panic_or_log!(
-                        "Fixpoint {} detected a loop of length {} after {} iterations",
+                        "Fixpoint `{}` detected a loop of length {} after {} iterations",
                         self.name,
                         i - seen_i,
                         i
