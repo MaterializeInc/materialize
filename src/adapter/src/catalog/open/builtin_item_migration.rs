@@ -19,7 +19,7 @@ use mz_catalog::builtin::{BuiltinTable, Fingerprint, BUILTINS};
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::{builtin_migration_shard_id, DurableCatalogError, Transaction};
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_ore::{halt, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
@@ -31,6 +31,7 @@ use mz_persist_types::ShardId;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::controller::StorageTxn;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tracing::error;
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
@@ -244,8 +245,16 @@ async fn migrate_builtin_items_0dt(
         txn.get_collection_metadata()
     };
     for (table_key, shard_id) in global_id_shards.clone() {
+        if table_key.deploy_generation > deploy_generation {
+            halt!(
+                "saw deploy generation {}, which is greater than current deploy generation {}",
+                table_key.deploy_generation,
+                deploy_generation
+            );
+        }
+
         if !migrated_tables.contains(&table_key.global_id)
-            || table_key.deploy_generation != deploy_generation
+            || table_key.deploy_generation < deploy_generation
         {
             global_id_shards.remove(&table_key);
             if storage_collection_metadata.get(&GlobalId::System(table_key.global_id))
@@ -329,8 +338,12 @@ async fn migrate_builtin_items_0dt(
                 .map(|(table_key, shard_id)| ((table_key, shard_id), upper, -1))
                 .collect();
             // Ignore any errors, these shards will get cleaned up in the next upgrade.
-            let _ = write_to_migration_shard(updates, upper, &mut write_handle, &mut since_handle)
-                .await;
+            let res =
+                write_to_migration_shard(updates, upper, &mut write_handle, &mut since_handle)
+                    .await;
+            if let Err(e) = res {
+                error!("Unable to remove old entries from migration shard: {e:?}");
+            }
         }
     }
     .boxed();
