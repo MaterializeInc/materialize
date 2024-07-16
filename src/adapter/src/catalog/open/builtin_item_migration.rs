@@ -171,8 +171,7 @@ async fn migrate_builtin_items_0dt(
     assert_eq!(
         read_only,
         txn.is_savepoint(),
-        "txn must be in savepoint mode when read_only is true, and in writable mode when \
-        read_only is false"
+        "txn must be in savepoint mode when read_only is true, and in writable mode when read_only is false"
     );
 
     // 1. Open migration shard.
