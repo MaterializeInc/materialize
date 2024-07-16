@@ -36,7 +36,6 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::Opaque;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
@@ -1507,13 +1506,18 @@ fn desc() -> RelationDesc {
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given
 /// `upper`.
 fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Timestamp) -> Timestamp {
-    soft_assert_or_log!(
-        upper > Timestamp::minimum(),
-        "Catalog persist shard is uninitialized"
-    );
     let since = read_handle.since().clone();
-    let mut as_of = upper.saturating_sub(1);
-    soft_assert_or_log!(since.less_equal(&as_of), "")
+    let mut as_of = upper.checked_sub(1).unwrap_or_else(|| {
+        panic!("catalog persist shard should be initialize, found upper: {upper:?}")
+    });
+    // We only downgrade the since after writing, and we always set the since to one less than the
+    // upper.
+    soft_assert_or_log!(
+        since.less_equal(&as_of),
+        "since={since:?}, as_of={as_of:?}; since must be less than or equal to as_of"
+    );
+    // This should be a no-op if the assert above passes, however if it doesn't then we'd like to
+    // continue with a correct timestamp instead of entering a panic loop.
     as_of.advance_by(since.borrow());
     as_of
 }
