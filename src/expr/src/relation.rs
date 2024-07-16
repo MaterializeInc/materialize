@@ -13,6 +13,7 @@ use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU64;
 
 use bytesize::ByteSize;
@@ -84,7 +85,14 @@ pub trait CollectionPlan {
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect)]
+///
+/// `derived_hash_with_manual_eq` was complaining for the wrong reason: This lint exists because
+/// it's bad when `Eq` doesn't agree with `Hash`, which is often quite likely if one of them is
+/// implemented manually. However, our manual implementation of `Eq` _will_ agree with the derived
+/// one. This is because the reason for the manual implementation is not to change the semantics
+/// from the derived one, but to avoid stack overflows.
+#[allow(clippy::derived_hash_with_manual_eq)]
+#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect, Hash)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
@@ -1916,6 +1924,14 @@ impl MirRelationExpr {
             result |= matches!(e, FlatMap { .. } | Reduce { .. });
         });
         result
+    }
+
+    /// Hash to an u64 using Rust's default Hasher. (Which is a somewhat slower, but better Hasher
+    /// than what `Hashable::hashed` would give us.)
+    pub fn hash_to_u64(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish()
     }
 }
 
