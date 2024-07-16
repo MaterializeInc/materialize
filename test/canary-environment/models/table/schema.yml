@@ -10,7 +10,7 @@
 version: 2
 
 sources:
-  - name: simple_table
+  - name: table
     schema: public_table
     tables:
       - name: table
