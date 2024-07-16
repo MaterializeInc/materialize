@@ -498,6 +498,7 @@ impl Default for FuseAndCollapse {
                 Box::new(fold_constants::FoldConstants {
                     limit: Some(FOLD_CONSTANTS_LIMIT),
                 }),
+                Box::new(canonicalization::ReduceScalars),
             ],
         }
     }
@@ -680,6 +681,7 @@ impl Optimizer {
                     Box::new(fold_constants::FoldConstants {
                         limit: Some(FOLD_CONSTANTS_LIMIT),
                     }),
+                    Box::new(canonicalization::ReduceScalars),
                     Box::new(demand::Demand::default()),
                     Box::new(literal_lifting::LiteralLifting::default()),
                 ],
@@ -696,6 +698,7 @@ impl Optimizer {
             Box::new(fold_constants::FoldConstants {
                 limit: Some(FOLD_CONSTANTS_LIMIT),
             }),
+            Box::new(canonicalization::ReduceScalars),
             // Remove threshold operators which have no effect.
             // Must be done at the very end of the physical pass, because before
             // that (at least at the moment) we cannot be sure that all trees
@@ -756,6 +759,7 @@ impl Optimizer {
                     Box::new(fold_constants::FoldConstants {
                         limit: Some(FOLD_CONSTANTS_LIMIT),
                     }),
+                    Box::new(canonicalization::ReduceScalars),
                 ],
             }),
             Box::new(
