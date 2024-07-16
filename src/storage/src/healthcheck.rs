@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::Hashable;
+use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_repr::GlobalId;

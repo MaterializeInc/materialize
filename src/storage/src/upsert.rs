@@ -18,6 +18,7 @@ use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::future::FutureExt;
+use futures::StreamExt;
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;

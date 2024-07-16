@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
+use futures_util::Stream;
 use timely::communication::{Message, Pull, Push};
 use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
@@ -153,32 +154,31 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, C: InputConnection<T>> {
     done: bool,
 }
 
-impl<T: Timestamp, D: Container, C: InputConnection<T>> AsyncInputHandle<T, D, C> {
-    /// Produces a future that will resolve to the next event of this input stream.
-    ///
-    /// # Cancel safety
-    ///
-    /// The returned future is cancel-safe
-    pub async fn next(&mut self) -> Option<Event<T, C::Capability, D>> {
-        std::future::poll_fn(|cx| {
-            if self.done {
-                return Poll::Ready(None);
+impl<T: Timestamp, D: Container, C: InputConnection<T>> Stream for AsyncInputHandle<T, D, C> {
+    type Item = Event<T, C::Capability, D>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        if this.done {
+            return Poll::Ready(None);
+        }
+        let mut queue = this.queue.borrow_mut();
+        match queue.pop_front() {
+            Some(event @ Event::Data(_, _)) => Poll::Ready(Some(event)),
+            Some(Event::Progress(frontier)) => {
+                this.done = frontier.is_empty();
+                Poll::Ready(Some(Event::Progress(frontier)))
             }
-            let mut queue = self.queue.borrow_mut();
-            match queue.pop_front() {
-                Some(event @ Event::Data(_, _)) => Poll::Ready(Some(event)),
-                Some(Event::Progress(frontier)) => {
-                    self.done = frontier.is_empty();
-                    Poll::Ready(Some(Event::Progress(frontier)))
-                }
-                None => {
-                    // Nothing else to produce so install the provided waker
-                    self.waker.set(Some(cx.waker().clone()));
-                    Poll::Pending
-                }
+            None => {
+                // Nothing else to produce so install the provided waker
+                this.waker.set(Some(cx.waker().clone()));
+                Poll::Pending
             }
-        })
-        .await
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.queue.borrow().len(), None)
     }
 }
 
@@ -754,6 +754,7 @@ impl Drop for PressOnDropButton {
 
 #[cfg(test)]
 mod test {
+    use futures_util::StreamExt;
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
