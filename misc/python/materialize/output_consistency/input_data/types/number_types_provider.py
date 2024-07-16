@@ -31,6 +31,7 @@ class NumberDataType(DataType):
         max_negative_value: str | None,
         further_tiny_dec_values: set[str] | None = None,
         is_floating_point_type: bool = False,
+        supports_infinity: bool = False,
         is_pg_compatible: bool = True,
     ):
         super().__init__(
@@ -48,6 +49,7 @@ class NumberDataType(DataType):
             further_tiny_dec_values if further_tiny_dec_values is not None else set()
         )
         self.is_floating_point_type = is_floating_point_type
+        self.supports_infinity = supports_infinity
 
     def resolve_return_type_spec(
         self, characteristics: set[ExpressionCharacteristics]
@@ -182,6 +184,7 @@ DOUBLE_TYPE = NumberDataType(
         "1.000000000000000000000000000000000000001",
     },
     is_floating_point_type=True,
+    supports_infinity=True,
 )
 
 SIGNED_INT_TYPES: list[NumberDataType] = [

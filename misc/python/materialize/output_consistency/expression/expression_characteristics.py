@@ -23,6 +23,7 @@ class ExpressionCharacteristics(Enum):
     LARGE_VALUE = 103
     MAX_VALUE = 104
     NAN = 105
+    INFINITY = 106
 
     OVERSIZE = 120
     NEGATIVE = 121
