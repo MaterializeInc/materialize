@@ -323,6 +323,7 @@ impl Transform for Fixpoint {
         let mut iter_no = 0;
         let mut seen = BTreeMap::new();
         seen.insert(relation.hashed(), iter_no);
+        let original = relation.clone();
         loop {
             let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
@@ -334,22 +335,43 @@ impl Transform for Fixpoint {
                 }
                 let seen_i = seen.insert(relation.hashed(), i);
                 if let Some(seen_i) = seen_i {
-                    // We got into an infinite loop (e.g., we are oscillating between two plans).
-                    // This is not catastrophic, because we can just say we are done now,
-                    // but it would be great to eventually find a way to prevent these loops from
-                    // happening in the first place. We have several relevant issues, see
-                    // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
-                    //
-                    // (Technically, it's also possible that there is just a hash collision, but
-                    // the chances of this are negligible.)
-                    mz_repr::explain::trace_plan(relation);
-                    soft_panic_or_log!(
-                        "Fixpoint `{}` detected a loop of length {} after {} iterations",
-                        self.name,
-                        i - seen_i,
-                        i
-                    );
-                    return Ok(());
+                    // Let's see whether this is just a hash collision, or a real loop: Run the
+                    // whole thing from the beginning up until `seen_i`, and compare all the plans
+                    // to the current plan from the outer `for`.
+                    // (It would not be enough to compare only the plan at `seen_i`, because
+                    // then we could miss a real loop if there is also a hash collision somewhere
+                    // in the middle of the loop, because then we'd compare the last plan of the
+                    // loop not with its actual match, but with the colliding plan.)
+                    let mut again = original.clone();
+                    // The `+2` is because:
+                    // - one `+1` is to finally get to the plan at `seen_i`,
+                    // - another `+1` is because we are comparing to `relation` only _before_
+                    //   calling `apply_transforms`.
+                    for j in 0..(seen_i + 2) {
+                        if again == *relation {
+                            // We really got into an infinite loop (e.g., we are oscillating between
+                            // two plans). This is not catastrophic, because we can just say we are
+                            // done now, but it would be great to eventually find a way to prevent
+                            // these loops from happening in the first place. We have several
+                            // relevant issues, see
+                            // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                            mz_repr::explain::trace_plan(relation);
+                            soft_panic_or_log!(
+                                "Fixpoint `{}` detected a loop of length {} after {} iterations",
+                                self.name,
+                                i - seen_i,
+                                i
+                            );
+                            return Ok(());
+                        }
+                        self.apply_transforms(
+                            &mut again,
+                            ctx,
+                            format!("collision detection {j:04}"),
+                        )?;
+                    }
+                    // If we got here, then this was just a hash collision! Just continue as if
+                    // nothing happened.
                 }
             }
             let current_size = relation.size();
