@@ -13,7 +13,6 @@ use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU64;
 use std::time::Instant;
 
@@ -1926,14 +1925,6 @@ impl MirRelationExpr {
             result |= matches!(e, FlatMap { .. } | Reduce { .. });
         });
         result
-    }
-
-    /// Hash to an u64 using Rust's default Hasher. (Which is a somewhat slower, but better Hasher
-    /// than what `Hashable::hashed` would give us.)
-    pub fn hash_to_u64(&self) -> u64 {
-        let mut h = DefaultHasher::new();
-        self.hash(&mut h);
-        h.finish()
     }
 }
 
