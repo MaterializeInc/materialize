@@ -229,6 +229,8 @@ async fn migrate_builtin_items_0dt(
         .collect();
 
     // 3. Read in the current contents of the migration shard.
+    // We intentionally fetch the upper AFTER opening the read handle to address races between
+    // the upper and since moving forward in some other process.
     let upper = fetch_upper(&mut write_handle).await;
     // The empty write above should ensure that the upper is at least 1.
     let as_of = upper.checked_sub(1).ok_or_else(|| {
