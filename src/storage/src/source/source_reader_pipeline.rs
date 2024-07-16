@@ -27,7 +27,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
 use std::future::Future;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -133,7 +133,9 @@ pub struct RawSourceCreationConfig {
 impl RawSourceCreationConfig {
     /// Returns the worker id responsible for handling the given partition.
     pub fn responsible_worker<P: Hash>(&self, partition: P) -> usize {
-        let key = usize::cast_from((self.id, partition).hashed());
+        let mut h = std::hash::DefaultHasher::default();
+        (self.id, partition).hash(&mut h);
+        let key = usize::cast_from(h.finish());
         key % self.worker_count
     }
 
