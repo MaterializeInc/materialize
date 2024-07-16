@@ -65,7 +65,11 @@ DATE_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01",
     "99999-12-31",
-    [("2023-06-01", set()), ("2024-02-29", set())],
+    [
+        ("2023-06-01", set()),
+        ("2024-02-29", set()),
+        ("01-02-03", {ExpressionCharacteristics.DATE_WITH_SHORT_YEAR}),
+    ],
     is_max_value_pg_compatible=False,
 )
 TIME_TYPE = DateTimeDataType(
@@ -73,7 +77,10 @@ TIME_TYPE = DateTimeDataType(
     "TIME",
     "00:00:00",
     "23:59:59.999999",
-    [("01:02:03.000001", set())],
+    [
+        ("01:02:03.000001", set()),
+        ("11:", {ExpressionCharacteristics.INCOMPLETE_TIME_VALUE}),
+    ],
 )
 TIMESTAMP_TYPE = DateTimeDataType(
     TIMESTAMP_TYPE_IDENTIFIER,
@@ -84,6 +91,13 @@ TIMESTAMP_TYPE = DateTimeDataType(
     [
         ("2023-02-28 11:22:33.44444", set()),
         ("2024-02-29 23:50:00", set()),
+        (
+            "01-02-03 11:",
+            {
+                ExpressionCharacteristics.DATE_WITH_SHORT_YEAR,
+                ExpressionCharacteristics.INCOMPLETE_TIME_VALUE,
+            },
+        ),
     ],
     is_max_value_pg_compatible=False,
 )
