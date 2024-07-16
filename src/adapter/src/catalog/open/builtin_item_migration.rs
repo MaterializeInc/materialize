@@ -29,7 +29,7 @@ use mz_persist_types::ShardId;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::controller::StorageTxn;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
@@ -204,7 +204,7 @@ async fn migrate_builtin_items_0dt(
         .expect("invalid usage");
     // Commit an empty write at the minimum timestamp so the shard is always readable.
     const EMPTY_UPDATES: &[((TableKey, ShardId), Timestamp, Diff)] = &[];
-    let _ = write_handle
+    let res = write_handle
         .compare_and_append(
             EMPTY_UPDATES,
             Antichain::from_elem(Timestamp::minimum()),
@@ -212,6 +212,9 @@ async fn migrate_builtin_items_0dt(
         )
         .await
         .expect("invalid usage");
+    if let Err(e) = res {
+        debug!("migration shard already initialized: {e:?}");
+    }
 
     // 2. Get the `GlobalId` of all migrated tables.
     let migrated_tables: BTreeSet<_> = migrated_builtins
