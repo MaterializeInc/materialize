@@ -244,7 +244,7 @@ async fn migrate_builtin_items_0dt(
     let since = read_handle.since();
     assert!(
         since.less_equal(&as_of),
-        "since={since:?}, as_of:{as_of:?}; since must be less than or equal to as_of"
+        "since={since:?}, as_of={as_of:?}; since must be less than or equal to as_of"
     );
     let as_of = Antichain::from_elem(as_of);
     let snapshot = read_handle
