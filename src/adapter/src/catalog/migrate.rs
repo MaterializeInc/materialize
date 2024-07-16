@@ -672,7 +672,7 @@ pub(crate) fn durable_migrate(
     catalog_rename_mz_introspection_cluster_v_0_103_0(tx, boot_ts)?;
     catalog_add_new_unstable_schemas_v_0_106_0(tx)?;
     catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx);
-    catalog_remove_txn_wal_toggle_v_0_108_0(tx)?;
+    catalog_remove_txn_wal_toggle_v_0_109_0(tx)?;
     Ok(())
 }
 
@@ -861,7 +861,7 @@ fn catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx: &mut Trans
 }
 
 /// This migration removes the txn wal feature flag.
-fn catalog_remove_txn_wal_toggle_v_0_108_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+fn catalog_remove_txn_wal_toggle_v_0_109_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
     tx.set_config("persist_txn_tables".to_string(), None)?;
     tx.remove_system_config("persist_txn_tables");
     Ok(())
