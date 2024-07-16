@@ -1506,7 +1506,7 @@ impl DurableCatalogState for PersistCatalogState {
     }
 }
 
-/// /// Deterministically generate a builtin table migration shard ID for the given
+/// Deterministically generate a builtin table migration shard ID for the given
 /// `organization_id`.
 pub fn builtin_migration_shard_id(organization_id: Uuid) -> ShardId {
     shard_id(organization_id, BUILTIN_MIGRATION_SEED)
