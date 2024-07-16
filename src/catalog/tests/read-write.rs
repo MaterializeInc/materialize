@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
+use std::time::Duration;
+
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{
@@ -28,7 +31,6 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
-use std::time::Duration;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
@@ -400,7 +402,13 @@ async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
     let mut txn = state.transaction().await.unwrap();
 
     let (schema_id, _oid) = txn
-        .insert_user_schema(DatabaseId::User(1), "foo", RoleId::User(1), vec![])
+        .insert_user_schema(
+            DatabaseId::User(1),
+            "foo",
+            RoleId::User(1),
+            vec![],
+            BTreeSet::new(),
+        )
         .unwrap();
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
@@ -490,6 +498,7 @@ async fn test_non_writer_commits(
                 RoleAttributes::new(),
                 RoleMembership::new(),
                 RoleVars::default(),
+                BTreeSet::new(),
             )
             .unwrap();
         // Drain updates.
@@ -512,7 +521,7 @@ async fn test_non_writer_commits(
         let db_name = "db";
         let mut txn = savepoint_state.transaction().await.unwrap();
         let (db_id, _) = txn
-            .insert_user_database(db_name, RoleId::User(42), Vec::new())
+            .insert_user_database(db_name, RoleId::User(42), Vec::new(), BTreeSet::new())
             .unwrap();
         let DatabaseId::User(db_id) = db_id else {
             panic!("unexpected id variant: {db_id:?}");

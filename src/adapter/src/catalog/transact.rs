@@ -684,13 +684,18 @@ impl Catalog {
                 )
                 .collect();
 
-                let (database_id, _) =
-                    tx.insert_user_database(&name, owner_id, database_privileges.clone())?;
+                let (database_id, _) = tx.insert_user_database(
+                    &name,
+                    owner_id,
+                    database_privileges.clone(),
+                    state.get_temporary_oids().collect(),
+                )?;
                 let (schema_id, _) = tx.insert_user_schema(
                     database_id,
                     DEFAULT_SCHEMA,
                     owner_id,
                     schema_privileges.clone(),
+                    state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -756,8 +761,13 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
-                let (schema_id, _) =
-                    tx.insert_user_schema(database_id, &schema_name, owner_id, privileges.clone())?;
+                let (schema_id, _) = tx.insert_user_schema(
+                    database_id,
+                    &schema_name,
+                    owner_id,
+                    privileges.clone(),
+                    state.get_temporary_oids().collect(),
+                )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
@@ -786,6 +796,7 @@ impl Catalog {
                     attributes.clone(),
                     membership.clone(),
                     vars.clone(),
+                    state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -838,6 +849,7 @@ impl Catalog {
                     owner_id,
                     privileges.clone(),
                     config.clone().into(),
+                    state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -962,9 +974,7 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    // TODO(jkosh44) This OID allocation is not correct. The temporary OID is not
-                    // saved durably, meaning we may allocate it twice.
-                    let oid = tx.allocate_oid()?;
+                    let oid = tx.allocate_oid(state.get_temporary_oids().collect())?;
                     let item = TemporaryItem {
                         id,
                         oid,
@@ -1006,6 +1016,7 @@ impl Catalog {
                         serialized_item,
                         owner_id,
                         privileges.clone(),
+                        state.get_temporary_oids().collect(),
                     )?;
                     info!(
                         "create {} {} ({})",

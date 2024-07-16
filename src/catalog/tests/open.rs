@@ -24,7 +24,7 @@ use mz_persist_client::{PersistClient, PersistLocation};
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
 
@@ -270,10 +270,21 @@ async fn test_open_savepoint(
         let mut db_schemas = Vec::new();
         for i in 0..10 {
             let (db_id, db_oid) = txn
-                .insert_user_database(&format!("db{i}"), RoleId::User(i), Vec::new())
+                .insert_user_database(
+                    &format!("db{i}"),
+                    RoleId::User(i),
+                    Vec::new(),
+                    BTreeSet::new(),
+                )
                 .unwrap();
             let (schema_id, schema_oid) = txn
-                .insert_user_schema(db_id, &format!("sc{i}"), RoleId::User(i), Vec::new())
+                .insert_user_schema(
+                    db_id,
+                    &format!("sc{i}"),
+                    RoleId::User(i),
+                    Vec::new(),
+                    BTreeSet::new(),
+                )
                 .unwrap();
             ids.push((db_id.clone(), schema_id.clone()));
             db_schemas.push((
@@ -439,6 +450,7 @@ async fn test_open_read_only(
             RoleAttributes::new(),
             RoleMembership::new(),
             RoleVars::default(),
+            BTreeSet::new(),
         )
         .unwrap();
     // Drain txn updates.

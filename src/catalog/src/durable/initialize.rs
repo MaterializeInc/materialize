@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use itertools::max;
@@ -165,6 +166,7 @@ pub(crate) async fn initialize(
             attributes.clone(),
             membership.clone(),
             vars.clone(),
+            BTreeSet::new(),
         )?;
 
         audit_events.push((
@@ -298,7 +300,7 @@ pub(crate) async fn initialize(
         })
     };
 
-    let materialize_db_oid = tx.allocate_oid()?;
+    let materialize_db_oid = tx.allocate_oid(BTreeSet::new())?;
     tx.insert_database(
         MATERIALIZE_DATABASE_ID,
         "materialize",
@@ -410,7 +412,7 @@ pub(crate) async fn initialize(
         owner_id: MZ_SYSTEM_ROLE_ID,
         privileges: schema_privileges.clone(),
     };
-    let public_schema_oid = tx.allocate_oid()?;
+    let public_schema_oid = tx.allocate_oid(BTreeSet::new())?;
     let public_schema = Schema {
         id: SchemaId::User(PUBLIC_SCHEMA_ID),
         oid: public_schema_oid,
@@ -523,6 +525,7 @@ pub(crate) async fn initialize(
         MZ_SYSTEM_ROLE_ID,
         cluster_privileges,
         default_cluster_config(options),
+        BTreeSet::new(),
     )?;
     audit_events.extend([
         (
