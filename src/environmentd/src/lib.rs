@@ -397,7 +397,7 @@ impl Listeners {
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
-            persist_client: persist_client.clone(),
+            persist_client,
             bootstrap_default_cluster_replica_size: config
                 .bootstrap_default_cluster_replica_size
                 .clone(),
@@ -513,7 +513,6 @@ impl Listeners {
             controller_envd_epoch: envd_epoch,
             controller_txn_wal_tables: txn_wal_tables,
             storage: adapter_storage,
-            persist_client,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,

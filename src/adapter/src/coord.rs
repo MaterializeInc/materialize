@@ -66,6 +66,7 @@
 //! ```
 //!
 
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use mz_sql::names::ResolvedIds;
 use mz_sql::session::user::User;
@@ -178,7 +179,6 @@ use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
-use mz_persist_client::PersistClient;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
@@ -932,7 +932,6 @@ pub struct Config {
     pub controller_envd_epoch: NonZeroI64,
     pub controller_txn_wal_tables: TxnWalTablesImpl,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
-    pub persist_client: PersistClient,
     pub timestamp_oracle_url: Option<String>,
     pub unsafe_mode: bool,
     pub all_features: bool,
@@ -3247,7 +3246,6 @@ pub fn serve(
         controller_envd_epoch,
         controller_txn_wal_tables,
         storage,
-        persist_client,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -3345,6 +3343,11 @@ pub fn serve(
 
         info!("coordinator init: opening catalog");
         let builtin_item_migration_config = if enable_0dt_deployment {
+            let persist_client = controller_config
+                .persist_clients
+                .open(controller_config.persist_location.clone())
+                .await
+                .context("opening builtin migration client")?;
             BuiltinItemMigrationConfig::ZeroDownTime {
                 persist_client,
                 deploy_generation: controller_config.deploy_generation,
