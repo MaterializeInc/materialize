@@ -267,6 +267,12 @@ impl From<Timestamp> for Numeric {
     }
 }
 
+impl From<Timestamp> for Duration {
+    fn from(ts: Timestamp) -> Self {
+        Duration::from_millis(ts.internal)
+    }
+}
+
 impl std::ops::Rem<Timestamp> for Timestamp {
     type Output = Timestamp;
 

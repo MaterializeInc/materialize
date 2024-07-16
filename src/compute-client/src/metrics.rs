@@ -66,6 +66,7 @@ pub struct ComputeControllerMetrics {
 
     // dataflows
     dataflow_initial_output_duration_seconds: GaugeVec,
+    dataflow_wallclock_lag_seconds: HistogramVec,
 }
 
 impl ComputeControllerMetrics {
@@ -162,6 +163,13 @@ impl ComputeControllerMetrics {
                 name: "mz_dataflow_initial_output_duration_seconds",
                 help: "The time from dataflow creation up to when the first output was produced.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
+            )),
+            dataflow_wallclock_lag_seconds: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_seconds",
+                help: "A histogram of the second-by-second lag of the dataflow frontier relative to \
+                       wallclock time.",
+                var_labels: ["instance_id", "replica_id", "collection_id"],
+                buckets: vec![1., 2., 5., 30.],
             )),
         }
     }
@@ -386,10 +394,15 @@ impl ReplicaMetrics {
         let initial_output_duration_seconds = self
             .metrics
             .dataflow_initial_output_duration_seconds
-            .get_delete_on_drop_gauge(labels);
+            .get_delete_on_drop_gauge(labels.clone());
+        let wallclock_lag_seconds = self
+            .metrics
+            .dataflow_wallclock_lag_seconds
+            .get_delete_on_drop_histogram(labels);
 
         Some(ReplicaCollectionMetrics {
             initial_output_duration_seconds,
+            wallclock_lag_seconds,
         })
     }
 }
@@ -416,8 +429,10 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 /// Per-replica-and-collection metrics.
 #[derive(Debug)]
 pub(crate) struct ReplicaCollectionMetrics {
-    /// TODO(#25239): Add documentation.
+    /// Gauge tracking dataflow hydration time.
     pub initial_output_duration_seconds: Gauge,
+    /// Histogram tracking dataflow wallclock lag.
+    pub wallclock_lag_seconds: Histogram,
 }
 
 /// Metrics keyed by `ComputeCommand` type.
