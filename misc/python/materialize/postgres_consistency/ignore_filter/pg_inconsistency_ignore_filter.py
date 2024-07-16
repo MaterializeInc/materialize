@@ -677,23 +677,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
         # expressions in other parts of the query like, for example, the WHERE part)!
-        col_index = error.col_index
-        assert col_index is not None
-
-        all_involved_characteristics = query_template.select_expressions[
-            col_index
-        ].recursively_collect_involved_characteristics(query_template.row_selection)
-
-        if query_template.where_expression is not None:
-            all_involved_characteristics = (
-                all_involved_characteristics
-                | query_template.where_expression.recursively_collect_involved_characteristics(
-                    query_template.row_selection
-                )
-            )
 
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
@@ -937,6 +925,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         details_by_strategy_key = error.get_details_by_strategy_key()
 
@@ -947,7 +937,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#26306: float instead of int returned")
 
         return self._shall_ignore_content_mismatch(
-            error, query_template, contains_aggregation
+            error,
+            query_template,
+            contains_aggregation,
+            col_index,
+            all_involved_characteristics,
         )
 
 
