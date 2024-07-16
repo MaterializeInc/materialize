@@ -80,7 +80,7 @@ class CreateCluster(Check):
         )
 
 
-class AlterClusterToManaged(Check):
+class AlterCluster(Check):
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -103,6 +103,8 @@ class AlterClusterToManaged(Check):
                 """,
                 """
                 > ALTER CLUSTER alter_cluster1 SET (MANAGED);
+
+                >[version>10600] ALTER CLUSTER alter_cluster1 SET (introspection debugging = TRUE, introspection interval = '45s');
                 """,
             ]
         ]
@@ -126,7 +128,10 @@ class AlterClusterToManaged(Check):
                 123
 
                 >[version>10600] SHOW CREATE CLUSTER alter_cluster1;
-                alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '2-2', SCHEDULE = MANUAL)"
+                alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (DISK = true, INTROSPECTION DEBUGGING = true, INTROSPECTION INTERVAL = INTERVAL '00:00:45', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '2-2', SCHEDULE = MANUAL)"
+
+                >[version>10600] SELECT name, introspection_debugging, introspection_interval FROM mz_catalog.mz_clusters WHERE name = 'alter_cluster1';
+                alter_cluster1 true "00:00:45"
            """
             )
         )
