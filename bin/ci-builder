@@ -237,6 +237,9 @@ case "$cmd" in
             --env SCHEMA_REGISTRY_URL
             --env POSTGRES_URL
             --env COCKROACH_URL
+            # For ci-closed-issues-detect
+            --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
+            --env GITHUB_TOKEN
         )
 
         if [[ $detach_container == "true" ]]; then
