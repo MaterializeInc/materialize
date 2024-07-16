@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{
     AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
 };
-use mz_repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena};
+use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
 
 use crate::{any, TransformCtx, TransformError};
 
@@ -49,11 +49,7 @@ impl crate::Transform for FoldConstants {
             let num_inputs = e.num_inputs();
             let input_types = &type_stack[type_stack.len() - num_inputs..];
             let mut relation_type = e.typ_with_input_types(input_types);
-            self.action(
-                e,
-                &mut relation_type,
-                input_types.iter().map(|typ| &typ.column_types),
-            )?;
+            self.action(e, &mut relation_type)?;
             type_stack.truncate(type_stack.len() - num_inputs);
             type_stack.push(relation_type);
             Ok(())
@@ -69,15 +65,11 @@ impl FoldConstants {
     /// This transform will cease optimization if it encounters constant collections
     /// that are larger than `self.limit`, if that is set. It is not guaranteed that
     /// a constant input within the limit will be reduced to a `Constant` variant.
-    pub fn action<'a, I>(
+    pub fn action(
         &self,
         relation: &mut MirRelationExpr,
         relation_type: &mut RelationType,
-        mut input_types: I,
-    ) -> Result<(), TransformError>
-    where
-        I: Iterator<Item = &'a Vec<ColumnType>>,
-    {
+    ) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
@@ -92,15 +84,6 @@ impl FoldConstants {
                 monotonic: _,
                 expected_group_size: _,
             } => {
-                let input_typ = input_types.next().unwrap();
-                // Reduce expressions to their simplest form.
-                for key in group_key.iter_mut() {
-                    key.reduce(input_typ);
-                }
-                for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(input_typ);
-                }
-
                 // Guard against evaluating an expression that may contain
                 // unmaterializable functions.
                 if group_key.iter().any(|e| e.contains_unmaterializable())
@@ -138,12 +121,6 @@ impl FoldConstants {
                 offset,
                 ..
             } => {
-                let input_typ = input_types.next().unwrap();
-
-                if let Some(limit) = limit {
-                    limit.reduce(input_typ);
-                }
-
                 // Only fold constants when:
                 //
                 // 1. The `limit` value is not set, or
@@ -183,16 +160,6 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::Map { input, scalars } => {
-                // Before reducing the scalar expressions, we need to form an appropriate
-                // RelationType to provide to each. Each expression needs a different
-                // relation type; although we could in principle use `relation_type` here,
-                // we shouldn't rely on `reduce` not looking at its cardinality to assess
-                // the number of columns.
-                let input_arity = input_types.next().unwrap().len();
-                for (index, scalar) in scalars.iter_mut().enumerate() {
-                    scalar.reduce(&relation_type.column_types[..(input_arity + index)]);
-                }
-
                 // Guard against evaluating expression that may contain
                 // unmaterializable functions.
                 if scalars.iter().any(|e| e.contains_unmaterializable()) {
@@ -240,11 +207,6 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let input_typ = input_types.next().unwrap();
-                for expr in exprs.iter_mut() {
-                    expr.reduce(input_typ);
-                }
-
                 // Guard against evaluating expression that may contain unmaterializable functions.
                 if exprs.iter().any(|e| e.contains_unmaterializable()) {
                     return Ok(());
@@ -273,12 +235,6 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
-                let input_typ = input_types.next().unwrap();
-                for predicate in predicates.iter_mut() {
-                    predicate.reduce(input_typ);
-                }
-                predicates.retain(|p| !p.is_literal_true());
-
                 // Guard against evaluating expression that may contain
                 // unmaterializable function calls.
                 if predicates.iter().any(|e| e.contains_unmaterializable()) {
