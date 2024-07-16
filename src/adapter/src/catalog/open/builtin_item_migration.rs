@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use mz_catalog::builtin::{BuiltinTable, Fingerprint, BUILTINS};
@@ -26,7 +25,6 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::ShardIdSchema;
-use mz_persist_types::Opaque;
 use mz_persist_types::ShardId;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::controller::StorageTxn;
@@ -232,9 +230,18 @@ async fn migrate_builtin_items_0dt(
 
     // 3. Read in the current contents of the migration shard.
     let upper = fetch_upper(&mut write_handle).await;
-    let as_of = Antichain::from_elem(upper.saturating_sub(1));
+    // The empty write above should ensure that the upper is at least 1.
+    let as_of = upper.checked_sub(1).ok_or_else(|| {
+        Error::new(ErrorKind::Internal(format!(
+            "builtin migration failed, unexpected upper: {upper:?}"
+        )))
+    })?;
     let since = read_handle.since();
-    as_of.join(since);
+    assert!(
+        since.less_equal(&as_of),
+        "since={since:?}, as_of:{as_of:?}; since must be less than or equal to as_of"
+    );
+    let as_of = Antichain::from_elem(as_of);
     let snapshot = read_handle
         .snapshot_and_fetch(as_of)
         .await
@@ -406,8 +413,9 @@ async fn write_to_migration_shard(
 
     // The since handle gives us the ability to fence out other downgraders using an opaque token.
     // (See the method documentation for details.)
-    // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
-    let opaque = i64::initial();
+    // That's not needed here, so we the since handle's opaque token to avoid any comparison
+    // failures.
+    let opaque = *since_handle.opaque();
     let downgrade = since_handle
         .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
         .await;
