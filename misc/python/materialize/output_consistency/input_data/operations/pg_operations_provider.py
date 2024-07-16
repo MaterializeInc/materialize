@@ -21,9 +21,9 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 
-SPECIAL_OPERATION_TYPES: list[DbOperationOrFunction] = []
+PG_OPERATIONS: list[DbOperationOrFunction] = []
 
-SPECIAL_OPERATION_TYPES.append(
+PG_OPERATIONS.append(
     DbFunction(
         "pg_typeof",
         [AnyOperationParam()],
@@ -31,7 +31,7 @@ SPECIAL_OPERATION_TYPES.append(
     )
 )
 
-SPECIAL_OPERATION_TYPES.append(
+PG_OPERATIONS.append(
     DbFunction(
         "pg_size_pretty",
         [NumericOperationParam()],
