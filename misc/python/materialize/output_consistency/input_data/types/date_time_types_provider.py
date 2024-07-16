@@ -26,7 +26,7 @@ class DateTimeDataType(DataType):
         type_name: str,
         min_value: str,
         max_value: str,
-        further_values: list[str],
+        further_values: list[tuple[str, set[ExpressionCharacteristics]]],
         further_values_with_fixed_timezone: list[str] = [],
         has_time_zone: bool = False,
         is_pg_compatible: bool = True,
@@ -65,11 +65,15 @@ DATE_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01",
     "99999-12-31",
-    ["2023-06-01", "2024-02-29"],
+    [("2023-06-01", set()), ("2024-02-29", set())],
     is_max_value_pg_compatible=False,
 )
 TIME_TYPE = DateTimeDataType(
-    TIME_TYPE_IDENTIFIER, "TIME", "00:00:00", "23:59:59.999999", ["01:02:03.000001"]
+    TIME_TYPE_IDENTIFIER,
+    "TIME",
+    "00:00:00",
+    "23:59:59.999999",
+    [("01:02:03.000001", set())],
 )
 TIMESTAMP_TYPE = DateTimeDataType(
     TIMESTAMP_TYPE_IDENTIFIER,
@@ -77,7 +81,10 @@ TIMESTAMP_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-02-28 11:22:33.44444", "2024-02-29 23:50:00"],
+    [
+        ("2023-02-28 11:22:33.44444", set()),
+        ("2024-02-29 23:50:00", set()),
+    ],
     is_max_value_pg_compatible=False,
 )
 TIMESTAMPTZ_TYPE = DateTimeDataType(
@@ -86,7 +93,7 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    further_values=["2023-06-01 11:22:33.44444"],
+    further_values=[("2023-06-01 11:22:33.44444", set())],
     further_values_with_fixed_timezone=[
         # leap year
         "2024-02-29 11:50:00 EST",
@@ -105,11 +112,11 @@ INTERVAL_TYPE = DateTimeDataType(
     "-178956970 years -8 months -2147483648 days -2562047788:00:54.775808",
     "178956970 years 7 months 2147483647 days 2562047788:00:54.775807",
     [
-        "2 years 3 months 4 days 11:22:33.456789",
-        "100 months 100 days",
-        "44:45:45",
-        "45 minutes",
-        "70 minutes",
+        ("2 years 3 months 4 days 11:22:33.456789", set()),
+        ("100 months 100 days", set()),
+        ("44:45:45", set()),
+        ("45 minutes", set()),
+        ("70 minutes", set()),
     ],
     # type is compatible but causes too many issues for now
     is_pg_compatible=False,
