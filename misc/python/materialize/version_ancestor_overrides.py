@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "ManyKafkaSourcesOnSameCluster":
+        # PR#28228 (storage/kafka: round-robin partition/worker assignment) increased wallclock
+        min_ancestor_mz_version_per_commit[
+            "256e1f839ba5243293e738bcd78d0f36c1be8f3e"
+        ] = MzVersion.parse_mz("v0.109.0")
+
     if scenario_class_name == "MinMax":
         # PR#27988 (adapter: always declare MV imports non-monotonic) increased wallclock and memory
         min_ancestor_mz_version_per_commit[
