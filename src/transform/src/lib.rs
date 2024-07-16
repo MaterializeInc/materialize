@@ -374,6 +374,8 @@ impl Transform for Fixpoint {
                     }
                     // If we got here, then this was just a hash collision! Just continue as if
                     // nothing happened.
+                    ////////// Actually, panic for the experiment
+                    panic!("HASH COLLISION");
                 }
             }
             let current_size = relation.size();
