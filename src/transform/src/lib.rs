@@ -26,7 +26,6 @@ use std::error::Error;
 use std::sync::Arc;
 use std::{fmt, iter};
 
-use differential_dataflow::Hashable;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
@@ -322,7 +321,7 @@ impl Transform for Fixpoint {
         // stable shape.
         let mut iter_no = 0;
         let mut seen = BTreeMap::new();
-        seen.insert(relation.hashed(), iter_no);
+        seen.insert(relation.hash_to_u64(), iter_no);
         let original = relation.clone();
         loop {
             let prev_size = relation.size();
@@ -333,7 +332,7 @@ impl Transform for Fixpoint {
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
-                let seen_i = seen.insert(relation.hashed(), i);
+                let seen_i = seen.insert(relation.hash_to_u64(), i);
                 if let Some(seen_i) = seen_i {
                     // Let's see whether this is just a hash collision, or a real loop: Run the
                     // whole thing from the beginning up until `seen_i`, and compare all the plans
