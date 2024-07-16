@@ -292,7 +292,7 @@ async fn migrate_builtin_items_0dt(
     )
     .await?;
 
-    // 6. Update `GlobalId` to `ShardId` mapping and finalize old `ShardId`s.
+    // 6. Update `GlobalId` to `ShardId` mapping and register old `ShardId`s for finalization. We don't do the finalization here and instead rely on the background finalization task.
     {
         let txn: &mut dyn StorageTxn<Timestamp> = txn;
         let storage_collection_metadata = txn.get_collection_metadata();
