@@ -6361,6 +6361,7 @@ dependencies = [
  "mz-txn-wal",
  "num_cpus",
  "once_cell",
+ "pin-project",
  "postgres-protocol",
  "prometheus",
  "prost",

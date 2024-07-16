@@ -795,11 +795,13 @@ impl Coordinator {
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
             let max_returned_query_size = session.vars().max_query_result_size();
+            let duration_histogram = session.metrics().row_set_finishing_seconds();
 
             return match finishing.finish(
                 RowCollection::new(&plan.returning),
                 plan.max_result_size,
                 Some(max_returned_query_size),
+                duration_histogram,
             ) {
                 Ok(rows) => Ok(Self::send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),

@@ -42,12 +42,10 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_sql::session::vars::Value as VarValue;
-use mz_sql::session::vars::{OwnedVarInput, Var, TXN_WAL_TABLES};
+use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use tracing::{info, trace};
 
 use crate::catalog::{
@@ -1937,14 +1935,10 @@ impl Catalog {
             Op::UpdateSystemConfiguration { name, value } => {
                 let parsed_value = state.parse_system_configuration(&name, value.borrow())?;
                 tx.upsert_system_config(&name, parsed_value.clone())?;
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
+                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
                 // storage "config" collection so that we can toggle the flag with
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == TXN_WAL_TABLES.name() {
-                    let txn_wal_tables =
-                        TxnWalTablesImpl::parse(value.borrow()).expect("parsing succeeded above");
-                    tx.set_txn_wal_tables(txn_wal_tables)?;
-                } else if name == ENABLE_0DT_DEPLOYMENT.name() {
+                if name == ENABLE_0DT_DEPLOYMENT.name() {
                     let enable_0dt_deployment =
                         strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
                     tx.set_enable_0dt_deployment(enable_0dt_deployment)?;
@@ -1966,12 +1960,10 @@ impl Catalog {
             }
             Op::ResetSystemConfiguration { name } => {
                 tx.remove_system_config(&name);
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
+                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
                 // storage "config" collection so that we can toggle the flag with
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == TXN_WAL_TABLES.name() {
-                    tx.reset_txn_wal_tables()?;
-                } else if name == ENABLE_0DT_DEPLOYMENT.name() {
+                if name == ENABLE_0DT_DEPLOYMENT.name() {
                     tx.reset_enable_0dt_deployment()?;
                 }
 
@@ -1988,7 +1980,6 @@ impl Catalog {
             }
             Op::ResetAllSystemConfiguration => {
                 tx.clear_system_configs();
-                tx.reset_txn_wal_tables()?;
                 tx.reset_enable_0dt_deployment()?;
 
                 CatalogState::add_to_audit_log(

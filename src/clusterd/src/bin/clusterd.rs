@@ -35,7 +35,6 @@ use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_txn_wal::operator::TxnsContext;
 use once_cell::sync::Lazy;
 use tracing::info;
@@ -85,21 +84,6 @@ struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
-    /// Whether to use the new txn-wal tables implementation or the legacy
-    /// one.
-    ///
-    /// This flag is only used to force clusterd restarts when the value in
-    /// environmentd is changed.
-    ///
-    /// This flag is named "persist-txn-tables" and not "txn-wal-tables" for
-    /// historical reasons.
-    #[clap(
-        long,
-        env = "PERSIST_TXN_TABLES",
-        default_value = "off",
-        parse(try_from_str)
-    )]
-    persist_txn_tables: TxnWalTablesImpl,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.

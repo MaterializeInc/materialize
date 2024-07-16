@@ -249,6 +249,34 @@ CREATE TABLE t (c type(1) list list)
 CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: List(List(Other { name: Name(UnresolvedItemName([Ident("type")])), typ_mod: [1] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
+CREATE TABLE t (c int4, d int4) FROM SOURCE foo (REFERENCE bar)
+----
+error: Expected right parenthesis, found identifier "int4"
+CREATE TABLE t (c int4, d int4) FROM SOURCE foo (REFERENCE bar)
+                  ^
+
+parse-statement
+CREATE TABLE t (c, d) FROM SOURCE foo (REFERENCE bar)
+----
+CREATE TABLE t (c, d) FROM SOURCE foo (REFERENCE = bar)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [Ident("c"), Ident("d")], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: UnresolvedItemName([Ident("bar")]) })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo
+----
+error: Expected left parenthesis, found EOF
+CREATE TABLE t FROM SOURCE foo
+                              ^
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz)
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: UnresolvedItemName([Ident("baz")]) })
+
+parse-statement
 CREATE DATABASE IF EXISTS foo
 ----
 error: Expected NOT, found EXISTS

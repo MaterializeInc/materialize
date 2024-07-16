@@ -237,38 +237,6 @@ def run(
         )
         thread.start()
         threads.append(thread)
-    elif scenario == Scenario.ToggleTxnWal:
-
-        def toggle_txn_wal(params: dict[str, str]) -> dict[str, str]:
-            params["persist_txn_tables"] = random.choice(["off", "eager", "lazy"])
-            return params
-
-        worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        assert composition, "ToggleTxnWal scenario only works in mzcompose"
-        worker = Worker(
-            worker_rng,
-            [
-                KillAction(
-                    worker_rng,
-                    composition,
-                    sanity_restart,
-                    toggle_txn_wal,
-                )
-            ],
-            [1],
-            end_time,
-            autocommit=False,
-            system=False,
-            composition=composition,
-        )
-        workers.append(worker)
-        thread = threading.Thread(
-            name="toggle-txn-wal",
-            target=worker.run,
-            args=(host, ports["materialized"], ports["http"], "materialize", database),
-        )
-        thread.start()
-        threads.append(thread)
     elif scenario == Scenario.ZeroDowntimeDeploy:
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         assert composition, "ZeroDowntimeDeploy scenario only works in mzcompose"

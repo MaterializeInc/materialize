@@ -18,7 +18,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v23.3.5",
+        version: str = "v24.1.9",
         auto_create_topics: bool = False,
         image: str | None = None,
         aliases: list[str] | None = None,

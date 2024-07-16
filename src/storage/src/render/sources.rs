@@ -11,9 +11,7 @@
 //!
 //! See [`render_source`] for more details.
 
-use std::collections::BTreeMap;
 use std::iter;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection};
@@ -66,11 +64,9 @@ pub fn render_source<'g, G, C>(
     id: GlobalId,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
-    as_of: Antichain<mz_repr::Timestamp>,
-    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
-    source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     storage_state: &crate::storage_state::StorageState,
+    base_source_config: RawSourceCreationConfig,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
@@ -91,35 +87,6 @@ where
     // source type does not support multiple instances. `render_source`
     // is called on each timely worker as part of
     // [`super::build_storage_dataflow`].
-
-    let source_name = format!("{}-{}", connection.name(), id);
-
-    let base_source_config = RawSourceCreationConfig {
-        name: source_name,
-        id,
-        source_exports: description.source_exports_with_output_indices(),
-        timestamp_interval: description.desc.timestamp_interval,
-        worker_id: scope.index(),
-        worker_count: scope.peers(),
-        now: storage_state.now.clone(),
-        metrics: storage_state.metrics.clone(),
-        as_of: as_of.clone(),
-        resume_uppers,
-        source_resume_uppers,
-        storage_metadata: description.ingestion_metadata.clone(),
-        persist_clients: Arc::clone(&storage_state.persist_clients),
-        source_statistics: storage_state
-            .aggregated_statistics
-            .get_source(&id)
-            .expect("statistics initialized")
-            .clone(),
-        shared_remap_upper: Rc::clone(
-            &storage_state.source_uppers[&description.remap_collection_id],
-        ),
-        // This might quite a large clone, but its just during rendering
-        config: storage_state.storage_configuration.clone(),
-        remap_collection_id: description.remap_collection_id.clone(),
-    };
 
     // A set of channels (1 per worker) used to signal rehydration being finished
     // to raw sources. These are channels and not timely streams because they

@@ -58,7 +58,6 @@ use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::StorageController;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use timely::Container;
 use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
@@ -276,10 +275,6 @@ impl Catalog {
                     txn.upsert_system_config(&name, value)?;
                 }
                 txn.set_system_config_synced_once()?;
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
-                // storage "config" collection so that we can toggle the flag with
-                // Launch Darkly, but use it in boot before Launch Darkly is available.
-                txn.set_txn_wal_tables(state.system_config().txn_wal_tables())?;
             }
             // Add any new builtin objects and remove old ones.
             let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
@@ -613,9 +608,6 @@ impl Catalog {
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
         storage_collections_to_drop: BTreeSet<GlobalId>,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let mut controller = {
@@ -632,14 +624,7 @@ impl Catalog {
 
             let read_only_tx = storage.transaction().await?;
 
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                txn_wal_tables,
-                &read_only_tx,
-            )
-            .await
+            mz_controller::Controller::new(config, envd_epoch, read_only, &read_only_tx).await
         };
 
         self.initialize_storage_controller_state(

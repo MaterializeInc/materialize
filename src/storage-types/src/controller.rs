@@ -372,46 +372,6 @@ impl<T> From<DataflowError> for StorageError<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, num_enum::IntoPrimitive)]
-#[repr(u64)]
-pub enum TxnWalTablesImpl {
-    Eager = 1,
-    Lazy = 2,
-}
-
-impl std::fmt::Display for TxnWalTablesImpl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TxnWalTablesImpl::Eager => f.write_str("eager"),
-            TxnWalTablesImpl::Lazy => f.write_str("lazy"),
-        }
-    }
-}
-
-impl std::str::FromStr for TxnWalTablesImpl {
-    type Err = Box<(dyn std::error::Error + Send + Sync + 'static)>;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "off" | "eager" => Ok(TxnWalTablesImpl::Eager),
-            "lazy" => Ok(TxnWalTablesImpl::Lazy),
-            _ => Err(s.into()),
-        }
-    }
-}
-
-impl TryFrom<u64> for TxnWalTablesImpl {
-    type Error = u64;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            0 | 1 => Ok(TxnWalTablesImpl::Eager),
-            2 => Ok(TxnWalTablesImpl::Lazy),
-            _ => Err(value),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct TxnsCodecRow;
 

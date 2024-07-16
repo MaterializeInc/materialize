@@ -119,7 +119,9 @@ use tracing::{error, trace};
 use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
-use crate::source::types::{ProgressStatisticsUpdate, SourceMessage, StackedCollection};
+use crate::source::types::{
+    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
+};
 use crate::source::RawSourceCreationConfig;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
@@ -174,7 +176,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let reader_table_info = table_info.clone();
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let table_info = reader_table_info;
-        Box::pin(async move {
+        let busy_signal = Arc::clone(&config.busy_signal);
+        Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
             let [data_cap_set, upper_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
                 caps.try_into().unwrap();
@@ -469,7 +472,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
             // We never expect the replication stream to gracefully end
             Err(TransientError::ReplicationEOF)
-        })
+        }))
     });
 
     // Distribute the raw slot data to all workers.

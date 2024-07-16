@@ -24,7 +24,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
-use mz_storage_types::controller::TxnWalTablesImpl;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
@@ -209,13 +208,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_next_user_replica_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
-
-    /// Get the `txn_wal_tables` config value of this instance.
-    ///
-    /// This mirrors the `txn_wal_tables` "system var" so that we can toggle
-    /// the flag with Launch Darkly, but use it in boot before Launch Darkly is
-    /// available.
-    async fn get_txn_wal_tables(&mut self) -> Result<Option<TxnWalTablesImpl>, CatalogError>;
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;

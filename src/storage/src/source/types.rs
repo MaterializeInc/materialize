@@ -14,6 +14,10 @@
 
 use std::convert::Infallible;
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 
 use differential_dataflow::Collection;
 use mz_repr::{Diff, Row};
@@ -21,9 +25,12 @@ use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::containers::stack::StackWrapper;
+use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::progress::Antichain;
+use tokio::sync::Semaphore;
+use tokio_util::sync::PollSemaphore;
 
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
@@ -188,4 +195,32 @@ pub struct DecodeResult<FromTime> {
     pub metadata: Row,
     /// The original timestamp of this message
     pub from_time: FromTime,
+}
+
+#[pin_project]
+pub struct SignaledFuture<F> {
+    #[pin]
+    fut: F,
+    semaphore: PollSemaphore,
+}
+
+impl<F: Future> SignaledFuture<F> {
+    pub fn new(semaphore: Arc<Semaphore>, fut: F) -> Self {
+        Self {
+            fut,
+            semaphore: PollSemaphore::new(semaphore),
+        }
+    }
+}
+
+impl<F: Future> Future for SignaledFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let permit = ready!(this.semaphore.poll_acquire(cx));
+        let ret = this.fut.poll(cx);
+        drop(permit);
+        ret
+    }
 }

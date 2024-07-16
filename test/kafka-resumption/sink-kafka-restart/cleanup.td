@@ -7,13 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-version: 2
+> DROP SINK output CASCADE;
 
-sources:
-  - name: simple_table
-    schema: public_table
-    tables:
-      - name: table
+> DROP TABLE t CASCADE;
 
-models:
-  - name: table_mv
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET kafka_transaction_timeout;

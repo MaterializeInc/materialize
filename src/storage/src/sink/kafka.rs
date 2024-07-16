@@ -79,6 +79,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use futures::StreamExt;
 use maplit::btreemap;
 use mz_interchange::avro::AvroEncoder;
 use mz_interchange::encode::Encode;
@@ -407,6 +408,8 @@ impl TransactionalProducer {
             .payload(&payload)
             .key(&self.progress_key);
         self.producer.send(record).map_err(|(e, _)| e)?;
+
+        fail::fail_point!("kafka_sink_commit_transaction");
 
         let timeout = self.socket_timeout;
         match self

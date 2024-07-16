@@ -64,9 +64,7 @@ use mz_storage_client::statistics::{
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::{
-    AlterError, CollectionMetadata, StorageError, TxnWalTablesImpl, TxnsCodecRow,
-};
+use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -97,26 +95,6 @@ mod persist_handles;
 mod rehydration;
 mod rtr;
 mod statistics;
-
-#[derive(Debug)]
-enum TxnsWal<T> {
-    EnabledEager,
-    EnabledLazy { txns_read: TxnsRead<T> },
-}
-
-impl<T: Timestamp + Lattice + Codec64> TxnsWal<T> {
-    fn expect_enabled_lazy(&self, txns_id: &ShardId) -> &TxnsRead<T> {
-        match self {
-            TxnsWal::EnabledLazy { txns_read, .. } => {
-                assert_eq!(txns_id, txns_read.txns_id());
-                txns_read
-            }
-            TxnsWal::EnabledEager { .. } => {
-                panic!("set if txns are enabled and lazy")
-            }
-        }
-    }
-}
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -160,9 +138,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
     /// Write handle for monotonic shards.
     pub(crate) persist_monotonic_worker: persist_handles::PersistMonotonicWriteWorker<T>,
-    /// Whether to use the new txn-wal tables implementation or the legacy
-    /// one.
-    txns: TxnsWal<T>,
+    /// A shared TxnsCache running in a task and communicated with over a channel.
+    txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
@@ -560,13 +537,9 @@ where
                 // If the shard is being managed by txn-wal (initially, tables), then we need to
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
-                        // If we're not using lazy txn-wal upper (i.e. we're
-                        // using eager uppers) then all reads should be done
-                        // normally.
-                        TxnsWal::EnabledEager { .. } => None,
-                        TxnsWal::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
-                    },
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        Some(*self.txns_read.txns_id())
+                    }
                     DataSource::Ingestion(_)
                     | DataSource::IngestionExport { .. }
                     | DataSource::Introspection(_)
@@ -1600,9 +1573,10 @@ where
                 // - This branch allows it to handle that advancing the physical upper of Table A to
                 //   10 (NB but only once we see it get past the write at 5!)
                 // - Then we can read it normally.
-                let txns_read = self.txns.expect_enabled_lazy(txns_id);
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
+                assert_eq!(txns_id, self.txns_read.txns_id());
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
@@ -1648,9 +1622,10 @@ where
                 }
             }
             Some(txns_id) => {
-                let txns_read = self.txns.expect_enabled_lazy(txns_id);
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
+                assert_eq!(txns_id, self.txns_read.txns_id());
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
@@ -2328,7 +2303,6 @@ where
         envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: MetricsRegistry,
-        txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
         storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -2356,15 +2330,8 @@ where
             Arc::new(UnitSchema),
         )
         .await;
-        let persist_table_worker =
-            persist_handles::PersistTableWriteWorker::new_txns(txns, txn_wal_tables);
-        let txns = match txn_wal_tables {
-            TxnWalTablesImpl::Lazy => {
-                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-                TxnsWal::EnabledLazy { txns_read }
-            }
-            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager,
-        };
+        let persist_table_worker = persist_handles::PersistTableWriteWorker::new_txns(txns);
+        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
 
@@ -2393,7 +2360,7 @@ where
             exports: BTreeMap::default(),
             persist_table_worker,
             persist_monotonic_worker,
-            txns,
+            txns_read,
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
@@ -3509,9 +3476,10 @@ where
                 }
             }
             Some(txns_id) => {
-                let txns_read = self.txns.expect_enabled_lazy(txns_id);
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
+                assert_eq!(txns_id, self.txns_read.txns_id());
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;

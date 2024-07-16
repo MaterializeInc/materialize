@@ -287,7 +287,7 @@ Return // { arity: 6 }
                 Negate // { arity: 11 }
                   Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
                     Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                      Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL AND ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
+                      Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
                         Get l2 // { arity: 11 }
                       Distinct project=[#0{x}..=#2] // { arity: 3 }
                         Project (#17..=#19) // { arity: 3 }
@@ -349,7 +349,7 @@ Return // { arity: 6 }
                   Negate // { arity: 11 }
                     Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
                       Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                        Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL AND ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
+                        Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
                           Get l2 // { arity: 11 }
                         Distinct project=[#0{x}..=#2] // { arity: 3 }
                           Project (#17..=#19) // { arity: 3 }
@@ -479,7 +479,7 @@ Return // { arity: 6 }
                 Negate // { arity: 11 }
                   Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
                     Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                      Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL AND ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
+                      Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
                         Get l2 // { arity: 11 }
                       Distinct project=[#0{x}..=#2] // { arity: 3 }
                         Project (#17..=#19) // { arity: 3 }
@@ -545,7 +545,7 @@ Return // { arity: 6 }
                   Negate // { arity: 11 }
                     Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
                       Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                        Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL AND ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
+                        Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
                           Get l2 // { arity: 11 }
                         Distinct project=[#0{x}..=#2] // { arity: 3 }
                           Project (#17..=#19) // { arity: 3 }
@@ -610,7 +610,7 @@ Return // { arity: 6 }
                   Negate // { arity: 8 }
                     Project (#0{x}..=#7{dim02_d05}) // { arity: 8 }
                       Join on=(#0{x} = #8{x} AND #1{y} = #9{y} AND coalesce(#2{dim02_k01}, #1{y}) = #10) // { arity: 11 }
-                        Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL AND (coalesce(#2{dim02_k01}, #1{y})) IS NOT NULL AND (#5{dim02_d03} < 24) // { arity: 8 }
+                        Filter (coalesce(#2{dim02_k01}, #1{y})) IS NOT NULL AND (#5{dim02_d03} < 24) // { arity: 8 }
                           Get l3 // { arity: 8 }
                         Get l5 // { arity: 3 }
                   Get l3 // { arity: 8 }
@@ -619,7 +619,7 @@ Return // { arity: 6 }
                 Negate // { arity: 8 }
                   Project (#0{x}..=#7{dim01_d05}) // { arity: 8 }
                     Join on=(#0{x} = #8{x} AND #1{y} = #9{y} AND coalesce(#2{dim01_k01}, #0{x}) = #10) // { arity: 11 }
-                      Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL AND (coalesce(#2{dim01_k01}, #0{x})) IS NOT NULL AND (#5{dim01_d03} > 42) // { arity: 8 }
+                      Filter (coalesce(#2{dim01_k01}, #0{x})) IS NOT NULL AND (#5{dim01_d03} > 42) // { arity: 8 }
                         Get l2 // { arity: 8 }
                       Get l5 // { arity: 3 }
                 Get l2 // { arity: 8 }

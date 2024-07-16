@@ -105,6 +105,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use differential_dataflow::Hashable;
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
