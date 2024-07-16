@@ -390,17 +390,6 @@ steps:
               composition: zippy
               args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
 
-      - id: zippy-user-tables-txn-wal
-        label: "Zippy User Tables + toggle txn-wal"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        agents:
-          queue: linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: zippy
-              args: [--scenario=UserTablesToggleTxnWal, --actions=10000, --max-execution-time=30m]
-
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
         depends_on: build-aarch64
@@ -768,29 +757,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-txn-wal-toggle
-        label: "Checks + Toggle txn_wal"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        agents:
-          # Seems to require more memory on aarch64
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TxnWalToggle, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-txn-wal-fencing
-        label: "Checks + txn_wal fencing"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [ --scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID" ]
 
       - id: checks-toggle-persist-batch-columnar-format
         label: "Checks toggling persist batch columnar format"
@@ -1444,18 +1410,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
-
-      - id: parallel-workload-txn-wal
-        label: "Parallel Workload (toggle txn-wal)"
-        depends_on: build-aarch64
-        artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: parallel-workload
-              args: [--runtime=1500, --scenario=toggle-txn-wal, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"

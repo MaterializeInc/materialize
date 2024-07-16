@@ -17,7 +17,6 @@ from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorPar
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
-from materialize.checks.scenarios_platform_v2 import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser

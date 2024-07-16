@@ -40,9 +40,7 @@ use mz_repr::{Diff, GlobalId, RelationDesc, TimestampManipulation};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::{
-    CollectionMetadata, StorageError, TxnWalTablesImpl, TxnsCodecRow,
-};
+use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -299,26 +297,6 @@ pub struct CollectionFrontiers<T> {
     pub read_capabilities: Antichain<T>,
 }
 
-#[derive(Debug, Clone)]
-enum TxnsWal<T> {
-    EnabledEager,
-    EnabledLazy { txns_read: TxnsRead<T> },
-}
-
-impl<T: TimelyTimestamp + Lattice + Codec64> TxnsWal<T> {
-    fn expect_enabled_lazy(&self, txns_id: &ShardId) -> &TxnsRead<T> {
-        match self {
-            TxnsWal::EnabledLazy { txns_read, .. } => {
-                assert_eq!(txns_id, txns_read.txns_id());
-                txns_read
-            }
-            TxnsWal::EnabledEager { .. } => {
-                panic!("set if txns are enabled and lazy")
-            }
-        }
-    }
-}
-
 /// Implementation of [StorageCollections] that is shallow-cloneable and uses a
 /// background task for doing work concurrently, in the background.
 #[derive(Debug, Clone)]
@@ -349,8 +327,8 @@ pub struct StorageCollectionsImpl<
     /// Collections maintained by this [StorageCollections].
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
 
-    /// Whether to use the new txn-wal tables implementation or the legacy one.
-    txns: TxnsWal<T>,
+    /// A shared TxnsCache running in a task and communicated with over a channel.
+    txns_read: TxnsRead<T>,
 
     /// Storage configuration parameters.
     config: Arc<Mutex<StorageConfiguration>>,
@@ -404,7 +382,6 @@ where
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
     ) -> Self {
@@ -448,13 +425,7 @@ where
             .await
             .expect("txns schema shouldn't change");
 
-        let txns = match txn_wal_tables {
-            TxnWalTablesImpl::Lazy => {
-                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-                TxnsWal::EnabledLazy { txns_read }
-            }
-            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager,
-        };
+        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
         let finalizable_shards = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
@@ -501,7 +472,7 @@ where
             finalizable_shards,
             finalized_shards,
             collections,
-            txns,
+            txns_read,
             envd_epoch,
             read_only,
             config,
@@ -1213,12 +1184,13 @@ where
         let as_of = match metadata.txns_shard.as_ref() {
             None => SnapshotStatsAsOf::Direct(as_of),
             Some(txns_id) => {
-                let txns_read = self.txns.expect_enabled_lazy(txns_id);
+                assert_eq!(txns_id, self.txns_read.txns_id());
                 let as_of = as_of
                     .into_option()
                     .expect("cannot read as_of the empty antichain");
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 SnapshotStatsAsOf::Txns(data_snapshot)
@@ -1259,9 +1231,12 @@ where
                 },
                 Some(as_of),
             ) => {
-                let txns_read = self.txns.expect_enabled_lazy(&txns_id);
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read.data_snapshot(data_shard, as_of.clone()).await;
+                assert_eq!(txns_id, *self.txns_read.txns_id());
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
+                    .data_snapshot(data_shard, as_of.clone())
+                    .await;
                 Some(data_snapshot)
             }
             _ => None,
@@ -1396,13 +1371,9 @@ where
                 // tables), then we need to pass along the shard id for the txns
                 // shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
-                        // If we're not using lazy txn-wal upper (i.e. we're
-                        // using eager uppers) then all reads should be done
-                        // normally.
-                        TxnsWal::EnabledEager { .. } => None,
-                        TxnsWal::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
-                    },
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        Some(*self.txns_read.txns_id())
+                    }
                     DataSource::Ingestion(_)
                     | DataSource::IngestionExport { .. }
                     | DataSource::Introspection(_)
@@ -1639,11 +1610,8 @@ where
                     // update it in create_collections, so just do that now.
                     let advance_to = mz_persist_types::StepForward::step_forward(register_ts);
 
-                    if let TxnsWal::EnabledLazy { .. } = &self.txns {
-                        if collection_state.write_frontier.less_than(&advance_to) {
-                            collection_state.write_frontier =
-                                Antichain::from_elem(advance_to.clone());
-                        }
+                    if collection_state.write_frontier.less_than(&advance_to) {
+                        collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
                     }
                     self_collections.insert(id, collection_state);
                 }
