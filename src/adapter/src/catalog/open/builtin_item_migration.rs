@@ -387,7 +387,7 @@ async fn write_to_migration_shard(
         ))));
     }
 
-    // The since handle gives us the ability to fence out other writes using an opaque token.
+    // The since handle gives us the ability to fence out other downgraders using an opaque token.
     // (See the method documentation for details.)
     // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
     let opaque = i64::initial();
