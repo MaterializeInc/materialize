@@ -21,7 +21,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::{soft_assert_eq_no_log, soft_panic_no_log, soft_panic_or_log};
+use mz_ore::{soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema2};
@@ -393,9 +393,9 @@ where
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        read_metrics.part_goodbytes.inc_by(u64::cast_from(
-            parsed.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
-        ));
+        read_metrics
+            .part_goodbytes
+            .inc_by(u64::cast_from(parsed.updates.records().goodbytes()));
         EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
     })
 }
@@ -841,7 +841,7 @@ where
         val: &mut Option<V>,
         result_override: Option<(K, V)>,
     ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
-        while let Some(((k, v, mut t, d), (part_idx, idx))) = self.part_cursor.pop(&self.part) {
+        while let Some(((k, v, mut t, d), idx)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
                 continue;
             }
@@ -894,8 +894,6 @@ where
                 // Note: We only provide structured columns, if they were originally written, and a
                 // dyncfg was specified to run validation.
                 if let Some(key_structured) = self.structured_part.0.as_ref() {
-                    // Structured data should always have at most 1 part.
-                    soft_assert_eq_no_log!(part_idx, 0);
                     let key_metrics = self.metrics.columnar.arrow().key();
 
                     let mut k_s = K::default();
@@ -909,8 +907,6 @@ where
                 }
 
                 if let Some(val_structured) = self.structured_part.1.as_ref() {
-                    // Structured data should always have at most 1 part.
-                    soft_assert_eq_no_log!(part_idx, 0);
                     let val_metrics = self.metrics.columnar.arrow().val();
 
                     let mut v_s = V::default();
@@ -945,7 +941,7 @@ where
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         // We don't know in advance how restrictive the filter will be.
-        let max_len = self.part.part.updates.iter().map(|x| x.len()).sum();
+        let max_len = self.part.part.updates.records().len();
         (0, Some(max_len))
     }
 }
@@ -1101,7 +1097,6 @@ where
 /// clone is very cheap.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Cursor {
-    part_idx: usize,
     idx: usize,
 }
 
@@ -1113,7 +1108,7 @@ impl Cursor {
         &self,
         encoded: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        let part = encoded.part.updates.get(self.part_idx)?;
+        let part = encoded.part.updates.records();
         let ((k, v), t, d) = part.get(self.idx)?;
 
         let mut t = T::decode(t);
@@ -1161,10 +1156,10 @@ impl Cursor {
     pub fn pop<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
         part: &'a EncodedPart<T>,
-    ) -> Option<((&'a [u8], &'a [u8], T, [u8; 8]), (usize, usize))> {
+    ) -> Option<((&'a [u8], &'a [u8], T, [u8; 8]), usize)> {
         while !self.is_exhausted(part) {
             let current = self.get(part);
-            let popped_idx = (self.part_idx, self.idx);
+            let popped_idx = self.idx;
             self.advance(part);
             if current.is_some() {
                 return current.map(|p| (p, popped_idx));
@@ -1175,17 +1170,13 @@ impl Cursor {
 
     /// Returns true if the cursor is past the end of the part data.
     pub fn is_exhausted<T: Timestamp + Codec64>(&self, part: &EncodedPart<T>) -> bool {
-        self.part_idx >= part.part.updates.num_row_groups()
+        self.idx >= part.part.updates.records().len()
     }
 
     /// Advance the cursor just past the end of the most recent update, if there is one.
     pub fn advance<T: Timestamp + Codec64>(&mut self, part: &EncodedPart<T>) {
-        if let Some(part) = part.part.updates.get(self.part_idx) {
+        if !self.is_exhausted(part) {
             self.idx += 1;
-            if self.idx >= part.len() {
-                self.part_idx += 1;
-                self.idx = 0;
-            }
         }
     }
 }

@@ -236,7 +236,7 @@ where
                 .expect("valid inline part");
             let key_lower = updates.key_lower().to_vec();
             let diffs_sum =
-                diffs_sum::<D>(updates.updates.iter()).expect("inline parts are not empty");
+                diffs_sum::<D>(updates.updates.records()).expect("inline parts are not empty");
 
             let write_span =
                 debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
@@ -726,7 +726,7 @@ where
         if num_updates == 0 {
             return;
         }
-        let diffs_sum = diffs_sum::<D>(std::iter::once(&columnar)).expect("part is non empty");
+        let diffs_sum = diffs_sum::<D>(&columnar).expect("part is non empty");
 
         if self.expect_consolidated {
             // if our parts are consolidated, we can rely on their sorted order to
@@ -913,7 +913,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         } else {
             let part = BlobTraceBatchPart {
                 desc,
-                updates: BlobTraceUpdates::Row(vec![updates]),
+                updates: BlobTraceUpdates::Row(updates),
                 index,
             };
             let write_span =
@@ -967,7 +967,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) -> BatchPart<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&shard_metrics.shard_id);
-        let goodbytes = updates.updates.iter().map(|x| x.goodbytes()).sum::<usize>();
+        let goodbytes = updates.updates.records().goodbytes();
         let metrics_ = Arc::clone(&metrics);
 
         let (stats, (buf, encode_time)) = isolated_runtime
@@ -987,14 +987,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                         // If our updates only had a single batch, and the dyncfg is enabled, then
                         // we'll switch to our structured format.
-                        if let BlobTraceUpdates::Row(ref mut records) = updates.updates {
-                            if records.len() == 1 && cfg.batch_columnar_format.is_structured() {
-                                let record = records.pop().expect("checked length above");
+                        if let BlobTraceUpdates::Row(record) = &updates.updates {
+                            if cfg.batch_columnar_format.is_structured() {
                                 let record_ext = ColumnarRecordsStructuredExt {
                                     key: key_col,
                                     val: val_col,
                                 };
-                                updates.updates = BlobTraceUpdates::Both(record, record_ext)
+                                updates.updates = BlobTraceUpdates::Both(record.clone(), record_ext)
                             }
                         }
 
@@ -1179,19 +1178,16 @@ impl Deref for PartDeletes {
 }
 
 /// Returns the total sum of diffs or None if there were no updates.
-fn diffs_sum<'a, D: Semigroup + Codec64>(
-    updates: impl IntoIterator<Item = &'a ColumnarRecords>,
-) -> Option<D> {
+fn diffs_sum<D: Semigroup + Codec64>(updates: &ColumnarRecords) -> Option<D> {
     let mut sum = None;
-    for updates in updates.into_iter() {
-        for (_kv, _t, d) in updates.iter() {
-            let d = D::decode(d);
-            match &mut sum {
-                None => sum = Some(d),
-                Some(x) => x.plus_equals(&d),
-            }
+    for (_kv, _t, d) in updates.iter() {
+        let d = D::decode(d);
+        match &mut sum {
+            None => sum = Some(d),
+            Some(x) => x.plus_equals(&d),
         }
     }
+
     sum
 }
 
