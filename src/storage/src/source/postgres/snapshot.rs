@@ -135,6 +135,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -165,7 +166,9 @@ use tracing::{error, trace};
 use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
-use crate::source::types::{ProgressStatisticsUpdate, SourceMessage, StackedCollection};
+use crate::source::types::{
+    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
+};
 use crate::source::RawSourceCreationConfig;
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -235,7 +238,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .collect();
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
-        Box::pin(async move {
+        let busy_signal = Arc::clone(&config.busy_signal);
+        Box::pin(SignaledFuture::new(busy_signal, async move {
             let id = config.id;
             let worker_id = config.worker_id;
 
@@ -491,7 +495,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
             drop(client);
             Ok(())
-        })
+        }))
     });
 
     // We now decode the COPY protocol and apply the cast expressions
