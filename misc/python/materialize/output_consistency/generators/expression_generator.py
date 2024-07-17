@@ -131,7 +131,7 @@ class ExpressionGenerator:
             else self.operation_weights_no_aggregates
         )
 
-        if accept_op_filter:
+        if accept_op_filter is not None:
             selected_operations = []
             weights = []
             for index, operation in enumerate(self.selectable_operations):
@@ -142,6 +142,10 @@ class ExpressionGenerator:
             selected_operations = self.selectable_operations
             weights = all_weights
 
+        assert (
+            len(selected_operations) > 0
+        ), f"no operations available (include_aggregates={include_aggregates}, accept_op_filter used={accept_op_filter is not None})"
+        assert len(selected_operations) == len(weights)
         return self.randomized_picker.random_operation(selected_operations, weights)
 
     def generate_boolean_expression(
