@@ -98,7 +98,10 @@ class PostgresConsistencyTest(OutputConsistencyTest):
 
     def create_input_data(self) -> ConsistencyTestInputData:
         input_data = super().create_input_data()
+        input_data.predefined_queries.extend(create_custom_pg_consistency_queries())
+        return input_data
 
+    def filter_input_data(self, input_data: ConsistencyTestInputData) -> None:
         input_data.types_input.remove_types(
             lambda data_type: not data_type.is_pg_compatible
         )
@@ -108,9 +111,6 @@ class PostgresConsistencyTest(OutputConsistencyTest):
         input_data.operations_input.remove_functions(
             lambda db_operation: not db_operation.is_pg_compatible
         )
-
-        input_data.predefined_queries.extend(create_custom_pg_consistency_queries())
-        return input_data
 
 
 def main() -> int:

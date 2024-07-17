@@ -156,6 +156,8 @@ class OutputConsistencyTest:
 
         evaluation_strategies = self.create_evaluation_strategies(sql_executors)
 
+        self.filter_input_data(input_data)
+
         ignore_filter = self.create_inconsistency_ignore_filter(sql_executors)
 
         expression_generator = ExpressionGenerator(
@@ -209,6 +211,10 @@ class OutputConsistencyTest:
 
     def create_input_data(self) -> ConsistencyTestInputData:
         return ConsistencyTestInputData()
+
+    def filter_input_data(self, input_data: ConsistencyTestInputData) -> None:
+        # This allows to filter the input data when sql_executors are created
+        pass
 
     def create_sql_executors(
         self,
