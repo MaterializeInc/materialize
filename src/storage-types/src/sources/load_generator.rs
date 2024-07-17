@@ -54,7 +54,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         "load-generator"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         None
     }
 

@@ -21,19 +21,18 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::sources::SubsourceResolver;
 
-use crate::catalog::SessionCatalog;
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
 use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
 
-use super::RequestedSubsource;
+use super::{PurifiedExportDetails, PurifiedSourceExport, RequestedSubsource};
 
 /// The name of the fake database that we use for MySQL sources
 /// to fit our model of a 3-layer catalog. MySQL doesn't have a concept
 /// of databases AND schemas, it treats both as the same thing.
 pub(crate) static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
 
-pub(super) fn mysql_upstream_name(
+pub(super) fn mysql_table_to_external_reference(
     table: &MySqlTableDesc,
 ) -> Result<UnresolvedItemName, IdentError> {
     Ok(UnresolvedItemName::qualified(&[
@@ -42,8 +41,8 @@ pub(super) fn mysql_upstream_name(
     ]))
 }
 
-/// Reverses the `mysql_upstream_name` function.
-pub(super) fn upstream_name_to_table(
+/// Reverses the `mysql_table_external_reference` function.
+pub(super) fn external_reference_to_table(
     name: &UnresolvedItemName,
 ) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
     if name.0.len() != 2 {
@@ -55,20 +54,19 @@ pub(super) fn upstream_name_to_table(
     })
 }
 
-pub(super) fn generate_targeted_subsources(
+pub fn generate_create_subsource_statements(
     scx: &StatementContext,
-    source_name: Option<ResolvedItemName>,
-    validated_requested_subsources: Vec<RequestedSubsource<MySqlTableDesc>>,
+    source_name: ResolvedItemName,
+    requested_subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
 ) -> Result<Vec<CreateSubsourceStatement<Aug>>, PlanError> {
-    let mut subsources = vec![];
+    let mut subsources = Vec::with_capacity(requested_subsources.len());
 
-    // Now that we have an explicit list of validated requested subsources we can create them
-    for RequestedSubsource {
-        upstream_name,
-        subsource_name,
-        table,
-    } in validated_requested_subsources.into_iter()
-    {
+    for (subsource_name, purified_export) in requested_subsources {
+        let table = match &purified_export.details {
+            PurifiedExportDetails::MySql { table } => table,
+            _ => unreachable!("purified export details must be mysql"),
+        };
+
         // Figure out the schema of the subsource
         let mut columns = vec![];
         for c in table.columns.iter() {
@@ -123,14 +121,14 @@ pub(super) fn generate_targeted_subsources(
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
-            // We might not know the primary source's `GlobalId` yet; if not,
-            // we'll fill it in once we generate it.
-            of_source: source_name.clone(),
+            of_source: Some(source_name.clone()),
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {
                 name: CreateSubsourceOptionName::ExternalReference,
-                value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
+                value: Some(WithOptionValue::UnresolvedItemName(
+                    purified_export.external_reference,
+                )),
             }],
         };
         subsources.push(subsource);
@@ -213,7 +211,11 @@ pub(super) async fn validate_requested_subsources_privileges(
     // snapshotting, we break the entire source.
     let tables_to_check_permissions = requested_subsources
         .iter()
-        .map(|RequestedSubsource { upstream_name, .. }| upstream_name_to_table(upstream_name))
+        .map(
+            |RequestedSubsource {
+                 external_reference, ..
+             }| external_reference_to_table(external_reference),
+        )
         .collect::<Result<Vec<_>, _>>()?;
 
     validate_source_privileges(&mut *conn, &tables_to_check_permissions)
@@ -235,7 +237,7 @@ pub(super) async fn validate_requested_subsources_privileges(
 }
 
 pub(super) struct PurifiedSubsources {
-    pub(super) new_subsources: Vec<CreateSubsourceStatement<Aug>>,
+    pub(super) subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     pub(super) tables: Vec<MySqlTableDesc>,
     pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
     pub(super) normalized_ignore_columns: Vec<WithOptionValue<Aug>>,
@@ -249,9 +251,7 @@ pub(super) async fn purify_subsources(
     referenced_subsources: &mut Option<ReferencedSubsources>,
     text_columns: Vec<UnresolvedItemName>,
     ignore_columns: Vec<UnresolvedItemName>,
-    resolved_source_name: Option<ResolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
-    catalog: &impl SessionCatalog,
 ) -> Result<PurifiedSubsources, PlanError> {
     // Determine which table schemas to request from mysql. Note that in mysql
     // a 'schema' is the same as a 'database', and a fully qualified table
@@ -327,11 +327,11 @@ pub(super) async fn purify_subsources(
     {
         ReferencedSubsources::All => {
             for table in &tables {
-                let upstream_name = mysql_upstream_name(table)?;
+                let external_reference = mysql_table_to_external_reference(table)?;
                 let subsource_name =
                     super::subsource_name_gen(unresolved_source_name, &table.name)?;
                 validated_requested_subsources.push(RequestedSubsource {
-                    upstream_name,
+                    external_reference,
                     subsource_name,
                     table,
                 });
@@ -356,11 +356,11 @@ pub(super) async fn purify_subsources(
                     continue;
                 }
 
-                let upstream_name = mysql_upstream_name(table)?;
+                let external_reference = mysql_table_to_external_reference(table)?;
                 let subsource_name =
                     super::subsource_name_gen(unresolved_source_name, &table.name)?;
                 validated_requested_subsources.push(RequestedSubsource {
-                    upstream_name,
+                    external_reference,
                     subsource_name,
                     table,
                 });
@@ -390,12 +390,23 @@ pub(super) async fn purify_subsources(
 
     validate_requested_subsources_privileges(&validated_requested_subsources, conn).await?;
 
-    let scx = StatementContext::new(None, catalog);
-    let new_subsources =
-        generate_targeted_subsources(&scx, resolved_source_name, validated_requested_subsources)?;
+    let requested_subsources = validated_requested_subsources
+        .into_iter()
+        .map(|r| {
+            (
+                r.subsource_name,
+                PurifiedSourceExport {
+                    external_reference: r.external_reference,
+                    details: PurifiedExportDetails::MySql {
+                        table: r.table.clone(),
+                    },
+                },
+            )
+        })
+        .collect();
 
     Ok(PurifiedSubsources {
-        new_subsources,
+        subsources: requested_subsources,
         // Normalize column options and remove unused column references.
         normalized_text_columns: normalize_column_refs(text_columns, &subsource_resolver, &tables)?,
         normalized_ignore_columns: normalize_column_refs(

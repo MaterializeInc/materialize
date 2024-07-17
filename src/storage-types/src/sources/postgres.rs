@@ -107,7 +107,7 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         "postgres"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         None
     }
 

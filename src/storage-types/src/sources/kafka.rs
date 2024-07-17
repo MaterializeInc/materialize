@@ -189,7 +189,7 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
         "kafka"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         Some(self.topic.as_str())
     }
 

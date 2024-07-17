@@ -170,7 +170,7 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
         "mysql"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         None
     }
 

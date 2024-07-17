@@ -713,7 +713,7 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     fn name(&self) -> &'static str;
 
     /// The name of the resource in the external system (e.g kafka topic) if any
-    fn upstream_name(&self) -> Option<&str>;
+    fn external_reference(&self) -> Option<&str>;
 
     /// The schema of this connection's key rows.
     // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
@@ -986,12 +986,12 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         match self {
-            Self::Kafka(conn) => conn.upstream_name(),
-            Self::Postgres(conn) => conn.upstream_name(),
-            Self::MySql(conn) => conn.upstream_name(),
-            Self::LoadGenerator(conn) => conn.upstream_name(),
+            Self::Kafka(conn) => conn.external_reference(),
+            Self::Postgres(conn) => conn.external_reference(),
+            Self::MySql(conn) => conn.external_reference(),
+            Self::LoadGenerator(conn) => conn.external_reference(),
         }
     }
 
