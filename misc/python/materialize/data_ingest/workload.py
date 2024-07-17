@@ -84,6 +84,23 @@ class SingleSensorUpdatingDisruptions(Workload):
             self.cycle.append(RestartMz(composition, probability=0.1))
 
 
+class SingleSensorUpdating0dtDeploy(Workload):
+    def __init__(self, composition: Composition | None) -> None:
+        self.cycle = [
+            TransactionDef(
+                [
+                    Upsert(
+                        keyspace=Keyspace.SINGLE_VALUE,
+                        count=Records.ONE,
+                        record_size=RecordSize.SMALL,
+                    ),
+                ]
+            ),
+        ]
+        if composition:
+            self.cycle.append(ZeroDowntimeDeploy(composition, probability=0.1))
+
+
 class DeleteDataAtEndOfDay(Workload):
     def __init__(self, composition: Composition | None) -> None:
         insert = Insert(
@@ -137,6 +154,35 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
 
         if composition:
             self.cycle.append(RestartMz(composition, probability=0.1))
+
+
+class DeleteDataAtEndOfDay0dtDeploys(Workload):
+    def __init__(self, composition: Composition | None) -> None:
+        insert = Insert(
+            count=Records.SOME,
+            record_size=RecordSize.SMALL,
+        )
+        insert_phase = TransactionDef(
+            size=TransactionSize.HUGE,
+            operations=[insert],
+        )
+        # Delete all records in a single transaction
+        delete_phase = TransactionDef(
+            [
+                Delete(
+                    number_of_records=Records.ALL,
+                    record_size=RecordSize.SMALL,
+                    num=insert.max_key(),
+                )
+            ]
+        )
+        self.cycle = [
+            insert_phase,
+            delete_phase,
+        ]
+
+        if composition:
+            self.cycle.append(ZeroDowntimeDeploy(composition, probability=0.1))
 
 
 # TODO: Implement
