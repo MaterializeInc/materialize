@@ -11,7 +11,9 @@
 
 use std::collections::BTreeMap;
 
+use mz_ore::cast::{CastFrom, CastInto};
 use mz_storage_client::client::StorageCommand;
+use mz_storage_client::metrics::HistoryMetrics;
 use mz_storage_types::parameters::StorageParameters;
 
 /// A history of storage commands.
@@ -25,14 +27,19 @@ pub(crate) struct CommandHistory<T> {
     /// removed given the context of other commands, for example compaction commands that can be
     /// unified, or run commands that can be dropped due to allowed compaction.
     commands: Vec<StorageCommand<T>>,
+    /// Tracked metrics.
+    metrics: HistoryMetrics,
 }
 
 impl<T: std::fmt::Debug> CommandHistory<T> {
     /// Constructs a new command history.
-    pub fn new() -> Self {
+    pub fn new(metrics: HistoryMetrics) -> Self {
+        metrics.reset();
+
         Self {
             reduced_count: 0,
             commands: Vec::new(),
+            metrics,
         }
     }
 
@@ -45,10 +52,25 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
     ///
     /// This action will reduce the history every time it doubles.
     pub fn push(&mut self, command: StorageCommand<T>) {
+        use StorageCommand::*;
+
         self.commands.push(command);
 
         if self.commands.len() > 2 * self.reduced_count {
             self.reduce();
+        } else {
+            // Refresh reported metrics. `reduce` already refreshes metrics, so we only need to do
+            // that here in the non-reduce case.
+            let command = self.commands.last().expect("pushed above");
+            let metrics = &self.metrics;
+            match command {
+                CreateTimely { .. } => metrics.create_timely_count.inc(),
+                InitializationComplete => metrics.initialization_complete_count.inc(),
+                UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
+                RunIngestions(x) => metrics.run_ingestions_count.add(x.len().cast_into()),
+                RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
+                AllowCompaction(x) => metrics.allow_compaction_count.add(x.len().cast_into()),
+            }
         }
     }
 
@@ -123,24 +145,47 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
         }
 
         // Reconstitute the commands as a compact history.
+        //
+        // When we update `metrics`, we need to be careful to not transiently report incorrect
+        // counts, as they would be observable by other threads. For example, we should not call
+        // `metrics.reset()` here, since otherwise the command history would appear empty for a
+        // brief amount of time.
+
+        let count = u64::from(create_timely_command.is_some());
+        self.metrics.create_timely_count.set(count);
         if let Some(create_timely_command) = create_timely_command {
             self.commands.push(create_timely_command);
         }
+
+        let count = u64::from(!final_configuration.all_unset());
+        self.metrics.update_configuration_count.set(count);
         if !final_configuration.all_unset() {
             self.commands
                 .push(StorageCommand::UpdateConfiguration(final_configuration));
         }
+
+        let count = u64::cast_from(run_ingestions.len());
+        self.metrics.run_ingestions_count.set(count);
         if !run_ingestions.is_empty() {
             self.commands
                 .push(StorageCommand::RunIngestions(run_ingestions));
         }
+
+        let count = u64::cast_from(run_sinks.len());
+        self.metrics.run_ingestions_count.set(count);
         if !run_sinks.is_empty() {
             self.commands.push(StorageCommand::RunSinks(run_sinks));
         }
+
+        let count = u64::cast_from(allow_compaction.len());
+        self.metrics.allow_compaction_count.set(count);
         if !allow_compaction.is_empty() {
             let updates = allow_compaction.into_iter().collect();
             self.commands.push(StorageCommand::AllowCompaction(updates));
         }
+
+        let count = u64::from(initialization_complete);
+        self.metrics.initialization_complete_count.set(count);
         if initialization_complete {
             self.commands.push(StorageCommand::InitializationComplete);
         }

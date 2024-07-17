@@ -14,13 +14,17 @@ use std::sync::Arc;
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropHistogram, IntCounterVec, MetricVecExt, MetricsRegistry,
+    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, IntCounterVec, MetricVecExt,
+    MetricsRegistry, UIntGaugeVec,
 };
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
 use mz_storage_types::instances::StorageInstanceId;
+use prometheus::core::AtomicU64;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
+
+pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 
 /// Storage controller metrics
 #[derive(Debug, Clone)]
@@ -29,6 +33,7 @@ pub struct StorageControllerMetrics {
     messages_received_bytes: prometheus::HistogramVec,
     startup_prepared_statements_kept: prometheus::IntGauge,
     regressed_offset_known: IntCounterVec,
+    history_command_count: UIntGaugeVec,
 }
 
 impl StorageControllerMetrics {
@@ -40,14 +45,12 @@ impl StorageControllerMetrics {
                 var_labels: ["instance"],
                 buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
             )),
-
             messages_received_bytes: metrics_registry.register(metric!(
                 name: "mz_storage_messages_received_bytes",
                 help: "size of storage messages received",
                 var_labels: ["instance"],
                 buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
             )),
-
             startup_prepared_statements_kept: metrics_registry.register(metric!(
                 name: "mz_storage_startup_prepared_statements_kept",
                 help: "number of prepared statements kept on startup",
@@ -56,6 +59,11 @@ impl StorageControllerMetrics {
                 name: "mz_storage_regressed_offset_known",
                 help: "number of regressed offset_known stats for this id",
                 var_labels: ["id"],
+            )),
+            history_command_count: metrics_registry.register(metric!(
+                name: "mz_storage_controller_history_command_count",
+                help: "The number of commands in the controller's command history.",
+                var_labels: ["instance_id", "command_type"],
             )),
         }
     }
@@ -120,5 +128,33 @@ impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for RehydratingSt
                 size
             ),
         }
+    }
+}
+
+/// Metrics tracked by the command history.
+#[derive(Debug)]
+pub struct HistoryMetrics {
+    /// Number of `CreateTimely` commands.
+    pub create_timely_count: UIntGauge,
+    /// Number of `RunIngestions` commands.
+    pub run_ingestions_count: UIntGauge,
+    /// Number of `RunSinks` commands.
+    pub run_sinks_count: UIntGauge,
+    /// Number of `AllowCompaction` commands.
+    pub allow_compaction_count: UIntGauge,
+    /// Number of `InitializationComplete` commands.
+    pub initialization_complete_count: UIntGauge,
+    /// Number of `UpdateConfiguration` commands.
+    pub update_configuration_count: UIntGauge,
+}
+
+impl HistoryMetrics {
+    pub fn reset(&self) {
+        self.create_timely_count.set(0);
+        self.run_ingestions_count.set(0);
+        self.run_sinks_count.set(0);
+        self.allow_compaction_count.set(0);
+        self.initialization_complete_count.set(0);
+        self.update_configuration_count.set(0);
     }
 }
