@@ -494,6 +494,7 @@ impl Listeners {
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
             read_only_controllers: read_only,
+            enable_0dt_deployment,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

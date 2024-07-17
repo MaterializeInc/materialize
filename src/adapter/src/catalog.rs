@@ -25,7 +25,7 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTINS, BUILTIN_PREFIXES,
     MZ_CATALOG_SERVER_CLUSTER,
 };
-use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
+use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
@@ -541,6 +541,7 @@ impl Catalog {
                     http_host_name: None,
                     connection_context: ConnectionContext::for_tests(secrets_reader),
                     active_connection_count,
+                    builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
                 },
             },
             previous_ts,

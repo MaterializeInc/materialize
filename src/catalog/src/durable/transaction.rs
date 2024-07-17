@@ -1914,6 +1914,10 @@ impl<'a> Transaction<'a> {
         updates
     }
 
+    pub fn is_savepoint(&self) -> bool {
+        self.durable_catalog.is_savepoint()
+    }
+
     fn commit_op(&mut self) {
         self.op_id += 1;
     }

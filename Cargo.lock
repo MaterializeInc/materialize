@@ -4031,6 +4031,7 @@ name = "mz-adapter"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "async-trait",
  "bytes",
  "bytesize",

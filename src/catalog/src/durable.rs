@@ -36,6 +36,7 @@ pub use crate::durable::objects::{
     Role, Schema, StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription,
     SystemObjectMapping, UnfinalizedShard,
 };
+pub use crate::durable::persist::builtin_migration_shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
@@ -239,6 +240,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Returns true if the catalog is opened in read only mode, false otherwise.
     fn is_read_only(&self) -> bool;
+
+    /// Returns true if the catalog is opened is savepoint mode, false otherwise.
+    fn is_savepoint(&self) -> bool;
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
