@@ -1039,7 +1039,7 @@ fn add_new_builtin_clusters_migration(
                         schedule: Default::default(),
                     }),
                 },
-                BTreeSet::new(),
+                &HashSet::new(),
             )?;
         }
     }
@@ -1076,7 +1076,7 @@ fn add_new_remove_old_builtin_introspection_source_migration(
                 .map(|name| (cluster.id, name)),
         );
     }
-    txn.insert_introspection_source_indexes(new_indexes, BTreeSet::new())?;
+    txn.insert_introspection_source_indexes(new_indexes, &HashSet::new())?;
     txn.remove_introspection_source_indexes(removed_indexes)?;
     Ok(())
 }

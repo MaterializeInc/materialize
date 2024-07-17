@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
@@ -18,14 +21,13 @@ use mz_catalog::durable::{
     Epoch, OpenableDurableCatalogState, Schema, CATALOG_VERSION,
 };
 use mz_ore::cast::usize_to_u64;
+use mz_ore::collections::HashSet;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
 
 /// A new type for [`Snapshot`] that excludes the user_version from the debug output. The
@@ -274,7 +276,7 @@ async fn test_open_savepoint(
                     &format!("db{i}"),
                     RoleId::User(i),
                     Vec::new(),
-                    BTreeSet::new(),
+                    HashSet::new(),
                 )
                 .unwrap();
             let (schema_id, schema_oid) = txn
@@ -283,7 +285,7 @@ async fn test_open_savepoint(
                     &format!("sc{i}"),
                     RoleId::User(i),
                     Vec::new(),
-                    BTreeSet::new(),
+                    HashSet::new(),
                 )
                 .unwrap();
             ids.push((db_id.clone(), schema_id.clone()));
@@ -450,7 +452,7 @@ async fn test_open_read_only(
             RoleAttributes::new(),
             RoleMembership::new(),
             RoleVars::default(),
-            BTreeSet::new(),
+            HashSet::new(),
         )
         .unwrap();
     // Drain txn updates.

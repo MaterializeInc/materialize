@@ -216,7 +216,7 @@ impl<'a> Transaction<'a> {
         database_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(DatabaseId, u32), CatalogError> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
         let id = DatabaseId::User(id);
@@ -254,7 +254,7 @@ impl<'a> Transaction<'a> {
         schema_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(SchemaId, u32), CatalogError> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
         let id = SchemaId::User(id);
@@ -327,7 +327,7 @@ impl<'a> Transaction<'a> {
         attributes: RoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(RoleId, u32), CatalogError> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
@@ -370,7 +370,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
@@ -392,7 +392,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         owner_id: RoleId,
         config: ClusterConfig,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
@@ -413,7 +413,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
@@ -575,7 +575,7 @@ impl<'a> Transaction<'a> {
         create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
@@ -674,7 +674,7 @@ impl<'a> Transaction<'a> {
     fn allocate_oids(
         &mut self,
         amount: u64,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<Vec<u32>, CatalogError> {
         /// Struct representing an OID for a user object. Allocated OIDs can be recycled, so when we've
         /// allocated [`u32::MAX`] we'll wrap back around to [`FIRST_USER_OID`].
@@ -725,9 +725,10 @@ impl<'a> Transaction<'a> {
                         .items()
                         .values()
                         .map(|value| value.oid),
-                )
-                .chain(temporary_oids.into_iter()),
+                ),
         );
+
+        let is_allocated = |oid| allocated_oids.contains(&oid) || temporary_oids.contains(&oid);
 
         let start_oid: u32 = self
             .id_allocator
@@ -743,7 +744,7 @@ impl<'a> Transaction<'a> {
             .expect("we should never persist an oid outside of user OID range");
         let mut oids = Vec::new();
         while oids.len() < u64_to_usize(amount) {
-            if !allocated_oids.contains(&current_oid.0) {
+            if !is_allocated(current_oid.0) {
                 oids.push(current_oid.0);
             }
             current_oid += 1;
@@ -776,7 +777,7 @@ impl<'a> Transaction<'a> {
 
     /// Allocates a single OID. OIDs can be recycled if they aren't currently assigned to any
     /// object.
-    pub fn allocate_oid(&mut self, temporary_oids: BTreeSet<u32>) -> Result<u32, CatalogError> {
+    pub fn allocate_oid(&mut self, temporary_oids: &HashSet<u32>) -> Result<u32, CatalogError> {
         self.allocate_oids(1, temporary_oids)
             .map(|oids| oids.into_element())
     }
@@ -1526,7 +1527,7 @@ impl<'a> Transaction<'a> {
     pub fn insert_introspection_source_indexes(
         &mut self,
         introspection_source_indexes: Vec<(ClusterId, String, GlobalId)>,
-        temporary_oids: BTreeSet<u32>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<Vec<IntrospectionSourceIndex>, CatalogError> {
         let amount = usize_to_u64(introspection_source_indexes.len());
         let oids = self.allocate_oids(amount, temporary_oids)?;

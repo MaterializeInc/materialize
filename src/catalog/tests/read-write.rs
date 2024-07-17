@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use insta::assert_debug_snapshot;
@@ -23,7 +22,7 @@ use mz_catalog::durable::{
     Item, OpenableDurableCatalogState, USER_ITEM_ALLOC_KEY,
 };
 use mz_ore::assert_ok;
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
@@ -407,7 +406,7 @@ async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
             "foo",
             RoleId::User(1),
             vec![],
-            BTreeSet::new(),
+            &HashSet::new(),
         )
         .unwrap();
     // Drain txn updates.
@@ -498,7 +497,7 @@ async fn test_non_writer_commits(
                 RoleAttributes::new(),
                 RoleMembership::new(),
                 RoleVars::default(),
-                BTreeSet::new(),
+                &HashSet::new(),
             )
             .unwrap();
         // Drain updates.
@@ -521,7 +520,7 @@ async fn test_non_writer_commits(
         let db_name = "db";
         let mut txn = savepoint_state.transaction().await.unwrap();
         let (db_id, _) = txn
-            .insert_user_database(db_name, RoleId::User(42), Vec::new(), BTreeSet::new())
+            .insert_user_database(db_name, RoleId::User(42), Vec::new(), &HashSet::new())
             .unwrap();
         let DatabaseId::User(db_id) = db_id else {
             panic!("unexpected id variant: {db_id:?}");

@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use itertools::max;
 use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
+use mz_ore::collections::HashSet;
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::oid::{
     FIRST_USER_OID, ROLE_PUBLIC_OID, SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID,
@@ -166,7 +166,7 @@ pub(crate) async fn initialize(
             attributes.clone(),
             membership.clone(),
             vars.clone(),
-            BTreeSet::new(),
+            &HashSet::new(),
         )?;
 
         audit_events.push((
@@ -300,7 +300,7 @@ pub(crate) async fn initialize(
         })
     };
 
-    let materialize_db_oid = tx.allocate_oid(BTreeSet::new())?;
+    let materialize_db_oid = tx.allocate_oid(&HashSet::new())?;
     tx.insert_database(
         MATERIALIZE_DATABASE_ID,
         "materialize",
@@ -412,7 +412,7 @@ pub(crate) async fn initialize(
         owner_id: MZ_SYSTEM_ROLE_ID,
         privileges: schema_privileges.clone(),
     };
-    let public_schema_oid = tx.allocate_oid(BTreeSet::new())?;
+    let public_schema_oid = tx.allocate_oid(&HashSet::new())?;
     let public_schema = Schema {
         id: SchemaId::User(PUBLIC_SCHEMA_ID),
         oid: public_schema_oid,
@@ -525,7 +525,7 @@ pub(crate) async fn initialize(
         MZ_SYSTEM_ROLE_ID,
         cluster_privileges,
         default_cluster_config(options),
-        BTreeSet::new(),
+        &HashSet::new(),
     )?;
     audit_events.extend([
         (
