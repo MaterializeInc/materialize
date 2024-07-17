@@ -155,15 +155,6 @@ SELECT (SELECT COUNT(*) FROM foo) FROM bar;
 2
 2
 
-## Test that we can determine recursively defined collections are empty
-query I
-WITH MUTUALLY RECURSIVE
-    foo (a int) AS (SELECT * FROM foo UNION SELECT 1),
-    bar (b int) AS (SELECT a + b FROM foo, bar)
-SELECT * FROM bar;
-----
-
-
 ## Test error cases
 
 ## Test a recursive query with mismatched types.

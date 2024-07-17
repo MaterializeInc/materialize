@@ -36,6 +36,7 @@ Target cluster: mz_catalog_server
 EOF
 
 ## Test a nested recursive query.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
@@ -56,6 +57,7 @@ EOF
 
 ## Test inlining at an inner nesting level. (#18889)
 ## `bar` is used only in `baz`, so it should be inlined. The inner WMR should have only one cte.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
@@ -118,6 +120,7 @@ Target cluster: quickstart
 EOF
 
 ## Test consolidation of not-really nested recursive query.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
@@ -137,6 +140,7 @@ Target cluster: mz_catalog_server
 EOF
 
 ## Test consolidation of independent recursive query blocks.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN SELECT * FROM (
     WITH MUTUALLY RECURSIVE
@@ -317,6 +321,7 @@ Target cluster: mz_catalog_server
 EOF
 
 ## RECURSION LIMIT -- consolidation of independent recursive query blocks with different RECURSION LIMIT
+# With #27389 this stopped testing a thing; see issue #28308.
 
 query T multiline
 EXPLAIN SELECT * FROM (
@@ -340,6 +345,7 @@ EOF
 
 ## RECURSION LIMIT -- consolidation of independent recursive query blocks with equal RECURSION LIMIT.
 ## We want to see RECURSION LIMIT printed at the block level rather than on each cte.
+# With #27389 this stopped testing a thing; see issue #28308.
 
 query T multiline
 EXPLAIN SELECT * FROM (
@@ -363,6 +369,7 @@ EOF
 
 ## ITERATION RECURSION -- consolidation of not-really nested recursive query.
 ## Here, the ITERATION RECURSION of the inner WMR is irrelevant, because it's not recursive.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
     foo (a int8) AS (
@@ -382,6 +389,7 @@ Target cluster: mz_catalog_server
 EOF
 
 # ITERATION RECURSION -- a nested recursive query.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
     foo (a int8) AS (

@@ -397,6 +397,7 @@ EOF
 # Here, SemijoinIdempotence relies on the keys introduced by the `select distinct on` being propagated through the
 # recursive Get. Note that in this test even if SemijoinIdempotence wouldn't work, RedundantJoin would step in. (But
 # see later a similar situation, but with a LEFT JOIN, where RedundantJoin wouldn't be able to eliminate a join.)
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain with(keys)
 with mutually recursive
@@ -425,6 +426,7 @@ EOF
 # Similar to the previous test, but the recursive Get is at the other input. This means that the input that should have
 # a known key is the static one, for which key inference works fine.
 # The resulting plan should have 1 join with 2 inputs.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
@@ -450,6 +452,7 @@ EOF
 # Manually written idempotent semijoin.
 # Similar to the previous test, but the CTE from inside c0 is manually lifted to the enclosing LetRec.
 # The resulting plan should have 1 join with 2 inputs.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
@@ -474,6 +477,7 @@ EOF
 # Similar to the previous test, but instead of using bar directly, we add an extra cte (bar2), which will recursively
 # refer to `c0`. `keys` will refer to `bar2` instead of `c0`.
 # The resulting plan should have 1 join with 2 inputs.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
@@ -504,6 +508,7 @@ EOF
 # changes meaning when `bar2` is being assigned after `key`. To correctly handle this situation, we need the expirations
 # in SemijoinIdempotence. To demonstrate this, if we comment out the two `do_expirations` lines, SemijoinIdempotence
 # incorrectly transforms this plan.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain with(keys)
 with mutually recursive
@@ -533,6 +538,7 @@ EOF
 # Another negative test. Similar to the first test with `bar2`, but both `keys` and `bar2` are being referenced from the
 # body, which means that SemijoinIdempotence can't kick in, as it would eliminate the intermediate Join's result, which
 # is now being referenced from the body.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
