@@ -15,9 +15,11 @@ use std::sync::Arc;
 use arrow::array::Array;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::soft_panic_or_log;
+use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
+use mz_persist_types::columnar::Schema2;
 use mz_persist_types::part::{Part2, PartBuilder, PartBuilder2};
-use mz_persist_types::stats::PartStats;
+use mz_persist_types::stats::{DynStats, PartStats, StructStats};
 use mz_persist_types::Codec;
 
 use crate::batch::UntrimmableColumns;
@@ -137,24 +139,38 @@ where
     K: Codec,
     V: Codec,
 {
-    let updates = match updates {
-        BlobTraceUpdates::Row(updates) => updates,
-        BlobTraceUpdates::Both(codec, _structured) => {
-            // This is super unexpected, but not worthy of a panic.
-            soft_panic_or_log!("re-encoding structured data?");
-            codec
-        }
+    let (updates, ext) = match updates {
+        BlobTraceUpdates::Row(updates) => (updates, None),
+        BlobTraceUpdates::Both(codec, structured) => (codec, Some(structured)),
     };
 
-    // Optionally we reuse instances of K and V and create instances of
-    // K::Storage and V::Storage to reduce allocations.
-    let mut k_reuse: Option<K> = None;
-    let mut v_reuse: Option<V> = None;
-    let mut k_storage = Some(K::Storage::default());
-    let mut v_storage = Some(V::Storage::default());
-
     if format.is_structured() {
+        if let Some(ext) = ext {
+            let key_stats = ext
+                .key
+                .as_ref()
+                .and_then(|k| schemas.key.stats(Arc::clone(k)).ok()) // TODO: warn on stats-collection failure
+                .and_then(|s| s.into_columnar_stats().into_struct_stats())
+                .unwrap_or_else(|| StructStats {
+                    len: updates.len(),
+                    cols: Default::default(),
+                });
+
+            return Ok((
+                (ext.key.clone(), ext.val.clone()),
+                PartStats { key: key_stats },
+            ));
+        }
+
         let mut builder = PartBuilder2::new(schemas.key.as_ref(), schemas.val.as_ref());
+
+        // Optionally we reuse instances of K and V and create instances of
+        // K::Storage and V::Storage to reduce allocations.
+        let mut k_reuse: Option<K> = None;
+        let mut v_reuse: Option<V> = None;
+        let mut k_storage = Some(K::Storage::default());
+        let mut v_storage = Some(V::Storage::default());
+
         for ((k, v), t, d) in updates.iter() {
             let t = i64::from_le_bytes(t);
             let d = i64::from_le_bytes(d);
