@@ -534,11 +534,15 @@ impl CatalogState {
             .get(&system_object_mapping.description)
             .expect("missing builtin")
             .1;
-        let schema_id = self.ambient_schemas_by_name[builtin.schema()];
+        let schema_name = builtin.schema();
+        let schema_id = self
+            .ambient_schemas_by_name
+            .get(schema_name)
+            .unwrap_or_else(|| panic!("unknown ambient schema: {schema_name}"));
         let name = QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
-                schema_spec: SchemaSpecifier::Id(schema_id),
+                schema_spec: SchemaSpecifier::Id(*schema_id),
             },
             item: builtin.name().into(),
         };
@@ -1109,11 +1113,14 @@ impl CatalogState {
                 Ok(item) => {
                     // Add item to catalog.
                     let view = views.remove(&id).expect("must exist");
-                    let schema_id = state.ambient_schemas_by_name[view.schema];
+                    let schema_id = state
+                        .ambient_schemas_by_name
+                        .get(view.schema)
+                        .unwrap_or_else(|| panic!("unknown ambient schema: {}", view.schema));
                     let qname = QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(schema_id),
+                            schema_spec: SchemaSpecifier::Id(*schema_id),
                         },
                         item: view.name.into(),
                     };
