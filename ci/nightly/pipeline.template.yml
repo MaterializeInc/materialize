@@ -1408,7 +1408,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill, --threads=16]
+              args: [--runtime=1500, --scenario=kill, --threads=8]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
@@ -1422,6 +1422,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
+
+      - id: parallel-workload-0dt
+        label: "Parallel Workload (0dt deploy)"
+        depends_on: build-aarch64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=0dt-deploy, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"

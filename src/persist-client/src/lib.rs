@@ -765,10 +765,8 @@ mod tests {
         let part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
         let mut updates = Vec::new();
-        for chunk in part.updates.iter() {
-            for ((k, v), t, d) in chunk.iter() {
-                updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
-            }
+        for ((k, v), t, d) in part.updates.records().iter() {
+            updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
         }
         (part, updates)
     }

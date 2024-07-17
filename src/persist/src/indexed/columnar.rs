@@ -14,7 +14,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use ::arrow::array::{Array, BinaryArray, BinaryBuilder, Int64Array};
+use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array};
 use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
 use bytes::Bytes;
@@ -82,6 +82,18 @@ pub struct ColumnarRecords {
     diffs: Int64Array,
 }
 
+impl Default for ColumnarRecords {
+    fn default() -> Self {
+        Self {
+            len: 0,
+            key_data: BinaryArray::from_vec(vec![]),
+            val_data: BinaryArray::from_vec(vec![]),
+            timestamps: Int64Array::from_iter_values([]),
+            diffs: Int64Array::from_iter_values([]),
+        }
+    }
+}
+
 impl fmt::Debug for ColumnarRecords {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&self.borrow(), fmt)
@@ -135,6 +147,31 @@ impl ColumnarRecords {
     /// Iterate through the records in Self.
     pub fn iter<'a>(&'a self) -> ColumnarRecordsIter<'a> {
         self.borrow().iter()
+    }
+
+    /// Concatenate the given records together, column-by-column.
+    pub fn concat(records: &[ColumnarRecords], metrics: &ColumnarMetrics) -> ColumnarRecords {
+        match records.len() {
+            0 => return ColumnarRecords::default(),
+            1 => return records[0].clone(),
+            _ => {}
+        }
+
+        let mut concat_array = vec![];
+        let mut concat = |get: fn(&ColumnarRecords) -> &dyn Array| {
+            concat_array.extend(records.iter().map(get));
+            let res = ::arrow::compute::concat(&concat_array).expect("same type");
+            concat_array.clear();
+            res
+        };
+
+        Self {
+            len: records.iter().map(|c| c.len).sum(),
+            key_data: realloc_array(concat(|c| &c.key_data).as_binary(), metrics),
+            val_data: realloc_array(concat(|c| &c.val_data).as_binary(), metrics),
+            timestamps: realloc_array(concat(|c| &c.timestamps).as_primitive(), metrics),
+            diffs: realloc_array(concat(|c| &c.diffs).as_primitive(), metrics),
+        }
     }
 }
 

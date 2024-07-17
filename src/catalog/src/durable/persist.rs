@@ -36,7 +36,6 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::Opaque;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
@@ -278,9 +277,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
     }
 
+    /// Fetch the current upper of the catalog state.
     #[mz_ore::instrument]
     async fn current_upper(&mut self) -> Timestamp {
-        current_upper(&mut self.write_handle).await
+        self.write_handle
+            .fetch_recent_upper()
+            .await
+            .as_option()
+            .cloned()
+            .expect("we use a totally ordered time and never finalize the shard")
     }
 
     /// Appends `updates` iff the current global upper of the catalog is `self.upper`.
@@ -314,10 +319,11 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         // Lag the shard's upper by 1 to keep it readable.
         let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
 
-        // The since handle gives us the ability to fence out other writes using an opaque token.
+        // The since handle gives us the ability to fence out other downgraders using an opaque token.
         // (See the method documentation for details.)
-        // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
-        let opaque = i64::initial();
+        // That's not needed here, so we the since handle's opaque token to avoid any comparison
+        // failures.
+        let opaque = *self.since_handle.opaque();
         let downgrade = self
             .since_handle
             .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
@@ -788,17 +794,23 @@ impl UnopenedPersistCatalogState {
             .expect("invalid usage");
 
         // Commit an empty write at the minimum timestamp so the catalog is always readable.
-        const EMPTY_UPDATES: &[((SourceData, ()), Timestamp, Diff)] = &[];
-        let _ = write_handle
-            .compare_and_append(
-                EMPTY_UPDATES,
-                Antichain::from_elem(Timestamp::minimum()),
-                Antichain::from_elem(Timestamp::minimum().step_forward()),
-            )
-            .await
-            .expect("invalid usage");
+        let upper = {
+            const EMPTY_UPDATES: &[((SourceData, ()), Timestamp, Diff)] = &[];
+            let upper = Antichain::from_elem(Timestamp::minimum());
+            let next_upper = Timestamp::minimum().step_forward();
+            match write_handle
+                .compare_and_append(EMPTY_UPDATES, upper, Antichain::from_elem(next_upper))
+                .await
+                .expect("invalid usage")
+            {
+                Ok(()) => next_upper,
+                Err(mismatch) => mismatch
+                    .current
+                    .into_option()
+                    .expect("we use a totally ordered time and never finalize the shard"),
+            }
+        };
 
-        let upper = current_upper(&mut write_handle).await;
         let as_of = as_of(&mut read_handle, upper);
         let snapshot: Vec<_> = snapshot_binary(&mut read_handle, as_of, &metrics)
             .await
@@ -1503,27 +1515,21 @@ fn desc() -> RelationDesc {
     RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
 }
 
-/// Fetch the current upper of the catalog state.
-async fn current_upper(
-    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
-) -> Timestamp {
-    write_handle
-        .fetch_recent_upper()
-        .await
-        .as_option()
-        .cloned()
-        .expect("we use a totally ordered time and never finalize the shard")
-}
-
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given
 /// `upper`.
 fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Timestamp) -> Timestamp {
-    soft_assert_or_log!(
-        upper > Timestamp::minimum(),
-        "Catalog persist shard is uninitialized"
-    );
     let since = read_handle.since().clone();
-    let mut as_of = upper.saturating_sub(1);
+    let mut as_of = upper.checked_sub(1).unwrap_or_else(|| {
+        panic!("catalog persist shard should be initialize, found upper: {upper:?}")
+    });
+    // We only downgrade the since after writing, and we always set the since to one less than the
+    // upper.
+    soft_assert_or_log!(
+        since.less_equal(&as_of),
+        "since={since:?}, as_of={as_of:?}; since must be less than or equal to as_of"
+    );
+    // This should be a no-op if the assert above passes, however if it doesn't then we'd like to
+    // continue with a correct timestamp instead of entering a panic loop.
     as_of.advance_by(since.borrow());
     as_of
 }

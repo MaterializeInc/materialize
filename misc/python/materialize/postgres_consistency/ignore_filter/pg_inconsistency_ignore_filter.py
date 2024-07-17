@@ -69,6 +69,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
     NumericReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
+    DECIMAL_39_8_TYPE_IDENTIFIER,
     DOUBLE_TYPE_IDENTIFIER,
     REAL_TYPE_IDENTIFIER,
 )
@@ -539,6 +540,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#28136: jsonb_object_agg with NULL as key")
 
         if (
+            re.search("function pg_size_pretty(.*?) is not unique", pg_error_msg)
+            is not None
+        ):
+            return YesIgnore("mz does not implement all overloadings")
+
+        if (
             "key value must be scalar, not array, composite, or json" == pg_error_msg
             and query_template.matches_any_expression(
                 partial(
@@ -882,6 +889,27 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 return YesIgnore(
                     "pg_typeof(pg_typeof(...)) returns regtype in pg but text in mz"
                 )
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(
+                matches_fun_by_name,
+                function_name_in_lower_case="pg_size_pretty",
+            ),
+            True,
+        ):
+            if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
+                # different value presentation, potentially an issue in Postgres
+                return YesIgnore("Postgres behaves differently for max_value")
+            if query_template.matches_specific_select_or_filter_expression(
+                col_index,
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={DECIMAL_39_8_TYPE_IDENTIFIER},
+                ),
+                True,
+            ):
+                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,

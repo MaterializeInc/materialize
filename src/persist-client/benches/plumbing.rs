@@ -18,6 +18,7 @@ use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
 use mz_ore::task::RuntimeExt;
+use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
@@ -198,9 +199,10 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
             Antichain::from_elem(0u64),
         ),
         index: 0,
-        updates: mz_persist::indexed::encoding::BlobTraceUpdates::Row(
-            data.batches().collect::<Vec<_>>(),
-        ),
+        updates: mz_persist::indexed::encoding::BlobTraceUpdates::Row(ColumnarRecords::concat(
+            &data.batches().collect::<Vec<_>>(),
+            &metrics,
+        )),
     };
 
     g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
