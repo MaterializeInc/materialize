@@ -86,6 +86,11 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
     stats_by_operation_variant: dict[DbOperationVariant, DbOperationOrFunctionStats] = (
         field(default_factory=dict)
     )
+    count_available_data_types: int = 0
+    count_available_op_variants: int = 0
+    count_predefined_queries: int = 0
+    count_generated_select_expressions: int = 0
+    count_ignored_select_expressions: int = 0
 
     def __post_init__(self):
         self.mode = "LIVE_DATABASE" if not self.dry_run else "DRY_RUN"
@@ -163,6 +168,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         output.sort()
 
         return "\n".join(output)
+
+    def count_used_ops(self) -> int:
+        return len(self.stats_by_operation_variant)
 
     def accept_expression_generation_statistics(
         self,

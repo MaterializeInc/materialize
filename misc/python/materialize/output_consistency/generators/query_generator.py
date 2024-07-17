@@ -34,6 +34,7 @@ from materialize.output_consistency.selection.selection import (
 from materialize.output_consistency.status.consistency_test_logger import (
     ConsistencyTestLogger,
 )
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 
 
 class QueryGenerator:
@@ -95,12 +96,12 @@ class QueryGenerator:
 
     def consume_queries(
         self,
-        logger: ConsistencyTestLogger,
+        test_summary: ConsistencyTestSummary,
     ) -> list[QueryTemplate]:
         queries = []
         queries.extend(
             self._create_multi_column_queries(
-                logger,
+                test_summary,
                 self.horizontal_layout_normal_expressions,
                 False,
                 ValueStorageLayout.HORIZONTAL,
@@ -109,7 +110,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_multi_column_queries(
-                logger,
+                test_summary,
                 self.horizontal_layout_aggregate_expressions,
                 False,
                 ValueStorageLayout.HORIZONTAL,
@@ -118,7 +119,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_multi_column_queries(
-                logger,
+                test_summary,
                 self.vertical_layout_normal_expressions,
                 False,
                 ValueStorageLayout.VERTICAL,
@@ -127,7 +128,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_multi_column_queries(
-                logger,
+                test_summary,
                 self.vertical_layout_aggregate_expressions,
                 False,
                 ValueStorageLayout.VERTICAL,
@@ -136,7 +137,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_single_column_queries(
-                logger, self.any_layout_presumably_failing_expressions
+                test_summary, self.any_layout_presumably_failing_expressions
             )
         )
 
@@ -146,7 +147,7 @@ class QueryGenerator:
 
     def _create_multi_column_queries(
         self,
-        logger: ConsistencyTestLogger,
+        test_summary: ConsistencyTestSummary,
         expressions: list[Expression],
         expect_error: bool,
         storage_layout: ValueStorageLayout,
@@ -165,7 +166,7 @@ class QueryGenerator:
             row_selection = self._select_rows(storage_layout)
 
             expression_chunk = self._remove_known_inconsistencies(
-                logger, expression_chunk, row_selection
+                test_summary, expression_chunk, row_selection
             )
 
             if len(expression_chunk) == 0:
@@ -187,7 +188,7 @@ class QueryGenerator:
         return queries
 
     def _create_single_column_queries(
-        self, logger: ConsistencyTestLogger, expressions: list[Expression]
+        self, test_summary: ConsistencyTestSummary, expressions: list[Expression]
     ) -> list[QueryTemplate]:
         """Creates one query per expression"""
 
@@ -204,7 +205,12 @@ class QueryGenerator:
                 expression, row_selection
             )
             if isinstance(ignore_verdict, YesIgnore):
-                self._log_skipped_expression(logger, expression, ignore_verdict.reason)
+                test_summary.count_ignored_select_expressions = (
+                    test_summary.count_ignored_select_expressions + 1
+                )
+                self._log_skipped_expression(
+                    test_summary, expression, ignore_verdict.reason
+                )
                 continue
 
             contains_aggregation = expression.is_aggregate
@@ -252,7 +258,7 @@ class QueryGenerator:
 
     def _remove_known_inconsistencies(
         self,
-        logger: ConsistencyTestLogger,
+        test_summary: ConsistencyTestSummary,
         expressions: list[Expression],
         row_selection: DataRowSelection,
     ) -> list[Expression]:
@@ -263,7 +269,12 @@ class QueryGenerator:
                 expression, row_selection
             )
             if isinstance(ignore_verdict, YesIgnore):
-                self._log_skipped_expression(logger, expression, ignore_verdict.reason)
+                test_summary.count_ignored_select_expressions = (
+                    test_summary.count_ignored_select_expressions + 1
+                )
+                self._log_skipped_expression(
+                    test_summary, expression, ignore_verdict.reason
+                )
                 indices_to_remove.append(index)
 
         for index_to_remove in sorted(indices_to_remove, reverse=True):

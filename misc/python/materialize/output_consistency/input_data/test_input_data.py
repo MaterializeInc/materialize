@@ -34,7 +34,7 @@ class ConsistencyTestInputData:
         return (
             f"Input stats:"
             f" count_data_types={self.count_available_data_types()},"
-            f" count_ops={self.count_available_ops()},"
+            f" count_ops={self.count_available_ops()} (with variants {self.count_available_op_variants()}),"
             f" count_predefined_queries={self.count_predefined_queries()}"
         )
 
@@ -43,6 +43,12 @@ class ConsistencyTestInputData:
 
     def count_available_ops(self) -> int:
         return len(self.operations_input.all_operation_types)
+
+    def count_available_op_variants(self) -> int:
+        count = 0
+        for operation in self.operations_input.all_operation_types:
+            count = count + operation.count_variants()
+        return count
 
     def count_predefined_queries(self) -> int:
         return len(self.predefined_queries)

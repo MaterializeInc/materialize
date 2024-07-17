@@ -80,7 +80,12 @@ class ConsistencyTestRunner:
 
     def start(self) -> ConsistencyTestSummary:
         expression_count = 0
-        test_summary = ConsistencyTestSummary(dry_run=self.config.dry_run)
+        test_summary = ConsistencyTestSummary(
+            dry_run=self.config.dry_run,
+            count_available_op_variants=self.input_data.count_available_op_variants(),
+            count_available_data_types=self.input_data.count_available_data_types(),
+            count_predefined_queries=self.input_data.count_predefined_queries(),
+        )
 
         time_guard = TimeGuard(self.config.max_runtime_in_sec)
 
@@ -152,6 +157,7 @@ class ConsistencyTestRunner:
         for strategy in self.evaluation_strategies:
             self.execution_manager.complete(strategy)
 
+        test_summary.count_generated_select_expressions = expression_count
         return test_summary
 
     def _consume_and_process_queries(
