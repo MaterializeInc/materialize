@@ -91,6 +91,7 @@ use crate::rehydration::RehydratingStorageClient;
 use crate::statistics::StatsState;
 mod collection_mgmt;
 mod collection_status;
+mod history;
 mod persist_handles;
 mod rehydration;
 mod rtr;

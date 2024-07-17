@@ -283,6 +283,11 @@ impl StorageParameters {
             user_storage_managed_collections_batch_duration;
         self.dyncfg_updates.extend(dyncfg_updates);
     }
+
+    /// Return whether all parameters are unset.
+    pub fn all_unset(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl RustType<ProtoStorageParameters> for StorageParameters {
