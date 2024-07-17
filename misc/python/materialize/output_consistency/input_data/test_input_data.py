@@ -26,10 +26,6 @@ class ConsistencyTestInputData:
         self.operations_input = ConsistencyTestOperationsInput()
         self.predefined_queries: list[QueryTemplate] = []
 
-    def remove_postgres_incompatible_data(self) -> None:
-        self.types_input.remove_postgres_incompatible_data()
-        self.operations_input.remove_postgres_incompatible_data()
-
     def get_stats(self) -> str:
         return (
             f"Input stats:"

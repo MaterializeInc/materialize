@@ -144,16 +144,11 @@ class OutputConsistencyTest:
             use_autocommit=True,
             split_and_retry_on_db_error=True,
             print_reproduction_code=True,
-            postgres_compatible_mode=scenario
-            == EvaluationScenario.POSTGRES_CONSISTENCY,
             disable_predefined_queries=disable_predefined_queries,
         )
 
         output_printer.print_config(config)
         config.validate()
-
-        if config.postgres_compatible_mode:
-            input_data.remove_postgres_incompatible_data()
 
         randomized_picker = RandomizedPicker(config)
 
