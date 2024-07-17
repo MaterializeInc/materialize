@@ -734,6 +734,8 @@ class BisectCommand(RunCommand):
         if git.is_dirty():
             raise UIError("working directory is dirty, please commit or stash changes")
 
+        self.validate_args(args)
+
         original_revision = git.get_branch_name() or git.rev_parse("HEAD")
 
         oldest_commit_hash = args.older_commit
@@ -782,6 +784,13 @@ class BisectCommand(RunCommand):
             if change_git_revision:
                 # go back to the original state
                 git.checkout(original_revision)
+
+    def validate_args(self, args: argparse.Namespace) -> None:
+        for key, value in vars(args).items():
+            if str(value) == "common-ancestor":
+                raise UIError(
+                    f"common-ancestor should not be used argument when bisecting but is used for '{key}'"
+                )
 
     def run_bisect(
         self,
