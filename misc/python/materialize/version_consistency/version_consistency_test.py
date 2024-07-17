@@ -29,6 +29,10 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
 )
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
+from materialize.output_consistency.operation.operation import DbOperationOrFunction
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
@@ -157,6 +161,25 @@ class VersionConsistencyTest(OutputConsistencyTest):
             )
 
         return strategies
+
+    def filter_input_data(self, input_data: ConsistencyTestInputData) -> None:
+        input_data.operations_input.remove_functions(
+            self._is_operation_unsupported_in_any_versions
+        )
+
+    def _is_operation_unsupported_in_any_versions(
+        self, operation: DbOperationOrFunction
+    ) -> bool:
+        if operation.since_mz_version is None:
+            return False
+
+        assert self.mz1_version is not None
+        assert self.mz2_version is not None
+
+        return (
+            operation.since_mz_version > self.mz1_version
+            or operation.since_mz_version > self.mz2_version
+        )
 
 
 def sanitize_and_shorten_version_string(version: str) -> str:
