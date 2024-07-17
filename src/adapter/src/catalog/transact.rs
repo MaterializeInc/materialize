@@ -27,6 +27,7 @@ use mz_catalog::memory::objects::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -684,13 +685,19 @@ impl Catalog {
                 )
                 .collect();
 
-                let (database_id, _) =
-                    tx.insert_user_database(&name, owner_id, database_privileges.clone())?;
+                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let (database_id, _) = tx.insert_user_database(
+                    &name,
+                    owner_id,
+                    database_privileges.clone(),
+                    &temporary_oids,
+                )?;
                 let (schema_id, _) = tx.insert_user_schema(
                     database_id,
                     DEFAULT_SCHEMA,
                     owner_id,
                     schema_privileges.clone(),
+                    &temporary_oids,
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -756,8 +763,13 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
-                let (schema_id, _) =
-                    tx.insert_user_schema(database_id, &schema_name, owner_id, privileges.clone())?;
+                let (schema_id, _) = tx.insert_user_schema(
+                    database_id,
+                    &schema_name,
+                    owner_id,
+                    privileges.clone(),
+                    &state.get_temporary_oids().collect(),
+                )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
@@ -786,6 +798,7 @@ impl Catalog {
                     attributes.clone(),
                     membership.clone(),
                     vars.clone(),
+                    &state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -838,6 +851,7 @@ impl Catalog {
                     owner_id,
                     privileges.clone(),
                     config.clone().into(),
+                    &state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -954,6 +968,8 @@ impl Catalog {
                 )
                 .collect();
 
+                let temporary_oids = state.get_temporary_oids().collect();
+
                 if item.is_temporary() {
                     if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                         || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -962,9 +978,7 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    // TODO(jkosh44) This OID allocation is not correct. The temporary OID is not
-                    // saved durably, meaning we may allocate it twice.
-                    let oid = tx.allocate_oid()?;
+                    let oid = tx.allocate_oid(&temporary_oids)?;
                     let item = TemporaryItem {
                         id,
                         oid,
@@ -1006,6 +1020,7 @@ impl Catalog {
                         serialized_item,
                         owner_id,
                         privileges.clone(),
+                        &temporary_oids,
                     )?;
                     info!(
                         "create {} {} ({})",

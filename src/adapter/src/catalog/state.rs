@@ -1226,6 +1226,25 @@ impl CatalogState {
         Ok(())
     }
 
+    /// Return all OIDs that are allocated to temporary objects.
+    pub(crate) fn get_temporary_oids(&self) -> impl Iterator<Item = u32> + '_ {
+        std::iter::empty()
+            .chain(self.ambient_schemas_by_id.values().filter_map(|schema| {
+                if schema.id.is_temporary() {
+                    Some(schema.oid)
+                } else {
+                    None
+                }
+            }))
+            .chain(self.entry_by_id.values().filter_map(|entry| {
+                if entry.item().is_temporary() {
+                    Some(entry.oid)
+                } else {
+                    None
+                }
+            }))
+    }
+
     /// Optimized lookup for a builtin table.
     ///
     /// Panics if the builtin table doesn't exist in the catalog.
