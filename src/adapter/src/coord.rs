@@ -133,6 +133,7 @@ use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
+use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp as _};
@@ -175,7 +176,7 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycle
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
-use mz_catalog::builtin::BUILTINS;
+use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -3278,9 +3279,11 @@ pub fn serve(
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
         info!("coordinator init: beginning");
-        // TODO(jkosh44) Experiment DO NOT merge.
-        let count = BUILTINS::iter().count();
-        info!("{count} builtins");
+
+        // Initializing the builtins can be an expensive process and consume a lot of memory. We
+        // forcibly initialize it early while the stack is relatively empty to avoid stack
+        // overflows later.
+        let _builtins = Lazy::force(&BUILTINS_STATIC);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
