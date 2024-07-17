@@ -181,17 +181,19 @@ def workflow_silent_connection_drop(
     ):
         c.up("materialized", "postgres")
 
-        c.run_testdrive_files(
-            "--no-reset",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            "override/silent-connection-drop-part-1.td",
-        )
-
         pg_conn = pg8000.connect(
             host="localhost",
             user="postgres",
             password="postgres",
             port=c.default_port("postgres"),
+        )
+
+        _verify_exactly_n_replication_slots_exist(pg_conn, n=0)
+
+        c.run_testdrive_files(
+            "--no-reset",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            "override/silent-connection-drop-part-1.td",
         )
 
         _verify_exactly_n_replication_slots_exist(pg_conn, n=1)
