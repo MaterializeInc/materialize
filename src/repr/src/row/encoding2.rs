@@ -17,9 +17,9 @@ use arrow::array::{
     Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
     BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, Float32Array, Float32Builder,
     Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder, Int64Array,
-    Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StructArray,
-    UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder, UInt8Array,
-    UInt8Builder,
+    Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StringViewArray,
+    StringViewBuilder, StructArray, UInt16Array, UInt16Builder, UInt32Array, UInt32Builder,
+    UInt64Array, UInt64Builder, UInt8Array, UInt8Builder,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields};
@@ -140,6 +140,7 @@ enum DatumColumnEncoder {
     },
     Bytes(BinaryBuilder),
     String(StringBuilder),
+    StringView(StringViewBuilder),
     Date(Int32Builder),
     Time(FixedSizeBinaryBuilder),
     Timestamp(FixedSizeBinaryBuilder),
@@ -249,6 +250,9 @@ impl DatumColumnEncoder {
                 binary_values.append_value(packed.as_bytes());
             }
             (DatumColumnEncoder::String(builder), Datum::String(val)) => builder.append_value(val),
+            (DatumColumnEncoder::StringView(builder), Datum::String(val)) => {
+                builder.append_value(val)
+            }
             (DatumColumnEncoder::Bytes(builder), Datum::Bytes(val)) => builder.append_value(val),
             (DatumColumnEncoder::Date(builder), Datum::Date(val)) => {
                 builder.append_value(val.pg_epoch_days())
@@ -453,6 +457,7 @@ impl DatumColumnEncoder {
                 binary_values.append_null();
             }
             DatumColumnEncoder::String(builder) => builder.append_null(),
+            DatumColumnEncoder::StringView(builder) => builder.append_null(),
             DatumColumnEncoder::Bytes(builder) => builder.append_null(),
             DatumColumnEncoder::Date(builder) => builder.append_null(),
             DatumColumnEncoder::Time(builder) => builder.append_null(),
@@ -631,6 +636,14 @@ impl DatumColumnEncoder {
                 let array = builder.finish();
                 let stats = PrimitiveStats::<String>::from_column(&array);
                 (Arc::new(array), stats.into())
+            }
+            DatumColumnEncoder::StringView(mut builder) => {
+                let array = builder.finish();
+                // TODO(parkmycar): min and max for *ViewArrays just merged upstream.
+                //
+                // See <https://github.com/apache/arrow-rs/pull/6053>
+                let stats = ColumnStatKinds::None;
+                (Arc::new(array), stats)
             }
             DatumColumnEncoder::Bytes(mut builder) => {
                 let array = builder.finish();
@@ -833,6 +846,7 @@ enum DatumColumnDecoder {
     Numeric(BinaryArray),
     Bytes(BinaryArray),
     String(StringArray),
+    StringView(StringViewArray),
     Date(Int32Array),
     Time(FixedSizeBinaryArray),
     Timestamp(FixedSizeBinaryArray),
@@ -920,6 +934,10 @@ impl DatumColumnDecoder {
                 Datum::Numeric(OrderedDecimal(val))
             }),
             DatumColumnDecoder::String(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(Datum::String),
+            DatumColumnDecoder::StringView(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
                 .map(Datum::String),
@@ -1414,6 +1432,16 @@ fn array_to_decoder(
             let array = downcast_array::<StringArray>(array)?;
             DatumColumnDecoder::String(array.clone())
         }
+        (
+            DataType::Utf8View,
+            ScalarType::String
+            | ScalarType::PgLegacyName
+            | ScalarType::Char { .. }
+            | ScalarType::VarChar { .. },
+        ) => {
+            let array = downcast_array::<StringViewArray>(array)?;
+            DatumColumnDecoder::StringView(array.clone())
+        }
         (DataType::Binary, ScalarType::Bytes) => {
             let array = downcast_array::<BinaryArray>(array)?;
             DatumColumnDecoder::Bytes(array.clone())
@@ -1569,7 +1597,13 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::String
         | ScalarType::PgLegacyName
         | ScalarType::Char { .. }
-        | ScalarType::VarChar { .. } => DatumColumnEncoder::String(StringBuilder::new()),
+        | ScalarType::VarChar { .. } => {
+            if false {
+                DatumColumnEncoder::StringView(StringViewBuilder::new())
+            } else {
+                DatumColumnEncoder::String(StringBuilder::new())
+            }
+        }
         ScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
         ScalarType::Date => DatumColumnEncoder::Date(Int32Builder::new()),
         ScalarType::Time => DatumColumnEncoder::Time(FixedSizeBinaryBuilder::new(TIME_FIXED_BYTES)),

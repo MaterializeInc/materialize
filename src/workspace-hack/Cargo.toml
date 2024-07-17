@@ -82,7 +82,7 @@ num-traits = { version = "0.2.15", features = ["i128", "libm"] }
 openssl = { version = "0.10.64", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "52.1.0", default-features = false, features = ["arrow", "snap"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
@@ -206,7 +206,7 @@ num-traits = { version = "0.2.15", features = ["i128", "libm"] }
 openssl = { version = "0.10.64", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "52.1.0", default-features = false, features = ["arrow", "snap"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
