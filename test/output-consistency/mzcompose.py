@@ -10,12 +10,14 @@
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.output_consistency.output_consistency_test import OutputConsistencyTest
 
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(propagate_crashes=True, external_cockroach=True),
+    Mz(app_password=""),
 ]
 
 
