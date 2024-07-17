@@ -1305,7 +1305,7 @@ steps:
   - id: data-ingest
     label: "Data Ingest"
     depends_on: build-aarch64
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
     retry:
       automatic:
         - exit_status: 75
