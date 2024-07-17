@@ -335,6 +335,7 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) batch_columnar_format: BatchColumnarFormat,
+    pub(crate) batch_columnar_stats_only_override: bool,
     pub(crate) batch_record_part_format: bool,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
@@ -354,6 +355,13 @@ pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
     "persist_batch_columnar_format",
     BatchColumnarFormat::default().as_str(),
     "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v2' (Materialize).",
+);
+
+pub(crate) const BATCH_COLUMNAR_STATS_ONLY_OVERRIDE: Config<bool> = Config::new(
+    "persist_batch_columnar_stats_only_override",
+    false,
+    "Regardless of the value for 'persist_batch_columnar_format' only use structured \
+    data for stats collection and do no durably persist it (Materialize).",
 );
 
 pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(
@@ -400,6 +408,7 @@ impl BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             batch_columnar_format: BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value)),
+            batch_columnar_stats_only_override: BATCH_COLUMNAR_STATS_ONLY_OVERRIDE.get(value),
             batch_record_part_format: BATCH_RECORD_PART_FORMAT.get(value),
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
@@ -985,10 +994,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             break 'collect_stats None;
                         };
 
-                        // If our updates only had a single batch, and the dyncfg is enabled, then
-                        // we'll switch to our structured format.
+                        // Write a structured batch if the dyncfg is enabled and we're the stats
+                        // override is not set.
                         if let BlobTraceUpdates::Row(record) = &updates.updates {
-                            if cfg.batch_columnar_format.is_structured() {
+                            if cfg.batch_columnar_format.is_structured()
+                                && !cfg.batch_columnar_stats_only_override
+                            {
                                 let record_ext = ColumnarRecordsStructuredExt {
                                     key: key_col,
                                     val: val_col,
