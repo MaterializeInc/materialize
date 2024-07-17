@@ -276,7 +276,7 @@ async fn test_open_savepoint(
                     &format!("db{i}"),
                     RoleId::User(i),
                     Vec::new(),
-                    HashSet::new(),
+                    &HashSet::new(),
                 )
                 .unwrap();
             let (schema_id, schema_oid) = txn
@@ -285,7 +285,7 @@ async fn test_open_savepoint(
                     &format!("sc{i}"),
                     RoleId::User(i),
                     Vec::new(),
-                    HashSet::new(),
+                    &HashSet::new(),
                 )
                 .unwrap();
             ids.push((db_id.clone(), schema_id.clone()));
@@ -452,7 +452,7 @@ async fn test_open_read_only(
             RoleAttributes::new(),
             RoleMembership::new(),
             RoleVars::default(),
-            HashSet::new(),
+            &HashSet::new(),
         )
         .unwrap();
     // Drain txn updates.
