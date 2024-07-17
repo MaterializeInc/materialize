@@ -66,6 +66,9 @@ where
     next: N,
     postgres_client: Arc<PostgresClient>,
     metrics: Arc<Metrics>,
+    /// A read-only timestamp oracle is NOT allowed to do operations that change
+    /// the backing Postgres/CRDB state.
+    read_only: bool,
 }
 
 /// Configuration to connect to a Postgres-backed implementation of
@@ -417,6 +420,7 @@ where
         timeline: String,
         initially: Timestamp,
         next: N,
+        read_only: bool,
     ) -> Self {
         info!(config = ?config, "opening PostgresTimestampOracle");
 
@@ -448,6 +452,7 @@ where
                 next: next.clone(),
                 postgres_client: Arc::new(postgres_client),
                 metrics,
+                read_only,
             };
 
             // Create a row for our timeline, if it doesn't exist. The
@@ -473,7 +478,9 @@ where
             // Forward timestamps to what we're given from outside. Remember,
             // the above query will only create the row at the initial timestamp
             // if it didn't exist before.
-            TimestampOracle::apply_write(&oracle, initially).await;
+            if !read_only {
+                TimestampOracle::apply_write(&oracle, initially).await;
+            }
 
             Result::<_, anyhow::Error>::Ok(oracle)
         };
@@ -556,6 +563,10 @@ where
 
     #[mz_ore::instrument(name = "oracle::write_ts")]
     async fn fallible_write_ts(&self) -> Result<WriteTimestamp<Timestamp>, anyhow::Error> {
+        if self.read_only {
+            panic!("attempting write_ts in read-only mode");
+        }
+
         let proposed_next_ts = self.next.now();
         let proposed_next_ts = Self::ts_to_decimal(proposed_next_ts);
 
@@ -631,6 +642,10 @@ where
 
     #[mz_ore::instrument(name = "oracle::apply_write")]
     async fn fallible_apply_write(&self, write_ts: Timestamp) -> Result<(), anyhow::Error> {
+        if self.read_only {
+            panic!("attempting apply_write in read-only mode");
+        }
+
         let q = r#"
             UPDATE timestamp_oracle SET write_ts = GREATEST(write_ts, $2), read_ts = GREATEST(read_ts, $2)
                 WHERE timeline = $1;
@@ -817,8 +832,13 @@ mod tests {
         };
 
         crate::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
-            let oracle =
-                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
+            let oracle = PostgresTimestampOracle::open(
+                config.clone(),
+                timeline,
+                initial_ts,
+                now_fn,
+                false, /* read-only */
+            );
 
             async {
                 let arced_oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =

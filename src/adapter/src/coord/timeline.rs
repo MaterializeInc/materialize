@@ -182,6 +182,7 @@ impl Coordinator {
             self.catalog().config().now.clone(),
             self.pg_timestamp_oracle_config.clone(),
             &mut self.global_timelines,
+            self.read_only_controllers,
         )
         .await
     }
@@ -195,6 +196,7 @@ impl Coordinator {
         now: NowFn,
         pg_oracle_config: Option<PostgresTimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
+        read_only: bool,
     ) -> &'a mut TimelineState<Timestamp> {
         if !global_timelines.contains_key(timeline) {
             info!(
@@ -227,6 +229,7 @@ impl Coordinator {
                     timeline.to_string(),
                     initially,
                     now_fn,
+                    read_only,
                 )
                 .await,
             );
