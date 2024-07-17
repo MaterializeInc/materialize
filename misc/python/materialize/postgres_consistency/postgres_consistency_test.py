@@ -78,9 +78,7 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     ) -> ResultComparator:
         return PostgresResultComparator(ignore_filter)
 
-    def create_inconsistency_ignore_filter(
-        self, sql_executors: SqlExecutors
-    ) -> GenericInconsistencyIgnoreFilter:
+    def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return PgInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(

@@ -158,7 +158,7 @@ class OutputConsistencyTest:
 
         self.filter_input_data(input_data)
 
-        ignore_filter = self.create_inconsistency_ignore_filter(sql_executors)
+        ignore_filter = self.create_inconsistency_ignore_filter()
 
         expression_generator = ExpressionGenerator(
             config, randomized_picker, input_data
@@ -234,9 +234,7 @@ class OutputConsistencyTest:
     ) -> ResultComparator:
         return ResultComparator(ignore_filter)
 
-    def create_inconsistency_ignore_filter(
-        self, sql_executors: SqlExecutors
-    ) -> GenericInconsistencyIgnoreFilter:
+    def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return InternalOutputInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(

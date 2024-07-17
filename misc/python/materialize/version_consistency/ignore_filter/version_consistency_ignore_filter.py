@@ -55,9 +55,7 @@ MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
-    def __init__(self, mz1_version_string: str, mz2_version_string: str):
-        mz1_version = MzVersion.parse_mz(mz1_version_string, drop_dev_suffix=True)
-        mz2_version = MzVersion.parse_mz(mz2_version_string, drop_dev_suffix=True)
+    def __init__(self, mz1_version: MzVersion, mz2_version: MzVersion):
         lower_version, higher_version = (
             (mz1_version, mz2_version)
             if mz1_version < mz2_version
