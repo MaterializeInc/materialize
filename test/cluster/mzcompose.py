@@ -2959,26 +2959,6 @@ def workflow_test_incident_70(c: Composition) -> None:
             thread.join()
 
 
-def workflow_test_index_source_stuck(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Inspired by incident 78, test that selecting an index of a materialized
-    view still works when the source is stuck, for example because it's busy or
-    it has no replicas."""
-    c.down(destroy_volumes=True)
-
-    with c.override(
-        Testdrive(),
-        Clusterd(name="clusterd1"),
-        Clusterd(name="clusterd2"),
-        Materialized(),
-    ):
-        c.up("materialized")
-        c.up("clusterd1")
-        c.up("clusterd2")
-        c.run_testdrive_files("index-source-stuck/run.td")
-
-
 def workflow_test_github_cloud_7998(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

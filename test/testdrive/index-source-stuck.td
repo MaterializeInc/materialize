@@ -7,29 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test INSERT INTO...SELECT. This must be a testdrive test to avoid symbiosis
-# in sqllogictest.
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
-
 > DROP CLUSTER IF EXISTS cluster1 CASCADE;
 > DROP CLUSTER IF EXISTS cluster2 CASCADE;
-> CREATE CLUSTER cluster1 REPLICAS (replica1 (
-  STORAGECTL ADDRESSES ['clusterd1:2100'],
-  STORAGE ADDRESSES ['clusterd1:2103'],
-  COMPUTECTL ADDRESSES ['clusterd1:2101'],
-  COMPUTE ADDRESSES ['clusterd1:2102'],
-  WORKERS 1));
-> CREATE CLUSTER cluster2 REPLICAS (replica1 (
-  STORAGECTL ADDRESSES ['clusterd2:2100'],
-  STORAGE ADDRESSES ['clusterd2:2103'],
-  COMPUTECTL ADDRESSES ['clusterd2:2101'],
-  COMPUTE ADDRESSES ['clusterd2:2102'],
-  WORKERS 1));
+> CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE '1'));
+> CREATE CLUSTER cluster2 REPLICAS (replica1 (SIZE '1'));
 > CREATE SOURCE src IN CLUSTER cluster1 FROM LOAD GENERATOR counter;
 > CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 AS SELECT * FROM src;
 > SET cluster = cluster2;
+
+# Prevent us from getting stuck, see #28328
+> SELECT min(counter) FROM src
+1
+> SELECT min(counter) FROM mv
+1
 
 # Dropping the replica will make the load generator be out of date from now on
 > DROP CLUSTER REPLICA cluster1.replica1;
@@ -91,8 +81,10 @@ Target cluster: cluster2
 > SELECT min(counter) FROM mv;
 1
 
-# Should return instantly, even inside of a transaction
 # TODO(def-): Enable once incident 78 is fixed:
 # > BEGIN
 # > SELECT * FROM mv;
 # > COMMIT
+
+> DROP CLUSTER IF EXISTS cluster1 CASCADE;
+> DROP CLUSTER IF EXISTS cluster2 CASCADE;
