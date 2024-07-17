@@ -24,8 +24,8 @@ from xml.etree.ElementTree import ParseError
 
 from junitparser.junitparser import Error, Failure, JUnitXml
 
-from materialize import ci_util, ui
-from materialize.buildkite import add_annotation_raw, get_artifact_url
+from materialize import buildkite, ci_util, ui
+from materialize.buildkite import BuildkiteEnvVar, add_annotation_raw, get_artifact_url
 from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
@@ -349,9 +349,10 @@ and finds associated open GitHub issues in Materialize repository.""",
 
         return_code = annotate_logged_errors(args.log_files, test_analytics)
     except Exception as e:
+        step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
         add_annotation_raw(
             style="error",
-            markdown=f"ci_annotate_errors failed, report this to #team-testing:\n```\n{e}\n```",
+            markdown=f"ci_annotate_errors failed in step {step_key}, report this to #team-testing:\n```\n{e}\n```",
         )
         raise
 
