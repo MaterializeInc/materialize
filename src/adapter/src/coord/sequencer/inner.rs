@@ -896,6 +896,19 @@ impl Coordinator {
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
                 // Determine the initial validity for the table.
                 let register_ts = coord.get_local_write_ts().await.timestamp;
+
+                // After acquiring `register_ts` but before using it, we need to
+                // be sure we're still the leader. Otherwise a new generation
+                // may also be trying to use `register_ts` for a different
+                // purpose.
+                //
+                // See #28216.
+                coord
+                    .catalog
+                    .confirm_leadership()
+                    .await
+                    .unwrap_or_terminate("unable to confirm leadership");
+
                 if let Some(id) = ctx.extra().contents() {
                     coord.set_statement_execution_timestamp(id, register_ts);
                 }
