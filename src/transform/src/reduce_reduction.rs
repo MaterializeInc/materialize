@@ -51,15 +51,45 @@ impl ReduceReduction {
             expected_group_size,
         } = relation
         {
-            // Segment the aggregates by reduction type.
-            let mut segmented_aggregates = std::collections::BTreeMap::default();
+            // We start by segmenting the aggregates into those that should be rendered independently.
+            // Each element of this list is a pair of lists describing a bundle of aggregations that
+            // should be applied independently. Each pair of lists correspond to the aggregaties and
+            // the column positions in which they should appear in the output.
+            // Perhaps these should be lists of pairs, to ensure they align, but their subsequent use
+            // is as the shredded lists.
+            let mut segmented_aggregates: Vec<(Vec<mz_expr::AggregateExpr>, Vec<usize>)> =
+                Vec::new();
+
+            // Our rendering currently produces independent dataflow paths for 1. all accumulable aggregations,
+            // 2. all hierarchical aggregations, and 3. *each* basic aggregation.
+            // We'll form groups for accumulable, hierarchical, and a list of basic aggregates.
+            let mut accumulable = (Vec::new(), Vec::new());
+            let mut hierarchical = (Vec::new(), Vec::new());
+
+            use mz_compute_types::plan::reduce::ReductionType;
             for (index, aggr) in aggregates.iter().enumerate() {
-                let (aggrs, indexes) = segmented_aggregates
-                    .entry(reduction_type(&aggr.func))
-                    .or_insert_with(|| (Vec::default(), Vec::default()));
-                indexes.push(group_key.len() + index);
-                aggrs.push(aggr.clone());
+                match reduction_type(&aggr.func) {
+                    ReductionType::Accumulable => {
+                        accumulable.0.push(aggr.clone());
+                        accumulable.1.push(group_key.len() + index);
+                    }
+                    ReductionType::Hierarchical => {
+                        hierarchical.0.push(aggr.clone());
+                        hierarchical.1.push(group_key.len() + index);
+                    }
+                    ReductionType::Basic => segmented_aggregates
+                        .push((vec![aggr.clone()], vec![group_key.len() + index])),
+                }
             }
+
+            // Fold in hierarchical and accumulable aggregates.
+            if !hierarchical.0.is_empty() {
+                segmented_aggregates.push(hierarchical);
+            }
+            if !accumulable.0.is_empty() {
+                segmented_aggregates.push(accumulable);
+            }
+            segmented_aggregates.sort();
 
             // Do nothing unless there are at least two distinct types of aggregations.
             if segmented_aggregates.len() < 2 {
@@ -69,11 +99,11 @@ impl ReduceReduction {
             // For each type of aggregation we'll plan the corresponding `Reduce`,
             // and then join the at-least-two `Reduce` stages together.
             // TODO: Perhaps we should introduce a `Let` stage rather than clone the input?
-            let mut reduces = Vec::with_capacity(segmented_aggregates.keys().count());
+            let mut reduces = Vec::with_capacity(segmented_aggregates.len());
             // Track the current and intended locations of each output column.
             let mut columns = Vec::new();
 
-            for (_aggr_type, (aggrs, indexes)) in segmented_aggregates {
+            for (aggrs, indexes) in segmented_aggregates {
                 columns.extend(0..group_key.len());
                 columns.extend(indexes);
 
