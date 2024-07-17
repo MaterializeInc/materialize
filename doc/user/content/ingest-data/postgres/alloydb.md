@@ -21,19 +21,21 @@ If you don't already have an AlloyDB instance, creating one involves several
 steps, including configuring your cluster and setting up network connections.
 For detailed instructions, refer to the [AlloyDB documentation](https://cloud.google.com/alloydb/docs).
 
-## Step 1. Enable logical replication
+## A. Configure AlloyDB
+
+### 1. Enable logical replication
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
 protocol to track changes in your database and propagate them to Materialize.
 
-For guidance on enabling logical replication in AlloyDB, see the
+To enable logical replication in AlloyDB, see the
 [AlloyDB documentation](https://cloud.google.com/datastream/docs/configure-your-source-postgresql-database#configure_alloydb_for_replication).
 
-## Step 2. Create a publication
+### 2. Create a publication and a Materialize user
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## Step 3. Configure network security
+## B. Configure network security
 
 To establish authorized and secure connections to an AlloyDB instance, an
 authentication proxy is necessary. Google Cloud Platform provides [a guide](https://cloud.google.com/alloydb/docs/auth-proxy/connect)
@@ -54,9 +56,9 @@ Materialize with AlloyDB:
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+   or your preferred SQL client connected to Materialize, find the static egress
+   IP addresses for the Materialize region you are running in:
 
     ```mzsql
     SELECT * FROM mz_egress_ips;
@@ -87,9 +89,10 @@ network to allow traffic from the bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](https://console.materialize.com/), or your preferred
-       SQL client connected to Materialize, get the static egress IP addresses for
-       the Materialize region you are running in:
+    1. In the [Materialize console's SQL
+       Shell](https://console.materialize.com/), or your preferred SQL client
+       connected to Materialize, get the static egress IP addresses for the
+       Materialize region you are running in:
 
        ```mzsql
        SELECT * FROM mz_egress_ips;
@@ -105,7 +108,9 @@ network to allow traffic from the bastion host.
 
 {{< /tabs >}}
 
-## Step 5. (Optional) Create a cluster
+## C. Ingest Data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL
@@ -116,7 +121,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% postgres-direct/create-a-cluster %}}
 
-## Step 6. Start ingesting data
+### 2. Start ingesting data
 
 With the network configured and an ingestion pipeline in place, connect
 Materialize to your AlloyDB instance and begin the data ingestion process.
@@ -133,11 +138,11 @@ Materialize to your AlloyDB instance and begin the data ingestion process.
 
 {{< /tabs >}}
 
-## Step 6. Monitor the ingestion status
+### 3. Check the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-## Step 7. Optimize the cluster performance
+### 4. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 

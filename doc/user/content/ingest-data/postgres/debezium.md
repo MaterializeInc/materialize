@@ -20,7 +20,7 @@ changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the
 upstream database and publishes them as events to Kafka using Kafka
 Connect-compatible connectors.
 
-### Database setup
+## A. Configure database
 
 **Minimum requirements:** PostgreSQL 11+
 
@@ -167,7 +167,7 @@ Once logical replication is enabled:
     increased CPU usage. For more information, see the
     [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
 
-### Deploy Debezium
+## B. Deploy Debezium
 
 **Minimum requirements:** Debezium 1.5+
 
@@ -212,6 +212,33 @@ you **must** override the default value of `After-state only` to `false`.
     By default, the connector writes events for each table to a Kafka topic
     named `serverName.schemaName.tableName`.
 
+1. Start the Debezium Postgres connector using the configuration file:
+
+    ```bash
+    export CURRENT_HOST='<your-host>'
+
+    curl -i -X POST -H "Accept:application/json" -H  "Content-Type:application/json" \
+    http://$CURRENT_HOST:8083/connectors/ -d @register-postgres.json
+    ```
+
+1. Check that the connector is running:
+
+    ```bash
+    curl http://$CURRENT_HOST:8083/connectors/your-connector/status
+    ```
+
+    The first time it connects to a Postgres server, Debezium takes a
+    [consistent snapshot](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-snapshots)
+    of the tables selected for replication, so you should see that the
+    pre-existing records in the replicated table are initially pushed into your
+    Kafka topic:
+
+    ```bash
+    /usr/bin/kafka-avro-console-consumer \
+      --bootstrap-server kafka:9092 \
+      --from-beginning \
+      --topic pg_repl.public.table1
+    ```
 
 {{< /tab >}}
 {{< tab "Debezium 2.0+">}}
@@ -263,9 +290,6 @@ you **must** override the default value of `After-state only` to `false`.
     By default, the connector writes events for each table to a Kafka topic
     named `serverName.schemaName.tableName`.
 
-{{< /tab >}}
-{{< /tabs >}}
-
 1. Start the Debezium Postgres connector using the configuration file:
 
     ```bash
@@ -294,7 +318,10 @@ you **must** override the default value of `After-state only` to `false`.
       --topic pg_repl.public.table1
     ```
 
-### Create a source
+{{< /tab >}}
+{{< /tabs >}}
+
+## C. Create a source
 
 {{< debezium-json >}}
 
@@ -323,7 +350,7 @@ that can be used to preserve transactional boundaries downstream. We are
 working on using this topic to support transaction-aware processing in
 [Materialize #7537](https://github.com/MaterializeInc/materialize/issues/7537)!
 
-### Create a materialized view
+## D. Create a materialized view
 
 Any materialized view defined on top of this source will be incrementally
 updated as new change events stream in through Kafka, as a result of `INSERT`,

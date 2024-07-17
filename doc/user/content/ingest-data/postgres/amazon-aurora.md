@@ -17,12 +17,14 @@ to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
 {{% postgres-direct/before-you-begin %}}
 
-## Step 1. Enable logical replication
+## A. Configure Amazon Aurora
+
+### 1. Enable logical replication
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
 protocol to track changes in your database and propagate them to Materialize.
 
-For guidance on enabling logical replication in Aurora, see the
+To enable logical replication in Aurora, see the
 [Aurora documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure).
 
 {{< note >}}
@@ -31,11 +33,11 @@ logical replication, so it's not possible to use this service with
 Materialize.
 {{</ note >}}
 
-## Step 2. Create a publication
+### 2. Create a publication and a Materialize user
 
 {{% postgres-direct/create-a-publication-aws %}}
 
-## Step 3. Configure network security
+## B. Configure network security
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -54,7 +56,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -225,7 +227,9 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest Data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL
@@ -234,9 +238,10 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
+
 {{% postgres-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 Now that you've configured your database network and created an ingestion
 cluster, you can connect Materialize to your PostgreSQL database and start
@@ -247,10 +252,11 @@ start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
-   command to securely store the password for the `materialize` PostgreSQL user you
-   created [earlier](#step-2-create-a-publication):
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+   or your preferred SQL client connected to Materialize, use the [`CREATE
+   SECRET`](/sql/create-secret/) command to securely store the password for the
+   `materialize` PostgreSQL user you created
+   [earlier](#2-create-a-publication-and-a-materialize-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -286,7 +292,7 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Aurora instance and start ingesting data from the publication you
-   created [earlier](#step-2-create-a-publication).
+   created [earlier](#2-create-a-publication-and-a-materialize-user).
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -309,9 +315,10 @@ start by selecting the relevant option.
 
 {{< tab "Use AWS PrivateLink">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink)
-   command to create an AWS PrivateLink connection:
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+   or your preferred SQL client connected to Materialize, use the [`CREATE
+   CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
+   AWS PrivateLink connection:
 
     ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -320,7 +327,7 @@ start by selecting the relevant option.
     );
     ```
 
-    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#step-3-configure-network-security).
+    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-configure-network-security).
 
     - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
       zones in your AWS account.
@@ -364,7 +371,7 @@ start by selecting the relevant option.
     If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+   password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-materialize-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -394,7 +401,8 @@ details for Materialize to use:
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Aurora instance via AWS PrivateLink and start ingesting data from the
-   publication you created [earlier](#step-2-create-a-publication):
+   publication you created
+   [earlier](#2-create-a-publication-and-a-materialize-user):
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -413,9 +421,10 @@ details for Materialize to use:
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel)
-   command to create an SSH tunnel connection:
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+   or your preferred SQL client connected to Materialize, use the [`CREATE
+   CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
+   tunnel connection:
 
     ```mzsql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
@@ -426,7 +435,7 @@ details for Materialize to use:
     ```
 
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#step-3-configure-network-security).
+      address and port of the SSH bastion host you created [earlier](#b-configure-network-security).
 
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you
       created for your SSH bastion host.
@@ -466,7 +475,7 @@ details for Materialize to use:
     If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-materialize-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -496,7 +505,7 @@ password for the `materialize` PostgreSQL user you created [earlier](#step-2-cre
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Aurora instance and start ingesting data from the publication you
-   created [earlier](#step-2-create-a-publication):
+   created [earlier](#2-create-a-publication-and-a-materialize-user):
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -515,11 +524,11 @@ password for the `materialize` PostgreSQL user you created [earlier](#step-2-cre
 
 {{< /tabs >}}
 
-## Step 6. Check the ingestion status
+### 3. Check the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 

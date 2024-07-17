@@ -17,19 +17,21 @@ to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
 {{% postgres-direct/before-you-begin %}}
 
-## Step 1. Enable logical replication
+## A. Configure Google Cloud SQL
+
+### 1. Enable logical replication
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
 protocol to track changes in your database and propagate them to Materialize.
 
-For guidance on enabling logical replication in Cloud SQL, see the [Cloud SQL
+To enable logical replication in Cloud SQL, see the [Cloud SQL
 documentation](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance).
 
-## Step 2. Create a publication
+### 2. Create a publication and a Materialize user
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## Step 3. Configure network security
+## B. Configure network security
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -47,9 +49,9 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+   or your preferred SQL client connected to Materialize, find the static egress
+   IP addresses for the Materialize region you are running in:
 
     ```mzsql
     SELECT * FROM mz_egress_ips;
@@ -79,9 +81,10 @@ network to allow traffic from the bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](https://console.materialize.com/), or your preferred
-       SQL client connected to Materialize, get the static egress IP addresses for
-       the Materialize region you are running in:
+    1. In the [Materialize console's SQL
+       Shell](https://console.materialize.com/), or your preferred SQL client
+       connected to Materialize, get the static egress IP addresses for the
+       Materialize region you are running in:
 
        ```mzsql
        SELECT * FROM mz_egress_ips;
@@ -97,7 +100,9 @@ bastion host.
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest Data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL
@@ -108,7 +113,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% postgres-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 Now that you've configured your database network and created an ingestion
 cluster, you can connect Materialize to your PostgreSQL database and start
@@ -127,11 +132,11 @@ start by selecting the relevant option.
 
 {{< /tabs >}}
 
-## Step 6. Check the ingestion status
+### 3. Check the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 

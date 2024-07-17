@@ -8,7 +8,7 @@
     );
     ```
 
-    - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP address and port of the SSH bastion host you created [earlier](#step-3-configure-network-security).
+    - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP address and port of the SSH bastion host you created [earlier](#b-configure-network-security).
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
@@ -33,7 +33,7 @@
 
     If no validation error is returned, move to the next step.
 
-1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-materialize-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -56,7 +56,7 @@
 
     - Replace `<database>` with the name of the database containing the tables you want to replicate to Materialize.
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize to your Azure instance and start ingesting data from the publication you created [earlier](#step-2-create-a-publication):
+1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize to your Azure instance and start ingesting data from the publication you created [earlier](#2-create-a-publication-and-a-materialize-user):
 
     ```mzsql
     CREATE SOURCE mz_source
