@@ -46,7 +46,7 @@ use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::stats2::{
-    IntervalStatsBuilder, JsonStatsBuilder, NaiveDateTimeStatsBuilder, NaiveTimeStatsBuilder,
+    stats_for_json, IntervalStatsBuilder, NaiveDateTimeStatsBuilder, NaiveTimeStatsBuilder,
     NumericStatsBuilder, UuidStatsBuilder,
 };
 use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
@@ -163,8 +163,6 @@ enum DatumColumnEncoder {
         buf: Cursor<Vec<u8>>,
         /// Null entries, if any.
         nulls: Option<BooleanBufferBuilder>,
-        /// Collect statistics as we push data into the column.
-        stats: JsonStatsBuilder,
     },
     Array {
         /// Binary encoded `ArrayDimension`s.
@@ -303,7 +301,6 @@ impl DatumColumnEncoder {
                     offsets,
                     buf,
                     nulls,
-                    stats,
                 },
                 d @ Datum::JsonNull
                 | d @ Datum::True
@@ -316,9 +313,6 @@ impl DatumColumnEncoder {
                 // TODO(parkmycar): Why do we need to re-borrow here?
                 let mut buf = buf;
                 let json = JsonbRef::from_datum(d);
-
-                // Incrementally collect stats.
-                stats.include(json);
 
                 // Serialize our JSON.
                 json.to_writer(&mut buf)
@@ -468,7 +462,6 @@ impl DatumColumnEncoder {
                 offsets,
                 buf: _,
                 nulls,
-                stats: _,
             } => {
                 let nulls = nulls.get_or_insert_with(|| {
                     let mut buf = BooleanBufferBuilder::new(offsets.len());
@@ -692,17 +685,14 @@ impl DatumColumnEncoder {
                 offsets,
                 buf,
                 mut nulls,
-                stats,
             } => {
                 let values = Buffer::from_vec(buf.into_inner());
                 let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
-                let stats = stats.finish();
+                let array = StringArray::new(offsets, values, nulls);
+                let stats = stats_for_json(array.iter());
 
-                (
-                    Arc::new(StringArray::new(offsets, values, nulls)),
-                    stats.into(),
-                )
+                (Arc::new(array), stats.values.into())
             }
             DatumColumnEncoder::Array {
                 mut dims,
@@ -1593,7 +1583,6 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
             offsets: vec![0],
             buf: Cursor::new(Vec::new()),
             nulls: None,
-            stats: ColumnarStatsBuilder::new(),
         },
         s @ ScalarType::Array(_) | s @ ScalarType::Int2Vector => {
             let element_type = match s {
