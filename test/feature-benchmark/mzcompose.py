@@ -697,6 +697,7 @@ def upload_results_to_test_analytics(
 
     for scenario_cls in scenario_classes:
         scenario_name = scenario_cls.__name__
+        scenario_group = scenario_cls.__bases__[0].__name__
         report = latest_report_by_scenario_name[scenario_name]
         report_measurements = report.measurements_of_this(scenario_name)
         scenario_version = report.get_scenario_version(scenario_name)
@@ -704,6 +705,7 @@ def upload_results_to_test_analytics(
         result_entries.append(
             feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
                 scenario_name=scenario_name,
+                scenario_group=scenario_group,
                 scenario_version=str(scenario_version),
                 scale=scale or "default",
                 wallclock=report_measurements[MeasurementType.WALLCLOCK],
