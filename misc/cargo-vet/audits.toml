@@ -818,6 +818,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.0.202"
 
+[[audits.sha2-asm]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.4"
+
 [[audits.sized-chunks]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
