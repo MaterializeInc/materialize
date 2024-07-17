@@ -27,6 +27,10 @@ class OutputConsistencyStatsStorage(BaseDataStorage):
         count_ignored_select_expressions: int,
         count_used_ops: int,
     ) -> None:
+        if count_generated_select_expressions == 0:
+            print("No upload to test analytics because the job was aborted")
+            return
+
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
         step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
 
