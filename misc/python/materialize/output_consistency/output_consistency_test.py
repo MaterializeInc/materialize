@@ -156,10 +156,13 @@ class OutputConsistencyTest:
 
         evaluation_strategies = self.create_evaluation_strategies(sql_executors)
 
+        # prerequisite: sql_executors need to be created
         self.filter_input_data(input_data)
 
+        # prerequisite: sql_executors need to be created
         ignore_filter = self.create_inconsistency_ignore_filter()
 
+        # prerequisite: input data needs to be filtered
         expression_generator = ExpressionGenerator(
             config, randomized_picker, input_data
         )
@@ -171,6 +174,7 @@ class OutputConsistencyTest:
         output_printer.print_info(sql_executors.get_database_infos())
         output_printer.print_empty_line()
 
+        # prerequisite: input data needs to be filtered
         output_printer.print_info(input_data.get_stats())
         output_printer.print_empty_line()
 
