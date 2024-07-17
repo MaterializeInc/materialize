@@ -36,7 +36,7 @@ We support a large fraction of PostgreSQL, and are actively working on supportin
 
 ## Get data in
 
-Materialize can read data from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) (and other Kafka API-compatible systems like [Redpanda](https://materialize.com/docs/integrations/redpanda/)), directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) replication stream, or from SaaS applications [via webhooks](https://materialize.com/docs/sql/create-source/webhook/). It also supports regular database tables to which you can insert, update, and delete rows.
+Materialize can read data from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) (and other Kafka API-compatible systems like [Redpanda](https://materialize.com/docs/integrations/redpanda/)), directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) or [MySQL](https://materialize.com/docs/sql/create-source/mysql/) replication stream, or from SaaS applications [via webhooks](https://materialize.com/docs/sql/create-source/webhook/). It also supports regular database tables to which you can insert, update, and delete rows.
 
 ## Transform, manipulate, and read your data
 
@@ -62,6 +62,10 @@ Materialize supports a comprehensive variety of SQL features, all using the Post
 Here's an example join query that works fine in Materialize, `TPC-H` query 15:
 
 ```sql
+CREATE SOURCE tpch
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
+  FOR ALL TABLES;
+
 -- Views define commonly reused subqueries.
 CREATE VIEW revenue (supplier_no, total_revenue) AS
     SELECT
