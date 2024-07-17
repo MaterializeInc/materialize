@@ -414,6 +414,15 @@ fn bench_json(c: &mut Criterion) {
             packer.push(Datum::String("status"));
             packer.push(Datum::String("improvement (maybe?)"));
 
+            packer.push(Datum::String("counter"));
+            packer.push(Datum::from(Numeric::from(60000u64)));
+
+            packer.push(Datum::String("enemies"));
+            packer.push(Datum::JsonNull);
+
+            packer.push(Datum::String("hungry"));
+            packer.push(Datum::True);
+
             packer.push(Datum::String("timing_info"));
             packer.push_list([
                 Datum::from(Numeric::from(1.0001f64)),
@@ -439,6 +448,9 @@ fn bench_json(c: &mut Criterion) {
             packer.push_dict_with(|packer| {
                 packer.push(Datum::String("three letter thing"));
                 packer.push(Datum::String("this will have to do"));
+
+                packer.push(Datum::String("my number"));
+                packer.push(Datum::from(Numeric::from(6.345789f64)));
             })
         })
     });
