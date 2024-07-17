@@ -11,9 +11,11 @@
 //!
 //! For primitive types please see [`mz_persist_types::stats2`].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Formatter;
 
-use arrow::array::{BinaryArray, FixedSizeBinaryArray, StringArray};
+use arrow::array::{BinaryArray, FixedSizeBinaryArray};
 use chrono::{NaiveDateTime, NaiveTime};
 use dec::OrderedDecimal;
 use mz_persist_types::columnar::{Data, FixedSizeCodec};
@@ -21,21 +23,24 @@ use mz_persist_types::stats::bytes::{BytesStats, FixedSizeBytesStats, FixedSizeB
 use mz_persist_types::stats::json::{JsonMapElementStats, JsonStats};
 use mz_persist_types::stats::primitive::PrimitiveStats;
 use mz_persist_types::stats::{
-    AtomicBytesStats, ColumnStatKinds, ColumnStats, PrimitiveStatsVariants,
+    AtomicBytesStats, ColumnNullStats, ColumnStatKinds, ColumnStats, ColumnarStats,
+    PrimitiveStatsVariants,
 };
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use ordered_float::OrderedFloat;
 use prost::Message;
+use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
+use serde::Deserializer;
 use uuid::Uuid;
 
 use crate::adt::date::Date;
 use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::{Interval, PackedInterval};
-use crate::adt::jsonb::{JsonbPacker, JsonbRef};
+use crate::adt::jsonb::{KeyClass, KeyClassifier, NumberParser};
 use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
-use crate::{Datum, Row, RowArena, ScalarType};
+use crate::{Datum, RowArena, ScalarType};
 
 /// Returns a `(lower, upper)` bound from the provided [`ColumnStatKinds`], if applicable.
 pub fn col_values<'a>(
@@ -675,6 +680,266 @@ impl<'a> ColumnarStatsBuilder<JsonbRef<'a>> for JsonStatsBuilder {
         Self::FinishedStats: Sized,
     {
         BytesStats::Json(self.to_stats())
+    }
+}
+
+#[derive(Default)]
+struct JsonVisitor<'de> {
+    count: usize,
+    nulls: bool,
+    bools: Option<(bool, bool)>,
+    strings: Option<(Cow<'de, str>, Cow<'de, str>)>,
+    ints: Option<(i64, i64)>,
+    uints: Option<(u64, u64)>,
+    floats: Option<(f64, f64)>,
+    numerics: Option<(Numeric, Numeric)>,
+    lists: bool,
+    maps: bool,
+    fields: BTreeMap<Cow<'de, str>, JsonVisitor<'de>>,
+}
+
+impl<'de> JsonVisitor<'de> {
+    pub fn to_stats(self) -> JsonMapElementStats {
+        let mut context: dec::Context<Numeric> = Default::default();
+        let Self {
+            count,
+            nulls,
+            bools,
+            strings,
+            ints,
+            uints,
+            floats,
+            numerics,
+            lists,
+            maps,
+            fields,
+        } = self;
+        let min_numeric = [
+            numerics.map(|(n, _)| n),
+            ints.map(|(n, _)| n.into()),
+            uints.map(|(n, _)| n.into()),
+            floats.map(|(n, _)| n.into()),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by(|a, b| context.total_cmp(a, b));
+        let max_numeric = [
+            numerics.map(|(_, n)| n),
+            ints.map(|(_, n)| n.into()),
+            uints.map(|(_, n)| n.into()),
+            floats.map(|(_, n)| n.into()),
+        ]
+        .into_iter()
+        .flatten()
+        .max_by(|a, b| context.total_cmp(a, b));
+
+        let stats = match (nulls, min_numeric, max_numeric, bools, strings, lists, maps) {
+            (false, None, None, None, None, false, false) => JsonStats::None,
+            (true, None, None, None, None, false, false) => JsonStats::JsonNulls,
+            (false, Some(min), Some(max), None, None, false, false) => {
+                JsonStats::Numerics(PrimitiveStats {
+                    lower: ProtoDatum::from(Datum::Numeric(OrderedDecimal(min))).encode_to_vec(),
+                    upper: ProtoDatum::from(Datum::Numeric(OrderedDecimal(max))).encode_to_vec(),
+                })
+            }
+            (false, None, None, Some((min, max)), None, false, false) => {
+                JsonStats::Bools(PrimitiveStats {
+                    lower: min,
+                    upper: max,
+                })
+            }
+            (false, None, None, None, Some((min, max)), false, false) => {
+                JsonStats::Strings(PrimitiveStats {
+                    lower: min.into_owned(),
+                    upper: max.into_owned(),
+                })
+            }
+            (false, None, None, None, None, true, false) => JsonStats::Lists,
+            (false, None, None, None, None, false, true) => JsonStats::Maps(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| (k.into_owned(), v.to_stats()))
+                    .collect(),
+            ),
+            _ => JsonStats::Mixed,
+        };
+
+        JsonMapElementStats { len: count, stats }
+    }
+}
+
+impl<'a, 'de> Visitor<'de> for &'a mut JsonVisitor<'de> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        write!(formatter, "json value")
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        self.count += 1;
+        let (min, max) = self.bools.get_or_insert((v, v));
+        *min = v.min(*min);
+        *max = v.max(*max);
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        self.count += 1;
+        let (min, max) = self.ints.get_or_insert((v, v));
+        *min = v.min(*min);
+        *max = v.max(*max);
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<(), E>
+    where
+        E: Error,
+    {
+        self.count += 1;
+        let (min, max) = self.uints.get_or_insert((v, v));
+        *min = v.min(*min);
+        *max = v.max(*max);
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<(), E> {
+        self.count += 1;
+        let (min, max) = self.floats.get_or_insert((v, v));
+        *min = v.min(*min);
+        *max = v.max(*max);
+        Ok(())
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        self.count += 1;
+        match &mut self.strings {
+            None => {
+                self.strings = Some((v.to_owned().into(), v.to_owned().into()));
+            }
+            Some((min, max)) => {
+                if v < &**min {
+                    *min = v.to_owned().into();
+                } else if v > &**max {
+                    *max = v.to_owned().into();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        self.count += 1;
+        match &mut self.strings {
+            None => {
+                self.strings = Some((v.into(), v.into()));
+            }
+            Some((min, max)) => {
+                if v < &**min {
+                    *min = v.into();
+                } else if v > &**max {
+                    *max = v.into();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        self.count += 1;
+        self.nulls = true;
+        Ok(())
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        self.count += 1;
+        self.lists = true;
+        while let Some(_) = seq.next_element::<serde::de::IgnoredAny>()? {}
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        self.count += 1;
+        // serde_json gives us arbitrary-precision decimals as a specially shaped object.
+        // See crate::adt::jsonb for the details.
+        let mut normal_only = true;
+        while let Some(key) = map.next_key_seed(KeyClassifier)? {
+            match key {
+                KeyClass::Number => {
+                    let v = map.next_value_seed(NumberParser)?.0;
+                    let (min, max) = self.numerics.get_or_insert((v, v));
+                    if v < *min {
+                        *min = v;
+                    }
+                    if v > *max {
+                        *max = v;
+                    }
+                    normal_only = false;
+                }
+                KeyClass::MapKey(key) => {
+                    let field = self.fields.entry(key).or_default();
+                    map.next_value_seed(field)?;
+                }
+            }
+        }
+        if normal_only {
+            self.maps = true;
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a, 'de> DeserializeSeed<'de> for &'a mut JsonVisitor<'de> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+pub fn stats_for_json<'a>(jsons: impl IntoIterator<Item = Option<&'a str>>) -> ColumnarStats {
+    let mut visitor = JsonVisitor::default();
+    let mut nulls = 0;
+    for json in jsons {
+        match json {
+            None => {
+                nulls += 1;
+            }
+            Some(json) => {
+                let () = serde_json::Deserializer::from_str(json)
+                    .deserialize_any(&mut visitor)
+                    .unwrap_or_else(|e| panic!("error {e:?} on json: {json}"));
+            }
+        }
+    }
+
+    ColumnarStats {
+        nulls: Some(ColumnNullStats { count: nulls }),
+        values: ColumnStatKinds::Bytes(BytesStats::Json(visitor.to_stats().stats)),
     }
 }
 
