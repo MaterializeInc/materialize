@@ -48,12 +48,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         choices=EVALUATION_STRATEGY_NAMES,
     )
 
+    parser.add_argument(
+        "--other-tag",
+        type=str,
+        default="common-ancestor",
+    )
+
     args = test.parse_output_consistency_input_args(parser)
 
     port_mz_internal, port_mz_this, port_mz_other = 6875, 6875, 16875
-    tag_mz_other = resolve_ancestor_image_tag(
-        ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
-    )
+    tag_mz_other = resolve_tag(args.other_tag)
 
     print(f"Using {tag_mz_other} as tag for other mz version")
 
@@ -83,3 +87,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if not test_summary.all_passed():
         raise FailedTestExecutionError(errors=test_summary.failures)
+
+
+def resolve_tag(tag: str) -> str:
+    if tag == "common-ancestor":
+        return resolve_ancestor_image_tag(
+            ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+        )
+
+    return tag
