@@ -51,6 +51,8 @@ from materialize.output_consistency.validation.validation_message import (
     ValidationError,
 )
 
+AGGREGATION_SHORTCUT_FUNCTION_NAMES = {"count", "string_agg"}
+
 
 class InternalOutputInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
     """Allows specifying and excluding expressions with known output inconsistencies"""
@@ -222,37 +224,18 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
     def _uses_shortcut_optimization(
         self, expressions: list[Expression], contains_aggregation: bool
     ) -> bool:
-        if self._uses_aggregation_shortcut_optimization(
-            expressions, contains_aggregation
-        ):
-            return True
+        for expression in expressions:
+            if expression.matches(
+                partial(
+                    uses_aggregation_shortcut_optimization,
+                    contains_aggregation=contains_aggregation,
+                ),
+                True,
+            ):
+                return True
+
         if self._might_use_null_shortcut_optimization(expressions):
             return True
-
-        return False
-
-    def _uses_aggregation_shortcut_optimization(
-        self, expressions: list[Expression], contains_aggregation: bool
-    ) -> bool:
-        if not contains_aggregation:
-            # all current known optimizations causing issues involve aggregations
-            return False
-
-        def is_function_taking_shortcut(expression: Expression) -> bool:
-            functions_taking_shortcuts = {"count", "string_agg"}
-
-            if isinstance(expression, ExpressionWithArgs):
-                operation = expression.operation
-                return (
-                    isinstance(operation, DbFunction)
-                    and operation.function_name_in_lower_case
-                    in functions_taking_shortcuts
-                )
-            return False
-
-        for expression in expressions:
-            if expression.contains(is_function_taking_shortcut, True):
-                return True
 
         return False
 
@@ -284,3 +267,19 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
             ),
             True,
         )
+
+
+def uses_aggregation_shortcut_optimization(
+    expression: Expression, contains_aggregation: bool
+) -> bool:
+    if not contains_aggregation:
+        # all current known optimizations causing issues involve aggregations
+        return False
+
+    return expression.matches(
+        partial(
+            matches_fun_by_any_name,
+            function_names_in_lower_case=AGGREGATION_SHORTCUT_FUNCTION_NAMES,
+        ),
+        True,
+    )
