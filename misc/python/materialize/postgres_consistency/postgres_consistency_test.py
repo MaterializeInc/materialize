@@ -103,7 +103,7 @@ class PostgresConsistencyTest(OutputConsistencyTest):
             lambda data_type: not data_type.is_pg_compatible
         )
         input_data.types_input.remove_values(
-            lambda data_value: not data_value.is_postgres_compatible
+            lambda data_value: not data_value.is_pg_compatible
         )
         input_data.operations_input.remove_functions(
             lambda db_operation: not db_operation.is_pg_compatible
