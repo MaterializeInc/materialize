@@ -42,6 +42,7 @@ class Executor:
     schema: str
     cluster: str | None
     logging_exe: Any | None
+    mz_service: str | None = None
 
     def __init__(
         self,
@@ -50,6 +51,7 @@ class Executor:
         database: str = "",
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ) -> None:
         self.num_transactions = 0
         self.ports = ports
@@ -57,19 +59,21 @@ class Executor:
         self.database = database
         self.schema = schema
         self.cluster = cluster
+        self.mz_service = mz_service
         self.logging_exe = None
         self.reconnect()
 
     def reconnect(self) -> None:
+        mz_service = self.mz_service
+        if not mz_service:
+            mz_service = (
+                random.choice(["materialized", "materialized2"])
+                if "materialized2" in self.ports
+                else "materialized"
+            )
         self.mz_conn = pg8000.connect(
             host="localhost",
-            port=self.ports[
-                (
-                    random.choice(["materialized", "materialized2"])
-                    if "materialized2" in self.ports
-                    else "materialized"
-                )
-            ],
+            port=self.ports[mz_service],
             user="materialize",
             database=self.database,
         )
@@ -149,8 +153,9 @@ class KafkaExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster)
+        super().__init__(ports, fields, database, schema, cluster, mz_service)
 
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
@@ -309,8 +314,9 @@ class MySqlExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster)
+        super().__init__(ports, fields, database, schema, cluster, mz_service)
         self.table = f"mytable{num}"
         self.source = f"mysql_source{num}"
         self.num = num
@@ -434,6 +440,7 @@ class PgExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
         super().__init__(ports, fields, database, schema, cluster)
         self.table = f"table{num}"
@@ -559,8 +566,9 @@ class KafkaRoundtripExecutor(Executor):
         database: str,
         schema: str = "public",
         cluster: str | None = None,
+        mz_service: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema, cluster)
+        super().__init__(ports, fields, database, schema, cluster, mz_service)
         self.table_original = f"table_rt_source{num}"
         self.table = f"table_rt{num}"
         self.topic = f"data-ingest-rt-{num}"

@@ -21,8 +21,10 @@ from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -42,9 +44,20 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
+    Cockroach(setup_materialize=True),
+    Minio(setup_materialize=True),
     # Fixed port so that we keep the same port after restarting Mz in disruptions
     Materialized(
         ports=["16875:6875"],
+        external_minio=True,
+        external_cockroach=True,
+        additional_system_parameter_defaults={"enable_table_keys": "true"},
+    ),
+    Materialized(
+        name="materialized2",
+        ports=["26875:6875"],
+        external_minio=True,
+        external_cockroach=True,
         additional_system_parameter_defaults={"enable_table_keys": "true"},
     ),
     Clusterd(name="clusterd1", options=["--scratch-directory=/mzdata/source_data"]),
