@@ -181,6 +181,38 @@ where
     }
 }
 
+impl<S: Scope, T> Context<S, T>
+where
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
+{
+    /// Brings the underlying arrangements and collections into a region.
+    pub fn enter_region<'a>(
+        &self,
+        region: &Child<'a, S, S::Timestamp>,
+        bindings: Option<&std::collections::BTreeSet<Id>>,
+    ) -> Context<Child<'a, S, S::Timestamp>, T> {
+        let bindings = self
+            .bindings
+            .iter()
+            .filter(|(key, _)| bindings.as_ref().map(|b| b.contains(key)).unwrap_or(true))
+            .map(|(key, bundle)| (*key, bundle.enter_region(region)))
+            .collect();
+
+        Context {
+            scope: region.clone(),
+            debug_name: self.debug_name.clone(),
+            dataflow_id: self.dataflow_id.clone(),
+            as_of_frontier: self.as_of_frontier.clone(),
+            until: self.until.clone(),
+            shutdown_token: self.shutdown_token.clone(),
+            hydration_logger: self.hydration_logger.clone(),
+            linear_join_spec: self.linear_join_spec.clone(),
+            bindings,
+        }
+    }
+}
+
 /// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
 /// datalow is shutting down.
 ///

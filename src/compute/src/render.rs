@@ -118,7 +118,7 @@ use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
@@ -300,7 +300,16 @@ pub fn build_compute_dataflow<A: Allocate>(
                     context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
                     tokens.insert(object.id, object_token);
 
-                    let bundle = context.render_recursive_plan(0, object.plan);
+                    let bundle = context.scope.clone().region_named(
+                        &format!("BuildingObject({:?})", object.id),
+                        |region| {
+                            let depends = object.plan.depends();
+                            context
+                                .enter_region(region, Some(&depends))
+                                .render_recursive_plan(0, object.plan)
+                                .leave_region()
+                        },
+                    );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -360,7 +369,17 @@ pub fn build_compute_dataflow<A: Allocate>(
                     context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
                     tokens.insert(object.id, object_token);
 
-                    context.build_object(object);
+                    let bundle = context.scope.clone().region_named(
+                        &format!("BuildingObject({:?})", object.id),
+                        |region| {
+                            let depends = object.plan.depends();
+                            context
+                                .enter_region(region, Some(&depends))
+                                .render_plan(object.plan)
+                                .leave_region()
+                        },
+                    );
+                    context.insert_id(Id::Global(object.id), bundle);
                 }
 
                 // Export declared indexes.
@@ -447,19 +466,6 @@ where
                 idx_id, self.dataflow_id
             );
         }
-    }
-}
-
-// This implementation block allows child timestamps to vary from parent timestamps.
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-{
-    pub(crate) fn build_object(&mut self, object: BuildDesc<FlatPlan>) {
-        // First, transform the relation expression into a render plan.
-        let bundle = self.render_plan(object.plan);
-        self.insert_id(Id::Global(object.id), bundle);
     }
 }
 
@@ -747,11 +753,24 @@ where
     pub fn render_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
         let (values, body) = plan.split_lets();
         for (id, value) in values {
-            let collection = self.render_letfree_plan(value);
-            self.insert_id(Id::Local(id), collection);
+            let bundle = self
+                .scope
+                .clone()
+                .region_named(&format!("Binding({:?})", id), |region| {
+                    let depends = value.depends();
+                    self.enter_region(region, Some(&depends))
+                        .render_letfree_plan(value)
+                        .leave_region()
+                });
+            self.insert_id(Id::Local(id), bundle);
         }
 
-        self.render_letfree_plan(body)
+        self.scope.clone().region_named("Main Body", |region| {
+            let depends = body.depends();
+            self.enter_region(region, Some(&depends))
+                .render_letfree_plan(body)
+                .leave_region()
+        })
     }
 
     /// Renders a plan to a differential dataflow, producing the collection of results.
