@@ -44,6 +44,9 @@ from materialize.output_consistency.operation.operation import (
 )
 from materialize.output_consistency.query.query_result import QueryFailure
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
 )
@@ -192,17 +195,27 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        all_characteristics = query_template.get_involved_characteristics(
+            ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
+        )
+
         if self._uses_shortcut_optimization(
             query_template.select_expressions, contains_aggregation
         ):
-            return YesIgnore("#17189")
+            return YesIgnore("#17189: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
-            return YesIgnore("#17189")
+            return YesIgnore("#17189: evaluation order")
 
         if query_template.where_expression is not None:
             # The error message may depend on the evaluation order of the where expression.
-            return YesIgnore("#17189")
+            return YesIgnore("#17189: evaluation order")
+
+        if (
+            ExpressionCharacteristics.INFINITY in all_characteristics
+            and ExpressionCharacteristics.MAX_VALUE in all_characteristics
+        ):
+            return YesIgnore("#17189: evaluation order")
 
         return NoIgnore()
 
