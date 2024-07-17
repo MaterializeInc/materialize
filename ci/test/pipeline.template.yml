@@ -233,8 +233,6 @@ steps:
       AWS_DEFAULT_REGION: "us-east-1"
       # cargo-test's coverage is handled separately by cargo-llvm-cov
       BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
-      # Set stack size to 4 MiB, since the default is too small for some tests
-      RUST_MIN_STACK: 4194304
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:

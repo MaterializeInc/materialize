@@ -3278,6 +3278,9 @@ pub fn serve(
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
         info!("coordinator init: beginning");
+        // TODO(jkosh44) Experiment DO NOT merge.
+        let count = BUILTINS::iter().count();
+        info!("{count} builtins");
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
