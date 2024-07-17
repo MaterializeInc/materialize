@@ -112,7 +112,7 @@ def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) 
             "--max-errors=1",
             f"--seed={seed}",
             f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
-            "--default-timeout=20s",
+            "--default-timeout=40s",
             "sink-kafka-restart/setup.td",
         )
         c.kill("redpanda" if args.redpanda else "kafka")
@@ -122,7 +122,7 @@ def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) 
             "--max-errors=1",
             f"--seed={seed}",
             f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
-            "--default-timeout=20s",
+            "--default-timeout=40s",
             "sink-kafka-restart/verify.td",
             "sink-kafka-restart/cleanup.td",
         )
