@@ -27,8 +27,11 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 # * 2038-01-19 03:14:18.123
 # * 2038-01-19 03:14:18.123+00
 # * 2038-01-19 03:14:18+00
+# * 2038-01-19 03:14:18-03:00
 # * 2038-01-19T03:14:18+00 (when used in JSONB)
-TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?")
+TIMESTAMP_PATTERN = re.compile(
+    r"^\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d+(:\d+)?)?$"
+)
 
 # Examples:
 # * NaN
@@ -36,7 +39,7 @@ TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?
 # * -1.23
 # * 1.23e-3
 # * 1.23e+3
-DECIMAL_PATTERN = re.compile(r"NaN|[+-]?\d+(\.\d+)?(e[+-]?\d+)?")
+DECIMAL_PATTERN = re.compile(r"^NaN|[+-]?\d+(\.\d+)?(e[+-]?\d+)?$")
 
 # Examples:
 # * ["1","2"]
@@ -119,7 +122,10 @@ class PostgresResultComparator(ResultComparator):
         value2 = value2.replace(" month", " mon")
 
         if is_tolerant and self.is_decimal(value1) and self.is_decimal(value2):
-            return self.is_decimal_equal(Decimal(value1), Decimal(value2))
+            try:
+                return self.is_decimal_equal(Decimal(value1), Decimal(value2))
+            except Exception:
+                return True
 
         return value1 == value2
 

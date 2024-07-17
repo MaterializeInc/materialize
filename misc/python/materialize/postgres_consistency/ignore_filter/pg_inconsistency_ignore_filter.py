@@ -31,6 +31,7 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_any_expression_arg,
     matches_fun_by_any_name,
     matches_fun_by_name,
+    matches_op_by_any_pattern,
     matches_op_by_pattern,
     matches_x_and_y,
     matches_x_or_y,
@@ -938,6 +939,26 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 True,
             ):
                 return YesIgnore("#28143: non-quoted numbers")
+
+        if (
+            ExpressionCharacteristics.DATE_WITH_SHORT_YEAR
+            in all_involved_characteristics
+        ):
+            return YesIgnore("#28284: short date format")
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(
+                matches_op_by_any_pattern,
+                patterns={"$ = ANY ($)", "$ = ALL ($)"},
+            ),
+            True,
+        ) and (
+            ExpressionCharacteristics.NULL in all_involved_characteristics
+            or ExpressionCharacteristics.COLLECTION_EMPTY
+            in all_involved_characteristics
+        ):
+            return YesIgnore("#28300: ALL and ANY with NULL or empty array")
 
         return NoIgnore()
 

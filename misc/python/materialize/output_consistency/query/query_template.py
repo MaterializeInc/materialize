@@ -19,6 +19,9 @@ from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.selection.selection import (
     DataRowSelection,
@@ -230,3 +233,22 @@ FROM{space_separator}{db_object_name}
             self.where_expression is not None
             and self.where_expression.matches(predicate, check_recursively)
         )
+
+    def get_involved_characteristics(
+        self,
+        query_column_selection: QueryColumnByIndexSelection,
+    ) -> set[ExpressionCharacteristics]:
+        all_involved_characteristics: set[ExpressionCharacteristics] = set()
+
+        for index, expression in enumerate(self.select_expressions):
+            if not query_column_selection.is_included(index):
+                continue
+
+            characteristics = expression.recursively_collect_involved_characteristics(
+                self.row_selection
+            )
+            all_involved_characteristics = all_involved_characteristics.union(
+                characteristics
+            )
+
+        return all_involved_characteristics

@@ -113,3 +113,36 @@ contains: must be owner of CLUSTER mz_support
 
 $ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
 ALTER CLUSTER mz_support SET (replication factor 0, size '1');
+
+$ unset-regex
+
+> select name, introspection_debugging from mz_catalog.mz_clusters where name IN ('quickstart', 'mz_support');
+name        introspection_debugging
+------------------------
+quickstart  false
+mz_support  false
+
+! ALTER CLUSTER quickstart SET (introspection debugging = TRUE);
+contains: must be owner of CLUSTER quickstart
+
+! ALTER CLUSTER mz_support SET (introspection debugging = TRUE);
+contains: must be owner of CLUSTER mz_support
+
+$ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
+ALTER CLUSTER mz_support SET (introspection debugging = TRUE);
+
+> select name, introspection_debugging from mz_catalog.mz_clusters where name IN ('quickstart', 'mz_support');
+quickstart false
+mz_support true
+
+$ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
+ALTER CLUSTER mz_support SET (introspection interval = '10ms');
+
+> select name, introspection_debugging, introspection_interval from mz_catalog.mz_clusters where name = 'mz_support';
+mz_support true "00:00:00.01"
+
+$ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
+ALTER CLUSTER mz_support SET (introspection interval = '0s');
+
+> select name, introspection_debugging, introspection_interval from mz_catalog.mz_clusters where name = 'mz_support';
+mz_support true <null>

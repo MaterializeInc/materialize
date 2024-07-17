@@ -1080,7 +1080,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
-              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering"]
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering", "--other-tag=common-ancestor"]
 
       - id: output-consistency-version-ctf
         label: "Output consistency (version for CTF)"
@@ -1091,7 +1091,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
-              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding"]
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding", "--other-tag=common-ancestor"]
 
 
   - group: SQLsmith

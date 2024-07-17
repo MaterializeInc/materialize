@@ -181,12 +181,6 @@ def workflow_silent_connection_drop(
     ):
         c.up("materialized", "postgres")
 
-        c.run_testdrive_files(
-            "--no-reset",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            "override/silent-connection-drop-part-1.td",
-        )
-
         pg_conn = pg8000.connect(
             host="localhost",
             user="postgres",
@@ -194,7 +188,15 @@ def workflow_silent_connection_drop(
             port=c.default_port("postgres"),
         )
 
-        _verify_only_one_replication_slot_exists(pg_conn)
+        _verify_exactly_n_replication_slots_exist(pg_conn, n=0)
+
+        c.run_testdrive_files(
+            "--no-reset",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            "override/silent-connection-drop-part-1.td",
+        )
+
+        _verify_exactly_n_replication_slots_exist(pg_conn, n=1)
 
         _await_postgres_replication_slot_state(
             pg_conn,
@@ -212,7 +214,7 @@ def workflow_silent_connection_drop(
 
         c.run_testdrive_files("--no-reset", "override/silent-connection-drop-part-2.td")
 
-        _verify_only_one_replication_slot_exists(pg_conn)
+        _verify_exactly_n_replication_slots_exist(pg_conn, n=1)
 
 
 def _await_postgres_replication_slot_state(
@@ -252,13 +254,13 @@ def _is_postgres_activation_slot_active(pg_conn: Connection) -> bool:
     return is_active
 
 
-def _verify_only_one_replication_slot_exists(pg_conn: Connection) -> None:
+def _verify_exactly_n_replication_slots_exist(pg_conn: Connection, n: int) -> None:
     cursor = pg_conn.cursor()
     cursor.execute("SELECT count(*) FROM pg_replication_slots;")
     count_slots = cursor.fetchall()[0][0]
     assert (
-        count_slots == 1
-    ), f"Expected one replication slot but found {count_slots} slots"
+        count_slots == n
+    ), f"Expected {n} replication slot(s) but found {count_slots} slot(s)"
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:

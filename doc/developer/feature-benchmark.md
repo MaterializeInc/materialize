@@ -59,13 +59,8 @@ interference of any defaults that may be in effect and that can change over time
 
 ## Running manually in Buildkite
 
-Go to the [Buildkite Nightly Job](https://buildkite.com/materialize/nightly), click the down arrow button
-at the top right and select `New Build`. Put the **full SHA** of your commit in `Commit` and the name
-of your branch in `Branch` including the Github username you forked with, e.g. `username:branch`.
-Click `Create Build` and wait for the build start, at which point you will
-have the opportunity to select `feature-benchmark` from the list.
-
-If you want to run a specific senario only, click `Options` and put `MZCOMPOSE_SCENARIO=...` in the text box.
+Go to [Trigger CI](https://trigger-ci.dev.materialize.com/) and enter your pull request, select Feature Benchmark to only run that test.
+If you want to run a specific senario only, enter a Feature Benchmark Scenario.
 For example, to run all scenarios that are subclasses of `Kafka`, use `MZCOMPOSE_SCENARIO=Kafka`.
 
 # Output

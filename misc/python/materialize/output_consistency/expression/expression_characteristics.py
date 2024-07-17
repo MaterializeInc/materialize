@@ -32,6 +32,8 @@ class ExpressionCharacteristics(Enum):
 
     INTERVAL_WITH_MONTHS = 130
     """time interval containing months or years"""
+    DATE_WITH_SHORT_YEAR = 131
+    INCOMPLETE_TIME_VALUE = 132
 
     STRING_EMPTY = 140
     STRING_WITH_SPECIAL_SPACE_CHARS = 141
