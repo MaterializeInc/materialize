@@ -36,6 +36,7 @@ Target cluster: mz_catalog_server
 EOF
 
 ## Test a nested recursive query.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
@@ -47,22 +48,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l1
-  With Mutually Recursive
-    cte l1 =
-      Return
-        Threshold
-          Union
-            Get l1
-            Negate
-              Get l0
-      With Mutually Recursive
-        cte l0 =
-          Union
-            Get l1
-            Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -70,6 +57,7 @@ EOF
 
 ## Test inlining at an inner nesting level. (#18889)
 ## `bar` is used only in `baz`, so it should be inlined. The inner WMR should have only one cte.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
@@ -84,26 +72,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l1
-  With Mutually Recursive
-    cte l1 =
-      Return
-        Threshold
-          Union
-            Get l1
-            Negate
-              Get l0
-      With Mutually Recursive
-        cte l0 =
-          Project (#1)
-            Map ((#0 + 3))
-              Union
-                Filter (#0 > -5)
-                  Get l1
-                Filter (#0 > -5)
-                  Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -150,6 +120,7 @@ Target cluster: quickstart
 EOF
 
 ## Test consolidation of not-really nested recursive query.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
@@ -161,20 +132,15 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive
-    cte l0 =
-      Union
-        Get l0
-        Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
 EOF
 
 ## Test consolidation of independent recursive query blocks.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN SELECT * FROM (
     WITH MUTUALLY RECURSIVE
@@ -188,16 +154,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get l0
-      Get l1
-  With Mutually Recursive
-    cte l1 =
-      Get l1
-    cte l0 =
-      Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -363,6 +321,7 @@ Target cluster: mz_catalog_server
 EOF
 
 ## RECURSION LIMIT -- consolidation of independent recursive query blocks with different RECURSION LIMIT
+# With #27389 this stopped testing a thing; see issue #28308.
 
 query T multiline
 EXPLAIN SELECT * FROM (
@@ -377,18 +336,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get l0
-      Get l1
-  With Mutually Recursive
-    cte [recursion_limit=7] l1 =
-      Project (#1)
-        Map ((#0 - 2))
-          Get l1
-    cte [recursion_limit=5] l0 =
-      Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -396,6 +345,7 @@ EOF
 
 ## RECURSION LIMIT -- consolidation of independent recursive query blocks with equal RECURSION LIMIT.
 ## We want to see RECURSION LIMIT printed at the block level rather than on each cte.
+# With #27389 this stopped testing a thing; see issue #28308.
 
 query T multiline
 EXPLAIN SELECT * FROM (
@@ -410,18 +360,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get l0
-      Get l1
-  With Mutually Recursive [recursion_limit=27]
-    cte l1 =
-      Project (#1)
-        Map ((#0 - 2))
-          Get l1
-    cte l0 =
-      Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -429,6 +369,7 @@ EOF
 
 ## ITERATION RECURSION -- consolidation of not-really nested recursive query.
 ## Here, the ITERATION RECURSION of the inner WMR is irrelevant, because it's not recursive.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
     foo (a int8) AS (
@@ -440,20 +381,15 @@ EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive [recursion_limit=9]
-    cte l0 =
-      Union
-        Get l0
-        Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
 EOF
 
 # ITERATION RECURSION -- a nested recursive query.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
     foo (a int8) AS (
@@ -465,22 +401,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l1
-  With Mutually Recursive [recursion_limit=17]
-    cte l1 =
-      Return
-        Threshold
-          Union
-            Get l1
-            Negate
-              Get l0
-      With Mutually Recursive [recursion_limit=11]
-        cte l0 =
-          Union
-            Get l1
-            Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 

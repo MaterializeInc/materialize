@@ -1336,6 +1336,7 @@ Target cluster: quickstart
 EOF
 
 # Test `LetRec` printing, with and without RECURSION LIMIT
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT * FROM (
@@ -1350,22 +1351,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get::PassArrangements l0
-        raw=true
-      Get::PassArrangements l1
-        raw=true
-  With Mutually Recursive
-    cte l1 =
-      Get::Collection l1
-        project=(#1)
-        map=((#0 - 2))
-        raw=true
-    cte [recursion_limit=5] l0 =
-      Get::PassArrangements l0
-        raw=true
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
