@@ -10,6 +10,8 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
+use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder};
+use arrow_row::RowConverter;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -24,15 +26,19 @@ use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use mz_dyncfg::Config;
+use mz_ore::collections::CollectionExt;
 use mz_ore::task::JoinHandle;
-use mz_persist::indexed::columnar::ColumnarRecords;
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
 use mz_persist::location::Blob;
-use mz_persist_types::Codec64;
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
+use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
 
 use crate::fetch::{Cursor, EncodedPart, FetchBatchFilter};
+use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
 use crate::internal::state::BatchPart;
@@ -53,6 +59,144 @@ fn borrow_tuple<T: Clone, D: Clone>(((k, v), t, d): &Tuple<T, D>) -> TupleRef<T,
 
 fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
     ((k.to_vec(), v.to_vec()), t, d)
+}
+
+pub trait Sort {
+    fn accepts(&self, version: Version, format: BatchColumnarFormat) -> bool;
+
+    fn order(&self, from: BlobTraceUpdates) -> ColumnarRecords;
+
+    fn disorder(&self, columns: ColumnarRecords) -> BlobTraceUpdates;
+}
+
+struct CodecSort;
+
+impl Sort for CodecSort {
+    fn accepts(&self, _version: Version, format: BatchColumnarFormat) -> bool {
+        !format.is_structured()
+    }
+
+    fn order(&self, from: BlobTraceUpdates) -> ColumnarRecords {
+        from.records().clone()
+    }
+
+    fn disorder(&self, columns: ColumnarRecords) -> BlobTraceUpdates {
+        BlobTraceUpdates::Row(columns)
+    }
+}
+
+struct ColumnarSort<K: Codec, V: Codec> {
+    schemas: Schemas<K, V>,
+    key_converter: RowConverter,
+    val_converter: RowConverter,
+}
+
+fn structure<A: Codec>(schema: &A::Schema, data: &BinaryArray) -> anyhow::Result<ArrayRef> {
+    let mut encoder = schema.encoder()?;
+
+    // Optionally we reuse instances of K and V and create instances of
+    // K::Storage and V::Storage to reduce allocations.
+    let mut value: A = A::default();
+    let mut storage = Some(A::Storage::default());
+
+    for bytes in data.iter() {
+        if let Some(bytes) = bytes {
+            A::decode_from(&mut value, bytes, &mut storage).map_err(|e| anyhow!(e))?;
+            encoder.append(&value);
+        } else {
+            encoder.append_null();
+        }
+    }
+
+    let (col, _stats) = encoder.finish();
+    Ok(Arc::new(col))
+}
+
+fn splat<A: Codec>(schema: &A::Schema, data: &dyn Array) -> anyhow::Result<BinaryArray> {
+    let len = data.len();
+    let mut decoder = Schema2::decoder_any(schema, data)?;
+    let mut builder = BinaryBuilder::new();
+
+    let mut value: A = A::default();
+    let mut buffer = vec![];
+
+    for i in 0..len {
+        if decoder.is_null(i) {
+            builder.append_null();
+        } else {
+            decoder.decode(i, &mut value);
+            Codec::encode(&value, &mut buffer);
+            builder.append_value(&buffer);
+        }
+    }
+
+    Ok(builder.finish())
+}
+
+impl<K: Codec, V: Codec> Sort for ColumnarSort<K, V> {
+    fn accepts(&self, _version: Version, format: BatchColumnarFormat) -> bool {
+        format.is_structured()
+    }
+
+    fn order(&self, from: BlobTraceUpdates) -> ColumnarRecords {
+        let (records, ext) = match from {
+            BlobTraceUpdates::Both(records, ext) => (records, ext),
+            BlobTraceUpdates::Row(records) => {
+                let ext = ColumnarRecordsStructuredExt {
+                    key: Some(structure::<K>(&*self.schemas.key, records.keys()).expect("fine")),
+                    val: Some(structure::<V>(&*self.schemas.val, records.values()).expect("fine")),
+                };
+                (records, ext)
+            }
+        };
+        let key_array = BinaryArray::from_iter_values(
+            self.key_converter
+                .convert_columns(ext.key.as_slice())
+                .expect("good")
+                .iter(),
+        );
+        let val_array = BinaryArray::from_iter_values(
+            self.val_converter
+                .convert_columns(ext.val.as_slice())
+                .expect("normal")
+                .iter(),
+        );
+        ColumnarRecords::new(
+            key_array,
+            val_array,
+            records.timestamps().clone(),
+            records.diffs().clone(),
+        )
+    }
+
+    fn disorder(&self, columns: ColumnarRecords) -> BlobTraceUpdates {
+        let parser = self.key_converter.parser();
+        let keys = self
+            .key_converter
+            .convert_rows(columns.keys().iter().map(|v| parser.parse(v.unwrap())))
+            .expect("ok")
+            .into_element();
+        let parser = self.val_converter.parser();
+        let vals = self
+            .val_converter
+            .convert_rows(columns.values().iter().map(|v| parser.parse(v.unwrap())))
+            .expect("ok")
+            .into_element();
+        let ext = ColumnarRecordsStructuredExt {
+            key: Some(keys.clone()),
+            val: Some(vals.clone()),
+        };
+        let codec_keys = splat::<K>(&self.schemas.key, &*keys).expect("good");
+        let codec_vals = splat::<V>(&self.schemas.val, &*vals).expect("good");
+        let records = ColumnarRecords::new(
+            codec_keys,
+            codec_vals,
+            columns.timestamps().clone(),
+            columns.diffs().clone(),
+        );
+
+        BlobTraceUpdates::Both(records, ext)
+    }
 }
 
 /// The data needed to fetch a batch part, bundled up to make it easy
