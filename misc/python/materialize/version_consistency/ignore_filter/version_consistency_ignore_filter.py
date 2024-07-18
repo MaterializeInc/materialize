@@ -199,16 +199,41 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         if (
             self.lower_version < MZ_VERSION_0_109_0 <= self.higher_version
-            and query_template.matches_any_expression(
-                partial(
-                    uses_aggregation_shortcut_optimization,
-                    contains_aggregation=contains_aggregation,
-                ),
-                True,
+            and self._aggregration_shortcut_changed(
+                query_template, contains_aggregation
             )
         ):
             return YesIgnore("Evaluation order changed with PR 28144")
 
         return super()._shall_ignore_success_mismatch(
             error, query_template, contains_aggregation
+        )
+
+    def _shall_ignore_explain_plan_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        if (
+            self.lower_version < MZ_VERSION_0_109_0 <= self.higher_version
+            and self._aggregration_shortcut_changed(
+                query_template, contains_aggregation
+            )
+        ):
+            return YesIgnore("Evaluation order changed with PR 28144")
+
+        return super()._shall_ignore_explain_plan_mismatch(
+            error, query_template, contains_aggregation
+        )
+
+    def _aggregration_shortcut_changed(
+        self, query_template: QueryTemplate, contains_aggregation: bool
+    ) -> bool:
+        return query_template.matches_any_expression(
+            partial(
+                uses_aggregation_shortcut_optimization,
+                contains_aggregation=contains_aggregation,
+            ),
+            True,
         )
