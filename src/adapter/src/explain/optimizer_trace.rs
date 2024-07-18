@@ -343,13 +343,17 @@ impl OptimizerTrace {
     ) -> Result<TraceEntries<String>, ExplainError> {
         let mut results = vec![];
 
+        if config.cardinality {
+            eprintln!("MGREE running collect_all with cardinality = true but no stats :(")
+        }
+
         // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., collect
         // HIR plans.
         let mut context = ExplainContext {
             config,
             features,
             humanizer,
-            cardinality_stats: Default::default(), // empty stats
+            cardinality_stats: Default::default(), // empty stats // !!!(mgree) implement
             used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
             duration: Default::default(),
@@ -372,7 +376,7 @@ impl OptimizerTrace {
             config,
             features,
             humanizer,
-            cardinality_stats: Default::default(), // empty stats
+            cardinality_stats: Default::default(), // empty stats // !!!(mgree) implement
             used_indexes: Default::default(),
             finishing: row_set_finishing,
             duration: Default::default(),

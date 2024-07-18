@@ -250,7 +250,7 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
-        let cardinality_stats = BTreeMap::new();
+        let cardinality_stats = BTreeMap::new(); // !!!(mgree) implement
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(

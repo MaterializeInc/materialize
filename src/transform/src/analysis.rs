@@ -1737,7 +1737,7 @@ mod cardinality {
                         .unwrap_or(CardinalityEstimate::Unknown),
                     Id::Global(id) => {
                         if !self.stats.contains_key(id) {
-                            eprintln!("STATS missing {id} from {:?}", self.stats);
+                            eprintln!("MGREE missing {id} from {:?}", self.stats);
                         }
 
                         self.stats

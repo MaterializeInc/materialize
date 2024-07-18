@@ -556,13 +556,13 @@ impl Coordinator {
         let stats_ts_ctx = match stats_ts {
             Ok((ts, _read_holds)) => {
                 eprintln!(
-                    "STATS stats_ts.respond_immediately = {}",
+                    "MGREE stats_ts.respond_immediately = {}",
                     ts.respond_immediately()
                 );
                 ts.timestamp_context
             }
             Err(e) => {
-                eprintln!("STATS stats_ts = Err({e:?})");
+                eprintln!("MGREE stats_ts = Err({e:?})");
                 timestamp_context.clone()
             }
         };
@@ -571,7 +571,7 @@ impl Coordinator {
             .statistics_oracle(session, &source_ids, &stats_ts_ctx.antichain(), true)
             .await
             .unwrap_or_else(|e| {
-                eprintln!("STATS statistics_oracle = Err({e:?})");
+                eprintln!("MGREE statistics_oracle = Err({e:?})");
                 Box::new(EmptyStatisticsOracle)
             });
         let session = session.meta();

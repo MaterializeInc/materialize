@@ -235,7 +235,7 @@ impl Coordinator {
         let cardinality_stats = match stats_ts {
             Ok((ts, _read_holds)) => {
                 eprintln!(
-                    "STATS stats_ts.respond_immediately = {}",
+                    "MGREE stats_ts.respond_immediately = {}",
                     ts.respond_immediately()
                 );
                 let timestamp_context = ts.timestamp_context;
@@ -243,20 +243,20 @@ impl Coordinator {
                 let stats = self
                     .statistics_oracle(
                         &ctx.session,
-                        &source_ids.0,
+                        &source_ids,
                         &timestamp_context.antichain(),
                         true,
                     )
                     .await
                     .unwrap_or_else(|e| {
-                        eprintln!("STATS statistics_oracle = Err({e:?})");
+                        eprintln!("MGREE statistics_oracle = Err({e:?})");
                         Box::new(mz_transform::EmptyStatisticsOracle)
                     });
 
                 stats.as_map()
             }
             Err(e) => {
-                eprintln!("STATS stats_ts = Err({e:?})");
+                eprintln!("MGREE stats_ts = Err({e:?})");
                 BTreeMap::new()
             }
         };

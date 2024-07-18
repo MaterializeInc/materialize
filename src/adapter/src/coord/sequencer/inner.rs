@@ -4572,7 +4572,7 @@ impl CachedStatisticsOracle {
                     cache.insert(*id, stats.num_updates);
                 }
                 Err(StorageError::IdentifierMissing(id)) => {
-                    eprintln!("no statistics for {id}");
+                    eprintln!("MGREE no statistics for {id}");
                     ::tracing::debug!("no statistics for {id}")
                 }
                 Err(e) => return Err(e),
@@ -4622,11 +4622,11 @@ impl Coordinator {
 
         match cached_stats {
             Ok(stats) => {
-                eprintln!("STATS successfully collected stats for {source_ids:?}");
+                eprintln!("MGREE successfully collected stats for {source_ids:?}");
                 Ok(Box::new(stats))
             }
             Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
-                eprintln!("STATS timed out");
+                eprintln!("MGREE timed out");
                 warn!(
                     is_oneshot = is_oneshot,
                     "optimizer statistics collection timed out after {}ms",
