@@ -7,6 +7,17 @@ menu:
     parent: 'commands'
 ---
 
+{{< note >}}
+
+In Materialize, [indexes on non-materialized
+views](/concepts/views/#non-materialized-views) **maintain and incrementally
+update view results in memory** for the cluster where you create the index.  For
+more information, see [Non-materialized
+views](/concepts/views/#non-materialized-views) and [`CREATE
+VIEW`](/sql/create-view).
+
+{{</ note >}}
+
 `CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
 incrementally updated as new data arrives.
 
@@ -14,6 +25,8 @@ A materialized view specifies a [cluster](/concepts/clusters/) that
 is tasked with keeping its results up-to-date, but **can be referenced in
 any cluster**. This allows you to effectively decouple the computational
 resources used for view maintenance from the resources used for query serving.
+
+
 
 ## Syntax
 
