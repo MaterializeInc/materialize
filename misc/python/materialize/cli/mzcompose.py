@@ -631,7 +631,7 @@ To see the available workflows, run:
                 buildkite_step_key = os.getenv("BUILDKITE_STEP_KEY")
                 extra_args = (
                     shlex.split(ci_extra_args[buildkite_step_key])
-                    if buildkite_step_key
+                    if buildkite_step_key and buildkite_step_key in ci_extra_args
                     else []
                 )
                 composition.workflow(
