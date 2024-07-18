@@ -11,9 +11,6 @@
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
-from materialize.output_consistency.expression.expression_characteristics import (
-    ExpressionCharacteristics,
-)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -108,8 +105,8 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         )
         self.print_separator_line()
 
-        characteristics = self.__get_involved_characteristics(
-            query_template, query_column_selection
+        characteristics = query_template.get_involved_characteristics(
+            query_column_selection
         )
         characteristic_names = ", ".join([char.name for char in characteristics])
         self._print_text(
@@ -182,23 +179,3 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 column_names.add(leaf_expression.column_name)
 
         return column_names
-
-    def __get_involved_characteristics(
-        self,
-        query_template: QueryTemplate,
-        query_column_selection: QueryColumnByIndexSelection,
-    ) -> set[ExpressionCharacteristics]:
-        all_involved_characteristics: set[ExpressionCharacteristics] = set()
-
-        for index, expression in enumerate(query_template.select_expressions):
-            if not query_column_selection.is_included(index):
-                continue
-
-            characteristics = expression.recursively_collect_involved_characteristics(
-                query_template.row_selection
-            )
-            all_involved_characteristics = all_involved_characteristics.union(
-                characteristics
-            )
-
-        return all_involved_characteristics

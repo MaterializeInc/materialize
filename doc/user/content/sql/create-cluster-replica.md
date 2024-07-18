@@ -15,7 +15,7 @@ cluster](/sql/alter-cluster/#converting-unmanaged-to-managed-clusters) instead
 of manually creating and dropping replicas.
 {{< /warning >}}
 
-`CREATE CLUSTER REPLICA` provisions a new replica of a [cluster](/get-started/key-concepts#clusters).
+`CREATE CLUSTER REPLICA` provisions a new replica of a [cluster](/concepts/clusters/).
 
 ## Conceptual framework
 

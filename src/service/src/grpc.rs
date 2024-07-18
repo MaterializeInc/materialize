@@ -49,8 +49,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_service.params.rs"));
 // Use with generated servers Server::new(Svc).max_decoding_message_size
 pub const MAX_GRPC_MESSAGE_SIZE: usize = usize::MAX;
 
-pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>;
-
 pub type ClientTransport = InterceptedService<Channel, VersionAttachInterceptor>;
 
 /// Types that we send and receive over a service endpoint.
@@ -335,7 +333,7 @@ where
         // canceled.
         let mut request = request.into_inner();
         let state = Arc::clone(&self.state);
-        let response = stream! {
+        let stream = stream! {
             let mut client = (state.client_builder)();
             loop {
                 select! {
@@ -376,9 +374,40 @@ where
                     _ = &mut cancel_rx => break,
                 }
             }
-            info!("GrpcServer: remote client disconnected");
         };
-        Ok(Response::new(Box::pin(response)))
+        Ok(Response::new(ResponseStream::new(stream)))
+    }
+}
+
+/// A stream returning responses to GRPC clients.
+///
+/// This is defined as a struct, rather than a type alias, so that we can define a `Drop` impl that
+/// logs stream termination.
+pub struct ResponseStream<PR>(Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>);
+
+impl<PR> ResponseStream<PR> {
+    fn new<S>(stream: S) -> Self
+    where
+        S: Stream<Item = Result<PR, Status>> + Send + 'static,
+    {
+        Self(Box::pin(stream))
+    }
+}
+
+impl<PR> Stream for ResponseStream<PR> {
+    type Item = Result<PR, Status>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_next_unpin(cx)
+    }
+}
+
+impl<PR> Drop for ResponseStream<PR> {
+    fn drop(&mut self) {
+        info!("GrpcServer: response stream disconnected");
     }
 }
 

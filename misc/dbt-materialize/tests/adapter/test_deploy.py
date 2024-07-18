@@ -507,9 +507,9 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
-    def test_dbt_deploy_init_with_refresh_rehydration_time(self, project):
+    def test_dbt_deploy_init_with_refresh_hydration_time(self, project):
         project.run_sql(
-            "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'))"
+            "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
         )
         project.run_sql("CREATE SCHEMA prod")
 

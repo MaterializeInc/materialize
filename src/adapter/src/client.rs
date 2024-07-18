@@ -147,7 +147,7 @@ impl Client {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, config)
+        Session::new(self.build_info, config, self.metrics().session_metrics())
     }
 
     /// Upgrades this client to a session client.

@@ -62,7 +62,7 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, Type,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
+use mz_ore::{assert_none, instrument};
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::plan::{
@@ -424,7 +424,7 @@ impl Coordinator {
         // source needs to know its shard ID, and the easiest way of
         // guaranteeing that the shard ID is discoverable is to create this
         // collection first.
-        assert!(progress_stmt.of_source.is_none());
+        assert_none!(progress_stmt.of_source);
         let progress_plan = self
             .plan_subsource(ctx.session(), &params, progress_stmt)
             .await?;
@@ -754,6 +754,7 @@ impl Coordinator {
                 .resolve_builtin_table_update(builtin_table_update);
             ops.push(catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,
+                audit_log: Vec::new(),
             });
         }
 
@@ -895,6 +896,19 @@ impl Coordinator {
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
                 // Determine the initial validity for the table.
                 let register_ts = coord.get_local_write_ts().await.timestamp;
+
+                // After acquiring `register_ts` but before using it, we need to
+                // be sure we're still the leader. Otherwise a new generation
+                // may also be trying to use `register_ts` for a different
+                // purpose.
+                //
+                // See #28216.
+                coord
+                    .catalog
+                    .confirm_leadership()
+                    .await
+                    .unwrap_or_terminate("unable to confirm leadership");
+
                 if let Some(id) = ctx.extra().contents() {
                     coord.set_statement_execution_timestamp(id, register_ts);
                 }
@@ -1630,6 +1644,7 @@ impl Coordinator {
             .chain(ssh_tunnel_updates.into_iter().map(|builtin_table_update| {
                 catalog::Op::WeirdBuiltinTableUpdates {
                     builtin_table_update,
+                    audit_log: Vec::new(),
                 }
             }))
             .collect();

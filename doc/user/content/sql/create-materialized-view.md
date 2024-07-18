@@ -10,7 +10,7 @@ menu:
 `CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
 incrementally updated as new data arrives.
 
-A materialized view specifies a [cluster](/get-started/key-concepts/#clusters) that
+A materialized view specifies a [cluster](/concepts/clusters/) that
 is tasked with keeping its results up-to-date, but **can be referenced in
 any cluster**. This allows you to effectively decouple the computational
 resources used for view maintenance from the resources used for query serving.
@@ -244,7 +244,7 @@ have a period of unavailability around the scheduled refresh times — during
 this period, the view **will not return any results**. To avoid unavailability
 during the refresh operation, we recommend hosting these views in
 [**scheduled clusters**](/sql/create-cluster/#scheduling) configured to
-automatically [turn on ahead of the scheduled refresh time](/sql/create-cluster/#rehydration-time-estimate).
+automatically [turn on ahead of the scheduled refresh time](/sql/create-cluster/#hydration-time-estimate).
 
 **Example**
 
@@ -254,7 +254,7 @@ refresh times:
 ```mzsql
 CREATE CLUSTER my_scheduled_cluster (
   SIZE = '3200cc',
-  SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour')
+  SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 );
 ```
 
@@ -283,18 +283,18 @@ backfill the view with pre-existing data — a process known as [_hydration_](/t
 of the view** to just the duration of the refresh.
 
 If the cluster is **not** configured to turn on ahead of scheduled refreshes
-(i.e., using the `REHYDRATION TIME ESTIMATE` option), the total unavailability
+(i.e., using the `HYDRATION TIME ESTIMATE` option), the total unavailability
 window of the view will be a combination of the hydration time for all objects
 in the cluster (typically long) and the duration of the refresh for the
 materialized view (typically short).
 
 Depending on the actual time it takes to hydrate the view or set of views in the
-cluster, you can later adjust the rehydration time estimate value for the
+cluster, you can later adjust the hydration time estimate value for the
 cluster using [`ALTER CLUSTER`](../alter-cluster/#schedule):
 
 ```mzsql
 ALTER CLUSTER my_scheduled_cluster
-SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '30 minutes'));
+SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '30 minutes'));
 ```
 
 #### Introspection

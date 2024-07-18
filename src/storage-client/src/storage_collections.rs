@@ -23,9 +23,9 @@ use futures::{Future, FutureExt, StreamExt};
 use itertools::Itertools;
 
 use mz_ore::collections::CollectionExt;
-use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
+use mz_ore::{assert_none, instrument};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
@@ -40,9 +40,7 @@ use mz_repr::{Diff, GlobalId, RelationDesc, TimestampManipulation};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::{
-    CollectionMetadata, StorageError, TxnWalTablesImpl, TxnsCodecRow,
-};
+use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -299,26 +297,6 @@ pub struct CollectionFrontiers<T> {
     pub read_capabilities: Antichain<T>,
 }
 
-#[derive(Debug, Clone)]
-enum TxnsWal<T> {
-    EnabledEager,
-    EnabledLazy { txns_read: TxnsRead<T> },
-}
-
-impl<T: TimelyTimestamp + Lattice + Codec64> TxnsWal<T> {
-    fn expect_enabled_lazy(&self, txns_id: &ShardId) -> &TxnsRead<T> {
-        match self {
-            TxnsWal::EnabledLazy { txns_read, .. } => {
-                assert_eq!(txns_id, txns_read.txns_id());
-                txns_read
-            }
-            TxnsWal::EnabledEager { .. } => {
-                panic!("set if txns are enabled and lazy")
-            }
-        }
-    }
-}
-
 /// Implementation of [StorageCollections] that is shallow-cloneable and uses a
 /// background task for doing work concurrently, in the background.
 #[derive(Debug, Clone)]
@@ -349,8 +327,8 @@ pub struct StorageCollectionsImpl<
     /// Collections maintained by this [StorageCollections].
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
 
-    /// Whether to use the new txn-wal tables implementation or the legacy one.
-    txns: TxnsWal<T>,
+    /// A shared TxnsCache running in a task and communicated with over a channel.
+    txns_read: TxnsRead<T>,
 
     /// Storage configuration parameters.
     config: Arc<Mutex<StorageConfiguration>>,
@@ -404,7 +382,6 @@ where
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
     ) -> Self {
@@ -448,13 +425,7 @@ where
             .await
             .expect("txns schema shouldn't change");
 
-        let txns = match txn_wal_tables {
-            TxnWalTablesImpl::Lazy => {
-                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-                TxnsWal::EnabledLazy { txns_read }
-            }
-            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager,
-        };
+        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
         let finalizable_shards = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
@@ -501,7 +472,7 @@ where
             finalizable_shards,
             finalized_shards,
             collections,
-            txns,
+            txns_read,
             envd_epoch,
             read_only,
             config,
@@ -1102,17 +1073,8 @@ where
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
-        let new_collections: BTreeSet<GlobalId> = init_ids
-            .iter()
-            .filter(|id| !existing_metadata.contains(id))
-            .cloned()
-            .collect();
-
-        mz_ore::soft_assert_or_log!(
-                new_collections.iter().all(|id| id.is_system()),
-                "initializing collections should only be missing metadata for new system objects, but got {:?}",
-                new_collections
-            );
+        let new_collections: BTreeSet<GlobalId> =
+            init_ids.difference(&existing_metadata).cloned().collect();
 
         self.prepare_state(txn, new_collections, drop_ids).await?;
 
@@ -1222,12 +1184,13 @@ where
         let as_of = match metadata.txns_shard.as_ref() {
             None => SnapshotStatsAsOf::Direct(as_of),
             Some(txns_id) => {
-                let txns_read = self.txns.expect_enabled_lazy(txns_id);
+                assert_eq!(txns_id, self.txns_read.txns_id());
                 let as_of = as_of
                     .into_option()
                     .expect("cannot read as_of the empty antichain");
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 SnapshotStatsAsOf::Txns(data_snapshot)
@@ -1268,9 +1231,12 @@ where
                 },
                 Some(as_of),
             ) => {
-                let txns_read = self.txns.expect_enabled_lazy(&txns_id);
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read.data_snapshot(data_shard, as_of.clone()).await;
+                assert_eq!(txns_id, *self.txns_read.txns_id());
+                self.txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = self
+                    .txns_read
+                    .data_snapshot(data_shard, as_of.clone())
+                    .await;
                 Some(data_snapshot)
             }
             _ => None,
@@ -1405,13 +1371,9 @@ where
                 // tables), then we need to pass along the shard id for the txns
                 // shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
-                        // If we're not using lazy txn-wal upper (i.e. we're
-                        // using eager uppers) then all reads should be done
-                        // normally.
-                        TxnsWal::EnabledEager { .. } => None,
-                        TxnsWal::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
-                    },
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        Some(*self.txns_read.txns_id())
+                    }
                     DataSource::Ingestion(_)
                     | DataSource::IngestionExport { .. }
                     | DataSource::Introspection(_)
@@ -1523,7 +1485,7 @@ where
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
             // Ensure that the ingestion has an export for its primary source.
-            // This is done in an akward spot to appease the borrow checker.
+            // This is done in an awkward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
                 ingestion.source_exports.insert(
                     id,
@@ -1541,7 +1503,7 @@ where
             let storage_dependencies = self
                 .determine_collection_dependencies(&*self_collections, &description.data_source)?;
 
-            // Determine the intial since of the collection.
+            // Determine the initial since of the collection.
             let initial_since = match storage_dependencies
                 .iter()
                 .at_most_one()
@@ -1648,11 +1610,8 @@ where
                     // update it in create_collections, so just do that now.
                     let advance_to = mz_persist_types::StepForward::step_forward(register_ts);
 
-                    if let TxnsWal::EnabledLazy { .. } = &self.txns {
-                        if collection_state.write_frontier.less_than(&advance_to) {
-                            collection_state.write_frontier =
-                                Antichain::from_elem(advance_to.clone());
-                        }
+                    if collection_state.write_frontier.less_than(&advance_to) {
+                        collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
                     }
                     self_collections.insert(id, collection_state);
                 }
@@ -1958,7 +1917,7 @@ where
             Self::Critical(handle) => handle.compare_and_downgrade_since(expected, new).await,
             Self::Leased(handle) => {
                 let (opaque, since) = new;
-                assert!(opaque.0.is_none());
+                assert_none!(opaque.0);
 
                 handle.downgrade_since(since).await;
 
@@ -1980,7 +1939,7 @@ where
             }
             Self::Leased(handle) => {
                 let (opaque, since) = new;
-                assert!(opaque.0.is_none());
+                assert_none!(opaque.0);
 
                 handle.maybe_downgrade_since(since).await;
 
@@ -2320,7 +2279,7 @@ where
             let collection = if let Some(c) = self_collections.get_mut(id) {
                 c
             } else {
-                warn!("Reference to absent collection {id}");
+                trace!("Reference to absent collection {id}, due to concurrent removal of that collection");
                 continue;
             };
 
@@ -2658,6 +2617,7 @@ mod tests {
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigSet;
+    use mz_ore::assert_err;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
@@ -2734,11 +2694,11 @@ mod tests {
         // No stats for unknown GlobalId.
         let stats =
             snapshot_stats(&cmds_tx, GlobalId::User(2), Antichain::from_elem(0.into())).await;
-        assert!(stats.is_err());
+        assert_err!(stats);
 
         // Stats don't resolve for as_of past the upper.
         let stats_fut = snapshot_stats(&cmds_tx, GlobalId::User(1), Antichain::from_elem(1.into()));
-        assert!(stats_fut.now_or_never().is_none());
+        assert_none!(stats_fut.now_or_never());
 
         // // Call it again because now_or_never consumed our future and it's not clone-able.
         let stats_ts1_fut =

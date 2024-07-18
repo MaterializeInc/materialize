@@ -654,6 +654,11 @@ EOF
 
 # Give up when reaching RECURSION LIMIT
 # Same as the previous query, but with RECURSION LIMIT 1.
+# As of #27389 this does not give up after the recursion limit,
+# as doing so is not necessary for equivalence propagation.
+# Issue #28308 tracks tests that may not be serving their intended
+# purpose; perhaps we can remove the test if we remove the
+# column_knowledge transform.
 query T multiline
 EXPLAIN WITH(arity, types)
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT 1)
@@ -679,8 +684,7 @@ Explained Query:
               Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
                 ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
             Project () // { arity: 0, types: "()" }
-              Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
-                Get l0 // { arity: 2, types: "(integer, integer)" }
+              Get l0 // { arity: 2, types: "(integer, integer)" }
 
 Source materialize.public.t1
   filter=((#0 = 3) AND (#1 = 5))

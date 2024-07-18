@@ -57,7 +57,7 @@ use mz_storage_client::controller::{StorageController, StorageMetadata, StorageT
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
+use mz_storage_types::controller::StorageError;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
@@ -178,9 +178,6 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
-    /// Whether to use the new txn-wal tables implementation or the legacy
-    /// one.
-    txn_wal_tables: TxnWalTablesImpl,
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
@@ -250,7 +247,6 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             metrics_rx: _,
             frontiers_ticker: _,
             persist_pubsub_url: _,
-            txn_wal_tables: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
@@ -648,14 +644,19 @@ where
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
         storage_txn: &dyn StorageTxn<T>,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
         }
+
+        let now_fn = config.now.clone();
+        let wallclock_lag = move |time: &T| {
+            let now = mz_repr::Timestamp::new(now_fn());
+            let time_ts: mz_repr::Timestamp = time.clone().into();
+            let lag_ts = now.saturating_sub(time_ts);
+            Duration::from(lag_ts)
+        };
 
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
@@ -665,7 +666,6 @@ where
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
-            txn_wal_tables,
             config.connection_context.clone(),
             storage_txn,
         )
@@ -683,7 +683,6 @@ where
             envd_epoch,
             read_only,
             config.metrics_registry.clone(),
-            txn_wal_tables,
             config.connection_context,
             storage_txn,
             Arc::clone(&collections_ctl),
@@ -697,6 +696,7 @@ where
             envd_epoch,
             read_only,
             config.metrics_registry.clone(),
+            Arc::new(wallclock_lag),
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
@@ -721,7 +721,6 @@ where
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
-            txn_wal_tables,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),

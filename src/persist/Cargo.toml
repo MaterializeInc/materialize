@@ -62,6 +62,14 @@ url = "2.3.1"
 uuid = { version = "1.7.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
+
+# While this crate doesn't directly depend on `sha2` we want to ensure that the
+# `asm` feature is enabled since computing SHA256 hashes is taking a
+# significant amount of CPU time when uploading data to S3
+[dependencies.sha2]
+version = "0.10.6"
+features = ["asm"]
+
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json = "1.0.89"
@@ -75,4 +83,4 @@ prost-build = "0.11.2"
 default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+normal = ["workspace-hack", "sha2"]

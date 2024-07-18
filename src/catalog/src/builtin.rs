@@ -276,33 +276,33 @@ impl Fingerprint for &BuiltinLog {
     }
 }
 
-impl Fingerprint for &BuiltinTable {
-    fn fingerprint(&self) -> String {
-        self.desc.fingerprint()
-    }
-}
-
 /// Allows tests to inject arbitrary amounts of whitespace to forcibly change the fingerprint and
 /// trigger a builtin migration. Ideally this would be guarded by a `#[cfg(test)]` but unfortunately,
 /// the builtin migrations are in a different crate and would not be able to modify this value.
 /// There is an open issue to move builtin migrations to this crate:
 /// <https://github.com/MaterializeInc/materialize/issues/22593>
-pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE: Mutex<
+pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE: Mutex<
     Option<String>,
 > = Mutex::new(None);
 
-impl Fingerprint for &BuiltinView {
+impl Fingerprint for &BuiltinTable {
     fn fingerprint(&self) -> String {
-        // This is only called during bootstrapping so it's not that big of a deal to lock a mutex,
+        // This is only called during bootstrapping, so it's not that big of a deal to lock a mutex,
         // though it's not great.
-        let guard = REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE
+        let guard = REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
             .lock()
             .expect("lock poisoned");
         if let Some(whitespace) = &*guard {
-            format!("{}{}", self.sql, whitespace)
+            format!("{}{}", self.desc.fingerprint(), whitespace)
         } else {
-            self.sql.to_string()
+            self.desc.fingerprint()
         }
+    }
+}
+
+impl Fingerprint for &BuiltinView {
+    fn fingerprint(&self) -> String {
+        self.sql.to_string()
     }
 }
 
@@ -2510,7 +2510,7 @@ pub static MZ_CLUSTER_SCHEDULES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column(
-            "refresh_rehydration_time_estimate",
+            "refresh_hydration_time_estimate",
             ScalarType::Interval.nullable(true),
         ),
     is_retained_metrics_object: false,
@@ -3261,12 +3261,12 @@ pub static MZ_RELATIONS: Lazy<BuiltinView> = Lazy::new(|| {
         name: "mz_relations",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::VIEW_MZ_RELATIONS_OID,
-        column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
+        column_defs: Some("id, oid, schema_id, name, type, owner_id, cluster_id, privileges"),
         sql: "
-      SELECT id, oid, schema_id, name, 'table', owner_id, privileges FROM mz_catalog.mz_tables
-UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, privileges FROM mz_catalog.mz_sources
-UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, privileges FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, privileges FROM mz_catalog.mz_materialized_views",
+      SELECT id, oid, schema_id, name, 'table', owner_id, NULL::text, privileges FROM mz_catalog.mz_tables
+UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, cluster_id, privileges FROM mz_catalog.mz_sources
+UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, NULL::text, privileges FROM mz_catalog.mz_views
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluster_id, privileges FROM mz_catalog.mz_materialized_views",
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -3299,23 +3299,23 @@ pub static MZ_OBJECTS: Lazy<BuiltinView> = Lazy::new(|| {
         name: "mz_objects",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::VIEW_MZ_OBJECTS_OID,
-        column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
+        column_defs: Some("id, oid, schema_id, name, type, owner_id, cluster_id, privileges"),
         sql:
-        "SELECT id, oid, schema_id, name, type, owner_id, privileges FROM mz_catalog.mz_relations
+        "SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
-    SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
+    SELECT id, oid, schema_id, name, 'sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
 UNION ALL
-    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, NULL::mz_catalog.mz_aclitem[]
+    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 UNION ALL
-    SELECT id, oid, schema_id, name, 'connection', owner_id, privileges FROM mz_catalog.mz_connections
+    SELECT id, oid, schema_id, name, 'connection', owner_id, NULL::text, privileges FROM mz_catalog.mz_connections
 UNION ALL
-    SELECT id, oid, schema_id, name, 'type', owner_id, privileges FROM mz_catalog.mz_types
+    SELECT id, oid, schema_id, name, 'type', owner_id, NULL::text, privileges FROM mz_catalog.mz_types
 UNION ALL
-    SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
+    SELECT id, oid, schema_id, name, 'function', owner_id, NULL::text, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
+    SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets",
         access: vec![PUBLIC_SELECT],
     }
 });

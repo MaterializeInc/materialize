@@ -48,7 +48,7 @@ use mz_sql::session::vars::{
 };
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::controller::StorageError;
+use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
@@ -198,7 +198,7 @@ impl Coordinator {
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
+        let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
@@ -239,28 +239,11 @@ impl Coordinator {
                                                     let conn = conn.clone().into_inline_connection(
                                                         self.catalog().state(),
                                                     );
-                                                    let config = conn
-                                                    .connection
-                                                    .config(
-                                                        self.secrets_reader(),
-                                                        self.controller.storage.config(),
-                                                        InTask::No,
-                                                    )
-                                                    .await
-                                                    .map_err(|e| {
-                                                        AdapterError::Storage(StorageError::Generic(
-                                                            anyhow::anyhow!(
-                                                                "error creating Postgres client for \
-                                                                dropping acquired slots: {}",
-                                                                e.display_with_causes()
-                                                            ),
-                                                        ))
-                                                    })?;
-
-                                                    replication_slots_to_drop.push((
-                                                        config,
+                                                    let pending_drop = (
+                                                        conn.connection.clone(),
                                                         conn.publication_details.slot.clone(),
-                                                    ));
+                                                    );
+                                                    replication_slots_to_drop.push(pending_drop);
                                                 }
                                                 _ => {}
                                             }
@@ -666,9 +649,6 @@ impl Coordinator {
             if !materialized_views_to_drop.is_empty() {
                 self.drop_materialized_views(materialized_views_to_drop);
             }
-            if !secrets_to_drop.is_empty() {
-                self.drop_secrets(secrets_to_drop).await;
-            }
             if !vpc_endpoints_to_drop.is_empty() {
                 self.drop_vpc_endpoints_in_background(vpc_endpoints_to_drop)
             }
@@ -689,31 +669,76 @@ impl Coordinator {
                 }
             }
 
-            // We don't want to block the coordinator on an external postgres server, so
-            // move the drop slots to a separate task. This does mean that a failed drop
-            // slot won't bubble up to the user as an error message. However, even if it
-            // did (and how the code previously worked), mz has already dropped it from our
-            // catalog, and so we wouldn't be able to retry anyway.
-            let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
-            if !replication_slots_to_drop.is_empty() {
-                // TODO(guswynn): see if there is more relevant info to add to this name
-                task::spawn(|| "drop_replication_slots", async move {
-                    for (config, slot_name) in replication_slots_to_drop {
-                        // Try to drop the replication slots, but give up after a while.
-                        let _ = Retry::default()
+            // We don't want to block the main coordinator thread on cleaning
+            // up external resources (PostgreSQL replication slots and secrets),
+            // so we perform that cleanup in a background task.
+            //
+            // TODO(14551): This is inherently best effort. An ill-timed crash
+            // means we'll never clean these resources up. Safer cleanup for non-Materialize resources.
+            // See <https://github.com/MaterializeInc/materialize/issues/14551>
+            task::spawn(|| "drop_replication_slots_and_secrets", {
+                let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
+                let secrets_controller = Arc::clone(&self.secrets_controller);
+                let secrets_reader = Arc::clone(self.secrets_reader());
+                let storage_config = self.controller.storage.config().clone();
+
+                async move {
+                    for (connection, replication_slot_name) in replication_slots_to_drop {
+                        tracing::info!(?replication_slot_name, "dropping replication slot");
+
+                        // Try to drop the replication slots, but give up after
+                        // a while. The PostgreSQL server may no longer be
+                        // healthy. Users often drop PostgreSQL sources
+                        // *because* the PostgreSQL server has been
+                        // decomissioned.
+                        let result: Result<(), anyhow::Error> = Retry::default()
                             .max_duration(Duration::from_secs(60))
                             .retry_async(|_state| async {
+                                let config = connection
+                                    .config(&secrets_reader, &storage_config, InTask::No)
+                                    .await
+                                    .map_err(|e| {
+                                        anyhow::anyhow!(
+                                            "error creating Postgres client for \
+                                            dropping acquired slots: {}",
+                                            e.display_with_causes()
+                                        )
+                                    })?;
+
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
                                     config.clone(),
-                                    &[&slot_name],
+                                    &[&replication_slot_name],
                                 )
-                                .await
+                                .await?;
+
+                                Ok(())
                             })
                             .await;
+
+                        if let Err(err) = result {
+                            tracing::warn!(
+                                ?replication_slot_name,
+                                ?err,
+                                "failed to drop replication slot"
+                            );
+                        }
                     }
-                });
-            }
+
+                    // Drop secrets *after* dropping the replication slots,
+                    // because those replication slots may.
+                    //
+                    // It's okay if we crash before processing the secret drops,
+                    // as we look for and remove any orphaned secrets during
+                    // startup.
+                    fail_point!("drop_secrets");
+                    for secret in secrets_to_drop {
+                        if let Err(e) = secrets_controller.delete(secret).await {
+                            warn!("Dropping secrets has encountered an error: {}", e);
+                        }
+                    }
+                }
+            });
 
             if update_compute_config {
                 self.update_compute_config();
@@ -982,15 +1007,6 @@ impl Coordinator {
 
         // Drop storage sources.
         self.drop_sources(source_ids)
-    }
-
-    async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
-        fail_point!("drop_secrets");
-        for secret in secrets {
-            if let Err(e) = self.secrets_controller.delete(secret).await {
-                warn!("Dropping secrets has encountered an error: {}", e);
-            }
-        }
     }
 
     fn drop_vpc_endpoints_in_background(&mut self, vpc_endpoints: Vec<GlobalId>) {

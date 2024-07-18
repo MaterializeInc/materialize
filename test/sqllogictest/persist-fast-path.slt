@@ -173,18 +173,22 @@ EOF
 
 # Check that we bound result set size correctly
 
+statement ok
+CREATE TABLE large_rows (a int, b text)
+
+statement ok
+INSERT INTO large_rows SELECT * FROM generate_series(1, 100), repeat('a', 100000)
+
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET max_result_size TO 100;
+ALTER SYSTEM SET max_result_size TO '1MB';
 ----
 COMPLETE 0
 
-query T
-SELECT * FROM numbers LIMIT 1;
-----
-1
+statement ok
+SELECT * FROM large_rows LIMIT 1;
 
-query error db error: ERROR: result exceeds max size of 100 B
-SELECT * FROM numbers LIMIT 99;
+query error db error: ERROR: result exceeds max size of 1048.6 KB
+SELECT * FROM large_rows LIMIT 99;
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET max_result_size

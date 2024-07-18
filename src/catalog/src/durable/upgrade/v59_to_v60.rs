@@ -1,4 +1,3 @@
-// Copyright 2018 Flavien Raynaud
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
@@ -8,8 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub fn parse_many(input: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
-    serde_json::Deserializer::from_str(input)
-        .into_iter()
-        .collect()
+use crate::durable::upgrade::MigrationAction;
+use crate::durable::upgrade::{objects_v59 as v59, objects_v60 as v60};
+
+/// No-op migration. In v60, we add some new audit log variants.
+pub fn upgrade(
+    _snapshot: Vec<v59::StateUpdateKind>,
+) -> Vec<MigrationAction<v59::StateUpdateKind, v60::StateUpdateKind>> {
+    Vec::new()
 }

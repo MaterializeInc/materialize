@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::NaiveTime;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveTime;
@@ -19,6 +19,7 @@ use mz_repr::adt::mz_acl_item::{
 };
 use mz_repr::adt::numeric::{Numeric, PackedNumeric};
 use mz_repr::adt::system::Oid;
+use mz_repr::adt::timestamp::PackedNaiveDateTime;
 use mz_repr::role_id::RoleId;
 use mz_repr::ProtoNumeric;
 use prost::Message;
@@ -248,12 +249,46 @@ fn bench_numeric(c: &mut Criterion) {
     group.finish();
 }
 
+#[allow(clippy::useless_vec)]
+fn bench_timestamp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Timestamp");
+    group.throughput(Throughput::Elements(1));
+
+    let date = NaiveDate::from_ymd_opt(2024, 06, 30).unwrap();
+    let time = NaiveTime::from_hms_opt(12, 30, 01).unwrap();
+    let val = NaiveDateTime::new(date, time);
+
+    group.bench_function("encode", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let packed = PackedNaiveDateTime::from_value(std::hint::black_box(val));
+            std::hint::black_box(&mut buf[..PackedNaiveDateTime::SIZE])
+                .copy_from_slice(packed.as_bytes());
+        })
+    });
+    group.bench_function("encode/micros", |b| {
+        b.iter(|| {
+            let encoded = std::hint::black_box(val).and_utc().timestamp_micros();
+            std::hint::black_box(encoded);
+        })
+    });
+    group.bench_function("encode/proto", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let proto = std::hint::black_box(val).into_proto();
+            proto.encode(&mut buf).unwrap();
+            buf.clear();
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_interval,
     bench_time,
     bench_acl_item,
     bench_mz_acl_item,
-    bench_numeric
+    bench_numeric,
+    bench_timestamp
 );
 criterion_main!(benches);

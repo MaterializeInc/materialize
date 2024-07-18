@@ -1114,6 +1114,7 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
     use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
     use DataListenNext::*;
@@ -1214,7 +1215,7 @@ mod tests {
 
         // empty
         assert_eq!(c.progress_exclusive, 0);
-        assert!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)).is_err());
+        assert_err!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)));
         assert_eq!(c.data_listen_next(&d0, &0), WaitForTxnsProgress);
 
         // ts 0 (never registered)
@@ -1481,7 +1482,7 @@ mod tests {
         let mut c = TxnsCacheState::new(ShardId::new(), 10, None);
         c.progress_exclusive = 20;
 
-        assert!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)).is_err());
+        assert_err!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)));
 
         let ds = c.data_snapshot(d0, 0);
         assert_eq!(

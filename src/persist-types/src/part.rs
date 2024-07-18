@@ -14,6 +14,7 @@ use std::sync::Arc;
 use arrow::array::{Array, Int64Array, PrimitiveArray, StructArray};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{Field, Int64Type};
+use mz_ore::assert_none;
 use mz_ore::iter::IteratorExt;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
@@ -176,7 +177,7 @@ impl Part {
                     diff.data_type()
                 )
             })?;
-        assert!(diff.logical_nulls().is_none());
+        assert_none!(diff.logical_nulls());
         let diff = diff.values().clone();
 
         let ts = ts
@@ -188,7 +189,7 @@ impl Part {
                     ts.data_type()
                 )
             })?;
-        assert!(ts.logical_nulls().is_none());
+        assert_none!(ts.logical_nulls());
         let ts = ts.values().clone();
 
         let part = Part {

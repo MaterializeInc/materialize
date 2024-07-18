@@ -30,6 +30,9 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -275,6 +278,9 @@ class ExpressionGenerator:
     ) -> Expression:
         if isinstance(param, EnumConstantOperationParam):
             return self._pick_enum_constant(param)
+
+        if isinstance(param, SameOperationParam):
+            return arg_context.args[param.index_of_previous_param]
 
         create_complex_arg = (
             arg_context.requires_aggregation()

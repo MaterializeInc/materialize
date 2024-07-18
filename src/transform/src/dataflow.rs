@@ -23,7 +23,7 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
+use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
 
@@ -1052,7 +1052,7 @@ impl<'a> CollectIndexRequests<'a> {
                 MirRelationExpr::Let { id, value, body } => {
                     let shadowed_context = this.context_across_lets.insert(id.clone(), Vec::new());
                     // No shadowing in MIR
-                    assert!(shadowed_context.is_none());
+                    assert_none!(shadowed_context);
                     // We go backwards: Recurse on the body and then the value.
                     this.collect_index_reqs_inner(body, contexts)?;
                     // The above call filled in the entry for `id` in `context_across_lets` (if it
@@ -1073,7 +1073,7 @@ impl<'a> CollectIndexRequests<'a> {
                 } => {
                     for id in ids.iter() {
                         let shadowed_context = this.context_across_lets.insert(id.clone(), Vec::new());
-                        assert!(shadowed_context.is_none()); // No shadowing in MIR
+                        assert_none!(shadowed_context); // No shadowing in MIR
                     }
                     // We go backwards: Recurse on the body first.
                     this.collect_index_reqs_inner(body, contexts)?;

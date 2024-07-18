@@ -22,7 +22,6 @@ use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist::location::Blob;
-use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -680,19 +679,10 @@ where
 
         let mut timings = Timings::default();
 
-        // Old style compaction operates on the encoded bytes and doesn't need
-        // the real schema, so we synthesize one. We use the real schema for
-        // stats though (see below).
-        let fake_compaction_schema = Schemas {
-            key: Arc::new(VecU8Schema),
-            val: Arc::new(VecU8Schema),
-        };
-
-        let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
+        let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
             cfg.batch.clone(),
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),
-            fake_compaction_schema,
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),

@@ -10,9 +10,10 @@
 //! Defines constraints that can be imposed on variables.
 
 use std::fmt::Debug;
-use std::ops::{RangeBounds, RangeInclusive};
+use std::ops::{RangeBounds, RangeFrom, RangeInclusive};
 
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::bytes::ByteSize;
 
 use super::{Value, Var, VarError};
 
@@ -20,6 +21,9 @@ pub static NUMERIC_NON_NEGATIVE: NumericNonNegNonNan = NumericNonNegNonNan;
 
 pub static NUMERIC_BOUNDED_0_1_INCLUSIVE: NumericInRange<RangeInclusive<f64>> =
     NumericInRange(0.0f64..=1.0);
+
+pub static BYTESIZE_AT_LEAST_1MB: ByteSizeInRange<RangeFrom<ByteSize>> =
+    ByteSizeInRange(ByteSize::mb(1)..);
 
 #[derive(Debug)]
 pub enum ValueConstraint {
@@ -146,6 +150,28 @@ where
             })
         } else {
             Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ByteSizeInRange<R>(pub R);
+
+impl<R> DomainConstraint for ByteSizeInRange<R>
+where
+    R: RangeBounds<ByteSize> + std::fmt::Debug + Send + Sync + 'static,
+{
+    type Value = ByteSize;
+
+    fn check(&self, var: &dyn Var, size: &ByteSize) -> Result<(), VarError> {
+        if self.0.contains(size) {
+            Ok(())
+        } else {
+            Err(VarError::InvalidParameterValue {
+                name: var.name(),
+                invalid_values: vec![size.to_string()],
+                reason: format!("only supports values in range {:?}", self.0),
+            })
         }
     }
 }

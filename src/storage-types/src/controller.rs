@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt::{self, Debug, Display};
 
 use itertools::Itertools;
+use mz_ore::assert_none;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
@@ -371,46 +372,6 @@ impl<T> From<DataflowError> for StorageError<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, num_enum::IntoPrimitive)]
-#[repr(u64)]
-pub enum TxnWalTablesImpl {
-    Eager = 1,
-    Lazy = 2,
-}
-
-impl std::fmt::Display for TxnWalTablesImpl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TxnWalTablesImpl::Eager => f.write_str("eager"),
-            TxnWalTablesImpl::Lazy => f.write_str("lazy"),
-        }
-    }
-}
-
-impl std::str::FromStr for TxnWalTablesImpl {
-    type Err = Box<(dyn std::error::Error + Send + Sync + 'static)>;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "off" | "eager" => Ok(TxnWalTablesImpl::Eager),
-            "lazy" => Ok(TxnWalTablesImpl::Lazy),
-            _ => Err(s.into()),
-        }
-    }
-}
-
-impl TryFrom<u64> for TxnWalTablesImpl {
-    type Error = u64;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            0 | 1 => Ok(TxnWalTablesImpl::Eager),
-            2 => Ok(TxnWalTablesImpl::Lazy),
-            _ => Err(value),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct TxnsCodecRow;
 
@@ -457,7 +418,7 @@ impl TxnsCodec for TxnsCodecRow {
         let ts = datums.next().expect("valid entry");
         let ts = u64::to_le_bytes(ts.unwrap_uint64());
         let batch = datums.next().expect("valid entry");
-        assert!(datums.next().is_none());
+        assert_none!(datums.next());
         if batch.is_null() {
             TxnsEntry::Register(data_id, ts)
         } else {

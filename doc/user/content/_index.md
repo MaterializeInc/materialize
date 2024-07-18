@@ -9,9 +9,8 @@ weight: 1
 
 # Materialize documentation
 
-Materialize is a **data warehouse** purpose-built for **operational workloads**
-where an analytical data warehouse would be too slow, and a stream processor
-would be too complicated.
+Materialize is the Operational Data Warehouse that delivers the speed of
+streaming with the ease of a data warehouse.
 
 Using SQL and common tools in the wider data ecosystem, Materialize allows you
 to build real-time automation, engaging customer experiences, and interactive
@@ -33,7 +32,7 @@ data freshness**.
 {{< linkbox icon="bulb" title="Key Concepts" >}}
 
 -   [Materialize overview](/overview/what-is-materialize/)
--   [Key Concepts](/get-started/key-concepts/)
+-   [Key Concepts](/concepts/)
     {{</ linkbox >}}
     {{< linkbox icon="doc" title="Guides" >}}
 -   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)

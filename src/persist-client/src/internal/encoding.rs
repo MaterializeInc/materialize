@@ -18,7 +18,7 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastInto;
-use mz_ore::halt;
+use mz_ore::{assert_none, halt};
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
@@ -1318,8 +1318,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
                 assert_eq!(proto.encoded_size_bytes, 0);
                 assert_eq!(proto.key_lower.len(), 0);
-                assert!(proto.key_stats.is_none());
-                assert!(proto.diffs_sum.is_none());
+                assert_none!(proto.key_stats);
+                assert_none!(proto.diffs_sum);
                 let updates = LazyInlineBatchPart(x.into_rust()?);
                 Ok(BatchPart::Inline {
                     updates,
@@ -1420,15 +1420,6 @@ impl ProtoInlineBatchPart {
         lgbytes: &ColumnarMetrics,
         proto: Self,
     ) -> Result<BlobTraceBatchPart<T>, TryFromProtoError> {
-        // BlobTraceBatchPart has a Vec<ColumnarRecords>. Inline writes only
-        // needs one and it's nice to only have to model one at the
-        // ProtoInlineBatchPart level. I'm _pretty_ sure that the actual
-        // BlobTraceBatchPart we've serialized into parquet always have exactly
-        // one (_maaaaaybe_ zero or one), but that's a scary thing to start
-        // enforcing, so separate it out (so we can e.g. use sentry errors! to
-        // confirm before rolling anything out). In the meantime, just construct
-        // the ProtoInlineBatchPart directly in BatchParts where it still knows
-        // that it has exactly one ColumnarRecords.
         let updates = proto
             .updates
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoInlineBatchPart::updates"))?;
@@ -1436,7 +1427,7 @@ impl ProtoInlineBatchPart {
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
             index: proto.index.into_rust()?,
-            updates: BlobTraceUpdates::Row(vec![updates]),
+            updates: BlobTraceUpdates::Row(updates),
         })
     }
 }
@@ -1553,6 +1544,7 @@ mod tests {
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::assert_err;
     use mz_persist::location::SeqNo;
     use proptest::prelude::*;
 
@@ -1599,7 +1591,7 @@ mod tests {
         // of code.
         let v1_res =
             mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
-        assert!(v1_res.is_err());
+        assert_err!(v1_res);
     }
 
     #[mz_ore::test]
@@ -1628,7 +1620,7 @@ mod tests {
         // losing or misinterpreting something written out by a future version
         // of code.
         let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
-        assert!(v1_res.is_err());
+        assert_err!(v1_res);
     }
 
     #[mz_ore::test]
@@ -1812,7 +1804,7 @@ mod tests {
             &mut field_diffs_writer,
         );
 
-        assert!(diff_proto.field_diffs.is_none());
+        assert_none!(diff_proto.field_diffs);
         diff_proto.field_diffs = Some(field_diffs_writer.into_proto());
 
         let diff = StateDiff::<u64>::from_proto(diff_proto.clone()).unwrap();

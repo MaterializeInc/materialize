@@ -608,7 +608,6 @@ where
             BatchBuilderConfig::new(&self.cfg, &self.writer_id),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
-            self.schemas.clone(),
             self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
@@ -622,6 +621,9 @@ where
         BatchBuilder {
             builder,
             stats_schemas: self.schemas.clone(),
+            metrics: Arc::clone(&self.metrics),
+            key_buf: vec![],
+            val_buf: vec![],
         }
     }
 

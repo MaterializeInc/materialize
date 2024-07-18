@@ -45,6 +45,9 @@ from materialize.output_consistency.input_data.operations.map_operations_provide
 from materialize.output_consistency.input_data.operations.number_operations_provider import (
     NUMERIC_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.pg_operations_provider import (
+    PG_OPERATIONS,
+)
 from materialize.output_consistency.input_data.operations.range_operations_provider import (
     RANGE_OPERATION_TYPES,
 )
@@ -53,9 +56,6 @@ from materialize.output_consistency.input_data.operations.record_operations_prov
 )
 from materialize.output_consistency.input_data.operations.set_operations_provider import (
     SET_OPERATION_TYPES,
-)
-from materialize.output_consistency.input_data.operations.special_operations_provider import (
-    SPECIAL_OPERATION_TYPES,
 )
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     STRING_OPERATION_TYPES,
@@ -88,6 +88,6 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         RANGE_OPERATION_TYPES,
         UUID_OPERATION_TYPES,
         RECORD_OPERATION_TYPES,
-        SPECIAL_OPERATION_TYPES,
+        PG_OPERATIONS,
     )
 )

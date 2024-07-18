@@ -403,21 +403,21 @@ impl AstDisplay for CsrSeedProtobufSchema {
 impl_display!(CsrSeedProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateSourceFormat<T: AstInfo> {
-    /// `CREATE SOURCE .. FORMAT`
+pub enum FormatSpecifier<T: AstInfo> {
+    /// `CREATE SOURCE/SINK .. FORMAT`
     Bare(Format<T>),
-    /// `CREATE SOURCE .. KEY FORMAT .. VALUE FORMAT`
+    /// `CREATE SOURCE/SINK .. KEY FORMAT .. VALUE FORMAT`
     KeyValue { key: Format<T>, value: Format<T> },
 }
 
-impl<T: AstInfo> AstDisplay for CreateSourceFormat<T> {
+impl<T: AstInfo> AstDisplay for FormatSpecifier<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceFormat::Bare(format) => {
+            FormatSpecifier::Bare(format) => {
                 f.write_str(" FORMAT ");
                 f.write_node(format)
             }
-            CreateSourceFormat::KeyValue { key, value } => {
+            FormatSpecifier::KeyValue { key, value } => {
                 f.write_str(" KEY FORMAT ");
                 f.write_node(key);
                 f.write_str(" VALUE FORMAT ");
@@ -426,7 +426,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceFormat<T> {
         }
     }
 }
-impl_display_t!(CreateSourceFormat);
+impl_display_t!(FormatSpecifier);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Format<T: AstInfo> {
@@ -545,14 +545,21 @@ impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceErrorPolicy {
-    Inline,
+    Inline {
+        /// The alias to use for the error column. If unspecified will be `error`.
+        alias: Option<Ident>,
+    },
 }
 
 impl AstDisplay for SourceErrorPolicy {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Inline => {
+            Self::Inline { alias } => {
                 f.write_str("INLINE");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
             }
         }
     }

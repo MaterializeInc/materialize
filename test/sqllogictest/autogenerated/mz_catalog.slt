@@ -228,7 +228,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  type  text
 6  owner_id  text
-7  privileges  mz_aclitem[]
+7  cluster_id  text
+8  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_pseudo_types' ORDER BY position
@@ -244,7 +245,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  type  text
 6  owner_id  text
-7  privileges  mz_aclitem[]
+7  cluster_id  text
+8  privileges  mz_aclitem[]
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_roles' ORDER BY position

@@ -23,6 +23,7 @@ use std::iter;
 
 use datadriven::walk;
 use itertools::Itertools;
+use mz_ore::assert_ok;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -254,9 +255,9 @@ fn test_max_statement_batch_size() {
     let max_statement_count = MAX_STATEMENT_BATCH_SIZE / size;
     let statements = iter::repeat(statement).take(max_statement_count).join("");
 
-    assert!(parse_statements_with_limit(&statements).is_ok());
+    assert_ok!(parse_statements_with_limit(&statements));
     let statements = format!("{statements}{statement}");
     let err = parse_statements_with_limit(&statements).expect_err("statements should be too big");
     assert!(err.contains("statement batch size cannot exceed "));
-    assert!(parse_statements(&statements).is_ok());
+    assert_ok!(parse_statements(&statements));
 }

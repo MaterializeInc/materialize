@@ -12,7 +12,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
@@ -24,6 +24,7 @@ use parquet::basic::{Compression, Encoding};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
 
 use crate::error::Error;
 use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
@@ -32,6 +33,7 @@ use crate::indexed::columnar::arrow::{
     decode_arrow_batch_kvtd, decode_arrow_batch_kvtd_ks_vs, encode_arrow_batch_kvtd,
     encode_arrow_batch_kvtd_ks_vs, SCHEMA_ARROW_RS_KVTD,
 };
+use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, BlobTraceUpdates,
 };
@@ -123,31 +125,22 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
 
-    let (iter, schema, format): (Box<dyn Iterator<Item = _>>, _, _) = match updates {
-        BlobTraceUpdates::Row(updates) => {
-            let iter = updates.into_iter().map(encode_arrow_batch_kvtd);
-            (
-                Box::new(iter),
-                Arc::clone(&*SCHEMA_ARROW_RS_KVTD),
-                "k,v,t,d",
-            )
-        }
+    let (columns, schema, format) = match updates {
+        BlobTraceUpdates::Row(updates) => (
+            encode_arrow_batch_kvtd(updates),
+            Arc::clone(&*SCHEMA_ARROW_RS_KVTD),
+            "k,v,t,d",
+        ),
         BlobTraceUpdates::Both(codec_updates, structured_updates) => {
             let (fields, arrays) = encode_arrow_batch_kvtd_ks_vs(codec_updates, structured_updates);
             let schema = Schema::new(fields);
-            (
-                Box::new(std::iter::once(arrays)),
-                Arc::new(schema),
-                "k,v,t,d,k_s,v_s",
-            )
+            (arrays, Arc::new(schema), "k,v,t,d,k_s,v_s")
         }
     };
 
     let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(properties))?;
-    for chunk in iter {
-        let batch = RecordBatch::try_new(Arc::clone(&schema), chunk)?;
-        writer.write(&batch)?
-    }
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+    writer.write(&batch)?;
 
     writer.flush()?;
     let bytes_written = writer.bytes_written();
@@ -190,9 +183,14 @@ pub fn decode_parquet_file_kvtd(
                 let batch = batch.map_err(|e| Error::String(e.to_string()))?;
                 ret.push(decode_arrow_batch_kvtd(batch.columns(), metrics)?);
             }
-            Ok(BlobTraceUpdates::Row(ret))
+            if ret.len() != 1 {
+                warn!("unexpected number of row groups: {}", ret.len());
+            }
+            Ok(BlobTraceUpdates::Row(ColumnarRecords::concat(
+                &ret, metrics,
+            )))
         }
-        Some(ProtoFormatMetadata::StructuredMigration(1)) => {
+        Some(ProtoFormatMetadata::StructuredMigration(v @ 1 | v @ 2)) => {
             if schema.fields().len() > 6 {
                 return Err(
                     format!("expected at most 6 columns, got {}", schema.fields().len()).into(),
@@ -212,31 +210,23 @@ pub fn decode_parquet_file_kvtd(
             // The first 4 columns are our primary (K, V, T, D) and optionally
             // we also have K_S and/or V_S if we wrote structured data.
             let primary_columns = &columns[..4];
+
+            // Version 1 is a deprecated format so we just ignored the k_s and v_s columns.
+            if *v == 1 {
+                let records = decode_arrow_batch_kvtd(primary_columns, metrics)?;
+                return Ok(BlobTraceUpdates::Row(records));
+            }
+
             let k_s_column = schema
                 .fields()
                 .iter()
                 .position(|field| field.name() == "k_s")
-                .map(|idx| columns[idx].as_ref());
+                .map(|idx| Arc::clone(&columns[idx]));
             let v_s_column = schema
                 .fields()
                 .iter()
                 .position(|field| field.name() == "v_s")
-                .map(|idx| columns[idx].as_ref());
-
-            if let Some(k_s) = k_s_column.as_ref() {
-                if !matches!(k_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("k_s should be a Struct, found {:?}", k_s.data_type()).into(),
-                    );
-                }
-            }
-            if let Some(v_s) = v_s_column.as_ref() {
-                if !matches!(v_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("v_s should be a Struct, found {:?}", v_s.data_type()).into(),
-                    );
-                }
-            }
+                .map(|idx| Arc::clone(&columns[idx]));
             if k_s_column.is_none() && v_s_column.is_none() {
                 return Err(
                     format!("at least one of k_s or v_s should exist, found {schema:?}").into(),

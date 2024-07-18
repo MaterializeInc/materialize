@@ -520,25 +520,11 @@ WHERE cd.dependency_id = <dropped_index_id>;
 ```
 
 To force a re-plan of the downstream objects that doesn't consider the dropped
-index, you can:
+index, you have to drop and recreate all downstream dependencies.
 
 {{< warning >}}
-Forcing a re-plan using any of the approaches below **will trigger hydration**,
+Forcing a re-plan using the approach above **will trigger hydration**,
 which incurs downtime while the objects are recreated and backfilled with
 pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/development-workflows/#bluegreen-deployments)
 to handle these changes in production environments.
 {{< /warning >}}
-
-* Drop and recreate all downstream dependencies;
-
-* Restart the cluster by setting it's replication factor to `0`, then back to
-  the original value.
-
-    ```mzsql
-    -- Note the original replication factor for the cluster
-    SHOW CREATE CLUSTER <cluster_name>;
-
-    ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = 0);
-
-    ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = <original_value>)
-    ```

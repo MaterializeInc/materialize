@@ -20,6 +20,7 @@ from materialize.output_consistency.operation.operation_param import OperationPa
 class AnyOperationParam(OperationParam):
     def __init__(
         self,
+        include_record_type: bool = True,
         optional: bool = False,
         incompatibilities: set[ExpressionCharacteristics] | None = None,
         incompatibility_combinations: (
@@ -33,9 +34,17 @@ class AnyOperationParam(OperationParam):
             incompatibility_combinations,
         )
 
+        self.include_record_type = include_record_type
+
     def supports_type(
         self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
+        if (
+            not self.include_record_type
+            and data_type.category == DataTypeCategory.RECORD
+        ):
+            return False
+
         return True
 
 

@@ -135,11 +135,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::AsCollection;
-use futures::TryStreamExt;
+use futures::{StreamExt as _, TryStreamExt};
 use mz_expr::MirScalarExpr;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -165,7 +166,9 @@ use tracing::{error, trace};
 use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
-use crate::source::types::{ProgressStatisticsUpdate, SourceMessage, StackedCollection};
+use crate::source::types::{
+    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
+};
 use crate::source::RawSourceCreationConfig;
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -235,7 +238,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .collect();
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
-        Box::pin(async move {
+        let busy_signal = Arc::clone(&config.busy_signal);
+        Box::pin(SignaledFuture::new(busy_signal, async move {
             let id = config.id;
             let worker_id = config.worker_id;
 
@@ -330,37 +334,42 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 use_snapshot(&client, &snapshot).await?;
             }
 
-            let upstream_info = match mz_postgres_util::publication_info(
-                &config.config.connection_context.ssh_tunnel_manager,
-                &connection_config,
-                &connection.publication,
-            )
-            .await
-            {
-                // If the replication stream cannot be obtained in a definite way there is
-                // nothing else to do. These errors are not retractable.
-                Err(PostgresError::PublicationMissing(publication)) => {
-                    let err = DefiniteError::PublicationDropped(publication);
-                    for oid in reader_snapshot_table_info.keys() {
-                        // Produce a definite error here and then exit to ensure
-                        // a missing publication doesn't generate a transient
-                        // error and restart this dataflow indefinitely.
-                        //
-                        // We pick `u64::MAX` as the LSN which will (in
-                        // practice) never conflict any previously revealed
-                        // portions of the TVC.
-                        let update = ((*oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
-                        raw_handle.give_fueled(&data_cap_set[0], update).await;
-                    }
+            let upstream_info = {
+                let schema_client = connection_config
+                    .connect(
+                        "snapshot schema info",
+                        &config.config.connection_context.ssh_tunnel_manager,
+                    )
+                    .await?;
+                match mz_postgres_util::publication_info(&schema_client, &connection.publication)
+                    .await
+                {
+                    // If the replication stream cannot be obtained in a definite way there is
+                    // nothing else to do. These errors are not retractable.
+                    Err(PostgresError::PublicationMissing(publication)) => {
+                        let err = DefiniteError::PublicationDropped(publication);
+                        for oid in reader_snapshot_table_info.keys() {
+                            // Produce a definite error here and then exit to ensure
+                            // a missing publication doesn't generate a transient
+                            // error and restart this dataflow indefinitely.
+                            //
+                            // We pick `u64::MAX` as the LSN which will (in
+                            // practice) never conflict any previously revealed
+                            // portions of the TVC.
+                            let update =
+                                ((*oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
+                            raw_handle.give_fueled(&data_cap_set[0], update).await;
+                        }
 
-                    definite_error_handle.give(
-                        &definite_error_cap_set[0],
-                        ReplicationError::Definite(Rc::new(err)),
-                    );
-                    return Ok(());
+                        definite_error_handle.give(
+                            &definite_error_cap_set[0],
+                            ReplicationError::Definite(Rc::new(err)),
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => Err(TransientError::from(e))?,
+                    Ok(i) => i,
                 }
-                Err(e) => Err(TransientError::from(e))?,
-                Ok(i) => i,
             };
 
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
@@ -486,7 +495,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
             drop(client);
             Ok(())
-        })
+        }))
     });
 
     // We now decode the COPY protocol and apply the cast expressions

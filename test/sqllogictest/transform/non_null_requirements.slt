@@ -21,6 +21,10 @@ CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 
 # Simplify non-nullable trees with multiple non-recursive bindings defined under
 # a single`WITH MUTUALLY RECURSIVE` block
+# As of #27389 this no longer tests what it used to test.
+# Issue #28308 tracks tests that may not be serving their intended
+# purpose; perhaps we can remove the test if we remove the
+# non_null_requirements transform.
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
@@ -35,14 +39,8 @@ WITH MUTUALLY RECURSIVE
   )
 SELECT * FROM (SELECT * FROM c1 UNION ALL SELECT * FROM c2) WHERE z > 0
 ----
-Explained Query:
-  Return // { arity: 3 }
-    Get l0 // { arity: 3 }
-  With Mutually Recursive
-    cte l0 =
-      Project (#0, #1, #3) // { arity: 3 }
-        Map (42) // { arity: 4 }
-          Get l0 // { arity: 3 }
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: quickstart
 

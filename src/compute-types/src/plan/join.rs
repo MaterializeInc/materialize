@@ -415,6 +415,7 @@ impl JoinBuildState {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -426,7 +427,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

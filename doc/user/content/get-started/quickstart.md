@@ -10,13 +10,12 @@ aliases:
   - /katacoda/
   - /quickstarts/
   - /install/
-  - /get-started/
 ---
 
-Materialize is a new kind of **data warehouse built for operational workloads**: the
-instant your data changes, Materialize reacts. This quickstart will get you up
-and running in a few minutes and with no dependencies, so you can experience
-the superpowers of an operational data warehouse first-hand:
+Materialize is the Operational Data Warehouse that delivers the speed of
+streaming with the ease of a data warehouse. This quickstart will get you up and
+running in a few minutes and with no dependencies, so you can experience the
+superpowers of an operational data warehouse first-hand:
 
 * **Interactivity**: get immediate responses from indexed warehouse relations and derived results.
 
@@ -105,7 +104,7 @@ with.
   available**. To identify potential auction flippers, you need to keep track
   of the winning bids for each completed auction.
 
-1. Create a [**view**](/get-started/key-concepts/#non-materialized-views) that
+1. Create a [**view**](/concepts/views/#non-materialized-views) that
 joins data from `auctions` and `bids` to get the bid with the highest `amount`
 for each auction at its `end_time`.
 

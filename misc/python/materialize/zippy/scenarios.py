@@ -37,7 +37,6 @@ from materialize.zippy.mz_actions import (
     KillClusterd,
     MzRestart,
     MzStart,
-    MzStartParameterized,
     MzStop,
 )
 from materialize.zippy.peek_actions import PeekCancellation
@@ -153,31 +152,6 @@ class UserTables(Scenario):
             ValidateView: 20,
             DML: 30,
         }
-
-
-class UserTablesToggleTxnWal(Scenario):
-    """A Zippy test using user tables with toggling txn_wal."""
-
-    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
-        workload: dict[ActionOrFactory, float] = {
-            MzStop: 10,
-            CreateTableParameterized(): 10,
-            CreateViewParameterized(): 10,
-            ValidateTable: 10,
-            ValidateView: 10,
-            DML: 50,
-        }
-
-        starts: dict[ActionOrFactory, float] = {}
-        for txn_wal in ["off", "eager", "lazy"]:
-            starts[
-                MzStartParameterized(
-                    additional_system_parameter_defaults={"persist_txn_tables": txn_wal}
-                )
-            ] = 1
-
-        workload.update(starts)
-        return workload
 
 
 class DebeziumPostgres(Scenario):
@@ -337,8 +311,7 @@ class KafkaSourcesLarge(Scenario):
             CreateViewParameterized(
                 max_views=50, expensive_aggregates=False, max_inputs=1
             ): 5,
-            # TODO(def-) Reenable when #26511 is fixed
-            # CreateSinkParameterized(max_sinks=25): 10,
+            CreateSinkParameterized(max_sinks=25): 10,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,

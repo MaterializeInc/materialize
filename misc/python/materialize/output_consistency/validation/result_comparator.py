@@ -13,6 +13,7 @@ from typing import Any, cast
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -294,7 +295,13 @@ class ResultComparator:
             raise RuntimeError("Result contains no columns!")
 
         if num_columns1 != num_columns2:
-            raise RuntimeError("Results count different number of columns!")
+            raise RuntimeError("Results contain a different number of columns!")
+
+        if num_columns1 != len(query_execution.query_template.select_expressions):
+            # This would happen with the disabled .* operator on a row() function
+            raise RuntimeError(
+                "Number of columns in the result does not match the number of select expressions!"
+            )
 
         for col_index in range(0, num_columns1):
             self.validate_column(
@@ -315,11 +322,10 @@ class ResultComparator:
         for row_index in range(0, row_length):
             result_value1 = result1.result_rows[row_index][col_index]
             result_value2 = result2.result_rows[row_index][col_index]
-            expression = query_execution.query_template.select_expressions[
-                col_index
-            ].to_sql(SqlDialectAdjuster(), True)
+            expression = query_execution.query_template.select_expressions[col_index]
+            expression_as_sql = expression.to_sql(SqlDialectAdjuster(), True)
 
-            if not self.is_value_equal(result_value1, result_value2):
+            if not self.is_value_equal(result_value1, result_value2, expression):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
                 error_message = "Value differs"
             elif not self.is_type_equal(result_value1, result_value2):
@@ -344,8 +350,9 @@ class ResultComparator:
                         strategy=result2.strategy, value=result_value2, sql=result2.sql
                     ),
                     col_index=col_index,
-                    concerned_expression=expression,
-                    location=f"row index {row_index}, column index {col_index} ('{expression}')",
+                    concerned_expression_str=expression_as_sql,
+                    concerned_expression_hash=expression.hash(),
+                    location=f"row index {row_index}, column index {col_index} ('{expression_as_sql}')",
                 ),
             )
 
@@ -356,12 +363,24 @@ class ResultComparator:
 
         return type(value1) == type(value2)
 
-    def is_value_equal(self, value1: Any, value2: Any) -> bool:
+    def is_value_equal(
+        self,
+        value1: Any,
+        value2: Any,
+        expression: Expression,
+        is_tolerant: bool = False,
+    ) -> bool:
         if value1 == value2:
             return True
 
         if isinstance(value1, list) and isinstance(value2, list):
-            return self.is_list_equal(value1, value2)
+            return self.is_list_or_tuple_equal(value1, value2, expression)
+
+        if isinstance(value1, tuple) and isinstance(value2, tuple):
+            return self.is_list_or_tuple_equal(value1, value2, expression)
+
+        if isinstance(value1, dict) and isinstance(value2, dict):
+            return self.is_dict_equal(value1, value2, expression)
 
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             if value1.is_nan() and value2.is_nan():
@@ -377,12 +396,43 @@ class ResultComparator:
 
         return False
 
-    def is_list_equal(self, list1: list[Any], list2: list[Any]) -> bool:
-        if len(list1) != len(list2):
+    def is_list_or_tuple_equal(
+        self,
+        collection1: list[Any] | tuple[Any],
+        collection2: list[Any] | tuple[Any],
+        expression: Expression,
+    ) -> bool:
+        if len(collection1) != len(collection2):
             return False
 
-        for value1, value2 in zip(list1, list2):
-            if not self.is_value_equal(value1, value2):
+        if self.ignore_order_when_comparing_collection(expression):
+            collection1 = sorted(collection1)
+            collection2 = sorted(collection2)
+
+        for value1, value2 in zip(collection1, collection2):
+            # use is_tolerant because tuples may contain all values as strings
+            if not self.is_value_equal(value1, value2, expression, is_tolerant=True):
                 return False
 
         return True
+
+    def is_dict_equal(
+        self,
+        dict1: dict[Any, Any],
+        dict2: dict[Any, Any],
+        expression: Expression,
+    ) -> bool:
+        if len(dict1) != len(dict2):
+            return False
+
+        if not self.is_value_equal(dict1.keys(), dict2.keys(), expression):
+            return False
+
+        for key in dict1.keys():
+            if not self.is_value_equal(dict1[key], dict2[key], expression):
+                return False
+
+        return True
+
+    def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
+        return False

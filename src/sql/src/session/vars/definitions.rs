@@ -25,7 +25,6 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::parameters::{
     DEFAULT_PG_SOURCE_CONNECT_TIMEOUT, DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER,
     DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE, DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL,
@@ -38,7 +37,8 @@ use uncased::UncasedStr;
 
 use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::constraints::{
-    DomainConstraint, ValueConstraint, NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE,
+    DomainConstraint, ValueConstraint, BYTESIZE_AT_LEAST_1MB, NUMERIC_BOUNDED_0_1_INCLUSIVE,
+    NUMERIC_NON_NEGATIVE,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{lazy_value, value, LazyValueFn};
@@ -533,13 +533,18 @@ pub static MAX_ROLES: VarDefinition = VarDefinition::new(
 
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
+//
+// We constrain this parameter to a minimum of 1MB, to avoid accidental usage of values that will
+// interfer with queries executed by the system itself.
+//
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
 pub static MAX_RESULT_SIZE: VarDefinition = VarDefinition::new(
     "max_result_size",
     value!(ByteSize; ByteSize::gb(1)),
     "The maximum size in bytes for an internal query result (Materialize).",
     false,
-);
+)
+.with_constraint(&BYTESIZE_AT_LEAST_1MB);
 
 pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     "max_query_result_size",
@@ -596,24 +601,6 @@ pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
     "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
     queries that may return more results will follow the normal / slow path. \
     Setting this to 0 disables the feature.",
-    true,
-);
-
-pub static TXN_WAL_TABLES: VarDefinition = VarDefinition::new(
-    // The actual name is kept as "persist_txn_tables" instead of "txn_wal_tables" for historical
-    // reasons.
-    "persist_txn_tables",
-    value!(TxnWalTablesImpl; TxnWalTablesImpl::Eager),
-    "\
-    Whether to use the new txn-wal tables implementation or the legacy \
-    one.
-
-    Only takes effect on restart. Any changes will also cause clusterd \
-    processes to restart.
-
-    This value is also configurable via a Launch Darkly parameter of the \
-    same name, but we keep the flag to make testing easier. If specified, \
-    the flag takes precedence over the Launch Darkly param.",
     true,
 );
 
@@ -2121,6 +2108,13 @@ feature_flags!(
         default: false,
         internal: true,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_graceful_cluster_reconfiguration,
+        desc: "Enable graceful reconfiguration for alter cluster",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
     },
 );
 

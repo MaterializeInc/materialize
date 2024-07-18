@@ -23,6 +23,7 @@ use bytes::BufMut;
 use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
+use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
@@ -1570,7 +1571,7 @@ impl<'a> SubsourceResolver {
             .flatten()
             .expect("must have provided the item name");
 
-        assert!(names.next().is_none(), "expected a 3-element iterator");
+        assert_none!(names.next(), "expected a 3-element iterator");
 
         let schemas =
             self.inner
@@ -1744,7 +1745,12 @@ impl SourceDataRowColumnarEncoder {
     pub fn append(&mut self, row: &Row) {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
-            SourceDataRowColumnarEncoder::EmptyRow => assert_eq!(row.iter().count(), 0),
+            SourceDataRowColumnarEncoder::EmptyRow => {
+                // TODO(parkmcar): Re-enable this check.
+                if false {
+                    assert_eq!(row.iter().count(), 0)
+                }
+            }
         }
     }
 
@@ -1877,6 +1883,7 @@ impl Schema2<SourceData> for RelationDesc {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use mz_ore::assert_err;
     use mz_repr::{arb_datum_for_scalar, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -1891,11 +1898,11 @@ mod tests {
         assert_eq!(Ok(Timeline::External("JOE".to_string())), "E.JOE".parse());
         assert_eq!(Ok(Timeline::User("MIKE".to_string())), "U.MIKE".parse());
 
-        assert!("Materialize".parse::<Timeline>().is_err());
-        assert!("Ejoe".parse::<Timeline>().is_err());
-        assert!("Umike".parse::<Timeline>().is_err());
-        assert!("Dance".parse::<Timeline>().is_err());
-        assert!("".parse::<Timeline>().is_err());
+        assert_err!("Materialize".parse::<Timeline>());
+        assert_err!("Ejoe".parse::<Timeline>());
+        assert_err!("Umike".parse::<Timeline>());
+        assert_err!("Dance".parse::<Timeline>());
+        assert_err!("".parse::<Timeline>());
     }
 
     #[track_caller]

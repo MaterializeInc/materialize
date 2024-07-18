@@ -17,6 +17,7 @@ use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{func, VariadicFunc};
+use mz_ore::assert_none;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
 
@@ -1135,7 +1136,7 @@ pub fn plan_coerce<'a>(
 
         Parameter(n) => {
             let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
-            assert!(prev.is_none());
+            assert_none!(prev);
             HirScalarExpr::Parameter(n)
         }
     })

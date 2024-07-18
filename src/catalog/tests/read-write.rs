@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{
@@ -19,8 +21,8 @@ use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, CatalogError, DurableCatalogError,
     Item, OpenableDurableCatalogState, USER_ITEM_ALLOC_KEY,
 };
-use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
-use mz_ore::collections::CollectionExt;
+use mz_ore::assert_ok;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
@@ -28,7 +30,6 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
-use std::time::Duration;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
@@ -56,7 +57,7 @@ async fn test_confirm_leadership(
         )
         .await
         .unwrap();
-    assert!(state1.confirm_leadership().await.is_ok());
+    assert_ok!(state1.confirm_leadership().await);
 
     let mut state2 = openable_state2
         .open(
@@ -67,7 +68,7 @@ async fn test_confirm_leadership(
         )
         .await
         .unwrap();
-    assert!(state2.confirm_leadership().await.is_ok());
+    assert_ok!(state2.confirm_leadership().await);
 
     let err = state1.confirm_leadership().await.unwrap_err();
     assert!(matches!(
@@ -149,26 +150,19 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
     let recent_event = VersionedStorageUsage::V1(recent_event);
 
     // Test with no retention period.
-    let updates = state.prune_storage_usage(None, boot_ts).await.unwrap();
-    let events = state.get_storage_usage().await.unwrap();
-    assert!(updates.is_empty(), "updates should be empty: {updates:?}");
+    let events = state
+        .get_and_prune_storage_usage(None, boot_ts)
+        .await
+        .unwrap();
     assert_eq!(events.len(), 2, "unexpected events len: {events:?}");
     assert!(events.contains(&old_event));
     assert!(events.contains(&recent_event));
 
     // Test with some retention period.
-    let updates = state
-        .prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
+    let events = state
+        .get_and_prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
         .await
         .unwrap();
-    let events = state.get_storage_usage().await.unwrap();
-    assert_eq!(updates.len(), 1, "unexpected updates len: {updates:?}");
-    let update = updates.into_element();
-    assert_eq!(update.diff, StateDiff::Retraction);
-    let StateUpdateKind::StorageUsage(update_usage) = update.kind else {
-        panic!("unexpected update kind: {:?}", update.kind);
-    };
-    assert_eq!(update_usage.metric, old_event);
     assert_eq!(events.len(), 1, "unexpected events len: {events:?}");
     assert_eq!(events.into_element(), recent_event);
     Box::new(state).expire().await;
@@ -248,7 +242,7 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
                     on_refresh: mz_audit_log::RefreshDecisionWithReasonV1 {
                         decision: mz_audit_log::SchedulingDecisionV1::On,
                         objects_needing_refresh: vec!["u42".to_string(), "u90".to_string()],
-                        rehydration_time_estimate: "1000s".to_string(),
+                        hydration_time_estimate: "1000s".to_string(),
                     },
                 }),
             }),
@@ -407,7 +401,13 @@ async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
     let mut txn = state.transaction().await.unwrap();
 
     let (schema_id, _oid) = txn
-        .insert_user_schema(DatabaseId::User(1), "foo", RoleId::User(1), vec![])
+        .insert_user_schema(
+            DatabaseId::User(1),
+            "foo",
+            RoleId::User(1),
+            vec![],
+            &HashSet::new(),
+        )
         .unwrap();
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
@@ -497,6 +497,7 @@ async fn test_non_writer_commits(
                 RoleAttributes::new(),
                 RoleMembership::new(),
                 RoleVars::default(),
+                &HashSet::new(),
             )
             .unwrap();
         // Drain updates.
@@ -519,7 +520,7 @@ async fn test_non_writer_commits(
         let db_name = "db";
         let mut txn = savepoint_state.transaction().await.unwrap();
         let (db_id, _) = txn
-            .insert_user_database(db_name, RoleId::User(42), Vec::new())
+            .insert_user_database(db_name, RoleId::User(42), Vec::new(), &HashSet::new())
             .unwrap();
         let DatabaseId::User(db_id) = db_id else {
             panic!("unexpected id variant: {db_id:?}");

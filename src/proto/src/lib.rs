@@ -623,6 +623,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use proptest::prelude::*;
 
     use super::*;
@@ -634,7 +635,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn duration_protobuf_roundtrip(expect in any_duration() ) {
             let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

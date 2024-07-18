@@ -28,6 +28,7 @@ from materialize.parallel_workload.action import (
     CancelAction,
     KillAction,
     StatisticsAction,
+    ZeroDowntimeDeployAction,
     action_lists,
     ddl_action_list,
     dml_nontrans_action_list,
@@ -236,22 +237,16 @@ def run(
         )
         thread.start()
         threads.append(thread)
-    elif scenario == Scenario.ToggleTxnWal:
-
-        def toggle_txn_wal(params: dict[str, str]) -> dict[str, str]:
-            params["persist_txn_tables"] = random.choice(["off", "eager", "lazy"])
-            return params
-
+    elif scenario == Scenario.ZeroDowntimeDeploy:
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        assert composition, "ToggleTxnWal scenario only works in mzcompose"
+        assert composition, "ZeroDowntimeDeploy scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
             [
-                KillAction(
+                ZeroDowntimeDeployAction(
                     worker_rng,
                     composition,
                     sanity_restart,
-                    toggle_txn_wal,
                 )
             ],
             [1],
@@ -262,7 +257,7 @@ def run(
         )
         workers.append(worker)
         thread = threading.Thread(
-            name="toggle-txn-wal",
+            name="zero-downtime-deploy",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
         )
@@ -361,8 +356,13 @@ def run(
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
         print_stats(num_queries, workers)
-        # TODO(def-): Switch to failing exit code when #23582 is fixed
-        os._exit(0)
+        if scenario == Scenario.Rename:
+            # TODO(def-): Switch to failing exit code when #28182 is fixed
+            os._exit(0)
+        if num_threads >= 50:
+            # Under high load some queries can't finish quickly, especially UPDATE/DELETE
+            os._exit(0)
+        os._exit(1)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True

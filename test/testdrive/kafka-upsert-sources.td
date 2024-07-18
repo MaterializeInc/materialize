@@ -628,7 +628,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-
 
 
 #
-# Test Inline error handling with value decode failures
+# Test Inline error handling with value decode failures for a JSON source
 #
 
 $ kafka-create-topic topic=inline-value-errors-1 partitions=1
@@ -659,7 +659,11 @@ ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
   VALUE FORMAT JSON
   ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
 
-> SELECT key, value::text, error::text FROM value_decode_error
+# there is now an additional 'error' column that should store the inline decoding errors, if any
+# since this is a json value record the output relation just has a single jsonb column named 'data'
+# though for other types (e.g. avro) the value columns should be present and flattened.
+
+> SELECT key, data, error::text FROM value_decode_error ORDER BY key
 val1 <null> "(\"Bytes: Failed to decode JSON: {\"\"a\"\":,\"\"c\"\":\"\"d\"\"} (original bytes: [7b, 22, 61, 22, 3a, 2c, 22, 63, 22, 3a, 22, 64, 22, 7d])\")"
 val2 <null> "(\"Bytes: Failed to decode JSON: [1,2, (original bytes: [5b, 31, 2c, 32, 2c])\")"
 
@@ -668,6 +672,58 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=inline-value
 val1:{"a": 1,"c":"d"}
 val2:[1,2,3]
 
-> SELECT key, value::text, error::text FROM value_decode_error
-val1 "(\"{\"\"a\"\":1,\"\"c\"\":\"\"d\"\"}\")" <null>
-val2 "(\"[1,2,3]\")" <null>
+> SELECT key, data, error::text FROM value_decode_error ORDER BY key
+val1 "{\"a\":1,\"c\":\"d\"}" <null>
+val2 [1,2,3] <null>
+
+! CREATE SOURCE value_decode_error_error
+  IN CLUSTER inline_error_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  INCLUDE KEY AS error
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
+contains: column "error" specified more than once
+
+
+#
+# Test Inline error handling with value decode failures for an AVRO source
+# that also uses a custom error column name
+#
+
+$ kafka-create-topic topic=inline-value-errors-2 partitions=1
+
+$ kafka-ingest format=avro topic=inline-value-errors-2 key-format=avro key-schema=${keyschema} schema=${schema}
+{"key": "fish"} {"f1": "fish", "f2": 1000}
+{"key": "bird1"} {"f1":"goose", "f2": 1}
+{"key": "birdmore"} {"f1":"geese", "f2": 2}
+{"key": "mammal1"} {"f1": "moose", "f2": 1}
+{"key": "bird1"}
+
+> CREATE CLUSTER inline_error_cluster_avro SIZE '${arg.default-storage-size}';
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
+
+# This source will inline errors and not propagate them
+> CREATE SOURCE value_decode_error_avro
+  IN CLUSTER inline_error_cluster_avro
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-2-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE AS decode_error));
+
+# there is now an additional 'error' column that should store the inline decoding errors, if any
+
+> SELECT key, f1, f2, decode_error::text from value_decode_error_avro ORDER BY key
+birdmore      geese    2         <null>
+fish          fish     1000      <null>
+mammal1       moose    1         <null>
+
+# insert a bad record for the birdmore key
+$ kafka-ingest format=bytes key-format=avro key-schema=${keyschema} topic=inline-value-errors-2
+{"key": "birdmore"} "notvalidavro"
+
+> SELECT key, f1, f2, decode_error::text from value_decode_error_avro ORDER BY key
+birdmore      <null>   <null>    "(\"Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 32 (original bytes: [20, 22, 6e, 6f, 74, 76, 61, 6c, 69, 64, 61, 76, 72, 6f, 22])\")"
+fish          fish     1000      <null>
+mammal1       moose    1         <null>

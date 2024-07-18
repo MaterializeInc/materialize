@@ -17,6 +17,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
     SELECT
         b.branch,
         res.scenario_name,
+        res.scenario_group,
         res.framework_version,
         res.scenario_version,
         res.scale,
@@ -42,6 +43,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
     GROUP BY
         b.branch,
         res.scenario_name,
+        res.scenario_group,
         res.framework_version,
         res.scenario_version,
         res.scale,
@@ -52,6 +54,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
     SELECT
         b.branch,
         res.scenario_name,
+        res.scenario_group,
         res.framework_version,
         res.scenario_version,
         res.scale,
@@ -77,6 +80,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
     GROUP BY
         b.branch,
         res.scenario_name,
+        res.scenario_group,
         res.framework_version,
         res.scenario_version,
         res.scale,
@@ -87,6 +91,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_month AS
     SELECT
         b.branch,
         res.scenario_name,
+        res.scenario_group,
         res.framework_version,
         res.scenario_version,
         res.scale,
@@ -112,6 +117,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_month AS
     GROUP BY
         b.branch,
         res.scenario_name,
+        res.scenario_group,
         res.framework_version,
         res.scenario_version,
         res.scale,

@@ -13,7 +13,9 @@ use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU64;
+use std::time::Instant;
 
 use bytesize::ByteSize;
 use itertools::Itertools;
@@ -21,6 +23,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
+use mz_ore::metrics::Histogram;
 use mz_ore::num::NonNeg;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
@@ -84,7 +87,14 @@ pub trait CollectionPlan {
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+///
+/// `derived_hash_with_manual_eq` was complaining for the wrong reason: This lint exists because
+/// it's bad when `Eq` doesn't agree with `Hash`, which is often quite likely if one of them is
+/// implemented manually. However, our manual implementation of `Eq` _will_ agree with the derived
+/// one. This is because the reason for the manual implementation is not to change the semantics
+/// from the derived one, but to avoid stack overflows.
+#[allow(clippy::derived_hash_with_manual_eq)]
+#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect, Hash)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
@@ -301,6 +311,16 @@ pub enum MirRelationExpr {
         keys: Vec<Vec<MirScalarExpr>>,
     },
 }
+
+impl PartialEq for MirRelationExpr {
+    fn eq(&self, other: &Self) -> bool {
+        // Capture the result and test it wrt `Ord` implementation in test environments.
+        let result = structured_diff::MreDiff::new(self, other).next().is_none();
+        mz_ore::soft_assert_eq_no_log!(result, self.cmp(other) == Ordering::Equal);
+        result
+    }
+}
+impl Eq for MirRelationExpr {}
 
 impl MirRelationExpr {
     /// Reports the schema of the relation.
@@ -1907,6 +1927,14 @@ impl MirRelationExpr {
         });
         result
     }
+
+    /// Hash to an u64 using Rust's default Hasher. (Which is a somewhat slower, but better Hasher
+    /// than what `Hashable::hashed` would give us.)
+    pub fn hash_to_u64(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish()
+    }
 }
 
 // `LetRec` helpers
@@ -3080,10 +3108,25 @@ impl<L> RowSetFinishing<L> {
 }
 
 impl RowSetFinishing {
-    /// Applies finishing actions to a [`RowCollection`].
-    ///
-    ///
+    /// Applies finishing actions to a [`RowCollection`], and reports the total
+    /// time it took to run.
     pub fn finish(
+        &self,
+        rows: RowCollection,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
+        duration_histogram: &Histogram,
+    ) -> Result<SortedRowCollectionIter, String> {
+        let now = Instant::now();
+        let result = self.finish_inner(rows, max_result_size, max_returned_query_size);
+        let duration = now.elapsed();
+        duration_histogram.observe(duration.as_secs_f64());
+
+        result
+    }
+
+    /// Implementation for [`RowSetFinishing::finish`].
+    fn finish_inner(
         &self,
         rows: RowCollection,
         max_result_size: u64,
@@ -3458,6 +3501,7 @@ pub enum AccessStrategy {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use mz_repr::explain::text::text_string_at;
     use proptest::prelude::*;
@@ -3470,7 +3514,7 @@ mod tests {
         #[mz_ore::test]
         fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
             let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3480,7 +3524,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3489,7 +3533,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_units_protobuf_roundtrip(expect in any::<WindowFrameUnits>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameUnits>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3498,7 +3542,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_bound_protobuf_roundtrip(expect in any::<WindowFrameBound>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameBound>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3507,7 +3551,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_protobuf_roundtrip(expect in any::<WindowFrame>()) {
             let actual = protobuf_roundtrip::<_, ProtoWindowFrame>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3542,5 +3586,300 @@ mod tests {
         };
 
         assert_eq!(act, exp);
+    }
+}
+
+/// An iterator over AST structures, which calls out nodes in difference.
+///
+/// The iterators visit two ASTs in tandem, continuing as long as the AST node data matches,
+/// and yielding an output pair as soon as the AST nodes do not match. Their intent is to call
+/// attention to the moments in the ASTs where they differ, and incidentally a stack-free way
+/// to compare two ASTs.
+mod structured_diff {
+
+    use super::MirRelationExpr;
+
+    ///  An iterator over structured differences between two `MirRelationExpr` instances.
+    pub struct MreDiff<'a> {
+        /// Pairs of expressions that must still be compared.
+        todo: Vec<(&'a MirRelationExpr, &'a MirRelationExpr)>,
+    }
+
+    impl<'a> MreDiff<'a> {
+        /// Create a new `MirRelationExpr` structured difference.
+        pub fn new(expr1: &'a MirRelationExpr, expr2: &'a MirRelationExpr) -> Self {
+            MreDiff {
+                todo: vec![(expr1, expr2)],
+            }
+        }
+    }
+
+    impl<'a> Iterator for MreDiff<'a> {
+        // Pairs of expressions that do not match.
+        type Item = (&'a MirRelationExpr, &'a MirRelationExpr);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            while let Some((expr1, expr2)) = self.todo.pop() {
+                match (expr1, expr2) {
+                    (
+                        MirRelationExpr::Constant {
+                            rows: rows1,
+                            typ: typ1,
+                        },
+                        MirRelationExpr::Constant {
+                            rows: rows2,
+                            typ: typ2,
+                        },
+                    ) => {
+                        if rows1 != rows2 || typ1 != typ2 {
+                            return Some((expr1, expr2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Get {
+                            id: id1,
+                            typ: typ1,
+                            access_strategy: as1,
+                        },
+                        MirRelationExpr::Get {
+                            id: id2,
+                            typ: typ2,
+                            access_strategy: as2,
+                        },
+                    ) => {
+                        if id1 != id2 || typ1 != typ2 || as1 != as2 {
+                            return Some((expr1, expr2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Let {
+                            id: id1,
+                            body: body1,
+                            value: value1,
+                        },
+                        MirRelationExpr::Let {
+                            id: id2,
+                            body: body2,
+                            value: value2,
+                        },
+                    ) => {
+                        if id1 != id2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((body1, body2));
+                            self.todo.push((value1, value2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::LetRec {
+                            ids: ids1,
+                            body: body1,
+                            values: values1,
+                            limits: limits1,
+                        },
+                        MirRelationExpr::LetRec {
+                            ids: ids2,
+                            body: body2,
+                            values: values2,
+                            limits: limits2,
+                        },
+                    ) => {
+                        if ids1 != ids2 || values1.len() != values2.len() || limits1 != limits2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((body1, body2));
+                            self.todo.extend(values1.iter().zip(values2.iter()));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Project {
+                            outputs: outputs1,
+                            input: input1,
+                        },
+                        MirRelationExpr::Project {
+                            outputs: outputs2,
+                            input: input2,
+                        },
+                    ) => {
+                        if outputs1 != outputs2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Map {
+                            scalars: scalars1,
+                            input: input1,
+                        },
+                        MirRelationExpr::Map {
+                            scalars: scalars2,
+                            input: input2,
+                        },
+                    ) => {
+                        if scalars1 != scalars2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Filter {
+                            predicates: predicates1,
+                            input: input1,
+                        },
+                        MirRelationExpr::Filter {
+                            predicates: predicates2,
+                            input: input2,
+                        },
+                    ) => {
+                        if predicates1 != predicates2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::FlatMap {
+                            input: input1,
+                            func: func1,
+                            exprs: exprs1,
+                        },
+                        MirRelationExpr::FlatMap {
+                            input: input2,
+                            func: func2,
+                            exprs: exprs2,
+                        },
+                    ) => {
+                        if func1 != func2 || exprs1 != exprs2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Join {
+                            inputs: inputs1,
+                            equivalences: eq1,
+                            implementation: impl1,
+                        },
+                        MirRelationExpr::Join {
+                            inputs: inputs2,
+                            equivalences: eq2,
+                            implementation: impl2,
+                        },
+                    ) => {
+                        if inputs1.len() != inputs2.len() || eq1 != eq2 || impl1 != impl2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.extend(inputs1.iter().zip(inputs2.iter()));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Reduce {
+                            aggregates: aggregates1,
+                            input: inputs1,
+                            group_key: gk1,
+                            monotonic: m1,
+                            expected_group_size: egs1,
+                        },
+                        MirRelationExpr::Reduce {
+                            aggregates: aggregates2,
+                            input: inputs2,
+                            group_key: gk2,
+                            monotonic: m2,
+                            expected_group_size: egs2,
+                        },
+                    ) => {
+                        if aggregates1 != aggregates2 || gk1 != gk2 || m1 != m2 || egs1 != egs2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((inputs1, inputs2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::TopK {
+                            group_key: gk1,
+                            order_key: order1,
+                            input: input1,
+                            limit: l1,
+                            offset: o1,
+                            monotonic: m1,
+                            expected_group_size: egs1,
+                        },
+                        MirRelationExpr::TopK {
+                            group_key: gk2,
+                            order_key: order2,
+                            input: input2,
+                            limit: l2,
+                            offset: o2,
+                            monotonic: m2,
+                            expected_group_size: egs2,
+                        },
+                    ) => {
+                        if order1 != order2
+                            || gk1 != gk2
+                            || l1 != l2
+                            || o1 != o2
+                            || m1 != m2
+                            || egs1 != egs2
+                        {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Negate { input: input1 },
+                        MirRelationExpr::Negate { input: input2 },
+                    ) => {
+                        self.todo.push((input1, input2));
+                    }
+                    (
+                        MirRelationExpr::Threshold { input: input1 },
+                        MirRelationExpr::Threshold { input: input2 },
+                    ) => {
+                        self.todo.push((input1, input2));
+                    }
+                    (
+                        MirRelationExpr::Union {
+                            base: base1,
+                            inputs: inputs1,
+                        },
+                        MirRelationExpr::Union {
+                            base: base2,
+                            inputs: inputs2,
+                        },
+                    ) => {
+                        if inputs1.len() != inputs2.len() {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((base1, base2));
+                            self.todo.extend(inputs1.iter().zip(inputs2.iter()));
+                        }
+                    }
+                    (
+                        MirRelationExpr::ArrangeBy {
+                            keys: keys1,
+                            input: input1,
+                        },
+                        MirRelationExpr::ArrangeBy {
+                            keys: keys2,
+                            input: input2,
+                        },
+                    ) => {
+                        if keys1 != keys2 {
+                            return Some((expr1, expr2));
+                        } else {
+                            self.todo.push((input1, input2));
+                        }
+                    }
+                    _ => {
+                        return Some((expr1, expr2));
+                    }
+                }
+            }
+            None
+        }
     }
 }

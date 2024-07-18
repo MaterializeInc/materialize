@@ -7,9 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// TODO(parkmycar): Remove this.
-#![allow(clippy::as_conversions)]
-
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::ops::AddAssign;
@@ -26,9 +23,9 @@ use arrow::array::{
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields};
-use chrono::DateTime;
 use dec::{Context, OrderedDecimal};
 use itertools::Itertools;
+use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
     BytesStats, ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats,
@@ -45,12 +42,12 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
-use crate::adt::numeric::PackedNumeric;
-use crate::adt::timestamp::CheckedTimestamp;
+use crate::adt::numeric::{Numeric, PackedNumeric};
+use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::stats2::{
-    IntervalStatsBuilder, JsonStatsBuilder, NaiveTimeStatsBuilder, NumericStatsBuilder,
-    UuidStatsBuilder,
+    stats_for_json, IntervalStatsBuilder, NaiveDateTimeStatsBuilder, NaiveTimeStatsBuilder,
+    NumericStatsBuilder, UuidStatsBuilder,
 };
 use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
@@ -58,14 +55,21 @@ use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 //
 // `FixedSizeBinaryArray`s push empty bytes when a value is null which for larger binary types
 // could result in poor performance.
-const TIME_FIXED_BYTES: i32 = PackedNaiveTime::SIZE as i32;
-const INTERVAL_FIXED_BYTES: i32 = PackedInterval::SIZE as i32;
-const ACL_ITEM_FIXED_BYTES: i32 = PackedAclItem::SIZE as i32;
-const _MZ_ACL_ITEM_FIXED_BYTES: i32 = PackedMzAclItem::SIZE as i32;
-const ARRAY_DIMENSION_FIXED_BYTES: i32 = PackedArrayDimension::SIZE as i32;
+#[allow(clippy::as_conversions)]
+mod fixed_binary_sizes {
+    use super::*;
 
-const UUID_FIXED_BYTES: i32 = 16;
-static_assertions::const_assert_eq!(UUID_FIXED_BYTES as usize, std::mem::size_of::<Uuid>());
+    pub const TIME_FIXED_BYTES: i32 = PackedNaiveTime::SIZE as i32;
+    pub const TIMESTAMP_FIXED_BYTES: i32 = PackedNaiveDateTime::SIZE as i32;
+    pub const INTERVAL_FIXED_BYTES: i32 = PackedInterval::SIZE as i32;
+    pub const ACL_ITEM_FIXED_BYTES: i32 = PackedAclItem::SIZE as i32;
+    pub const _MZ_ACL_ITEM_FIXED_BYTES: i32 = PackedMzAclItem::SIZE as i32;
+    pub const ARRAY_DIMENSION_FIXED_BYTES: i32 = PackedArrayDimension::SIZE as i32;
+
+    pub const UUID_FIXED_BYTES: i32 = 16;
+    static_assertions::const_assert_eq!(UUID_FIXED_BYTES as usize, std::mem::size_of::<Uuid>());
+}
+use fixed_binary_sizes::*;
 
 /// An encoder for a column of [`Datum`]s.
 #[derive(Debug)]
@@ -131,13 +135,15 @@ enum DatumColumnEncoder {
         binary_values: BinaryBuilder,
         /// Also maintain a float64 approximation for sorting.
         approx_values: Float64Builder,
+        /// Re-usable `libdecimal` context for conversions.
+        numeric_context: Context<Numeric>,
     },
     Bytes(BinaryBuilder),
     String(StringBuilder),
     Date(Int32Builder),
     Time(FixedSizeBinaryBuilder),
-    Timestamp(Int64Builder),
-    TimestampTz(Int64Builder),
+    Timestamp(FixedSizeBinaryBuilder),
+    TimestampTz(FixedSizeBinaryBuilder),
     MzTimestamp(UInt64Builder),
     Interval(FixedSizeBinaryBuilder),
     Uuid(FixedSizeBinaryBuilder),
@@ -157,8 +163,6 @@ enum DatumColumnEncoder {
         buf: Cursor<Vec<u8>>,
         /// Null entries, if any.
         nulls: Option<BooleanBufferBuilder>,
-        /// Collect statistics as we push data into the column.
-        stats: JsonStatsBuilder,
     },
     Array {
         /// Binary encoded `ArrayDimension`s.
@@ -225,11 +229,12 @@ impl DatumColumnEncoder {
                 DatumColumnEncoder::Numeric {
                     approx_values,
                     binary_values,
+                    numeric_context,
                 },
                 Datum::Numeric(val),
             ) => {
-                let mut ctx = Context::default();
-                let float_approx = ctx.try_into_f64(val.0).unwrap_or_else(|_| {
+                let float_approx = numeric_context.try_into_f64(val.0).unwrap_or_else(|_| {
+                    numeric_context.clear_status();
                     if val.0.is_negative() {
                         f64::NEG_INFINITY
                     } else {
@@ -253,12 +258,16 @@ impl DatumColumnEncoder {
                     .expect("known correct size");
             }
             (DatumColumnEncoder::Timestamp(builder), Datum::Timestamp(val)) => {
-                let micros = val.and_utc().timestamp_micros();
-                builder.append_value(micros);
+                let packed = PackedNaiveDateTime::from_value(val.to_naive());
+                builder
+                    .append_value(packed.as_bytes())
+                    .expect("known correct size");
             }
             (DatumColumnEncoder::TimestampTz(builder), Datum::TimestampTz(val)) => {
-                let micros = val.timestamp_micros();
-                builder.append_value(micros);
+                let packed = PackedNaiveDateTime::from_value(val.to_naive());
+                builder
+                    .append_value(packed.as_bytes())
+                    .expect("known correct size");
             }
             (DatumColumnEncoder::MzTimestamp(builder), Datum::MzTimestamp(val)) => {
                 builder.append_value(val.into());
@@ -292,7 +301,6 @@ impl DatumColumnEncoder {
                     offsets,
                     buf,
                     nulls,
-                    stats,
                 },
                 d @ Datum::JsonNull
                 | d @ Datum::True
@@ -305,9 +313,6 @@ impl DatumColumnEncoder {
                 // TODO(parkmycar): Why do we need to re-borrow here?
                 let mut buf = buf;
                 let json = JsonbRef::from_datum(d);
-
-                // Incrementally collect stats.
-                stats.include(json);
 
                 // Serialize our JSON.
                 json.to_writer(&mut buf)
@@ -413,11 +418,11 @@ impl DatumColumnEncoder {
                 }
             }
             (DatumColumnEncoder::RecordEmpty(builder), Datum::List(records)) => {
-                assert!(records.into_iter().next().is_none());
+                assert_none!(records.into_iter().next());
                 builder.append_value(true);
             }
             (encoder, Datum::Null) => encoder.push_invalid(),
-            (encoder, datum) => unimplemented!("can't encode {datum:?} into {encoder:?}"),
+            (encoder, datum) => panic!("can't encode {datum:?} into {encoder:?}"),
         }
     }
 
@@ -436,6 +441,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Numeric {
                 approx_values,
                 binary_values,
+                numeric_context: _,
             } => {
                 approx_values.append_null();
                 binary_values.append_null();
@@ -456,7 +462,6 @@ impl DatumColumnEncoder {
                 offsets,
                 buf: _,
                 nulls,
-                stats: _,
             } => {
                 let nulls = nulls.get_or_insert_with(|| {
                     let mut buf = BooleanBufferBuilder::new(offsets.len());
@@ -589,6 +594,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Numeric {
                 mut approx_values,
                 mut binary_values,
+                numeric_context: _,
             } => {
                 let approx_array = approx_values.finish();
                 let binary_array = binary_values.finish();
@@ -639,13 +645,17 @@ impl DatumColumnEncoder {
             }
             DatumColumnEncoder::Timestamp(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                let stats = NaiveDateTimeStatsBuilder::from_column(&array)
+                    .finish()
+                    .into();
+                (Arc::new(array), stats)
             }
             DatumColumnEncoder::TimestampTz(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                let stats = NaiveDateTimeStatsBuilder::from_column(&array)
+                    .finish()
+                    .into();
+                (Arc::new(array), stats)
             }
             DatumColumnEncoder::MzTimestamp(mut builder) => {
                 let array = builder.finish();
@@ -675,17 +685,14 @@ impl DatumColumnEncoder {
                 offsets,
                 buf,
                 mut nulls,
-                stats,
             } => {
                 let values = Buffer::from_vec(buf.into_inner());
                 let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
-                let stats = stats.finish();
+                let array = StringArray::new(offsets, values, nulls);
+                let stats = stats_for_json(array.iter());
 
-                (
-                    Arc::new(StringArray::new(offsets, values, nulls)),
-                    stats.into(),
-                )
+                (Arc::new(array), stats.values.into())
             }
             DatumColumnEncoder::Array {
                 mut dims,
@@ -697,10 +704,10 @@ impl DatumColumnEncoder {
 
                 // TODO(parkmycar): Record these stats.
                 let (vals, _stats) = vals.finish();
-                // Note: A value being null is managed by the null buffer we manually maintain.
-                assert!(vals.logical_nulls().is_none());
 
-                let field = Field::new_list_field(vals.data_type().clone(), nulls.is_some());
+                // Note: Values in an Array can always be Null, regardless of whether or not the
+                // column is nullable.
+                let field = Field::new_list_field(vals.data_type().clone(), true);
                 let val_offsets = OffsetBuffer::from_lengths(val_lengths);
                 let values =
                     ListArray::new(Arc::new(field), val_offsets, Arc::new(vals), nulls.clone());
@@ -725,10 +732,10 @@ impl DatumColumnEncoder {
             } => {
                 // TODO(parkmycar): Record these stats.
                 let (values, _stats) = values.finish();
-                // Note: A value being null is managed by the null buffer we manually maintain.
-                assert!(values.logical_nulls().is_none());
 
-                let field = Field::new_list_field(values.data_type().clone(), nulls.is_some());
+                // Note: Values in an Array can always be Null, regardless of whether or not the
+                // column is nullable.
+                let field = Field::new_list_field(values.data_type().clone(), true);
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
@@ -744,17 +751,15 @@ impl DatumColumnEncoder {
                 let keys = keys.finish();
                 // TODO(parkmycar): Record these stats.
                 let (vals, _val_stats) = vals.finish();
-                // Note: A value being null is managed by the null buffer we manually maintain.
-                assert!(keys.logical_nulls().is_none());
-                assert!(vals.logical_nulls().is_none());
 
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
-                // The keys and values in a Map can never be null, instead a
-                // field being null is maintained by the higher level MapArray.
+                // Note: Values in an Map can always be Null, regardless of whether or not the
+                // column is nullable, but Keys cannot.
+                assert_none!(keys.logical_nulls());
                 let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
-                let val_field = Arc::new(Field::new("val", vals.data_type().clone(), false));
+                let val_field = Arc::new(Field::new("val", vals.data_type().clone(), true));
                 let fields = Fields::from(vec![Arc::clone(&key_field), Arc::clone(&val_field)]);
                 let entries = StructArray::new(fields, vec![Arc::new(keys), vals], None);
 
@@ -820,8 +825,8 @@ enum DatumColumnDecoder {
     String(StringArray),
     Date(Int32Array),
     Time(FixedSizeBinaryArray),
-    Timestamp(Int64Array),
-    TimestampTz(Int64Array),
+    Timestamp(FixedSizeBinaryArray),
+    TimestampTz(FixedSizeBinaryArray),
     MzTimestamp(UInt64Array),
     Interval(FixedSizeBinaryArray),
     Uuid(FixedSizeBinaryArray),
@@ -926,17 +931,20 @@ impl DatumColumnDecoder {
             }
             DatumColumnDecoder::Timestamp(array) => {
                 array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                    let timestamp = DateTime::from_timestamp_micros(x)
-                        .and_then(|dt| CheckedTimestamp::from_timestamplike(dt.naive_utc()).ok())
+                    let packed = PackedNaiveDateTime::from_bytes(x)
+                        .expect("failed to roundtrip PackedNaiveDateTime");
+                    let timestamp = CheckedTimestamp::from_timestamplike(packed.into_value())
                         .expect("failed to roundtrip timestamp");
                     Datum::Timestamp(timestamp)
                 })
             }
             DatumColumnDecoder::TimestampTz(array) => {
                 array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                    let timestamp = DateTime::from_timestamp_micros(x)
-                        .and_then(|dt| CheckedTimestamp::from_timestamplike(dt).ok())
-                        .expect("failed to roundtrip timestamptz");
+                    let packed = PackedNaiveDateTime::from_bytes(x)
+                        .expect("failed to roundtrip PackedNaiveDateTime");
+                    let timestamp =
+                        CheckedTimestamp::from_timestamplike(packed.into_value().and_utc())
+                            .expect("failed to roundtrip timestamp");
                     Datum::TimestampTz(timestamp)
                 })
             }
@@ -1010,16 +1018,24 @@ impl DatumColumnDecoder {
                     return;
                 }
 
-                let start = dim_offsets[idx] as usize;
-                let end = dim_offsets[idx + 1] as usize;
+                let start: usize = dim_offsets[idx]
+                    .try_into()
+                    .expect("unexpected negative offset");
+                let end: usize = dim_offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
                 let dimensions = (start..end).map(|idx| {
                     PackedArrayDimension::from_bytes(dims.value(idx))
                         .expect("failed to roundtrip ArrayDimension")
                         .into_value()
                 });
 
-                let start = val_offsets[idx] as usize;
-                let end = val_offsets[idx + 1] as usize;
+                let start: usize = val_offsets[idx]
+                    .try_into()
+                    .expect("unexpected negative offset");
+                let end: usize = val_offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
                 packer
                     .push_array_with_row_major(dimensions, |packer| {
                         for x in start..end {
@@ -1044,8 +1060,10 @@ impl DatumColumnDecoder {
                     return;
                 }
 
-                let start = offsets[idx] as usize;
-                let end = offsets[idx + 1] as usize;
+                let start: usize = offsets[idx].try_into().expect("unexpected negative offset");
+                let end: usize = offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
 
                 packer.push_list_with(|packer| {
                     for idx in start..end {
@@ -1068,8 +1086,10 @@ impl DatumColumnDecoder {
                     return;
                 }
 
-                let start = offsets[idx] as usize;
-                let end = offsets[idx + 1] as usize;
+                let start: usize = offsets[idx].try_into().expect("unexpected negative offset");
+                let end: usize = offsets[idx + 1]
+                    .try_into()
+                    .expect("unexpected negative offset");
 
                 packer.push_dict_with(|packer| {
                     for idx in start..end {
@@ -1149,8 +1169,17 @@ impl RowColumnarDecoder {
 
         // For performance reasons we downcast just a single time.
         let mut decoders = Vec::with_capacity(desc_columns.len());
-        for (col_array, col_type) in inner_columns.iter().zip(desc_columns.iter()) {
-            let decoder = array_to_decoder(col_array, &col_type.scalar_type)?;
+
+        // The columns of the `StructArray` are named with their column index.
+        for (col_idx, col_type) in desc_columns.iter().enumerate() {
+            let field_name = col_idx.to_string();
+            let column = col.column_by_name(&field_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "StructArray did not contain column name {field_name}, found {:?}",
+                    col.column_names()
+                )
+            })?;
+            let decoder = array_to_decoder(column, &col_type.scalar_type)?;
             decoders.push(decoder);
         }
 
@@ -1182,7 +1211,8 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
 #[derive(Debug)]
 pub struct RowColumnarEncoder {
     encoders: Vec<DatumEncoder>,
-    col_names: Vec<Arc<str>>,
+    // TODO(parkmycar): Replace the `usize` with a `ColumnIdx` type.
+    col_names: Vec<(usize, Arc<str>)>,
     // TODO(parkmycar): Optionally omit this.
     nullability: BooleanBufferBuilder,
 }
@@ -1202,22 +1232,25 @@ impl RowColumnarEncoder {
             return None;
         }
 
-        let encoders: Vec<_> = desc
-            .typ()
-            .columns()
+        let (col_names, encoders): (Vec<_>, Vec<_>) = desc
             .iter()
-            .map(|column_type| {
-                let encoder = scalar_type_to_encoder(&column_type.scalar_type)
+            .enumerate()
+            .map(|(idx, (col_name, col_type))| {
+                let encoder = scalar_type_to_encoder(&col_type.scalar_type)
                     .expect("failed to create encoder");
-                DatumEncoder {
-                    nullable: column_type.nullable,
+                let encoder = DatumEncoder {
+                    nullable: col_type.nullable,
                     encoder,
                     none_stats: 0,
-                }
+                };
+
+                // We name the Fields in Parquet with the column index, but for
+                // backwards compat use the column name for stats.
+                let name = (idx, col_name.as_str().into());
+
+                (name, encoder)
             })
-            .collect();
-        let col_names: Vec<_> = desc.iter_names().map(|name| name.as_str().into()).collect();
-        assert_eq!(encoders.len(), col_names.len());
+            .unzip();
 
         Some(RowColumnarEncoder {
             encoders,
@@ -1256,11 +1289,11 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
         let (arrays, fields, stats): (Vec<_>, Vec<_>, Vec<_>) = col_names
             .iter()
             .zip(encoders.into_iter())
-            .map(|(name, encoder)| {
+            .map(|((col_idx, col_name), encoder)| {
                 let nullable = encoder.nullable;
                 let (array, stats) = encoder.finish();
-                let stats = (name.to_string(), stats);
-                let field = Field::new(name.as_ref(), array.data_type().clone(), nullable);
+                let stats = (col_name.to_string(), stats);
+                let field = Field::new(col_idx.to_string(), array.data_type().clone(), nullable);
 
                 (array, field, stats)
             })
@@ -1383,12 +1416,12 @@ fn array_to_decoder(
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Time(array.clone())
         }
-        (DataType::Int64, ScalarType::Timestamp { .. }) => {
-            let array = downcast_array::<Int64Array>(array)?;
+        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), ScalarType::Timestamp { .. }) => {
+            let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Timestamp(array.clone())
         }
-        (DataType::Int64, ScalarType::TimestampTz { .. }) => {
-            let array = downcast_array::<Int64Array>(array)?;
+        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), ScalarType::TimestampTz { .. }) => {
+            let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::TimestampTz(array.clone())
         }
         (DataType::UInt64, ScalarType::MzTimestamp) => {
@@ -1478,7 +1511,9 @@ fn array_to_decoder(
 
             let mut decoders = Vec::with_capacity(fields.len());
             for (tag, (_name, col_type)) in fields.iter().enumerate() {
-                let inner_array = record_array.column_by_name(&tag.to_string()).expect("TODO");
+                let inner_array = record_array
+                    .column_by_name(&tag.to_string())
+                    .ok_or_else(|| anyhow::anyhow!("no column named '{tag}'"))?;
                 let inner_decoder = array_to_decoder(inner_array, &col_type.scalar_type)?;
 
                 decoders.push(Box::new(inner_decoder));
@@ -1489,7 +1524,11 @@ fn array_to_decoder(
                 nulls: record_array.nulls().cloned(),
             }
         }
-        (x, y) => unimplemented!("column type {x:?}, datum type {y:?}"),
+        (x, y) => {
+            let msg = format!("can't decode column of {x:?} for scalar type {y:?}");
+            mz_ore::soft_panic_or_log!("{msg}");
+            anyhow::bail!("{msg}");
+        }
     };
 
     Ok(decoder)
@@ -1515,6 +1554,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
             approx_values: Float64Builder::new(),
             binary_values: BinaryBuilder::new(),
+            numeric_context: crate::adt::numeric::cx_datum().clone(),
         },
         ScalarType::String
         | ScalarType::PgLegacyName
@@ -1523,8 +1563,12 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
         ScalarType::Date => DatumColumnEncoder::Date(Int32Builder::new()),
         ScalarType::Time => DatumColumnEncoder::Time(FixedSizeBinaryBuilder::new(TIME_FIXED_BYTES)),
-        ScalarType::Timestamp { .. } => DatumColumnEncoder::Timestamp(Int64Builder::new()),
-        ScalarType::TimestampTz { .. } => DatumColumnEncoder::TimestampTz(Int64Builder::new()),
+        ScalarType::Timestamp { .. } => {
+            DatumColumnEncoder::Timestamp(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
+        }
+        ScalarType::TimestampTz { .. } => {
+            DatumColumnEncoder::TimestampTz(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
+        }
         ScalarType::MzTimestamp => DatumColumnEncoder::MzTimestamp(UInt64Builder::new()),
         ScalarType::Interval => {
             DatumColumnEncoder::Interval(FixedSizeBinaryBuilder::new(INTERVAL_FIXED_BYTES))
@@ -1539,7 +1583,6 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
             offsets: vec![0],
             buf: Cursor::new(Vec::new()),
             nulls: None,
-            stats: ColumnarStatsBuilder::new(),
         },
         s @ ScalarType::Array(_) | s @ ScalarType::Int2Vector => {
             let element_type = match s {
@@ -1593,36 +1636,46 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
+    use mz_persist::indexed::columnar::arrow::realloc_array;
+    use mz_persist::metrics::ColumnarMetrics;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
     use super::*;
     use crate::adt::array::ArrayDimension;
     use crate::relation::arb_relation_desc;
-    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType};
+    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
 
     #[track_caller]
-    fn roundtrip_datum<'a>(ty: ColumnType, datum: impl Iterator<Item = Datum<'a>>) {
+    fn roundtrip_datum<'a>(
+        ty: ColumnType,
+        datum: impl Iterator<Item = Datum<'a>>,
+        metrics: &ColumnarMetrics,
+    ) {
         let desc = RelationDesc::empty().with_column("a", ty);
         let rows = datum.map(|d| Row::pack_slice(&[d])).collect();
-        roundtrip_rows(&desc, rows)
+        roundtrip_rows(&desc, rows, metrics)
     }
 
     #[track_caller]
-    fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>) {
+    fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>, metrics: &ColumnarMetrics) {
         let mut encoder = <RelationDesc as Schema2<Row>>::encoder(desc).unwrap();
         for row in &rows {
             encoder.append(row);
         }
         let (col, stats) = encoder.finish();
+        let col = realloc_array(&col, metrics);
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
         // Collect all of our lower and upper bounds.
+        let arena = RowArena::new();
         let (stats, stat_nulls): (Vec<_>, Vec<_>) = desc
             .iter()
             .map(|(name, ty)| {
                 let col_stats = stats.some.cols.get(name.as_str()).unwrap();
-                let (lower, upper) = crate::stats2::col_values(&ty.scalar_type, &col_stats.values);
+                let (lower, upper) =
+                    crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
 
                 ((lower, upper), null_count)
@@ -1687,9 +1740,10 @@ mod tests {
             proptest::collection::vec(arb_datum_for_column(&ty), 0..16)
                 .prop_map(move |d| (ty.clone(), d))
         });
+        let metrics = ColumnarMetrics::disconnected();
 
         proptest!(|((ty, datums) in strat)| {
-            roundtrip_datum(ty.clone(), datums.iter().map(Datum::from));
+            roundtrip_datum(ty.clone(), datums.iter().map(Datum::from), &metrics);
         })
     }
 
@@ -1700,9 +1754,10 @@ mod tests {
             proptest::collection::vec(arb_row_for_relation(&desc), 0..12)
                 .prop_map(move |rows| (desc.clone(), rows))
         });
+        let metrics = ColumnarMetrics::disconnected();
 
         proptest!(|((desc, rows) in strat)| {
-            roundtrip_rows(&desc, rows)
+            roundtrip_rows(&desc, rows, &metrics)
         })
     }
 
@@ -1710,13 +1765,14 @@ mod tests {
     fn empty_relation_desc_returns_error() {
         let empty_desc = RelationDesc::empty();
         let result = <RelationDesc as Schema2<Row>>::encoder(&empty_desc);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]
     fn smoketest_collections() {
         let mut row = Row::default();
         let mut packer = row.packer();
+        let metrics = ColumnarMetrics::disconnected();
 
         packer
             .push_array(
@@ -1732,6 +1788,7 @@ mod tests {
         roundtrip_datum(
             ScalarType::Array(Box::new(ScalarType::UInt32)).nullable(true),
             [array].into_iter(),
+            &metrics,
         );
     }
 

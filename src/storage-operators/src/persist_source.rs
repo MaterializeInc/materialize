@@ -304,13 +304,10 @@ where
         .as_ref()
         .map_or(false, |x| x.ignores_input());
     let project = if ignores_data {
-        let (mut key_bytes, mut val_bytes) = (Vec::new(), Vec::new());
-        Codec::encode(&SourceData(Ok(Row::default())), &mut key_bytes);
-        Codec::encode(&(), &mut val_bytes);
         ProjectionPushdown::IgnoreAllNonErr {
             err_col_name: "err",
-            key_bytes,
-            val_bytes,
+            key_bytes: SourceData(Ok(Row::default())).encode_to_vec(),
+            val_bytes: ().encode_to_vec(),
         }
     } else {
         ProjectionPushdown::FetchAll

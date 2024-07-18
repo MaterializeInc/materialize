@@ -1961,6 +1961,7 @@ impl FixedSizeCodec<NaiveTime> for PackedNaiveTime {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::any;
     use proptest::{prop_assert_eq, proptest};
@@ -3560,7 +3561,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // slow, large amount of memory
         fn datetimeunits_serialization_roundtrip(expect in any::<DateTimeUnits>() ) {
             let actual = protobuf_roundtrip::<_, ProtoDateTimeUnits>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

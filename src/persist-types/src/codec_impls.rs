@@ -14,8 +14,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder,
-    NullArray, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
+    Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
+    BooleanBuilder, NullArray, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
+    StructArray,
 };
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{
@@ -23,6 +24,7 @@ use arrow::datatypes::{
     UInt64Type, UInt8Type,
 };
 use bytes::BufMut;
+use mz_ore::assert_none;
 use timely::order::Product;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
@@ -166,6 +168,115 @@ impl Schema2<()> for UnitSchema {
     }
 }
 
+/// Simple type of data that can be columnar encoded.
+pub trait SimpleColumnarData {
+    /// Type of [`arrow`] builder that we encode data into.
+    type ArrowBuilder: arrow::array::ArrayBuilder + Default;
+    /// Type of [`arrow`] array the we decode data from.
+    type ArrowColumn: arrow::array::Array + Clone + 'static;
+
+    /// Encode `self` into `builder`.
+    fn push(&self, builder: &mut Self::ArrowBuilder);
+    /// Encode a null value into `builder`.
+    fn push_null(builder: &mut Self::ArrowBuilder);
+
+    /// Decode an instance of `self` from `column`.
+    fn read(&mut self, idx: usize, column: &Self::ArrowColumn);
+}
+
+impl SimpleColumnarData for String {
+    type ArrowBuilder = StringBuilder;
+    type ArrowColumn = StringArray;
+
+    fn push(&self, builder: &mut Self::ArrowBuilder) {
+        builder.append_value(self.as_str())
+    }
+    fn push_null(builder: &mut Self::ArrowBuilder) {
+        builder.append_null()
+    }
+    fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+        self.clear();
+        self.push_str(column.value(idx));
+    }
+}
+
+impl SimpleColumnarData for Vec<u8> {
+    type ArrowBuilder = BinaryBuilder;
+    type ArrowColumn = BinaryArray;
+
+    fn push(&self, builder: &mut Self::ArrowBuilder) {
+        builder.append_value(self.as_slice())
+    }
+    fn push_null(builder: &mut Self::ArrowBuilder) {
+        builder.append_null()
+    }
+    fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+        self.clear();
+        self.extend(column.value(idx));
+    }
+}
+
+impl SimpleColumnarData for ShardId {
+    type ArrowBuilder = StringBuilder;
+    type ArrowColumn = StringArray;
+
+    fn push(&self, builder: &mut Self::ArrowBuilder) {
+        builder.append_value(&self.to_string());
+    }
+    fn push_null(builder: &mut Self::ArrowBuilder) {
+        builder.append_null();
+    }
+    fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+        *self = column.value(idx).parse().expect("should be valid ShardId");
+    }
+}
+
+/// A type that implements [`ColumnEncoder`] for [`SimpleColumnarData`].
+#[derive(Debug, Default)]
+pub struct SimpleColumnarEncoder<T: SimpleColumnarData>(T::ArrowBuilder);
+
+impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
+    type FinishedColumn = T::ArrowColumn;
+    type FinishedStats = NoneStats;
+
+    fn append(&mut self, val: &T) {
+        T::push(val, &mut self.0);
+    }
+    fn append_null(&mut self) {
+        T::push_null(&mut self.0)
+    }
+    fn finish(mut self) -> (Self::FinishedColumn, Self::FinishedStats) {
+        let array = ArrayBuilder::finish(&mut self.0);
+        let array = array
+            .as_any()
+            .downcast_ref::<T::ArrowColumn>()
+            .expect("created using StringBuilder")
+            .clone();
+
+        (array, NoneStats)
+    }
+}
+
+/// A type that implements [`ColumnDecoder`] for [`SimpleColumnarData`].
+#[derive(Debug)]
+pub struct SimpleColumnarDecoder<T: SimpleColumnarData>(T::ArrowColumn);
+
+impl<T: SimpleColumnarData> SimpleColumnarDecoder<T> {
+    /// Returns a new [`SimpleColumnarDecoder`] with the provided column.
+    pub fn new(col: T::ArrowColumn) -> Self {
+        SimpleColumnarDecoder(col)
+    }
+}
+
+impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
+    fn decode(&self, idx: usize, val: &mut T) {
+        T::read(val, idx, &self.0)
+    }
+    fn is_null(&self, idx: usize) -> bool {
+        self.0.is_null(idx)
+    }
+}
+
 /// An implementation of [PartEncoder] for a single column.
 pub struct SimpleEncoder<X, T: Data>(usize, SimpleEncoderFn<X, T>);
 
@@ -291,6 +402,22 @@ impl Schema<String> for StringSchema {
     }
 }
 
+impl Schema2<String> for StringSchema {
+    type ArrowColumn = StringArray;
+    type Statistics = NoneStats;
+
+    type Decoder = SimpleColumnarDecoder<String>;
+    type Encoder = SimpleColumnarEncoder<String>;
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(SimpleColumnarEncoder::default())
+    }
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        Ok(SimpleColumnarDecoder::new(col))
+    }
+}
+
 impl Codec for String {
     type Storage = ();
     type Schema = StringSchema;
@@ -330,6 +457,22 @@ impl Schema<Vec<u8>> for VecU8Schema {
 
     fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
         SimpleSchema::<Vec<u8>, Vec<u8>>::encoder(cols, |val| val.as_slice())
+    }
+}
+
+impl Schema2<Vec<u8>> for VecU8Schema {
+    type ArrowColumn = BinaryArray;
+    type Statistics = NoneStats;
+
+    type Decoder = SimpleColumnarDecoder<Vec<u8>>;
+    type Encoder = SimpleColumnarEncoder<Vec<u8>>;
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(SimpleColumnarEncoder::default())
+    }
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        Ok(SimpleColumnarDecoder::new(col))
     }
 }
 
@@ -390,6 +533,22 @@ impl Schema<ShardId> for ShardIdSchema {
         SimpleSchema::<ShardId, String>::push_encoder(cols, |col, val| {
             ColumnPush::<String>::push(col, &val.to_string())
         })
+    }
+}
+
+impl Schema2<ShardId> for ShardIdSchema {
+    type ArrowColumn = StringArray;
+    type Statistics = NoneStats;
+
+    type Decoder = SimpleColumnarDecoder<ShardId>;
+    type Encoder = SimpleColumnarEncoder<ShardId>;
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(SimpleColumnarEncoder::default())
+    }
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        Ok(SimpleColumnarDecoder::new(col))
     }
 }
 
@@ -926,7 +1085,7 @@ impl ColumnMut<()> for BinaryBuilder {
 
 impl ColumnPush<Vec<u8>> for BinaryBuilder {
     fn push<'a>(&mut self, val: &'a [u8]) {
-        assert!(self.validity_slice().is_none());
+        assert_none!(self.validity_slice());
         <BinaryBuilder>::append_value(self, val)
     }
 
@@ -999,7 +1158,7 @@ impl ColumnMut<()> for StringBuilder {
 
 impl ColumnPush<String> for StringBuilder {
     fn push<'a>(&mut self, val: &'a str) {
-        assert!(self.validity_slice().is_none());
+        assert_none!(self.validity_slice());
         <StringBuilder>::append_value(self, val)
     }
 
@@ -1040,7 +1199,7 @@ impl ColumnGet<Option<OpaqueData>> for BinaryArray {
 
 impl ColumnPush<OpaqueData> for BinaryBuilder {
     fn push<'a>(&mut self, val: <OpaqueData as Data>::Ref<'a>) {
-        assert!(self.validity_slice().is_none());
+        assert_none!(self.validity_slice());
         <BinaryBuilder>::append_value(self, val)
     }
 
@@ -1098,6 +1257,57 @@ impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
     }
 
     fn encoder(&self, _cols: ColumnsMut) -> Result<Self::Encoder, String> {
+        panic!("TODO")
+    }
+}
+
+impl<T: Debug + Send + Sync> Schema2<T> for TodoSchema<T> {
+    type ArrowColumn = StructArray;
+    type Statistics = NoneStats;
+
+    type Decoder = TodoColumnarDecoder<T>;
+    type Encoder = TodoColumnarEncoder<T>;
+
+    fn decoder(&self, _col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        panic!("TODO")
+    }
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        panic!("TODO")
+    }
+}
+
+/// A [`ColumnEncoder`] that has no implementation.
+#[derive(Debug)]
+pub struct TodoColumnarEncoder<T>(PhantomData<T>);
+
+impl<T> ColumnEncoder<T> for TodoColumnarEncoder<T> {
+    type FinishedColumn = StructArray;
+    type FinishedStats = NoneStats;
+
+    fn append(&mut self, _val: &T) {
+        panic!("TODO")
+    }
+
+    fn append_null(&mut self) {
+        panic!("TODO")
+    }
+
+    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
+        panic!("TODO")
+    }
+}
+
+/// A [`ColumnDecoder`] that has no implementation.
+#[derive(Debug)]
+pub struct TodoColumnarDecoder<T>(PhantomData<T>);
+
+impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
+    fn decode(&self, _idx: usize, _val: &mut T) {
+        panic!("TODO")
+    }
+
+    fn is_null(&self, _idx: usize) -> bool {
         panic!("TODO")
     }
 }

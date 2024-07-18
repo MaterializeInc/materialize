@@ -32,6 +32,7 @@ from materialize.output_consistency.operation.return_type_spec import (
     ReturnTypeSpec,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.util import stable_int_hash
 
 
 class ExpressionWithArgs(Expression):
@@ -54,6 +55,12 @@ class ExpressionWithArgs(Expression):
         self.pattern = operation.to_pattern(len(args))
         self.return_type_spec = operation.return_type_spec
         self.args = args
+
+    def hash(self) -> int:
+        return stable_int_hash(
+            self.operation.to_pattern(self.count_args()),
+            *[str(arg.hash()) for arg in self.args],
+        )
 
     def count_args(self) -> int:
         return len(self.args)

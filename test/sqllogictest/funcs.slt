@@ -1617,6 +1617,21 @@ SELECT mz_unsafe.mz_error_if_null(1, '')
 ----
 1
 
+# Confirm that `mz_error_if_null` can be seen to be non-null.
+query T multiline
+EXPLAIN SELECT mz_unsafe.mz_error_if_null(t, '') IS NULL FROM ts_size;
+----
+Explained Query:
+  Project (#1)
+    Map (false)
+      ReadStorage materialize.public.ts_size
+
+Source materialize.public.ts_size
+
+Target cluster: quickstart
+
+EOF
+
 query error unexpected NULL
 SELECT mz_unsafe.mz_error_if_null(NULL, NULL)
 

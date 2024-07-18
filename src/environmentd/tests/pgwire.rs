@@ -20,6 +20,7 @@ use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
+use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
@@ -349,9 +350,9 @@ fn test_conn_user() {
 fn test_simple_query_no_hang() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
-    assert!(client.simple_query("asdfjkl;").is_err());
+    assert_err!(client.simple_query("asdfjkl;"));
     // This will hang if #2880 is not fixed.
-    assert!(client.simple_query("SELECT 1").is_ok());
+    assert_ok!(client.simple_query("SELECT 1"));
 }
 
 #[mz_ore::test]

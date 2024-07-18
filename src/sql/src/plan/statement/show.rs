@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -289,15 +290,15 @@ pub fn show_objects<'a>(
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_roles(scx, filter)
         }
         ShowObjectType::Cluster => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_clusters(scx, filter)
         }
         ShowObjectType::ClusterReplica => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_cluster_replicas(scx, filter)
         }
         ShowObjectType::Secret => show_secrets(scx, from, filter),
@@ -310,23 +311,23 @@ pub fn show_objects<'a>(
             on_object,
         } => show_indexes(scx, from, on_object, in_cluster, filter),
         ShowObjectType::Database => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_databases(scx, filter)
         }
         ShowObjectType::Schema { from: db_from } => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_schemas(scx, db_from, filter)
         }
         ShowObjectType::Privileges { object_type, role } => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::DefaultPrivileges { object_type, role } => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_default_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::RoleMembership { role } => {
-            assert!(from.is_none(), "parser should reject from");
+            assert_none!(from, "parser should reject from");
             show_role_membership(scx, role, filter)
         }
     }

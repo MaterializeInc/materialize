@@ -9,10 +9,6 @@
 
 # Tests `LOAD GENERATOR KEY VALUE`
 
-# TODO(def-) Reenable when #27835 is fixed
-$ skip-if
-SELECT true
-
 $ set-arg-default default-replica-size=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

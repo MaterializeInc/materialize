@@ -10,17 +10,20 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_repr::{Diff, Timestamp};
+use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::flatcontainer::FlatStack;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::logging::{Logger, TimelyEvent, WorkerIdentifier};
+use timely::logging::{Logger, ProgressEventTimestamp, TimelyEvent, WorkerIdentifier};
+use timely::order::Product;
 use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
@@ -199,7 +202,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                         TrackerEvent::SourceUpdate(update) => {
                             massaged.extend(update.updates.iter().map(
                                 |(node, port, time, diff)| {
-                                    let ts = time.as_any().downcast_ref::<Timestamp>().copied();
+                                    let ts = try_downcast_timestamp(time);
                                     let is_source = true;
                                     (*node, *port, is_source, ts, *diff)
                                 },
@@ -212,7 +215,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                         TrackerEvent::TargetUpdate(update) => {
                             massaged.extend(update.updates.iter().map(
                                 |(node, port, time, diff)| {
-                                    let ts = time.as_any().downcast_ref::<Timestamp>().copied();
+                                    let ts = try_downcast_timestamp(time);
                                     let is_source = false;
                                     (*node, *port, is_source, ts, *diff)
                                 },
@@ -229,4 +232,22 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             },
         )
     }
+}
+
+/// Extracts a `Timestamp` from a `dyn ProgressEventTimestamp`.
+///
+/// For nested timestamps, only extracts the outermost one. The rest of the timestamps are
+/// ignored for now.
+#[inline]
+fn try_downcast_timestamp(time: &dyn ProgressEventTimestamp) -> Option<Timestamp> {
+    let time_any = time.as_any();
+    time_any
+        .downcast_ref::<Timestamp>()
+        .copied()
+        .or_else(|| {
+            time_any
+                .downcast_ref::<Product<Timestamp, PointStamp<u64>>>()
+                .map(|t| t.outer)
+        })
+        .or_else(|| time_any.downcast_ref::<(Timestamp, Subtime)>().map(|t| t.0))
 }

@@ -63,7 +63,7 @@ pub const STACK_RED_ZONE: usize = {
 /// The size of any freshly allocated stacks. It was chosen to match the default
 /// stack size for threads in Rust.
 ///
-/// The default stack size is larger in debug builds to correspond to the the
+/// The default stack size is larger in debug builds to correspond to the
 /// larger [`STACK_RED_ZONE`].
 pub const STACK_SIZE: usize = {
     #[cfg(debug_assertions)]

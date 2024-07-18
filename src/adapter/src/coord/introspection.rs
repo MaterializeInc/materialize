@@ -36,7 +36,6 @@ use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
@@ -404,7 +403,7 @@ impl Coordinator {
         for (_time, row, diff) in updates {
             let mut packer = new_row.packer();
             packer.push(Datum::String(&replica_id));
-            packer.extend(row.to_datum_iter());
+            packer.extend_by_row(&row);
             new_updates.push((new_row.clone(), diff));
         }
 

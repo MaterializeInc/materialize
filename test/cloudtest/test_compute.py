@@ -233,7 +233,14 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         assert replica_id is not None
 
         expected = value.get("selectors", {}) | {"materialize.cloud/disk": "true"}
-        node_selectors = json.loads(get_node_selector(mz, cluster_id, replica_id)[1:-1])
+        node_selectors_raw = ""
+        for i in range(1, 10):
+            node_selectors_raw = get_node_selector(mz, cluster_id, replica_id)
+            if node_selectors_raw:
+                break
+            print("No node selectors available yet, sleeping")
+            time.sleep(5)
+        node_selectors = json.loads(node_selectors_raw[1:-1])
         assert (
             node_selectors == expected
         ), f"actual: {node_selectors}, but expected {expected}"

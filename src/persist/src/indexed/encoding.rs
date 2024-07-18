@@ -65,7 +65,7 @@ impl BatchColumnarFormat {
         match s {
             "row" => BatchColumnarFormat::Row,
             "both" => BatchColumnarFormat::Both(0),
-            "both_v1" => BatchColumnarFormat::Both(1),
+            "both_v2" => BatchColumnarFormat::Both(2),
             x => {
                 let default = BatchColumnarFormat::default();
                 soft_panic_or_log!("Invalid batch columnar type: {x}, falling back to {default}");
@@ -78,8 +78,8 @@ impl BatchColumnarFormat {
     pub const fn as_str(&self) -> &'static str {
         match self {
             BatchColumnarFormat::Row => "row",
-            BatchColumnarFormat::Both(0) => "both",
-            BatchColumnarFormat::Both(1) => "both_v1",
+            BatchColumnarFormat::Both(0 | 1) => "both",
+            BatchColumnarFormat::Both(2) => "both_v2",
             _ => panic!("unknown batch columnar format"),
         }
     }
@@ -88,6 +88,8 @@ impl BatchColumnarFormat {
     pub const fn is_structured(&self) -> bool {
         match self {
             BatchColumnarFormat::Row => false,
+            // The V0 format has been deprecated and we ignore its structured columns.
+            BatchColumnarFormat::Both(0 | 1) => false,
             BatchColumnarFormat::Both(_) => true,
         }
     }
@@ -183,7 +185,7 @@ pub enum BlobTraceUpdates {
     /// columnar-esque struct.
     ///
     /// [`Codec`]: mz_persist_types::Codec
-    Row(Vec<ColumnarRecords>),
+    Row(ColumnarRecords),
     /// Migration format. Keys and Values are encoded into bytes via [`Codec`] and structured into
     /// an Apache Arrow columnar format.
     ///
@@ -193,39 +195,11 @@ pub enum BlobTraceUpdates {
 }
 
 impl BlobTraceUpdates {
-    /// Return the [`ColumnarRecords`], if one exists for the provided `idx`.
-    pub fn get(&self, idx: usize) -> Option<&ColumnarRecords> {
+    /// Return the [`ColumnarRecords`] of the blob.
+    pub fn records(&self) -> &ColumnarRecords {
         match self {
-            BlobTraceUpdates::Row(updates) => updates.get(idx),
-            BlobTraceUpdates::Both(codec, _structured) => match idx {
-                0 => Some(codec),
-                _ => None,
-            },
-        }
-    }
-
-    /// Returns the number of row groups.
-    pub fn num_row_groups(&self) -> usize {
-        match self {
-            BlobTraceUpdates::Row(updates) => updates.len(),
-            BlobTraceUpdates::Both(..) => 1,
-        }
-    }
-
-    /// Returns an iterator over the [`ColumnarRecords`] in this update.
-    pub fn iter(&self) -> impl Iterator<Item = &'_ ColumnarRecords> {
-        let updates: Box<dyn Iterator<Item = _>> = match self {
-            BlobTraceUpdates::Row(updates) => Box::new(updates.iter()),
-            BlobTraceUpdates::Both(codec, _s) => Box::new(std::iter::once(codec)),
-        };
-        updates
-    }
-
-    /// Returns the total number of logical bytes in the represented data.
-    pub fn goodbytes(&self) -> usize {
-        match self {
-            BlobTraceUpdates::Row(updates) => updates.iter().map(|u| u.goodbytes()).sum(),
-            BlobTraceUpdates::Both(codec, _s) => codec.goodbytes(),
+            BlobTraceUpdates::Row(c) => c,
+            BlobTraceUpdates::Both(c, _structured) => c,
         }
     }
 }
@@ -279,7 +253,7 @@ impl TraceBatchMeta {
 
         for update in batches
             .iter()
-            .flat_map(|batch| batch.updates.iter().flat_map(|u| u.iter()))
+            .flat_map(|batch| batch.updates.records().iter())
         {
             let ((_key, _val), _ts, diff) = update;
 
@@ -313,7 +287,7 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
 
         let uncompacted = PartialOrder::less_equal(self.desc.since(), self.desc.lower());
 
-        for update in self.updates.iter().flat_map(|u| u.iter()) {
+        for update in self.updates.records().iter() {
             let ((_key, _val), ts, diff) = update;
             // TODO: Don't assume diff is an i64, take a D type param instead.
             let ts = T::decode(ts);
@@ -368,8 +342,8 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     /// Scans the part and returns a lower bound on the contained keys.
     pub fn key_lower(&self) -> &[u8] {
         self.updates
+            .records()
             .iter()
-            .flat_map(|x| x.iter())
             .map(|((key, _), _, _)| key)
             .min()
             .unwrap_or(&[])
@@ -464,7 +438,7 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPa
         BlobTraceUpdates::Row(_) => (ProtoBatchFormat::ParquetKvtd, None),
         // For the newer structured format we track some metadata about the version of the format.
         BlobTraceUpdates::Both { .. } => {
-            let metadata = ProtoFormatMetadata::StructuredMigration(1);
+            let metadata = ProtoFormatMetadata::StructuredMigration(2);
             (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
     };
@@ -540,7 +514,7 @@ mod tests {
         for ((k, v), t, d) in updates {
             assert!(builder.push(((&k, &v), Codec64::encode(&t), Codec64::encode(&d))));
         }
-        let updates = vec![builder.finish(&ColumnarMetrics::disconnected())];
+        let updates = builder.finish(&ColumnarMetrics::disconnected());
         BlobTraceUpdates::Row(updates)
     }
 
@@ -763,8 +737,8 @@ mod tests {
     fn encoded_batch_sizes() {
         fn sizes(data: DataGenerator) -> usize {
             let metrics = ColumnarMetrics::disconnected();
-            let updates = data.batches().collect();
-            let updates = BlobTraceUpdates::Row(updates);
+            let updates: Vec<_> = data.batches().collect();
+            let updates = BlobTraceUpdates::Row(ColumnarRecords::concat(&updates, &metrics));
             let trace = BlobTraceBatchPart {
                 desc: Description::new(
                     Antichain::from_elem(0u64),

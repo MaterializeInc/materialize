@@ -21,6 +21,7 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_fun_by_any_name,
+    matches_fun_by_name,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
     IgnoreVerdict,
@@ -41,10 +42,16 @@ from materialize.output_consistency.operation.operation import (
     DbOperation,
     DbOperationOrFunction,
 )
+from materialize.output_consistency.query.query_result import QueryFailure
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
 )
+
+AGGREGATION_SHORTCUT_FUNCTION_NAMES = {"count", "string_agg"}
 
 
 class InternalOutputInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -133,12 +140,12 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
-        dfr_successful = outcome_by_strategy_id[
+        dfr_outcome = outcome_by_strategy_id[
             EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
-        ].successful
-        ctf_successful = outcome_by_strategy_id[
-            EvaluationStrategyKey.MZ_CONSTANT_FOLDING
-        ].successful
+        ]
+        ctf_outcome = outcome_by_strategy_id[EvaluationStrategyKey.MZ_CONSTANT_FOLDING]
+        dfr_successful = dfr_outcome.successful
+        ctf_successful = ctf_outcome.successful
 
         dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
         dfr_succeeds_but_ctf_fails = dfr_successful and not ctf_successful
@@ -167,6 +174,21 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         if self._uses_eager_evaluation(query_template):
             return YesIgnore("#17189")
 
+        if dfr_succeeds_but_ctf_fails:
+            assert isinstance(ctf_outcome, QueryFailure)
+
+            if (
+                ctf_outcome.error_message == "key cannot be null"
+                and query_template.matches_any_expression(
+                    partial(
+                        matches_fun_by_name,
+                        function_name_in_lower_case="jsonb_object_agg",
+                    ),
+                    True,
+                )
+            ):
+                return YesIgnore("#28136: jsonb_object_agg with NULL as key")
+
         return NoIgnore()
 
     def _shall_ignore_error_mismatch(
@@ -175,54 +197,45 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        all_characteristics = query_template.get_involved_characteristics(
+            ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
+        )
+
         if self._uses_shortcut_optimization(
             query_template.select_expressions, contains_aggregation
         ):
-            return YesIgnore("#17189")
+            return YesIgnore("#17189: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
-            return YesIgnore("#17189")
+            return YesIgnore("#17189: evaluation order")
 
         if query_template.where_expression is not None:
             # The error message may depend on the evaluation order of the where expression.
-            return YesIgnore("#17189")
+            return YesIgnore("#17189: evaluation order")
+
+        if (
+            ExpressionCharacteristics.INFINITY in all_characteristics
+            and ExpressionCharacteristics.MAX_VALUE in all_characteristics
+        ):
+            return YesIgnore("#17189: evaluation order")
 
         return NoIgnore()
 
     def _uses_shortcut_optimization(
         self, expressions: list[Expression], contains_aggregation: bool
     ) -> bool:
-        if self._uses_aggregation_shortcut_optimization(
-            expressions, contains_aggregation
-        ):
-            return True
+        for expression in expressions:
+            if expression.matches(
+                partial(
+                    uses_aggregation_shortcut_optimization,
+                    contains_aggregation=contains_aggregation,
+                ),
+                True,
+            ):
+                return True
+
         if self._might_use_null_shortcut_optimization(expressions):
             return True
-
-        return False
-
-    def _uses_aggregation_shortcut_optimization(
-        self, expressions: list[Expression], contains_aggregation: bool
-    ) -> bool:
-        if not contains_aggregation:
-            # all current known optimizations causing issues involve aggregations
-            return False
-
-        def is_function_taking_shortcut(expression: Expression) -> bool:
-            functions_taking_shortcuts = {"count", "string_agg"}
-
-            if isinstance(expression, ExpressionWithArgs):
-                operation = expression.operation
-                return (
-                    isinstance(operation, DbFunction)
-                    and operation.function_name_in_lower_case
-                    in functions_taking_shortcuts
-                )
-            return False
-
-        for expression in expressions:
-            if expression.contains(is_function_taking_shortcut, True):
-                return True
 
         return False
 
@@ -254,3 +267,19 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
             ),
             True,
         )
+
+
+def uses_aggregation_shortcut_optimization(
+    expression: Expression, contains_aggregation: bool
+) -> bool:
+    if not contains_aggregation:
+        # all current known optimizations causing issues involve aggregations
+        return False
+
+    return expression.matches(
+        partial(
+            matches_fun_by_any_name,
+            function_names_in_lower_case=AGGREGATION_SHORTCUT_FUNCTION_NAMES,
+        ),
+        True,
+    )

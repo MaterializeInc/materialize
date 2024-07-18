@@ -13,7 +13,7 @@
   - Slack:
     - [channel #wg-tuning-freshness](https://materializeinc.slack.com/archives/C06535JL58R/p1699395646085619)
     - [big design thread in #epd-sql-council](https://materializeinc.slack.com/archives/C063H5S7NKE/p1699543250405409)
-    - [`REHYDRATION TIME ESTIMATE` thread in #epd-sql-council](https://materializeinc.slack.com/archives/C063H5S7NKE/p1712165305916299)
+    - [`HYDRATION TIME ESTIMATE` thread in #epd-sql-council](https://materializeinc.slack.com/archives/C063H5S7NKE/p1712165305916299)
   - Notion:
     - [Tuning REFRESH on MVs: UX](https://www.notion.so/materialize/Tuning-REFRESH-on-MVs-UX-1abbf85683364a1d997d77d7022ccd4f)
     - [Compute meeting on automatic cluster scheduling](https://www.notion.so/materialize/Compute-meeting-on-automatic-cluster-scheduling-ce353b8af52e449d8784241c4a1c0585)
@@ -183,7 +183,7 @@ There is a workaround for this until we properly fix it: If there is a specific 
 
 A proper fix would be to start up the replica a bit before the exact moment of the refresh, so that it can rehydrate already. For example, let's say we have an MV that is to be updated at every midnight. If we know that a refresh will take approximately 1 hour, then we can start up the replica at, say, 10:50 PM, so that it will be rehydrated by about 11:50 PM. At this point, most of the Compute processing that is needed for the refresh has already happened. Now the replica just needs to process the last 10 minutes of input data until midnight at a normal pace. We let the replica run until the MV's upper passes midnight (and jumps to the next midnight), which should happen within a few seconds after midnight. Note that before midnight, queries against the MV will still read the old state (as they should), because the new data is written at timestamps rounded up to midnight.
 
-How do we know how much earlier than the refresh time should we turn on the replica, that is, how much time the refresh will take? In the first version of this feature, we can let the user set this explicitly by something like `REFRESH EVERY <interval> EARLY <interval>`. Later, we should record the times the refreshes take, and infer the time requirement of the next refresh based on earlier ones. Note that this will be complicated by the fact that we have different instance types [that have wildly differing CPU performance](https://materializeinc.slack.com/archives/CM7ATT65S/p1697816482502819). Update: This is now set on the auto-scheduled cluster, with the `REHYDRATION TIME ESTIMATE` syntax.
+How do we know how much earlier than the refresh time should we turn on the replica, that is, how much time the refresh will take? In the first version of this feature, we can let the user set this explicitly by something like `REFRESH EVERY <interval> EARLY <interval>`. Later, we should record the times the refreshes take, and infer the time requirement of the next refresh based on earlier ones. Note that this will be complicated by the fact that we have different instance types [that have wildly differing CPU performance](https://materializeinc.slack.com/archives/CM7ATT65S/p1697816482502819). Update: This is now set on the auto-scheduled cluster, with the `HYDRATION TIME ESTIMATE` syntax.
 
 ### Logical Times vs. Wall Clock Times
 
@@ -253,14 +253,14 @@ As mentioned in the [scoping section](#out-of-scope), an alternative implementat
 
 E.g.:
 ```
-ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'));
+ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
 ```
 
 Discussions:
 - [Original discussion](https://github.com/MaterializeInc/materialize/issues/25712)
 - [Overview](https://www.notion.so/materialize/REFRESH-user-docs-draft-4a8f30b737a94619ac9f645abc9f84ce?pvs=4#025fd5733fcd4f38b48ee967bc8fb763)
 - [Syntax discussion](https://materializeinc.slack.com/archives/C063H5S7NKE/p1710355545343079)
-- [REHYDRATION TIME ESTIMATE discussion](https://materializeinc.slack.com/archives/C063H5S7NKE/p1712165305916299)
+- [HYDRATION TIME ESTIMATE discussion](https://materializeinc.slack.com/archives/C063H5S7NKE/p1712165305916299)
 
 ## Introspection / Observability
 
@@ -276,13 +276,13 @@ The values in `mz_materialized_view_refreshes` will be calculated as follows:
 
 For seeing whether the last refresh is being late, the user can run `EXPLAIN TIMESTAMP` in `STRICT SERIALIZABLE` mode, and look at can respond immediately. If it's false, then the last refresh's completion is overdue. Another way to get the same information would be to check if `mz_materialized_view_refreshes.next_refresh < now()`.
 
-For showing cluster schedules, I'll create a table in `mz_internal` called `mz_cluster_schedules`. This will be similar to `mz_materialized_view_refresh_strategies` in that it will allow for multiple `SCHEDULE =` options on a cluster by having one row for each schedule option of each cluster. This would currently be only either `SCHEDULE = ON REFRESH` or `SCHEDULE = MANUAL`. Columns would be `(cluster_id text, type text, refresh_rehydration_time_estimate interval)`. In `type`, we would currently have either "manual" (the default), or "on-refresh". (Eventually, we'll probably also want a `next_scheduled_turn_on`, but this doesn't seem so urgent. It will get more important when we'll be choosing the warmup time automatically.)
+For showing cluster schedules, I'll create a table in `mz_internal` called `mz_cluster_schedules`. This will be similar to `mz_materialized_view_refresh_strategies` in that it will allow for multiple `SCHEDULE =` options on a cluster by having one row for each schedule option of each cluster. This would currently be only either `SCHEDULE = ON REFRESH` or `SCHEDULE = MANUAL`. Columns would be `(cluster_id text, type text, refresh_hydration_time_estimate interval)`. In `type`, we would currently have either "manual" (the default), or "on-refresh". (Eventually, we'll probably also want a `next_scheduled_turn_on`, but this doesn't seem so urgent. It will get more important when we'll be choosing the warmup time automatically.)
 
 For seeing whether a cluster is currently turned on, the user can simply look at `mz_cluster_replicas`, because we currently turn clusters On/Off by just creating/dropping replicas. We might also add a builtin view for showing this information in a more focused way.
 
 For the automatic cluster scheduling history, the user can look at `mz_audit_events`. This has a `details` column, which is a JSON blob, where I'm planning to add the `reason` for turning on a cluster, i.e., which materialized views were in need of a refresh. (See Nikhil's comment [here](https://github.com/MaterializeInc/materialize/pull/26401#pullrequestreview-1981986544).) There is also the `mz_cluster_replica_history` view, which takes its info from `mz_audit_events`, and presents the info in a nicer form. I could add a new reason column to this view. Also note that the `reason` could also be prepared to show reasons from other policies: it could itself be a collection of key-value pairs, where the keys are policy names (e.g., refresh), and the values have policy-specific structures. For refresh, it could be a list of the materialized view IDs that made us turn the cluster on.
 
-We'll also want to show rehydration times from the last several refreshes, to help users set the `REHYDRATION TIME ESTIMATE` of clusters. I'm thinking to create a new table `mz_internal.mz_compute_hydration_history (replica_id text, rehydration_time interval)`, which would have one row for each replica creation, and it would show the time it took to rehydrate the replica when it was created. (The user can join this with `mz_cluster_replica_history` to know which cluster the replica belonged to, replica size, etc.) Btw. this doesn't need to be constrained to clusters involving `REFRESH` MVs; this info seems generally useful for any compute cluster. If we want to make it even more useful generally, we might want to add one row not just for each replica creation, but also each replica restart, so that we'll show the rehydrations that happen at system upgrade restarts. In this case, we'll probably need also a `time` column, and then `(replica_id, time)` would be a composite key. For this general version, we might have to truncate the relation to keep it from growing too big.
+We'll also want to show rehydration times from the last several refreshes, to help users set the `HYDRATION TIME ESTIMATE` of clusters. I'm thinking to create a new table `mz_internal.mz_compute_hydration_history (replica_id text, rehydration_time interval)`, which would have one row for each replica creation, and it would show the time it took to rehydrate the replica when it was created. (The user can join this with `mz_cluster_replica_history` to know which cluster the replica belonged to, replica size, etc.) Btw. this doesn't need to be constrained to clusters involving `REFRESH` MVs; this info seems generally useful for any compute cluster. If we want to make it even more useful generally, we might want to add one row not just for each replica creation, but also each replica restart, so that we'll show the rehydrations that happen at system upgrade restarts. In this case, we'll probably need also a `time` column, and then `(replica_id, time)` would be a composite key. For this general version, we might have to truncate the relation to keep it from growing too big.
 
 We might want to also track the time it takes to actually perform a refresh, assuming that the replica is already hydrated. This will often take <1 sec, but if the MV's storage is big and/or there are many changes, then it might take more.
 

@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
 )
@@ -23,6 +26,9 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
 )
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
+)
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.array_return_spec import (
     ArrayReturnTypeSpec,
@@ -45,12 +51,21 @@ from materialize.output_consistency.operation.operation import (
 
 ARRAY_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
+TAG_ARRAY_INDEX_OPERATION = "array_index_op"
+
 ARRAY_OPERATION_TYPES.append(
     DbOperation(
         # parentheses are needed only for Postgres when accessing an array element on the result of a function
         "($)[$]",
-        [ArrayOperationParam(), NumericOperationParam(no_floating_point_type=True)],
+        [
+            ArrayOperationParam(),
+            NumericOperationParam(
+                only_int_type=True,
+                incompatibilities={ExpressionCharacteristics.MAX_VALUE},
+            ),
+        ],
         CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="access by index",
     )
 )
@@ -61,10 +76,17 @@ ARRAY_OPERATION_TYPES.append(
         "$([$:$])",
         [
             ArrayOperationParam(),
-            NumericOperationParam(no_floating_point_type=True),
-            NumericOperationParam(no_floating_point_type=True),
+            NumericOperationParam(
+                only_int_type=True,
+                incompatibilities={ExpressionCharacteristics.MAX_VALUE},
+            ),
+            NumericOperationParam(
+                only_int_type=True,
+                incompatibilities={ExpressionCharacteristics.MAX_VALUE},
+            ),
         ],
         ArrayReturnTypeSpec(),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="slice double-sided",
     )
 )
@@ -73,8 +95,15 @@ ARRAY_OPERATION_TYPES.append(
     DbOperation(
         # parentheses are needed only for Postgres when accessing an array element on the result of a function
         "$([:$])",
-        [ArrayOperationParam(), NumericOperationParam(no_floating_point_type=True)],
+        [
+            ArrayOperationParam(),
+            NumericOperationParam(
+                only_int_type=True,
+                incompatibilities={ExpressionCharacteristics.MAX_VALUE},
+            ),
+        ],
         ArrayReturnTypeSpec(),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="slice left open",
     )
 )
@@ -83,8 +112,15 @@ ARRAY_OPERATION_TYPES.append(
     DbOperation(
         # parentheses are needed only for Postgres when accessing an array element on the result of a function
         "$([$:])",
-        [ArrayOperationParam(), NumericOperationParam(no_floating_point_type=True)],
+        [
+            ArrayOperationParam(),
+            NumericOperationParam(
+                only_int_type=True,
+                incompatibilities={ExpressionCharacteristics.MAX_VALUE},
+            ),
+        ],
         ArrayReturnTypeSpec(),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="slice right open",
     )
 )
@@ -145,8 +181,8 @@ ARRAY_OPERATION_TYPES.append(
 ARRAY_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "array_agg",
-        {1: "array_agg($ ORDER BY row_index)"},
-        [AnyOperationParam()],
+        {2: "array_agg($ ORDER BY row_index, $)"},
+        [AnyOperationParam(), SameOperationParam(index_of_previous_param=0)],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.DYNAMIC),
         is_aggregation=True,
         comment="with ordering",

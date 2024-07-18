@@ -397,6 +397,7 @@ EOF
 # Here, SemijoinIdempotence relies on the keys introduced by the `select distinct on` being propagated through the
 # recursive Get. Note that in this test even if SemijoinIdempotence wouldn't work, RedundantJoin would step in. (But
 # see later a similar situation, but with a LEFT JOIN, where RedundantJoin wouldn't be able to eliminate a join.)
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain with(keys)
 with mutually recursive
@@ -414,24 +415,8 @@ with mutually recursive
   )
 select * from c0;
 ----
-Explained Query:
-  Return // { keys: "([0])" }
-    Get l0 // { keys: "([0])" }
-  With Mutually Recursive
-    cte l0 =
-      TopK group_by=[#0] limit=1 // { keys: "([0])" }
-        Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
-          Union // { keys: "()" }
-            Project (#0..=#2, #0) // { keys: "()" }
-              Join on=(#0 = #3) type=differential // { keys: "()" }
-                ArrangeBy keys=[[#0]] // { keys: "()" }
-                  ReadStorage materialize.public.foo // { keys: "()" }
-                ArrangeBy keys=[[#0]] // { keys: "([0])" }
-                  Project (#0) // { keys: "([0])" }
-                    Get l0 // { keys: "([0])" }
-            Get l0 // { keys: "([0])" }
-
-Source materialize.public.foo
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: quickstart
 
@@ -441,6 +426,7 @@ EOF
 # Similar to the previous test, but the recursive Get is at the other input. This means that the input that should have
 # a known key is the static one, for which key inference works fine.
 # The resulting plan should have 1 join with 2 inputs.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
@@ -456,25 +442,8 @@ with mutually recursive
   )
 select * from c0;
 ----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive
-    cte l0 =
-      Distinct project=[#0..=#3]
-        Union
-          Project (#0..=#3)
-            Join on=(#0 = #4) type=differential
-              ArrangeBy keys=[[#0]]
-                Get l0
-              ArrangeBy keys=[[#0]]
-                Project (#0)
-                  Filter (#0) IS NOT NULL
-                    ReadStorage materialize.public.bar
-          Get l0
-
-Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: quickstart
 
@@ -483,6 +452,7 @@ EOF
 # Manually written idempotent semijoin.
 # Similar to the previous test, but the CTE from inside c0 is manually lifted to the enclosing LetRec.
 # The resulting plan should have 1 join with 2 inputs.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
@@ -496,25 +466,8 @@ with mutually recursive
   )
 select * from c0;
 ----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive
-    cte l0 =
-      Distinct project=[#0..=#3]
-        Union
-          Project (#0..=#3)
-            Join on=(#0 = #4) type=differential
-              ArrangeBy keys=[[#0]]
-                Get l0
-              ArrangeBy keys=[[#0]]
-                Project (#0)
-                  Filter (#0) IS NOT NULL
-                    ReadStorage materialize.public.bar
-          Get l0
-
-Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: quickstart
 
@@ -524,6 +477,7 @@ EOF
 # Similar to the previous test, but instead of using bar directly, we add an extra cte (bar2), which will recursively
 # refer to `c0`. `keys` will refer to `bar2` instead of `c0`.
 # The resulting plan should have 1 join with 2 inputs.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
@@ -542,30 +496,8 @@ with mutually recursive
   )
 select * from c0;
 ----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive
-    cte l0 =
-      Distinct project=[#0..=#3]
-        Union
-          Project (#0..=#3)
-            Join on=(#0 = #4) type=differential
-              ArrangeBy keys=[[#0]]
-                Get l0
-              ArrangeBy keys=[[#0]]
-                TopK group_by=[#0] limit=1
-                  Project (#0)
-                    Distinct project=[#0, #1]
-                      Union
-                        Filter (#0) IS NOT NULL
-                          ReadStorage materialize.public.bar
-                        Project (#0, #2)
-                          Get l0
-          Get l0
-
-Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: quickstart
 
@@ -576,6 +508,7 @@ EOF
 # changes meaning when `bar2` is being assigned after `key`. To correctly handle this situation, we need the expirations
 # in SemijoinIdempotence. To demonstrate this, if we comment out the two `do_expirations` lines, SemijoinIdempotence
 # incorrectly transforms this plan.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain with(keys)
 with mutually recursive
@@ -594,40 +527,8 @@ with mutually recursive
   )
 select * from c0;
 ----
-Explained Query:
-  Return // { keys: "([0, 1, 2, 3])" }
-    Get l2 // { keys: "([0, 1, 2, 3])" }
-  With Mutually Recursive
-    cte l2 =
-      Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
-        Union // { keys: "()" }
-          Project (#0..=#3) // { keys: "([0, 1, 2, 3])" }
-            Join on=(#0 = #4) type=differential // { keys: "([0, 1, 2, 3])" }
-              ArrangeBy keys=[[#0]] // { keys: "([0, 1, 2, 3])" }
-                Get l2 // { keys: "([0, 1, 2, 3])" }
-              ArrangeBy keys=[[#0]] // { keys: "([0])" }
-                Get l0 // { keys: "([0])" }
-          Get l2 // { keys: "([0, 1, 2, 3])" }
-    cte l1 =
-      Distinct project=[#0, #1] // { keys: "([0, 1])" }
-        Union // { keys: "()" }
-          ReadStorage materialize.public.bar // { keys: "([0])" }
-          Project (#0, #2) // { keys: "()" }
-            Get l2 // { keys: "([0, 1, 2, 3])" }
-    cte l0 =
-      Project (#0) // { keys: "([0])" }
-        Join on=(#0 = #1) type=differential // { keys: "([0])" }
-          ArrangeBy keys=[[#0]] // { keys: "([0])" }
-            Distinct project=[#0] // { keys: "([0])" }
-              Project (#0) // { keys: "()" }
-                Get l2 // { keys: "([0, 1, 2, 3])" }
-          ArrangeBy keys=[[#0]] // { keys: "([0])" }
-            TopK group_by=[#0] limit=1 // { keys: "([0])" }
-              Project (#0) // { keys: "()" }
-                Filter (#0) IS NOT NULL // { keys: "([0, 1])" }
-                  Get l1 // { keys: "([0, 1])" }
-
-Source materialize.public.bar
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: quickstart
 
@@ -637,6 +538,7 @@ EOF
 # Another negative test. Similar to the first test with `bar2`, but both `keys` and `bar2` are being referenced from the
 # body, which means that SemijoinIdempotence can't kick in, as it would eliminate the intermediate Join's result, which
 # is now being referenced from the body.
+# With #27389 this stopped testing a thing; see issue #28308.
 query T multiline
 explain
 with mutually recursive
@@ -660,47 +562,9 @@ union all
 select a, -2, 'keys', a from keys;
 ----
 Explained Query:
-  Return
-    Union
-      Get l2
-      Project (#0, #2, #1, #0)
-        Map (-1)
-          Get l0
-      Project (#0, #2, #1, #0)
-        Map ("keys", -2)
-          Get l1
-  With Mutually Recursive
-    cte l2 =
-      Distinct project=[#0..=#3]
-        Union
-          Project (#0..=#3)
-            Join on=(#0 = #4) type=differential
-              ArrangeBy keys=[[#0]]
-                Get l2
-              ArrangeBy keys=[[#0]]
-                TopK group_by=[#0] limit=1
-                  Project (#0)
-                    Filter (#0) IS NOT NULL
-                      Get l0
-          Get l2
-    cte l1 =
-      Project (#0)
-        Join on=(#0 = #1) type=differential
-          ArrangeBy keys=[[#0]]
-            Distinct project=[#0]
-              Project (#0)
-                Get l2
-          ArrangeBy keys=[[#0]]
-            TopK group_by=[#0] limit=1
-              Project (#0)
-                Filter (#0) IS NOT NULL
-                  Get l0
-    cte l0 =
-      Distinct project=[#0, #1]
-        Union
-          ReadStorage materialize.public.bar
-          Project (#0, #2)
-            Get l2
+  Project (#0, #2, #1, #0)
+    Map (-1)
+      ReadStorage materialize.public.bar
 
 Source materialize.public.bar
 

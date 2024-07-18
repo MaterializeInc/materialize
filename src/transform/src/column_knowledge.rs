@@ -18,8 +18,8 @@ use mz_expr::{
     func, EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::{assert_none, soft_panic_or_log};
 use mz_repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 
 use crate::{TransformCtx, TransformError};
@@ -121,7 +121,7 @@ impl ColumnKnowledge {
                         let id = mz_expr::Id::Local(id.clone());
                         let knowledge_new = vec![DatumKnowledge::bottom(); value.arity()];
                         let knowledge_old = knowledge.insert(id, knowledge_new);
-                        assert!(knowledge_old.is_none());
+                        assert_none!(knowledge_old);
                     }
 
                     // Sum up the arity of all ids in the enclosing LetRec node.

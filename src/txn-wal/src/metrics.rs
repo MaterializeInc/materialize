@@ -25,7 +25,6 @@ pub struct Metrics {
     pub(crate) forget: FallibleOpMetrics,
     pub(crate) forget_all: FallibleOpMetrics,
     pub(crate) apply_le: InfallibleOpMetrics,
-    pub(crate) apply_eager_le: InfallibleOpMetrics,
     pub(crate) compact_to: InfallibleOpMetrics,
 
     pub(crate) batches: BatchMetrics,
@@ -51,7 +50,6 @@ impl Metrics {
             forget: ops.fallible("forget"),
             forget_all: ops.fallible("forget_all"),
             apply_le: ops.infallible("apply_le"),
-            apply_eager_le: ops.infallible("apply_eager_le"),
             compact_to: ops.infallible("compact_to"),
             batches: BatchMetrics::new(registry),
         }

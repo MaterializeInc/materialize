@@ -20,11 +20,12 @@ from dataclasses import dataclass, field
 from itertools import chain
 from textwrap import dedent
 from typing import Any
+from xml.etree.ElementTree import ParseError
 
 from junitparser.junitparser import Error, Failure, JUnitXml
 
-from materialize import ci_util, ui
-from materialize.buildkite import add_annotation_raw, get_artifact_url
+from materialize import buildkite, ci_util, ui
+from materialize.buildkite import BuildkiteEnvVar, add_annotation_raw, get_artifact_url
 from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
@@ -75,7 +76,13 @@ ERROR_RE = re.compile(
     | environmentd\ .*\ unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
-    | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------.*----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
+    | Fixpoint\ .*\ detected\ a\ loop\ of\ length\ .*\ after\ .*\ iterations
+    | Fixpoint\ .*\ failed\ to\ reach\ a\ fixed\ point,\ or\ cycle\ of\ length\ at\ most
+    # \s\S is any character including newlines, so this matches multiline strings
+    # non-greedy using ? so that we don't match all the result comparison issues into one block
+    | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------[\s\S]*?----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
+    # output consistency tests
+    | possibly\ invalid\ operation\ specification
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     )
@@ -329,17 +336,25 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    test_analytics_config = create_test_analytics_config_with_hostname(
-        args.cloud_hostname
-    )
-    test_analytics = TestAnalyticsDb(test_analytics_config)
+    try:
+        test_analytics_config = create_test_analytics_config_with_hostname(
+            args.cloud_hostname
+        )
+        test_analytics = TestAnalyticsDb(test_analytics_config)
 
-    # always insert a build job regardless whether it has annotations or not
-    test_analytics.builds.add_build_job(
-        was_successful=has_successful_buildkite_status()
-    )
+        # always insert a build job regardless whether it has annotations or not
+        test_analytics.builds.add_build_job(
+            was_successful=has_successful_buildkite_status()
+        )
 
-    return_code = annotate_logged_errors(args.log_files, test_analytics)
+        return_code = annotate_logged_errors(args.log_files, test_analytics)
+    except Exception as e:
+        step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
+        add_annotation_raw(
+            style="error",
+            markdown=f"ci_annotate_errors failed in step {step_key}, report this to #team-testing:\n```\n{e}\n```",
+        )
+        raise
 
     try:
         test_analytics.submit_updates()
@@ -610,7 +625,14 @@ def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
 
 def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
     error_logs = []
-    xml = JUnitXml.fromfile(log_file_name)
+    try:
+        xml = JUnitXml.fromfile(log_file_name)
+    except ParseError as e:
+        # Ignore empty files
+        if "no element found: line 1, column 0" in str(e):
+            return error_logs
+        else:
+            raise
     for suite in xml:
         for testcase in suite:
             for result in testcase.result:

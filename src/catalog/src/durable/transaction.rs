@@ -33,10 +33,10 @@ use mz_sql::catalog::{
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
-use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
+use mz_storage_types::controller::StorageError;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES};
+use crate::durable::initialize::{ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -216,10 +216,11 @@ impl<'a> Transaction<'a> {
         database_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(DatabaseId, u32), CatalogError> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
         let id = DatabaseId::User(id);
-        let oid = self.allocate_oid()?;
+        let oid = self.allocate_oid(temporary_oids)?;
         self.insert_database(id, database_name, owner_id, privileges, oid)?;
         Ok((id, oid))
     }
@@ -253,10 +254,11 @@ impl<'a> Transaction<'a> {
         schema_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(SchemaId, u32), CatalogError> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
         let id = SchemaId::User(id);
-        let oid = self.allocate_oid()?;
+        let oid = self.allocate_oid(temporary_oids)?;
         self.insert_schema(
             id,
             Some(database_id),
@@ -325,10 +327,11 @@ impl<'a> Transaction<'a> {
         attributes: RoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(RoleId, u32), CatalogError> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
-        let oid = self.allocate_oid()?;
+        let oid = self.allocate_oid(temporary_oids)?;
         self.insert_role(id, name, attributes, membership, vars, oid)?;
         Ok((id, oid))
     }
@@ -367,6 +370,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
@@ -375,6 +379,7 @@ impl<'a> Transaction<'a> {
             owner_id,
             privileges,
             config,
+            temporary_oids,
         )
     }
 
@@ -387,6 +392,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         owner_id: RoleId,
         config: ClusterConfig,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
@@ -395,6 +401,7 @@ impl<'a> Transaction<'a> {
             owner_id,
             privileges,
             config,
+            temporary_oids,
         )
     }
 
@@ -406,6 +413,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
@@ -420,7 +428,8 @@ impl<'a> Transaction<'a> {
             return Err(SqlCatalogError::ClusterAlreadyExists(cluster_name.to_owned()).into());
         };
 
-        let oids = self.allocate_oids(usize_to_u64(introspection_source_indexes.len()))?;
+        let amount = usize_to_u64(introspection_source_indexes.len());
+        let oids = self.allocate_oids(amount, temporary_oids)?;
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
             .zip(oids.into_iter())
@@ -566,8 +575,9 @@ impl<'a> Transaction<'a> {
         create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<u32, CatalogError> {
-        let oid = self.allocate_oid()?;
+        let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
             id, oid, schema_id, item_name, create_sql, owner_id, privileges,
         )?;
@@ -661,7 +671,11 @@ impl<'a> Transaction<'a> {
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
     /// object.
     #[mz_ore::instrument]
-    fn allocate_oids(&mut self, amount: u64) -> Result<Vec<u32>, CatalogError> {
+    fn allocate_oids(
+        &mut self,
+        amount: u64,
+        temporary_oids: &HashSet<u32>,
+    ) -> Result<Vec<u32>, CatalogError> {
         /// Struct representing an OID for a user object. Allocated OIDs can be recycled, so when we've
         /// allocated [`u32::MAX`] we'll wrap back around to [`FIRST_USER_OID`].
         struct UserOid(u32);
@@ -697,13 +711,12 @@ impl<'a> Transaction<'a> {
                 + self.schemas.items().len()
                 + self.roles.items().len()
                 + self.items.items().len()
-                + self.introspection_sources.items().len(),
+                + self.introspection_sources.items().len()
+                + temporary_oids.len(),
         );
         allocated_oids.extend(
-            self.databases
-                .items()
-                .values()
-                .map(|value| value.oid)
+            std::iter::empty()
+                .chain(self.databases.items().values().map(|value| value.oid))
                 .chain(self.schemas.items().values().map(|value| value.oid))
                 .chain(self.roles.items().values().map(|value| value.oid))
                 .chain(self.items.items().values().map(|value| value.oid))
@@ -714,6 +727,8 @@ impl<'a> Transaction<'a> {
                         .map(|value| value.oid),
                 ),
         );
+
+        let is_allocated = |oid| allocated_oids.contains(&oid) || temporary_oids.contains(&oid);
 
         let start_oid: u32 = self
             .id_allocator
@@ -729,7 +744,7 @@ impl<'a> Transaction<'a> {
             .expect("we should never persist an oid outside of user OID range");
         let mut oids = Vec::new();
         while oids.len() < u64_to_usize(amount) {
-            if !allocated_oids.contains(&current_oid.0) {
+            if !is_allocated(current_oid.0) {
                 oids.push(current_oid.0);
             }
             current_oid += 1;
@@ -762,8 +777,9 @@ impl<'a> Transaction<'a> {
 
     /// Allocates a single OID. OIDs can be recycled if they aren't currently assigned to any
     /// object.
-    pub fn allocate_oid(&mut self) -> Result<u32, CatalogError> {
-        self.allocate_oids(1).map(|oids| oids.into_element())
+    pub fn allocate_oid(&mut self, temporary_oids: &HashSet<u32>) -> Result<u32, CatalogError> {
+        self.allocate_oids(1, temporary_oids)
+            .map(|oids| oids.into_element())
     }
 
     pub(crate) fn insert_id_allocator(
@@ -1511,8 +1527,10 @@ impl<'a> Transaction<'a> {
     pub fn insert_introspection_source_indexes(
         &mut self,
         introspection_source_indexes: Vec<(ClusterId, String, GlobalId)>,
+        temporary_oids: &HashSet<u32>,
     ) -> Result<Vec<IntrospectionSourceIndex>, CatalogError> {
-        let oids = self.allocate_oids(usize_to_u64(introspection_source_indexes.len()))?;
+        let amount = usize_to_u64(introspection_source_indexes.len());
+        let oids = self.allocate_oids(amount, temporary_oids)?;
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
             .zip(oids.into_iter())
@@ -1583,15 +1601,6 @@ impl<'a> Transaction<'a> {
         val
     }
 
-    /// Updates the catalog `txn_wal_tables` "config" value to
-    /// match the `txn_wal_tables` "system var" value.
-    ///
-    /// These are mirrored so that we can toggle the flag with Launch Darkly,
-    /// but use it in boot before Launch Darkly is available.
-    pub fn set_txn_wal_tables(&mut self, value: TxnWalTablesImpl) -> Result<(), CatalogError> {
-        self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))
-    }
-
     /// Updates the catalog `enable_0dt_deployment` "config" value to
     /// match the `enable_0dt_deployment` "system var" value.
     ///
@@ -1599,15 +1608,6 @@ impl<'a> Transaction<'a> {
     /// but use it in boot before Launch Darkly is available.
     pub fn set_enable_0dt_deployment(&mut self, value: bool) -> Result<(), CatalogError> {
         self.set_config(ENABLE_0DT_DEPLOYMENT.into(), Some(u64::from(value)))
-    }
-
-    /// Removes the catalog `txn_wal_tables` "config" value to
-    /// match the `txn_wal_tables` "system var" value.
-    ///
-    /// These are mirrored so that we can toggle the flag with Launch Darkly,
-    /// but use it in boot before Launch Darkly is available.
-    pub fn reset_txn_wal_tables(&mut self) -> Result<(), CatalogError> {
-        self.set_config(TXN_WAL_TABLES.into(), None)
     }
 
     /// Removes the catalog `enable_0dt_deployment` "config" value to
@@ -1932,6 +1932,10 @@ impl<'a> Transaction<'a> {
         updates
     }
 
+    pub fn is_savepoint(&self) -> bool {
+        self.durable_catalog.is_savepoint()
+    }
+
     fn commit_op(&mut self) {
         self.op_id += 1;
     }
@@ -1991,7 +1995,7 @@ impl<'a> Transaction<'a> {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn commit_internal(
         self,
-    ) -> Result<&'a mut dyn DurableCatalogState, CatalogError> {
+    ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
         let (mut txn_batch, durable_catalog) = self.into_parts();
         let TransactionBatch {
             databases,
@@ -2039,8 +2043,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
 
-        durable_catalog.commit_transaction(txn_batch).await?;
-        Ok(durable_catalog)
+        let upper = durable_catalog.commit_transaction(txn_batch).await?;
+        Ok((durable_catalog, upper))
     }
 
     /// Commits the storage transaction to durable storage. Any error returned outside read-only
@@ -2067,9 +2071,9 @@ impl<'a> Transaction<'a> {
         );
 
         let commit_ts = self.commit_ts();
-        let durable_storage = self.commit_internal().await?;
+        let (durable_storage, upper) = self.commit_internal().await?;
         // Drain all the updates from the commit since it is assumed that they were already applied.
-        let updates = durable_storage.sync_updates(commit_ts).await?;
+        let updates = durable_storage.sync_updates(upper).await?;
         // Writable and savepoint catalogs should have consumed all updates before committing a
         // transaction, otherwise the commit was performed with an out of date state.
         // Read-only catalogs can only commit empty transactions, so they don't need to consume all

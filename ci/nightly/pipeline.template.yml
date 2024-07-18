@@ -163,6 +163,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-multi-broker
 
+      - id: redpanda-resumption
+        label: ":panda_face: resumption tests"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-resumption
+              args: [--redpanda]
+        agents:
+          queue: linux-aarch64
+
+
   - group: Testdrive
     key: testdrive
     steps:
@@ -251,7 +263,7 @@ steps:
               composition: testdrive
               args: [
                 --system-param=persist_part_decode_format=row_with_validate,
-                --system-param=persist_batch_columnar_format=both,
+                --system-param=persist_batch_columnar_format=both_v2,
               ]
 
       - id: testdrive-in-cloudtest
@@ -390,17 +402,6 @@ steps:
               composition: zippy
               args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
 
-      - id: zippy-user-tables-txn-wal
-        label: "Zippy User Tables + toggle txn-wal"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        agents:
-          queue: linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: zippy
-              args: [--scenario=UserTablesToggleTxnWal, --actions=10000, --max-execution-time=30m]
-
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
         depends_on: build-aarch64
@@ -513,7 +514,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          # A larger instance is needed due to frequent OOMs
+          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
           queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
@@ -525,7 +526,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          # A larger instance is needed due to frequent OOMs
           queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
@@ -586,7 +586,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel]
+              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
@@ -598,7 +598,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel]
+              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz"
@@ -610,7 +610,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, --execution-mode=parallel]
+              args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd"
@@ -622,7 +622,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel]
+              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd"
@@ -634,7 +634,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
+              args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-redpanda
         label: "Checks parallel + restart Redpanda & Debezium"
@@ -646,7 +646,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel]
+              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
@@ -657,7 +657,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMz]
+              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade"
@@ -668,7 +668,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PreflightCheckContinue]
+              args: [--scenario=PreflightCheckContinue, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
@@ -679,7 +679,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PreflightCheckRollback]
+              args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
@@ -690,7 +690,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzTwoVersions]
+              args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
@@ -701,7 +701,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzFourVersions]
+              args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-first
         label: "Platform checks upgrade, restarting compute clusterd first"
@@ -712,7 +712,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeFirst]
+              args: [--scenario=UpgradeClusterdComputeFirst, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-last
         label: "Platform checks upgrade, restarting compute clusterd last"
@@ -723,7 +723,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeLast]
+              args: [--scenario=UpgradeClusterdComputeLast, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-kill-clusterd-storage
         label: "Checks + kill storage clusterd"
@@ -770,40 +770,6 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-txn-wal-toggle
-        label: "Checks + Toggle txn_wal"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        agents:
-          # Seems to require more memory on aarch64
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TxnWalToggle, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-txn-wal-fencing
-        label: "Checks + txn_wal fencing"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-toggle-persist-roundtrip-spine
-        label: "Checks toggling persist roundtrip spine"
-        depends_on: build-aarch64
-        timeout_in_minutes: 45
-        agents:
-          queue: linux-aarch64-large
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TogglePersistRoundtripSpine, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-toggle-persist-batch-columnar-format
         label: "Checks toggling persist batch columnar format"
         depends_on: build-aarch64
@@ -814,6 +780,50 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=TogglePersistBatchColumnarFormat, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-restart-entire-mz
+        label: "Checks 0dt restart of the entire Mz"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-upgrade-entire-mz
+        label: "Checks 0dt upgrade, whole-Mz restart"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-upgrade-entire-mz-two-versions
+        label: "Checks 0dt upgrade across two versions"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-upgrade-entire-mz-four-versions
+        label: "Checks 0dt upgrade across four versions"
+        depends_on: build-aarch64
+        timeout_in_minutes: 90
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -1070,7 +1080,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
-              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering"]
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering", "--other-tag=common-ancestor"]
 
       - id: output-consistency-version-ctf
         label: "Output consistency (version for CTF)"
@@ -1081,7 +1091,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
-              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding"]
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding", "--other-tag=common-ancestor"]
 
 
   - group: SQLsmith
@@ -1332,19 +1342,20 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --complexity=ddl-only, --threads=2]
 
-      - id: parallel-workload-100-threads
-        label: "Parallel Workload (50 threads)"
+      - id: parallel-workload-many-threads
+        label: "Parallel Workload (many threads)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64
+          # Sporadic OoM otherwise
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1397,7 +1408,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill, --threads=16]
+              args: [--runtime=1500, --scenario=kill, --threads=8]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
@@ -1412,23 +1423,11 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
 
-      - id: parallel-workload-txn-wal
-        label: "Parallel Workload (toggle txn-wal)"
-        depends_on: build-aarch64
-        artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: parallel-workload
-              args: [--runtime=1500, --scenario=toggle-txn-wal, --threads=16]
-
   - id: incident-70
     label: "Test for incident 70"
     depends_on: build-aarch64
     timeout_in_minutes: 15
-    skip: "Affected by #15209"
+    skip: "Affected by incidents-and-escalations#72"
     agents:
       queue: linux-aarch64
     plugins:
@@ -1488,6 +1487,16 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
+    agents:
+      queue: linux-aarch64
+
+  - id: 0dt
+    label: Zero downtime
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
     agents:
       queue: linux-aarch64
 

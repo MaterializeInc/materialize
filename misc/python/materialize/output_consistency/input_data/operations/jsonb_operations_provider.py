@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from materialize.output_consistency.input_data.params.any_operation_param import (
+    AnyOperationParam,
+)
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     JSON_FIELD_INDEX_PARAM,
     JSON_FIELD_NAME_PARAM,
@@ -14,6 +16,12 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
 )
 from materialize.output_consistency.input_data.params.jsonb_operation_param import (
     JsonbOperationParam,
+)
+from materialize.output_consistency.input_data.params.record_operation_param import (
+    RecordOperationParam,
+)
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -29,13 +37,16 @@ from materialize.output_consistency.input_data.return_specs.string_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
+    OperationRelevance,
 )
 
 JSONB_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TAG_JSONB_TO_TEXT = "jsonb_to_text"
+TAG_JSONB_AGGREGATION = "jsonb_aggregation"
 
 JSONB_OPERATION_TYPES.append(
     DbOperation(
@@ -149,4 +160,65 @@ JSONB_OPERATION_TYPES.append(
         [JsonbOperationParam()],
         JsonbReturnTypeSpec(),
     )
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunctionWithCustomPattern(
+        "jsonb_agg",
+        {2: "jsonb_agg($ ORDER BY row_index, $)"},
+        [
+            AnyOperationParam(include_record_type=False),
+            SameOperationParam(index_of_previous_param=0),
+        ],
+        JsonbReturnTypeSpec(),
+        is_aggregation=True,
+        relevance=OperationRelevance.LOW,
+        tags={TAG_JSONB_AGGREGATION},
+        comment="generic variant without records",
+    ),
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunctionWithCustomPattern(
+        "jsonb_agg",
+        {2: "jsonb_agg($ ORDER BY row_index, $)"},
+        [RecordOperationParam(), SameOperationParam(index_of_previous_param=0)],
+        JsonbReturnTypeSpec(),
+        is_aggregation=True,
+        tags={TAG_JSONB_AGGREGATION},
+        comment="additional overlapping variant only for records",
+    ),
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunctionWithCustomPattern(
+        "jsonb_object_agg",
+        {3: "jsonb_object_agg($, $ ORDER BY row_index, $)"},
+        [
+            AnyOperationParam(),
+            AnyOperationParam(include_record_type=False),
+            SameOperationParam(index_of_previous_param=0),
+        ],
+        JsonbReturnTypeSpec(),
+        is_aggregation=True,
+        relevance=OperationRelevance.LOW,
+        tags={TAG_JSONB_AGGREGATION},
+        comment="generic variant without record values",
+    ),
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunctionWithCustomPattern(
+        "jsonb_object_agg",
+        {3: "jsonb_object_agg($, $ ORDER BY row_index, $)"},
+        [
+            AnyOperationParam(),
+            RecordOperationParam(),
+            SameOperationParam(index_of_previous_param=0),
+        ],
+        JsonbReturnTypeSpec(),
+        is_aggregation=True,
+        tags={TAG_JSONB_AGGREGATION},
+        comment="additional overlapping variant only for records",
+    ),
 )

@@ -3973,6 +3973,12 @@ fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
 pub struct PropArray(Row, Vec<PropDatum>);
 
 fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropArray> {
+    // Elements in Arrays can always be Null.
+    let element_strategy = Union::new_weighted(vec![
+        (20, element_strategy),
+        (1, Just(PropDatum::Null).boxed()),
+    ]);
+
     prop::collection::vec(
         arb_array_dimension(),
         1..usize::from(crate::adt::array::MAX_ARRAY_DIMENSIONS),
@@ -3999,6 +4005,12 @@ fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropAr
 pub struct PropList(Row, Vec<PropDatum>);
 
 fn arb_list(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropList> {
+    // Elements in Lists can always be Null.
+    let element_strategy = Union::new_weighted(vec![
+        (20, element_strategy),
+        (1, Just(PropDatum::Null).boxed()),
+    ]);
+
     prop::collection::vec(element_strategy, 1..50)
         .prop_map(|elements| {
             let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
@@ -4148,6 +4160,12 @@ fn arb_range(
 pub struct PropDict(Row, Vec<(String, PropDatum)>);
 
 fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDict> {
+    // Elements in Maps can always be Null.
+    let element_strategy = Union::new_weighted(vec![
+        (20, element_strategy),
+        (1, Just(PropDatum::Null).boxed()),
+    ]);
+
     prop::collection::vec((".*", element_strategy), 1..50)
         .prop_map(|mut entries| {
             entries.sort_by_key(|(k, _)| k.clone());
@@ -4328,6 +4346,7 @@ fn verify_base_eq_record_nullability() {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -4337,7 +4356,7 @@ mod tests {
        #[cfg_attr(miri, ignore)] // too slow
         fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

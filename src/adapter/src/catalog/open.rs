@@ -9,6 +9,8 @@
 
 //! Logic related to opening a [`Catalog`].
 
+mod builtin_item_migration;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,7 +31,7 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    BootstrapStateUpdateKind, CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges,
+    BootstrapStateUpdateKind, CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateDiff,
     StateUpdate, StateUpdateKind,
 };
 use mz_catalog::SYSTEM_CONN_ID;
@@ -56,12 +58,14 @@ use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::StorageController;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use timely::Container;
-use tracing::{info, warn, Instrument};
+use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::catalog::open::builtin_item_migration::{
+    migrate_builtin_items, BuiltinItemMigrationResult,
+};
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
@@ -166,7 +170,7 @@ impl Catalog {
     ) -> Result<
         (
             CatalogState,
-            BuiltinMigrationMetadata,
+            BTreeSet<GlobalId>,
             Vec<BuiltinTableUpdate>,
             String,
         ),
@@ -271,10 +275,6 @@ impl Catalog {
                     txn.upsert_system_config(&name, value)?;
                 }
                 txn.set_system_config_synced_once()?;
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
-                // storage "config" collection so that we can toggle the flag with
-                // Launch Darkly, but use it in boot before Launch Darkly is available.
-                txn.set_txn_wal_tables(state.system_config().txn_wal_tables())?;
             }
             // Add any new builtin objects and remove old ones.
             let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
@@ -421,30 +421,27 @@ impl Catalog {
         builtin_table_updates.extend(builtin_table_update);
 
         // Migrate builtin items.
-        let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
-            .map(|builtin| {
-                let id = state.resolve_builtin_object(builtin);
-                let fingerprint = builtin.fingerprint();
-                (id, fingerprint)
-            })
-            .collect();
-        let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
-            &state,
+        let BuiltinItemMigrationResult {
+            builtin_table_updates: builtin_table_update,
+            storage_collections_to_drop,
+            cleanup_action,
+        } = migrate_builtin_items(
+            &mut state,
             &mut txn,
             migrated_builtins,
-            id_fingerprint_map,
-        )?;
-        let builtin_table_update =
-            Catalog::apply_builtin_migration(&mut state, &mut txn, &mut builtin_migration_metadata)
-                .await?;
+            config.builtin_item_migration_config,
+        )
+        .await?;
         builtin_table_updates.extend(builtin_table_update);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
         txn.commit().await?;
 
+        cleanup_action.await;
+
         Ok((
             state,
-            builtin_migration_metadata,
+            storage_collections_to_drop,
             builtin_table_updates,
             last_seen_version,
         ))
@@ -466,19 +463,11 @@ impl Catalog {
         boot_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
-        Result<
-            (
-                Catalog,
-                BuiltinMigrationMetadata,
-                Vec<BuiltinTableUpdate>,
-                String,
-            ),
-            AdapterError,
-        >,
+        Result<(Catalog, BTreeSet<GlobalId>, Vec<BuiltinTableUpdate>, String), AdapterError>,
     > {
         async move {
             let mut storage = config.storage;
-            let (state, builtin_migration_metadata, mut builtin_table_updates, last_seen_version) =
+            let (state, storage_collections_to_drop, mut builtin_table_updates, last_seen_version) =
                 // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
                 // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
                 // Because of that we purposefully move this Future onto the heap (i.e. Box it).
@@ -532,21 +521,25 @@ impl Catalog {
                 }
             }
 
-            {
-                let mut storage = catalog.storage().await;
-                let updates = storage
-                    .prune_storage_usage(config.storage_usage_retention_period, boot_ts)
-                    .await?;
-                soft_assert_no_log!(
-                    updates
-                        .iter()
-                        .all(|update| matches!(update.kind, StateUpdateKind::StorageUsage(_))),
-                    "unexpected update kinds: {updates:?}"
-                );
-                let storage_usage_builtin_table_updates =
-                    catalog.state.generate_builtin_table_updates(updates);
-                builtin_table_updates.extend(storage_usage_builtin_table_updates);
-            }
+            let storage_usage_events = catalog
+                .storage()
+                .await
+                .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
+                .await?
+                .into_iter()
+                .map(|metric| StateUpdate {
+                    kind: StateUpdateKind::StorageUsage(
+                        mz_catalog::durable::objects::StorageUsage { metric },
+                    ),
+                    ts: boot_ts,
+                    diff: StateDiff::Addition,
+                })
+                .collect();
+            builtin_table_updates.extend(
+                catalog
+                    .state
+                    .generate_builtin_table_updates(storage_usage_events),
+            );
 
             for ip in &catalog.state.egress_ips {
                 builtin_table_updates.push(
@@ -558,7 +551,7 @@ impl Catalog {
 
             Ok((
                 catalog,
-                builtin_migration_metadata,
+                storage_collections_to_drop,
                 builtin_table_updates,
                 last_seen_version,
             ))
@@ -576,7 +569,7 @@ impl Catalog {
     async fn initialize_storage_controller_state(
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
+        storage_collections_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
@@ -592,11 +585,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_state(
-                &mut txn,
-                collections,
-                builtin_migration_metadata.previous_storage_collection_ids,
-            )
+            .initialize_state(&mut txn, collections, storage_collections_to_drop)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -618,10 +607,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
+        storage_collections_to_drop: BTreeSet<GlobalId>,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let mut controller = {
@@ -638,19 +624,12 @@ impl Catalog {
 
             let read_only_tx = storage.transaction().await?;
 
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                txn_wal_tables,
-                &read_only_tx,
-            )
-            .await
+            mz_controller::Controller::new(config, envd_epoch, read_only, &read_only_tx).await
         };
 
         self.initialize_storage_controller_state(
             &mut *controller.storage,
-            builtin_migration_metadata,
+            storage_collections_to_drop,
         )
         .await?;
 
@@ -839,6 +818,19 @@ impl Catalog {
         txn: &mut Transaction<'_>,
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, Error> {
+        for id in &migration_metadata.user_item_drop_ops {
+            let entry = state.get_entry(id);
+            if entry.is_sink() {
+                let full_name = state.resolve_full_name(entry.name(), None);
+                error!(
+                    "user sink {full_name} will be recreated as part of a builtin migration which \
+                    can result in duplicate data being emitted. This is a known issue, \
+                    https://github.com/MaterializeInc/materialize/issues/18767. Please inform the \
+                    customer that their sink may produce duplicate data."
+                )
+            }
+        }
+
         let mut builtin_table_updates = Vec::new();
         txn.remove_items(&migration_metadata.user_item_drop_ops.drain(..).collect())?;
         txn.update_system_object_mappings(std::mem::take(
@@ -1037,6 +1029,7 @@ fn add_new_builtin_clusters_migration(
                         schedule: Default::default(),
                     }),
                 },
+                &HashSet::new(),
             )?;
         }
     }
@@ -1073,7 +1066,7 @@ fn add_new_remove_old_builtin_introspection_source_migration(
                 .map(|name| (cluster.id, name)),
         );
     }
-    txn.insert_introspection_source_indexes(new_indexes)?;
+    txn.insert_introspection_source_indexes(new_indexes, &HashSet::new())?;
     txn.remove_introspection_source_indexes(removed_indexes)?;
     Ok(())
 }

@@ -1547,6 +1547,7 @@ EOF
 # (1) a Filter (#1 > 7) over l0 appears twice.
 # (2) l2 is equivalent to l5.
 # (3) l1 is not equivalent (although structurally equal) to l4.
+# With #27389 this stopped testing what it says it tests; see issue #28308.
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
@@ -1589,38 +1590,26 @@ Explained Query:
       Filter (#0 > 7) // { arity: 2 }
         Get l0 // { arity: 2 }
       Filter (#0 > 7) // { arity: 2 }
-        Get l3 // { arity: 2 }
+        Get l1 // { arity: 2 }
       Filter (#0 > 7) // { arity: 2 }
-        Get l6 // { arity: 2 }
+        Get l2 // { arity: 2 }
   With Mutually Recursive
-    cte l6 =
-      Union // { arity: 2 }
-        Filter (#1 > 7) // { arity: 2 }
-          Get l0 // { arity: 2 }
-        Get l4 // { arity: 2 }
-        Get l4 // { arity: 2 }
-        Get l5 // { arity: 2 }
-        Get l5 // { arity: 2 }
-    cte l5 =
-      Filter (#1 > 7) // { arity: 2 }
-        Get l6 // { arity: 2 }
-    cte l4 =
-      Filter (#1 > 7) // { arity: 2 }
-        Get l3 // { arity: 2 }
-    cte l3 =
-      Union // { arity: 2 }
-        Filter (#1 > 7) // { arity: 2 }
-          Get l0 // { arity: 2 }
-        Get l1 // { arity: 2 }
-        Get l1 // { arity: 2 }
-        Get l2 // { arity: 2 }
-        Get l2 // { arity: 2 }
     cte l2 =
-      Filter (#1 > 7) // { arity: 2 }
-        Get l6 // { arity: 2 }
+      Union // { arity: 2 }
+        Filter (#1 > 7) // { arity: 2 }
+          Get l0 // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l2 // { arity: 2 }
+        Get l2 // { arity: 2 }
     cte l1 =
-      Filter (#1 > 7) // { arity: 2 }
-        Get l3 // { arity: 2 }
+      Union // { arity: 2 }
+        Filter (#1 > 7) // { arity: 2 }
+          Get l0 // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l2 // { arity: 2 }
+        Get l2 // { arity: 2 }
     cte l0 =
       Union // { arity: 2 }
         ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }

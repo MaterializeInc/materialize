@@ -45,8 +45,9 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica, SelectStatement,
-    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
+    SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
+    WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -104,6 +105,9 @@ pub use statement::{
     describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,
     StatementDesc,
 };
+
+use self::statement::ddl::ClusterAlterOptionExtracted;
+use self::with_options::TryFromValue;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
@@ -252,6 +256,7 @@ impl Plan {
             | StatementKind::CreateSubsource
             | StatementKind::CreateWebhookSource => &[PlanKind::CreateSource],
             StatementKind::CreateTable => &[PlanKind::CreateTable],
+            StatementKind::CreateTableFromSource => &[PlanKind::CreateTable],
             StatementKind::CreateType => &[PlanKind::CreateType],
             StatementKind::CreateView => &[PlanKind::CreateView],
             StatementKind::Deallocate => &[PlanKind::Deallocate],
@@ -590,9 +595,9 @@ pub enum ClusterSchedule {
     /// The system won't automatically turn the cluster On or Off.
     Manual,
     /// The cluster will be On when a REFRESH materialized view on it needs to refresh.
-    /// `rehydration_time_estimate` determines how much time before a refresh to turn the
+    /// `hydration_time_estimate` determines how much time before a refresh to turn the
     /// cluster On, so that it can rehydrate already before the refresh time.
-    Refresh { rehydration_time_estimate: Duration },
+    Refresh { hydration_time_estimate: Duration },
 }
 
 impl Default for ClusterSchedule {
@@ -1079,6 +1084,7 @@ pub struct AlterClusterPlan {
     pub id: ClusterId,
     pub name: String,
     pub options: PlanClusterOption,
+    pub strategy: AlterClusterPlanStrategy,
 }
 
 #[derive(Debug)]
@@ -1631,6 +1637,46 @@ impl Default for PlanClusterOption {
             disk: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AlterClusterPlanStrategy {
+    pub condition: AlterClusterStrategyCondition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AlterClusterStrategyCondition {
+    None,
+    For(Duration),
+}
+
+impl AlterClusterStrategyCondition {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+impl Default for AlterClusterPlanStrategy {
+    fn default() -> Self {
+        Self {
+            condition: AlterClusterStrategyCondition::None,
+        }
+    }
+}
+
+impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
+    type Error = PlanError;
+
+    fn try_from(value: ClusterAlterOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(Self {
+            condition: match value.wait {
+                Some(ClusterAlterOptionValue::For(v)) => {
+                    AlterClusterStrategyCondition::For(Duration::try_from_value(v)?)
+                }
+                None => AlterClusterStrategyCondition::None,
+            },
+        })
     }
 }
 

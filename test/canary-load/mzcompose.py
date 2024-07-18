@@ -66,7 +66,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         c.up("testdrive", persistent=True)
 
-        failures = []
+        failures: list[TestFailureDetails] = []
 
         count_chunk = 0
         while time.time() - start_time < args.runtime:
@@ -142,7 +142,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     continue
                 print(f"Test failure occurred ({msg}), collecting it, and continuing.")
                 # collect, continue, and rethrow at the end
-                failures.append(msg)
+                failures.append(TestFailureDetails(message=msg, details=None))
 
         if len(failures) > 0:
             # reset test case name to remove current iteration and chunk, which does not apply to collected errors

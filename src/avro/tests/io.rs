@@ -31,6 +31,7 @@ use mz_avro::error::Error as AvroError;
 use mz_avro::schema::resolve_schemas;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::{from_avro_datum, to_avro_datum, Schema, ValidationError};
+use mz_ore::assert_err;
 use once_cell::sync::Lazy;
 
 static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
@@ -256,7 +257,7 @@ fn test_unknown_symbol() {
     let encoded = to_avro_datum(&writer_schema, original_value).unwrap();
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
     let decoded = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded));
-    assert!(decoded.is_err());
+    assert_err!(decoded);
 }
 
 #[mz_ore::test]

@@ -81,7 +81,6 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
 use mz_repr::user::ExternalUserMetadata;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -128,7 +127,7 @@ pub enum VarInput<'a> {
 
 impl<'a> VarInput<'a> {
     /// Converts the variable input to an owned vector of strings.
-    fn to_vec(&self) -> Vec<String> {
+    pub fn to_vec(&self) -> Vec<String> {
         match self {
             VarInput::Flat(v) => vec![v.to_string()],
             VarInput::SqlSet(values) => values.into_iter().map(|v| v.to_string()).collect(),
@@ -1203,7 +1202,6 @@ impl SystemVars {
             &STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO,
             &STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS,
             &PERSIST_FAST_PATH_LIMIT,
-            &TXN_WAL_TABLES,
             &METRICS_RETENTION,
             &UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP,
             &ENABLE_RBAC_CHECKS,
@@ -1784,10 +1782,6 @@ impl SystemVars {
 
     pub fn persist_fast_path_limit(&self) -> usize {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
-    }
-
-    pub fn txn_wal_tables(&self) -> TxnWalTablesImpl {
-        *self.expect_value(&TXN_WAL_TABLES)
     }
 
     /// Returns the `pg_source_connect_timeout` configuration parameter.

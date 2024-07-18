@@ -2550,46 +2550,46 @@ Explained Query:
                                           ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
                                             Get l2 // { arity: 2 }
                                           ArrangeBy keys=[[#1, #0]] // { arity: 2 }
-                                            Distinct project=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] // { arity: 2 }
-                                              Project (#0{person1id}, #1{person2id}) // { arity: 2 }
-                                                Get l1 // { arity: 3 }
+                                            Distinct project=[#0, #1] // { arity: 2 }
+                                              Project (#2, #3) // { arity: 2 }
+                                                Get l1 // { arity: 5 }
                                     Get l2 // { arity: 2 }
-                                Get l1 // { arity: 3 }
+                                Project (#0{person1id}, #1{person2id}, #4) // { arity: 3 }
+                                  Get l1 // { arity: 5 }
                   Constant // { arity: 2 }
                     - (1450, 0)
       cte l2 =
         Project (#1{person2id}, #2) // { arity: 2 }
           ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
       cte l1 =
-        Project (#0{person1id}, #1{person2id}, #4) // { arity: 3 }
-          Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 5 }
-            implementation
-              %1[#1, #0]UKK » %0:person_knows_person[greatest(#0, #1), least(#0, #1)]KK
-            ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
-              Project (#1{person2id}, #2) // { arity: 2 }
-                ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
-            ArrangeBy keys=[[#1, #0]] // { arity: 3 }
-              Reduce group_by=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] aggregates=[sum(case when (#2{parentmessageid}) IS NULL then 10 else 5 end)] // { arity: 3 }
-                Project (#1{person2id}, #2{parentmessageid}, #6) // { arity: 3 }
-                  Join on=(#1{person1id} = #4{creatorpersonid} AND #2{person2id} = #7{creatorpersonid} AND #3{messageid} = #9{parentmessageid} AND #5{containerforumid} = #10{id} AND #8{containerforumid} = #11{id}) type=delta // { arity: 12 }
-                    implementation
-                      %0:person_knows_person » %1:message[#1]KA » %3:l0[#0]UK » %2:message[#0, #2]KK » %4:l0[#0]UK
-                      %1:message » %3:l0[#0]UK » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
-                      %2:message » %4:l0[#0]UK » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
-                      %3:l0 » %1:message[#2]KA » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
-                      %4:l0 » %2:message[#1]KA » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
-                    ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
-                      ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
-                    ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}], [#2{containerforumid}]] // { arity: 4 }
-                      Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
-                        Filter (#10{containerforumid}) IS NOT NULL // { arity: 13 }
-                          ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
-                    ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}], [#1{containerforumid}]] // { arity: 3 }
-                      Project (#9, #10, #12) // { arity: 3 }
-                        Filter (#10{containerforumid}) IS NOT NULL AND (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
-                          ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
-                    Get l0 // { arity: 1 }
-                    Get l0 // { arity: 1 }
+        Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 5 }
+          implementation
+            %1[#1, #0]UKK » %0:person_knows_person[greatest(#0, #1), least(#0, #1)]KK
+          ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
+            Project (#1{person2id}, #2) // { arity: 2 }
+              ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
+          ArrangeBy keys=[[#1, #0]] // { arity: 3 }
+            Reduce group_by=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] aggregates=[sum(case when (#2{parentmessageid}) IS NULL then 10 else 5 end)] // { arity: 3 }
+              Project (#1{person2id}, #2{parentmessageid}, #6) // { arity: 3 }
+                Join on=(#1{person1id} = #4{creatorpersonid} AND #2{person2id} = #7{creatorpersonid} AND #3{messageid} = #9{parentmessageid} AND #5{containerforumid} = #10{id} AND #8{containerforumid} = #11{id}) type=delta // { arity: 12 }
+                  implementation
+                    %0:person_knows_person » %1:message[#1]KA » %3:l0[#0]UK » %2:message[#0, #2]KK » %4:l0[#0]UK
+                    %1:message » %3:l0[#0]UK » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
+                    %2:message » %4:l0[#0]UK » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
+                    %3:l0 » %1:message[#2]KA » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
+                    %4:l0 » %2:message[#1]KA » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
+                  ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
+                    ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
+                  ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}], [#2{containerforumid}]] // { arity: 4 }
+                    Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
+                      Filter (#10{containerforumid}) IS NOT NULL // { arity: 13 }
+                        ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+                  ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}], [#1{containerforumid}]] // { arity: 3 }
+                    Project (#9, #10, #12) // { arity: 3 }
+                      Filter (#10{containerforumid}) IS NOT NULL AND (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
+                        ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+                  Get l0 // { arity: 1 }
+                  Get l0 // { arity: 1 }
       cte l0 =
         ArrangeBy keys=[[#0{id}]] // { arity: 1 }
           Distinct project=[#0{id}] // { arity: 1 }
@@ -2946,44 +2946,44 @@ Explained Query:
                       ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
                         Get l2 // { arity: 2 }
                       ArrangeBy keys=[[#1, #0]] // { arity: 2 }
-                        Distinct project=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] // { arity: 2 }
-                          Project (#0{person1id}, #1{person2id}) // { arity: 2 }
-                            Get l1 // { arity: 3 }
+                        Distinct project=[#0, #1] // { arity: 2 }
+                          Project (#2, #3) // { arity: 2 }
+                            Get l1 // { arity: 5 }
                 Get l2 // { arity: 2 }
-            Get l1 // { arity: 3 }
+            Project (#0{person1id}, #1{person2id}, #4) // { arity: 3 }
+              Get l1 // { arity: 5 }
     cte l2 =
       Project (#1{person2id}, #2) // { arity: 2 }
         ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
     cte l1 =
-      Project (#0{person1id}, #1{person2id}, #4) // { arity: 3 }
-        Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 5 }
-          implementation
-            %1[#1, #0]UKK » %0:person_knows_person[greatest(#0, #1), least(#0, #1)]KK
-          ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
-            Project (#1{person2id}, #2) // { arity: 2 }
-              ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
-          ArrangeBy keys=[[#1, #0]] // { arity: 3 }
-            Reduce group_by=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] aggregates=[sum(case when (#2{parentmessageid}) IS NULL then 10 else 5 end)] // { arity: 3 }
-              Project (#1{person2id}, #2{parentmessageid}, #6) // { arity: 3 }
-                Join on=(#1{person1id} = #4{creatorpersonid} AND #2{person2id} = #7{creatorpersonid} AND #3{messageid} = #9{parentmessageid} AND #5{containerforumid} = #10{id} AND #8{containerforumid} = #11{id}) type=delta // { arity: 12 }
-                  implementation
-                    %0:person_knows_person » %1:message[#1]KA » %3:l0[#0]UK » %2:message[#0, #2]KK » %4:l0[#0]UK
-                    %1:message » %3:l0[#0]UK » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
-                    %2:message » %4:l0[#0]UK » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
-                    %3:l0 » %1:message[#2]KA » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
-                    %4:l0 » %2:message[#1]KA » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
-                  ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
-                    ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
-                  ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}], [#2{containerforumid}]] // { arity: 4 }
-                    Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
-                      Filter (#10{containerforumid}) IS NOT NULL // { arity: 13 }
-                        ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
-                  ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}], [#1{containerforumid}]] // { arity: 3 }
-                    Project (#9, #10, #12) // { arity: 3 }
-                      Filter (#10{containerforumid}) IS NOT NULL AND (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
-                        ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
-                  Get l0 // { arity: 1 }
-                  Get l0 // { arity: 1 }
+      Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 5 }
+        implementation
+          %1[#1, #0]UKK » %0:person_knows_person[greatest(#0, #1), least(#0, #1)]KK
+        ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }
+          Project (#1{person2id}, #2) // { arity: 2 }
+            ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
+        ArrangeBy keys=[[#1, #0]] // { arity: 3 }
+          Reduce group_by=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] aggregates=[sum(case when (#2{parentmessageid}) IS NULL then 10 else 5 end)] // { arity: 3 }
+            Project (#1{person2id}, #2{parentmessageid}, #6) // { arity: 3 }
+              Join on=(#1{person1id} = #4{creatorpersonid} AND #2{person2id} = #7{creatorpersonid} AND #3{messageid} = #9{parentmessageid} AND #5{containerforumid} = #10{id} AND #8{containerforumid} = #11{id}) type=delta // { arity: 12 }
+                implementation
+                  %0:person_knows_person » %1:message[#1]KA » %3:l0[#0]UK » %2:message[#0, #2]KK » %4:l0[#0]UK
+                  %1:message » %3:l0[#0]UK » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
+                  %2:message » %4:l0[#0]UK » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
+                  %3:l0 » %1:message[#2]KA » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK » %4:l0[#0]UK
+                  %4:l0 » %2:message[#1]KA » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK » %3:l0[#0]UK
+                ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
+                  ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
+                ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}], [#2{containerforumid}]] // { arity: 4 }
+                  Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
+                    Filter (#10{containerforumid}) IS NOT NULL // { arity: 13 }
+                      ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+                ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}], [#1{containerforumid}]] // { arity: 3 }
+                  Project (#9, #10, #12) // { arity: 3 }
+                    Filter (#10{containerforumid}) IS NOT NULL AND (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
+                      ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+                Get l0 // { arity: 1 }
+                Get l0 // { arity: 1 }
     cte l0 =
       ArrangeBy keys=[[#0{id}]] // { arity: 1 }
         Distinct project=[#0{id}] // { arity: 1 }

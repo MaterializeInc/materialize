@@ -25,12 +25,23 @@ $ set-arg-default single-replica-cluster=quickstart
 # collection when it changes.
 > INSERT INTO post_alter VALUES ('ignored', 0);
 
+! CREATE SINK sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM mz_tables
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-sink-${testdrive.seed}')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM;
+contains: creating a sink directly on a catalog object not yet supported
+
 > CREATE SINK sink
   IN CLUSTER ${arg.single-replica-cluster}
   FROM pre_alter
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-sink-${testdrive.seed}')
   FORMAT JSON
   ENVELOPE DEBEZIUM;
+
+! ALTER SINK sink SET FROM mz_tables;
+contains: creating a sink directly on a catalog object not yet supported
 
 $ kafka-verify-data format=json sink=materialize.public.sink key=false
 {"before": null, "after": {"pre_name": "fish"}}

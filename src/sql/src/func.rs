@@ -1656,7 +1656,7 @@ macro_rules! builtins {
                 assert_eq!(imp.return_is_set, expect_set_return, "wrong set return value for func with oid {}", imp.oid);
             }
             let old = builtins.insert($name, func);
-            assert!(old.is_none(), "duplicate entry in builtins list {:?}", old);
+            mz_ore::assert_none!(old, "duplicate entry in builtins list");
         )+
         builtins
     }};
@@ -2313,6 +2313,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "pg_column_size" => Scalar {
             params!(Any) => UnaryFunc::PgColumnSize(func::PgColumnSize) => Int32, 1269;
+        },
+        "pg_size_pretty" => Scalar {
+            params!(Numeric) => UnaryFunc::PgSizePretty(func::PgSizePretty) => String, 3166;
         },
         "mz_row_size" => Scalar {
             params!(Any) => Operation::unary(|ecx, e| {

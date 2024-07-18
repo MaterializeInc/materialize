@@ -1131,6 +1131,7 @@ impl RustType<proto_flat_plan_node::ProtoUpdate> for (Row, mz_repr::Timestamp, i
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -1140,7 +1141,7 @@ mod tests {
         #[mz_ore::test]
         fn flat_plan_protobuf_roundtrip(expect in any::<FlatPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoFlatPlan>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 

@@ -15,6 +15,7 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::Codec64;
@@ -823,7 +824,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
 
     let batches = {
         let mut batches = BTreeMap::new();
-        trace.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+        trace.map_batches(|b| assert_none!(batches.insert(b.clone(), ())));
         apply_diffs_map("spine", diffs.clone(), &mut batches).map(|_ok| batches)
     };
 
@@ -851,7 +852,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             });
 
             let mut batches = BTreeMap::new();
-            reconstructed_spine.map_batches(|b| assert!(batches.insert(b.clone(), ()).is_none()));
+            reconstructed_spine.map_batches(|b| assert_none!(batches.insert(b.clone(), ())));
             apply_diffs_map("spine", diffs, &mut batches)?;
             batches
         }

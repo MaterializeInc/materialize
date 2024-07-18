@@ -16,9 +16,9 @@ use mz_audit_log::{
     DropClusterReplicaV2, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
     GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
     RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
-    RevokeRoleV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1, SchemaV2,
-    StorageUsageV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
-    VersionedStorageUsage,
+    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1,
+    SchemaV2, SetV1, StorageUsageV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
+    VersionedEvent, VersionedStorageUsage,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
@@ -92,11 +92,11 @@ impl RustType<proto::ClusterSchedule> for ClusterSchedule {
                 value: Some(cluster_schedule::Value::Manual(Empty {})),
             },
             ClusterSchedule::Refresh {
-                rehydration_time_estimate,
+                hydration_time_estimate,
             } => proto::ClusterSchedule {
                 value: Some(cluster_schedule::Value::Refresh(
                     ClusterScheduleRefreshOptions {
-                        rehydration_time_estimate: Some(rehydration_time_estimate.into_proto()),
+                        rehydration_time_estimate: Some(hydration_time_estimate.into_proto()),
                     },
                 )),
             },
@@ -108,7 +108,7 @@ impl RustType<proto::ClusterSchedule> for ClusterSchedule {
             None => Ok(Default::default()),
             Some(cluster_schedule::Value::Manual(Empty {})) => Ok(ClusterSchedule::Manual),
             Some(cluster_schedule::Value::Refresh(csro)) => Ok(ClusterSchedule::Refresh {
-                rehydration_time_estimate: csro
+                hydration_time_estimate: csro
                     .rehydration_time_estimate
                     .into_rust_if_some("rehydration_time_estimate")?,
             }),
@@ -1448,6 +1448,7 @@ impl RustType<proto::audit_log_event_v1::EventType> for EventType {
             EventType::Alter => proto::audit_log_event_v1::EventType::Alter,
             EventType::Grant => proto::audit_log_event_v1::EventType::Grant,
             EventType::Revoke => proto::audit_log_event_v1::EventType::Revoke,
+            EventType::Comment => proto::audit_log_event_v1::EventType::Comment,
         }
     }
 
@@ -1458,6 +1459,7 @@ impl RustType<proto::audit_log_event_v1::EventType> for EventType {
             proto::audit_log_event_v1::EventType::Alter => Ok(EventType::Alter),
             proto::audit_log_event_v1::EventType::Grant => Ok(EventType::Grant),
             proto::audit_log_event_v1::EventType::Revoke => Ok(EventType::Revoke),
+            proto::audit_log_event_v1::EventType::Comment => Ok(EventType::Comment),
             proto::audit_log_event_v1::EventType::Unknown => Err(
                 TryFromProtoError::unknown_enum_variant("EventType::Unknown"),
             ),
@@ -1841,7 +1843,7 @@ impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV1>
         proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
             decision: Some(decision),
             objects_needing_refresh: self.objects_needing_refresh.clone(),
-            rehydration_time_estimate: self.rehydration_time_estimate.clone(),
+            rehydration_time_estimate: self.hydration_time_estimate.clone(),
         }
     }
 
@@ -1864,7 +1866,7 @@ impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV1>
         Ok(RefreshDecisionWithReasonV1 {
             decision,
             objects_needing_refresh: proto.objects_needing_refresh,
-            rehydration_time_estimate: proto.rehydration_time_estimate,
+            hydration_time_estimate: proto.rehydration_time_estimate,
         })
     }
 }
@@ -2271,6 +2273,40 @@ impl RustType<proto::audit_log_event_v1::FromPreviousIdV1> for FromPreviousIdV1 
     }
 }
 
+impl RustType<proto::audit_log_event_v1::SetV1> for SetV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::SetV1 {
+        proto::audit_log_event_v1::SetV1 {
+            name: self.name.clone(),
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::SetV1) -> Result<Self, TryFromProtoError> {
+        Ok(SetV1 {
+            name: proto.name,
+            value: proto.value,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RotateKeysV1> for RotateKeysV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RotateKeysV1 {
+        proto::audit_log_event_v1::RotateKeysV1 {
+            id: self.id.clone(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RotateKeysV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RotateKeysV1 {
+            id: proto.id,
+            name: proto.name,
+        })
+    }
+}
+
 impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
     fn into_proto(&self) -> proto::audit_log_event_v1::Details {
         use proto::audit_log_event_v1::Details::*;
@@ -2318,6 +2354,9 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             }
             EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
             EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
+            EventDetails::SetV1(details) => SetV1(details.into_proto()),
+            EventDetails::ResetAllV1 => ResetAllV1(Empty {}),
+            EventDetails::RotateKeysV1(details) => RotateKeysV1(details.into_proto()),
         }
     }
 
@@ -2373,6 +2412,9 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             }
             ToNewIdV1(details) => Ok(EventDetails::ToNewIdV1(details.into_rust()?)),
             FromPreviousIdV1(details) => Ok(EventDetails::FromPreviousIdV1(details.into_rust()?)),
+            SetV1(details) => Ok(EventDetails::SetV1(details.into_rust()?)),
+            ResetAllV1(Empty {}) => Ok(EventDetails::ResetAllV1),
+            RotateKeysV1(details) => Ok(EventDetails::RotateKeysV1(details.into_rust()?)),
         }
     }
 }

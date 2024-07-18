@@ -84,6 +84,7 @@ pub struct ApiTokenResponse {
 mod tests {
     use axum::{routing::post, Router};
     use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::{assert_err, assert_ok};
     use reqwest::StatusCode;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -165,13 +166,13 @@ mod tests {
         }
 
         // Should get retried which results in eventual success.
-        assert!(test_case(&client, &addr, &count, 500, true).await.is_ok());
-        assert!(test_case(&client, &addr, &count, 502, true).await.is_ok());
-        assert!(test_case(&client, &addr, &count, 429, true).await.is_ok());
-        assert!(test_case(&client, &addr, &count, 408, true).await.is_ok());
+        assert_ok!(test_case(&client, &addr, &count, 500, true).await);
+        assert_ok!(test_case(&client, &addr, &count, 502, true).await);
+        assert_ok!(test_case(&client, &addr, &count, 429, true).await);
+        assert_ok!(test_case(&client, &addr, &count, 408, true).await);
 
         // Should not get retried, and thus return an error.
-        assert!(test_case(&client, &addr, &count, 404, false).await.is_err());
-        assert!(test_case(&client, &addr, &count, 400, false).await.is_err());
+        assert_err!(test_case(&client, &addr, &count, 404, false).await);
+        assert_err!(test_case(&client, &addr, &count, 400, false).await);
     }
 }

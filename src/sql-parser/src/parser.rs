@@ -1553,8 +1553,12 @@ impl<'a> Parser<'a> {
     }
 
     fn peek_keywords(&mut self, keywords: &[Keyword]) -> bool {
+        self.peek_keywords_from(0, keywords)
+    }
+
+    fn peek_keywords_from(&mut self, start: usize, keywords: &[Keyword]) -> bool {
         for (i, keyword) in keywords.iter().enumerate() {
-            match self.peek_nth_token(i) {
+            match self.peek_nth_token(start + i) {
                 Some(Token::Keyword(k)) => {
                     if k != *keyword {
                         return false;
@@ -1571,6 +1575,19 @@ impl<'a> Parser<'a> {
             Some(Token::Keyword(k)) => kws.contains(&k),
             _ => false,
         }
+    }
+
+    /// Returns whether the sequence of keywords is found at any point before
+    /// the end of the unprocessed tokens.
+    fn peek_keywords_lookahead(&mut self, keywords: &[Keyword]) -> bool {
+        let mut index = 0;
+        while index < self.tokens.len() {
+            if self.peek_keywords_from(index, keywords) {
+                return true;
+            }
+            index += 1;
+        }
+        false
     }
 
     /// Return the nth token that has not yet been processed.
@@ -1854,8 +1871,13 @@ impl<'a> Parser<'a> {
             || self.peek_keywords(&[TEMP, TABLE])
             || self.peek_keywords(&[TEMPORARY, TABLE])
         {
-            self.parse_create_table()
-                .map_parser_err(StatementKind::CreateTable)
+            if self.peek_keywords_lookahead(&[FROM, SOURCE]) {
+                self.parse_create_table_from_source()
+                    .map_parser_err(StatementKind::CreateTableFromSource)
+            } else {
+                self.parse_create_table()
+                    .map_parser_err(StatementKind::CreateTable)
+            }
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
                 .map_parser_err(StatementKind::CreateSecret)
@@ -2202,7 +2224,9 @@ impl<'a> Parser<'a> {
 
     fn parse_source_error_policy_option(&mut self) -> Result<SourceErrorPolicy, ParserError> {
         match self.expect_one_of_keywords(&[INLINE])? {
-            INLINE => Ok(SourceErrorPolicy::Inline),
+            INLINE => Ok(SourceErrorPolicy::Inline {
+                alias: self.parse_alias()?,
+            }),
             _ => unreachable!(),
         }
     }
@@ -2722,9 +2746,9 @@ impl<'a> Parser<'a> {
                 let key = self.parse_format()?;
                 self.expect_keywords(&[VALUE, FORMAT])?;
                 let value = self.parse_format()?;
-                Some(CreateSourceFormat::KeyValue { key, value })
+                Some(FormatSpecifier::KeyValue { key, value })
             }
-            Some(FORMAT) => Some(CreateSourceFormat::Bare(self.parse_format()?)),
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => None,
         };
@@ -3045,10 +3069,18 @@ impl<'a> Parser<'a> {
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
         let connection = self.parse_create_sink_connection()?;
-        let format = if self.parse_keyword(FORMAT) {
-            Some(self.parse_format()?)
-        } else {
-            None
+
+        let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
+            Some(KEY) => {
+                self.expect_keyword(FORMAT)?;
+                let key = self.parse_format()?;
+                self.expect_keywords(&[VALUE, FORMAT])?;
+                let value = self.parse_format()?;
+                Some(FormatSpecifier::KeyValue { key, value })
+            }
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
+            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
+            None => None,
         };
         let envelope = if self.parse_keyword(ENVELOPE) {
             Some(self.parse_sink_envelope()?)
@@ -3852,6 +3884,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_alter_cluster_option(&mut self) -> Result<ClusterAlterOption<Raw>, ParserError> {
+        let (name, value) = match self.expect_one_of_keywords(&[WAIT])? {
+            WAIT => {
+                let _ = self.consume_token(&Token::Eq);
+                let v = match self.expect_one_of_keywords(&[FOR])? {
+                    FOR => Some(WithOptionValue::ClusterAlterStrategy(
+                        ClusterAlterOptionValue::For(self.parse_value()?),
+                    )),
+                    _ => unreachable!(),
+                };
+                (ClusterAlterOptionName::Wait, v)
+            }
+            _ => unreachable!(),
+        };
+        Ok(ClusterAlterOption { name, value })
+    }
+
     fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         self.expect_token(&Token::LParen)?;
@@ -3881,9 +3930,12 @@ impl<'a> Parser<'a> {
             MANUAL => ClusterScheduleOptionValue::Manual,
             ON => {
                 self.expect_keyword(REFRESH)?;
-                // Parse optional `(REHYDRATION TIME ESTIMATE ...)`
-                let rehydration_time_estimate = if self.consume_token(&Token::LParen) {
-                    self.expect_keywords(&[REHYDRATION, TIME, ESTIMATE])?;
+                // Parse optional `(HYDRATION TIME ESTIMATE ...)`
+                let hydration_time_estimate = if self.consume_token(&Token::LParen) {
+                    // `REHYDRATION` is the legacy way of writing this. We'd like to eventually
+                    // remove this, and allow only `HYDRATION`. (Dbt needs to be updated for this.)
+                    self.expect_one_of_keywords(&[HYDRATION, REHYDRATION])?;
+                    self.expect_keywords(&[TIME, ESTIMATE])?;
                     let _ = self.consume_token(&Token::Eq);
                     let interval = self.parse_interval_value()?;
                     self.expect_token(&Token::RParen)?;
@@ -3892,7 +3944,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 ClusterScheduleOptionValue::Refresh {
-                    rehydration_time_estimate,
+                    hydration_time_estimate,
                 }
             }
             _ => unreachable!(),
@@ -4231,6 +4283,39 @@ impl<'a> Parser<'a> {
             temporary,
             with_options,
         }))
+    }
+
+    fn parse_create_table_from_source(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(TABLE)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let table_name = self.parse_item_name()?;
+        // parse optional column name list
+        let columns = if self.consume_token(&Token::LParen) {
+            let cols = self.parse_comma_separated(Parser::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            cols
+        } else {
+            vec![]
+        };
+
+        self.expect_keywords(&[FROM, SOURCE])?;
+
+        let source = self.parse_raw_name()?;
+        self.expect_token(&Token::LParen)?;
+        self.expect_keyword(REFERENCE)?;
+        let _ = self.consume_token(&Token::Eq);
+        let external_reference = self.parse_item_name()?;
+        self.expect_token(&Token::RParen)?;
+
+        Ok(Statement::CreateTableFromSource(
+            CreateTableFromSourceStatement {
+                name: table_name,
+                columns,
+                if_not_exists,
+                source,
+                external_reference,
+            },
+        ))
     }
 
     fn parse_columns(
@@ -4685,10 +4770,25 @@ impl<'a> Parser<'a> {
                     .map_parser_err(StatementKind::AlterCluster)?;
                 self.expect_token(&Token::RParen)
                     .map_parser_err(StatementKind::AlterCluster)?;
+                let with_options = if self.parse_keyword(WITH) {
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    let options = self
+                        .parse_comma_separated(Parser::parse_alter_cluster_option)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    options
+                } else {
+                    vec![]
+                };
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
-                    action: AlterClusterAction::SetOptions(options),
+                    action: AlterClusterAction::SetOptions {
+                        options,
+                        with_options,
+                    },
                 }))
             }
             SWAP => {

@@ -18,7 +18,6 @@ use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -45,8 +44,7 @@ use mz_repr::strconv;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, Var, TXN_WAL_TABLES};
-use mz_storage_types::controller::TxnWalTablesImpl;
+use mz_sql::session::vars::ConnectionCounter;
 use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 use tracing::{info, info_span, Instrument};
@@ -108,12 +106,6 @@ pub struct Config {
     pub secrets_controller: Arc<dyn SecretsController>,
     /// VpcEndpoint controller configuration.
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-    /// Whether to use the new txn-wal tables implementation or the legacy
-    /// one.
-    ///
-    /// If specified, this overrides the value stored in Launch Darkly (and
-    /// mirrored to the catalog storage's "config" collection).
-    pub txn_wal_tables_cli: Option<TxnWalTablesImpl>,
 
     // === Storage options. ===
     /// The interval at which to collect storage usage information.
@@ -420,7 +412,7 @@ impl Listeners {
             bootstrap_role: config.bootstrap_role,
         };
 
-        let mut adapter_storage = if read_only {
+        let adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             openable_adapter_storage
@@ -442,15 +434,6 @@ impl Listeners {
                 .await?
         };
 
-        let txn_wal_tables_current_ld =
-            get_ld_value(TXN_WAL_TABLES.name(), &remote_system_parameters, |x| {
-                TxnWalTablesImpl::from_str(x).map_err(|x| x.to_string())
-            })?;
-        // Get the value from Launch Darkly as of the last time this environment
-        // was running. (Ideally it would be the above current value, but that's
-        // not guaranteed: we don't want to block startup on it if LD is down.)
-        let txn_wal_tables_stash_ld = adapter_storage.get_txn_wal_tables().await?;
-
         // Load the adapter catalog from disk.
         if !config
             .cluster_replica_sizes
@@ -471,39 +454,6 @@ impl Listeners {
                 .context("opening storage usage client")?,
         );
 
-        // Initialize controller.
-        let txn_wal_tables_default = config
-            .system_parameter_defaults
-            .get(TXN_WAL_TABLES.name())
-            .map(|x| {
-                TxnWalTablesImpl::from_str(x).map_err(|err| {
-                    anyhow!(
-                        "failed to parse default for {}: {}",
-                        TXN_WAL_TABLES.name(),
-                        err
-                    )
-                })
-            })
-            .transpose()?;
-        let mut txn_wal_tables = txn_wal_tables_default.unwrap_or(TxnWalTablesImpl::Eager);
-        if let Some(value) = txn_wal_tables_stash_ld {
-            txn_wal_tables = value;
-        }
-        if let Some(value) = txn_wal_tables_current_ld {
-            txn_wal_tables = value;
-        }
-        if let Some(value) = config.txn_wal_tables_cli {
-            txn_wal_tables = value;
-        }
-        info!(
-            computed = %txn_wal_tables,
-            default = ?txn_wal_tables_default,
-            catalog = ?txn_wal_tables_stash_ld,
-            ld = ?txn_wal_tables_current_ld,
-            cli = ?config.txn_wal_tables_cli,
-            "determined value for persist_txn_tables system parameter",
-        );
-
         // Initialize adapter.
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
@@ -511,7 +461,6 @@ impl Listeners {
             connection_context: config.controller.connection_context.clone(),
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
-            controller_txn_wal_tables: txn_wal_tables,
             storage: adapter_storage,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
@@ -545,6 +494,7 @@ impl Listeners {
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
             read_only_controllers: read_only,
+            enable_0dt_deployment,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

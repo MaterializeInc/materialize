@@ -29,7 +29,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.5.2"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.6.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -93,7 +93,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_roundtrip_spine": "true",
     "persist_sink_minimum_batch_updates": "128",
     "persist_stats_audit_percent": "100",
-    "persist_txn_tables": "lazy",
+    "persist_txn_tables": "lazy",  # removed, but keep value for older versions
     "persist_use_critical_since_catalog": "true",
     "persist_use_critical_since_snapshot": "true",
     "persist_use_critical_since_source": "true",

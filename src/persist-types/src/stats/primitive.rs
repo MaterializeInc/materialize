@@ -12,6 +12,7 @@ use std::fmt::{self, Debug};
 use arrow::array::{Array, BinaryArray, BooleanArray, PrimitiveArray, StringArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
+use mz_ore::assert_none;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;
@@ -202,7 +203,7 @@ macro_rules! stats_primitive {
             where
                 Self: Sized,
             {
-                match stats.non_null_values()? {
+                match stats.as_non_null_values()? {
                     ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => {
                         Some(prim.clone())
                     }
@@ -281,7 +282,7 @@ impl StatsFrom<BooleanArray> for OptionStats<PrimitiveStats<bool>> {
 
 impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>> for PrimitiveStats<T::Native> {
     fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
-        assert!(col.logical_nulls().is_none());
+        assert_none!(col.logical_nulls());
 
         // Create a new array with the provided validity.
         let array = PrimitiveArray::<T>::new(col.values().clone(), validity.0.as_ref().cloned());
@@ -311,7 +312,7 @@ impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>>
 
 impl StatsFrom<StringArray> for PrimitiveStats<String> {
     fn stats_from(col: &StringArray, validity: ValidityRef) -> Self {
-        assert!(col.logical_nulls().is_none());
+        assert_none!(col.logical_nulls());
 
         // Create a new array with the provided validity.
         let array = StringArray::new(
@@ -358,7 +359,7 @@ impl StatsFrom<StringArray> for OptionStats<PrimitiveStats<String>> {
 
 impl StatsFrom<BinaryArray> for PrimitiveStats<Vec<u8>> {
     fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        assert!(col.logical_nulls().is_none());
+        assert_none!(col.logical_nulls());
 
         // Create a new array with the provided validity.
         let array = BinaryArray::new(

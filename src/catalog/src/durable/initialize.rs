@@ -13,6 +13,7 @@ use itertools::max;
 use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
+use mz_ore::collections::HashSet;
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::oid::{
     FIRST_USER_OID, ROLE_PUBLIC_OID, SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID,
@@ -48,15 +49,6 @@ pub const USER_VERSION_KEY: &str = "user_version";
 /// The key within the "config" collection that stores whether the remote configuration was
 /// synchronized at least once.
 pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";
-
-/// The key used within the "config" collection where we store a mirror of the
-/// `txn_wal_tables` "system var" value. This is mirrored so that we
-/// can toggle the flag with Launch Darkly, but use it in boot before Launch
-/// Darkly is available.
-///
-/// The actual key name is called `persist_txn_tables` and not `txn_wal_tables`
-/// for historical reasons.
-pub(crate) const TXN_WAL_TABLES: &str = "persist_txn_tables";
 
 /// The key used within the "config" collection where we store a mirror of the
 /// `enable_0dt_deployment` "system var" value. This is mirrored so that we can
@@ -174,6 +166,7 @@ pub(crate) async fn initialize(
             attributes.clone(),
             membership.clone(),
             vars.clone(),
+            &HashSet::new(),
         )?;
 
         audit_events.push((
@@ -307,7 +300,7 @@ pub(crate) async fn initialize(
         })
     };
 
-    let materialize_db_oid = tx.allocate_oid()?;
+    let materialize_db_oid = tx.allocate_oid(&HashSet::new())?;
     tx.insert_database(
         MATERIALIZE_DATABASE_ID,
         "materialize",
@@ -419,7 +412,7 @@ pub(crate) async fn initialize(
         owner_id: MZ_SYSTEM_ROLE_ID,
         privileges: schema_privileges.clone(),
     };
-    let public_schema_oid = tx.allocate_oid()?;
+    let public_schema_oid = tx.allocate_oid(&HashSet::new())?;
     let public_schema = Schema {
         id: SchemaId::User(PUBLIC_SCHEMA_ID),
         oid: public_schema_oid,
@@ -532,6 +525,7 @@ pub(crate) async fn initialize(
         MZ_SYSTEM_ROLE_ID,
         cluster_privileges,
         default_cluster_config(options),
+        &HashSet::new(),
     )?;
     audit_events.extend([
         (

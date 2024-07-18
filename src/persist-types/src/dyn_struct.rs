@@ -16,6 +16,7 @@ use std::sync::Arc;
 use arrow::array::{Array, BooleanBufferBuilder, NullArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{Field, Fields};
+use mz_ore::assert_none;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{ColumnGet, ColumnPush, Data, DataType};
@@ -110,7 +111,7 @@ impl ColumnGet<DynStruct> for DynStructCol {
         // columnar struct into components via ColumnsRef, so this is unused. We
         // keep it for completeness and also so that any future changes to the
         // code consider it.
-        assert!(self.validity.is_none());
+        assert_none!(self.validity);
         DynStructRef::Idx {
             idx,
             cols: &self.cols,
@@ -164,7 +165,7 @@ impl DynStructCol {
     ///
     /// Panics if this struct is optional.
     pub fn as_ref(&self) -> ColumnsRef {
-        assert!(self.validity.is_none());
+        assert_none!(self.validity);
         ColumnsRef {
             validity: (),
             cols: self
@@ -318,7 +319,7 @@ impl ColumnPush<DynStruct> for DynStructMut {
         // columnar struct into components via ColumnsMut, so this is unused. We
         // keep it for completeness and also so that any future changes to the
         // code consider it.
-        assert!(self.validity.is_none());
+        assert_none!(self.validity);
         self.push_cols(val);
     }
 
@@ -392,7 +393,7 @@ impl DynStructMut {
             validity,
             cols,
         } = self.as_opt_mut();
-        assert!(validity.validity.is_none());
+        assert_none!(validity.validity);
         ColumnsMut {
             len,
             validity: (),

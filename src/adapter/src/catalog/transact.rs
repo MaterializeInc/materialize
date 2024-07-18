@@ -15,8 +15,8 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::ENABLE_0DT_DEPLOYMENT;
 use mz_audit_log::{
-    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, ObjectType,
-    SchedulingDecisionsWithReasonsV1, VersionedEvent,
+    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
+    ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent,
 };
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
@@ -27,6 +27,7 @@ use mz_catalog::memory::objects::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -42,18 +43,17 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_sql::session::vars::Value as VarValue;
-use mz_sql::session::vars::{OwnedVarInput, Var, TXN_WAL_TABLES};
+use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use tracing::{info, trace};
 
 use crate::catalog::{
-    catalog_type_to_audit_object_type, is_reserved_name, is_reserved_role_name,
-    object_type_to_audit_object_type, system_object_type_to_audit_object_type, BuiltinTableUpdate,
-    Catalog, CatalogState, UpdatePrivilegeVariant,
+    catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
+    is_reserved_role_name, object_type_to_audit_object_type,
+    system_object_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogState,
+    UpdatePrivilegeVariant,
 };
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::ConnMeta;
@@ -197,6 +197,7 @@ pub enum Op {
     /// then another listening catalog will never know to update the builtin table.
     WeirdBuiltinTableUpdates {
         builtin_table_update: BuiltinTableUpdate,
+        audit_log: Vec<(EventType, ObjectType, EventDetails)>,
     },
     /// Performs a dry run of the commit, but errors with
     /// [`AdapterError::TransactionDryRun`].
@@ -684,13 +685,19 @@ impl Catalog {
                 )
                 .collect();
 
-                let (database_id, _) =
-                    tx.insert_user_database(&name, owner_id, database_privileges.clone())?;
+                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let (database_id, _) = tx.insert_user_database(
+                    &name,
+                    owner_id,
+                    database_privileges.clone(),
+                    &temporary_oids,
+                )?;
                 let (schema_id, _) = tx.insert_user_schema(
                     database_id,
                     DEFAULT_SCHEMA,
                     owner_id,
                     schema_privileges.clone(),
+                    &temporary_oids,
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -756,8 +763,13 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
-                let (schema_id, _) =
-                    tx.insert_user_schema(database_id, &schema_name, owner_id, privileges.clone())?;
+                let (schema_id, _) = tx.insert_user_schema(
+                    database_id,
+                    &schema_name,
+                    owner_id,
+                    privileges.clone(),
+                    &state.get_temporary_oids().collect(),
+                )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
@@ -786,6 +798,7 @@ impl Catalog {
                     attributes.clone(),
                     membership.clone(),
                     vars.clone(),
+                    &state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -838,6 +851,7 @@ impl Catalog {
                     owner_id,
                     privileges.clone(),
                     config.clone().into(),
+                    &state.get_temporary_oids().collect(),
                 )?;
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -954,6 +968,8 @@ impl Catalog {
                 )
                 .collect();
 
+                let temporary_oids = state.get_temporary_oids().collect();
+
                 if item.is_temporary() {
                     if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                         || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -962,9 +978,7 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    // TODO(jkosh44) This OID allocation is not correct. The temporary OID is not
-                    // saved durably, meaning we may allocate it twice.
-                    let oid = tx.allocate_oid()?;
+                    let oid = tx.allocate_oid(&temporary_oids)?;
                     let item = TemporaryItem {
                         id,
                         oid,
@@ -1006,6 +1020,7 @@ impl Catalog {
                         serialized_item,
                         owner_id,
                         privileges.clone(),
+                        &temporary_oids,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -1056,7 +1071,32 @@ impl Catalog {
                 sub_component,
                 comment,
             } => {
-                tx.update_comment(object_id, sub_component, comment.clone())?;
+                tx.update_comment(object_id, sub_component, comment)?;
+                let entry = state.get_comment_id_entry(&object_id);
+                let should_log = entry
+                    .map(|entry| Self::should_audit_log_item(entry.item()))
+                    // Things that aren't catalog entries can't be temp, so should be logged.
+                    .unwrap_or(true);
+                // TODO: We need a conn_id to resolve schema names. This means that system-initiated
+                // comments won't be logged for now.
+                if let (Some(conn_id), true) =
+                    (session.map(|session| session.conn_id()), should_log)
+                {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Comment,
+                        comment_id_to_audit_object_type(object_id),
+                        EventDetails::IdNameV1(IdNameV1 {
+                            // CommentObjectIds don't have a great string representation, but debug will do for now.
+                            id: format!("{object_id:?}"),
+                            name: state.comment_id_to_audit_log_name(object_id, conn_id),
+                        }),
+                    )?;
+                }
             }
             Op::DropObjects(drop_object_infos) => {
                 // Generate all of the objects that need to get dropped.
@@ -1856,6 +1896,20 @@ impl Catalog {
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::Cluster,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name,
+                    }),
+                )?;
             }
             Op::UpdateItem { id, name, to_item } => {
                 let mut entry = state.get_entry(&id).clone();
@@ -1896,39 +1950,81 @@ impl Catalog {
             Op::UpdateSystemConfiguration { name, value } => {
                 let parsed_value = state.parse_system_configuration(&name, value.borrow())?;
                 tx.upsert_system_config(&name, parsed_value.clone())?;
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
+                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
                 // storage "config" collection so that we can toggle the flag with
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == TXN_WAL_TABLES.name() {
-                    let txn_wal_tables =
-                        TxnWalTablesImpl::parse(value.borrow()).expect("parsing succeeded above");
-                    tx.set_txn_wal_tables(txn_wal_tables)?;
-                } else if name == ENABLE_0DT_DEPLOYMENT.name() {
+                if name == ENABLE_0DT_DEPLOYMENT.name() {
                     let enable_0dt_deployment =
                         strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
                     tx.set_enable_0dt_deployment(enable_0dt_deployment)?;
                 }
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 {
+                        name,
+                        value: Some(value.borrow().to_vec().join(", ")),
+                    }),
+                )?;
             }
             Op::ResetSystemConfiguration { name } => {
                 tx.remove_system_config(&name);
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
+                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
                 // storage "config" collection so that we can toggle the flag with
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == TXN_WAL_TABLES.name() {
-                    tx.reset_txn_wal_tables()?;
-                } else if name == ENABLE_0DT_DEPLOYMENT.name() {
+                if name == ENABLE_0DT_DEPLOYMENT.name() {
                     tx.reset_enable_0dt_deployment()?;
                 }
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 { name, value: None }),
+                )?;
             }
             Op::ResetAllSystemConfiguration => {
                 tx.clear_system_configs();
-                tx.reset_txn_wal_tables()?;
                 tx.reset_enable_0dt_deployment()?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::ResetAllV1,
+                )?;
             }
             Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,
+                audit_log,
             } => {
                 weird_builtin_table_update = Some(builtin_table_update);
+                for (ev_type, ob_type, ev_details) in audit_log {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        ev_type,
+                        ob_type,
+                        ev_details,
+                    )?;
+                }
             }
         };
         Ok((weird_builtin_table_update, temporary_item_updates))

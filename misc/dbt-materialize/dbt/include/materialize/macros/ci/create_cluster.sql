@@ -21,20 +21,20 @@ This macro creates a cluster with the specified properties.
   - size (str): The size of the cluster. This parameter is required.
   - replication_factor (int, optional): The replication factor for the cluster. Only applicable when schedule_type is 'manual'.
   - schedule_type (str, optional): The type of schedule for the cluster. Accepts 'manual' or 'on-refresh'.
-  - refresh_rehydration_time_estimate (str, optional): The estimated rehydration time for the cluster. Only applicable when schedule_type is 'on-refresh'.
+  - refresh_hydration_time_estimate (str, optional): The estimated hydration time for the cluster. Only applicable when schedule_type is 'on-refresh'.
   - ignore_existing_objects (bool, optional): Whether to ignore existing objects in the cluster. Defaults to false.
   - force_deploy_suffix (bool, optional): Whether to forcefully add a deploy suffix to the cluster name. Defaults to false.
 
   Incompatibilities:
   - replication_factor is only applicable when schedule_type is 'manual'.
-  - refresh_rehydration_time_estimate is only applicable when schedule_type is 'on-refresh'.
+  - refresh_hydration_time_estimate is only applicable when schedule_type is 'on-refresh'.
 #}
 {% macro create_cluster(
     cluster_name,
     size,
     replication_factor=none,
     schedule_type=none,
-    refresh_rehydration_time_estimate=none,
+    refresh_hydration_time_estimate=none,
     ignore_existing_objects=false,
     force_deploy_suffix=false
 ) %}
@@ -116,8 +116,8 @@ This macro creates a cluster with the specified properties.
                 {% if replication_factor is not none and ( schedule_type == 'manual' or schedule_type is none ) %}
                     , REPLICATION FACTOR = {{ replication_factor }}
                 {% elif schedule_type == 'on-refresh' %}
-                    {% if refresh_rehydration_time_estimate is not none %}
-                        , SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = {{ dbt.string_literal(refresh_rehydration_time_estimate) }})
+                    {% if refresh_hydration_time_estimate is not none %}
+                        , SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = {{ dbt.string_literal(refresh_hydration_time_estimate) }})
                     {% else %}
                         , SCHEDULE = ON REFRESH
                     {% endif %}

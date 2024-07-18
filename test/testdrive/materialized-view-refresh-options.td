@@ -516,11 +516,11 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
 > SELECT * FROM mv11;
 3
 
-## REHYDRATION TIME ESTIMATE
+## HYDRATION TIME ESTIMATE
 
-> CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+> CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 > CREATE CLUSTER c_schedule_7 (SIZE = '1');
-> ALTER CLUSTER c_schedule_7 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+> ALTER CLUSTER c_schedule_7 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
 # Create MVs whose first refresh is 1000 seconds from now.
 > CREATE MATERIALIZED VIEW mv13
@@ -532,7 +532,7 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
   WITH (REFRESH AT mz_now()::string::int8 + 1000 * 1000)
   AS SELECT count(*) FROM t2;
 
-# Should be turned on soon due to the REHYDRATION TIME ESTIMATE.
+# Should be turned on soon due to the HYDRATION TIME ESTIMATE.
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
 1
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_7';
@@ -635,7 +635,7 @@ true <null>
   SELECT mz_unsafe.mz_sleep(a)
   FROM t6;
 
-# Wait for the first rehydration to complete
+# Wait for the first hydration to complete
 > SELECT * FROM mv_long_hydration;
 <null>
 
@@ -644,10 +644,10 @@ true <null>
   WHERE name = 'mv_long_hydration';
 true
 
-# Make the next rehydration take 1000000 ms.
+# Make the next hydration take 1000000 ms.
 > INSERT INTO t6 VALUES (1000000);
 
-# Restart the cluster to force a rehydration.
+# Restart the cluster to force a hydration.
 > ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 0);
 > ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 1);
 

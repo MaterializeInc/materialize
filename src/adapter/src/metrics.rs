@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
+use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -39,6 +39,7 @@ pub struct Metrics {
     pub webhook_get_appender: IntCounter,
     pub check_scheduling_policies_seconds: HistogramVec,
     pub handle_scheduling_decisions_seconds: HistogramVec,
+    pub row_set_finishing_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -156,7 +157,34 @@ impl Metrics {
                 var_labels: ["altered_a_cluster"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            row_set_finishing_seconds: registry.register(metric!(
+                name: "mz_row_set_finishing_seconds",
+                help: "The time it takes to run RowSetFinishing::finish.",
+                buckets: histogram_seconds_buckets(0.000_128, 16.0),
+            )),
         }
+    }
+
+    pub(crate) fn row_set_finishing_seconds(&self) -> Histogram {
+        self.row_set_finishing_seconds.with_label_values(&[])
+    }
+
+    pub(crate) fn session_metrics(&self) -> SessionMetrics {
+        SessionMetrics {
+            row_set_finishing_seconds: self.row_set_finishing_seconds(),
+        }
+    }
+}
+
+/// Metrics associated with a [`crate::session::Session`].
+#[derive(Debug, Clone)]
+pub struct SessionMetrics {
+    row_set_finishing_seconds: Histogram,
+}
+
+impl SessionMetrics {
+    pub(crate) fn row_set_finishing_seconds(&self) -> &Histogram {
+        &self.row_set_finishing_seconds
     }
 }
 

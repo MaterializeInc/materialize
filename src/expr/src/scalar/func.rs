@@ -4859,7 +4859,8 @@ derive_unary!(
     AclItemPrivileges,
     QuoteIdent,
     TryParseMonotonicIso8601Timestamp,
-    RegexpSplitToArray
+    RegexpSplitToArray,
+    PgSizePretty
 );
 
 impl UnaryFunc {
@@ -5251,6 +5252,7 @@ impl Arbitrary for UnaryFunc {
             Panic::arbitrary().prop_map_into().boxed(),
             AdjustNumericScale::arbitrary().prop_map_into().boxed(),
             PgColumnSize::arbitrary().prop_map_into().boxed(),
+            PgSizePretty::arbitrary().prop_map_into().boxed(),
             MzRowSize::arbitrary().prop_map_into().boxed(),
             MzTypeName::arbitrary().prop_map_into().boxed(),
             RangeLower::arbitrary().prop_map_into().boxed(),
@@ -5632,6 +5634,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::Panic(_) => Panic(()),
             UnaryFunc::AdjustNumericScale(func) => AdjustNumericScale(func.0.into_proto()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
+            UnaryFunc::PgSizePretty(_) => PgSizePretty(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
             UnaryFunc::CastMzTimestampToString(_) => CastMzTimestampToString(()),
@@ -6107,6 +6110,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     Ok(impls::AdjustNumericScale(max_scale.into_rust()?).into())
                 }
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
+                PgSizePretty(()) => Ok(impls::PgSizePretty.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),
                 MzTypeName(()) => Ok(impls::MzTypeName.into()),
 
@@ -8427,6 +8431,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
 #[cfg(test)]
 mod test {
     use chrono::prelude::*;
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -8495,7 +8500,7 @@ mod test {
         #[cfg_attr(miri, ignore)] // too slow
         fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
@@ -8503,7 +8508,7 @@ mod test {
         #[cfg_attr(miri, ignore)] // too slow
         fn unary_func_protobuf_roundtrip(expect in any::<UnaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoUnaryFunc>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
@@ -8511,7 +8516,7 @@ mod test {
         #[cfg_attr(miri, ignore)] // too slow
         fn binary_func_protobuf_roundtrip(expect in any::<BinaryFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoBinaryFunc>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
@@ -8519,7 +8524,7 @@ mod test {
         #[cfg_attr(miri, ignore)] // too slow
         fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
             let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

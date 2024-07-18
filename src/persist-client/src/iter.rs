@@ -948,9 +948,9 @@ mod tests {
                                         BlobTraceBatchPart {
                                             desc: desc.clone(),
                                             index: 0,
-                                            updates: BlobTraceUpdates::Row(vec![
-                                                records.finish(&metrics.columnar)
-                                            ]),
+                                            updates: BlobTraceUpdates::Row(
+                                                records.finish(&metrics.columnar),
+                                            ),
                                         },
                                     );
                                     (ConsolidationPart::from_encoded(part, &filter, true), 0)

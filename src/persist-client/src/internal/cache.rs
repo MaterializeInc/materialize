@@ -379,6 +379,7 @@ mod lru {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_none;
     use proptest::arbitrary::any;
     use proptest::proptest;
     use proptest_derive::Arbitrary;
@@ -491,7 +492,7 @@ mod tests {
         assert_eq!(cache.keys(), &["e", "d"]);
 
         // Remove a non-existent element.
-        assert!(cache.remove("f").is_none());
+        assert_none!(cache.remove("f"));
         assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.entry_weight(), 2);
         assert_eq!(cache.keys(), &["e", "d"]);

@@ -265,11 +265,9 @@ impl<T: Timestamp + Lattice> Trace<T> {
             mut merges,
         } = value;
 
-        // If the flattened representation has spine batches, we know to preserve the structure for
-        // this trace.
-        // Note that for empty spines, roundtrip_structure will default to false. This is done for
-        // backwards-compatability.
-        let roundtrip_structure = !spine_batches.is_empty();
+        // If the flattened representation has spine batches (or is empty)
+        // we know to preserve the structure for this trace.
+        let roundtrip_structure = !spine_batches.is_empty() || legacy_batches.is_empty();
 
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.

@@ -25,8 +25,10 @@ use std::ops::Sub;
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
 };
+use chrono::Timelike;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom};
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
@@ -974,9 +976,85 @@ impl Arbitrary for CheckedTimestamp<DateTime<Utc>> {
     }
 }
 
+/// An encoded packed variant of [`NaiveDateTime`].
+///
+/// We uphold the invariant that [`PackedNaiveDateTime`] sorts the same as
+/// [`NaiveDateTime`].
+#[derive(Copy, Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct PackedNaiveDateTime([u8; Self::SIZE]);
+
+// `as` conversions are okay here because we're doing bit level logic to make
+// sure the sort order of the packed binary is correct. This is implementation
+// is proptest-ed below.
+#[allow(clippy::as_conversions)]
+impl FixedSizeCodec<NaiveDateTime> for PackedNaiveDateTime {
+    const SIZE: usize = 16;
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn from_bytes(slice: &[u8]) -> Result<Self, String> {
+        let buf: [u8; Self::SIZE] = slice.try_into().map_err(|_| {
+            format!(
+                "size for PackedNaiveDateTime is {} bytes, got {}",
+                Self::SIZE,
+                slice.len()
+            )
+        })?;
+        Ok(PackedNaiveDateTime(buf))
+    }
+
+    #[inline]
+    fn from_value(value: NaiveDateTime) -> Self {
+        let mut buf = [0u8; 16];
+
+        // Note: We XOR the values to get correct sorting of negative values.
+
+        let year = (value.year() as u32) ^ (0x8000_0000u32);
+        let ordinal = value.ordinal();
+        let secs = value.num_seconds_from_midnight();
+        let nano = value.nanosecond();
+
+        buf[..4].copy_from_slice(&year.to_be_bytes());
+        buf[4..8].copy_from_slice(&ordinal.to_be_bytes());
+        buf[8..12].copy_from_slice(&secs.to_be_bytes());
+        buf[12..].copy_from_slice(&nano.to_be_bytes());
+
+        PackedNaiveDateTime(buf)
+    }
+
+    #[inline]
+    fn into_value(self) -> NaiveDateTime {
+        let mut year = [0u8; 4];
+        year.copy_from_slice(&self.0[..4]);
+        let year = u32::from_be_bytes(year) ^ 0x8000_0000u32;
+
+        let mut ordinal = [0u8; 4];
+        ordinal.copy_from_slice(&self.0[4..8]);
+        let ordinal = u32::from_be_bytes(ordinal);
+
+        let mut secs = [0u8; 4];
+        secs.copy_from_slice(&self.0[8..12]);
+        let secs = u32::from_be_bytes(secs);
+
+        let mut nano = [0u8; 4];
+        nano.copy_from_slice(&self.0[12..]);
+        let nano = u32::from_be_bytes(nano);
+
+        let date = NaiveDate::from_yo_opt(year as i32, ordinal)
+            .expect("NaiveDate roundtrips with PackedNaiveDateTime");
+        let time = NaiveTime::from_num_seconds_from_midnight_opt(secs, nano)
+            .expect("NaiveTime roundtrips with PackedNaiveDateTime");
+
+        NaiveDateTime::new(date, time)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use mz_ore::assert_err;
     use proptest::prelude::*;
 
     #[mz_ore::test]
@@ -1062,7 +1140,7 @@ mod test {
             .unwrap();
             let _ = date.round_to_precision(Some(TimestampPrecision(7)));
         });
-        assert!(result.is_err());
+        assert_err!(result);
 
         let date = CheckedTimestamp::try_from(
             DateTime::from_timestamp_micros(123456).unwrap().naive_utc(),
@@ -1118,5 +1196,34 @@ mod test {
             let result = a.age(&b);
             prop_assert!(result.is_ok());
         }
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_naive_date_time_roundtrips() {
+        proptest!(|(timestamp in arb_naive_date_time())| {
+            let packed = PackedNaiveDateTime::from_value(timestamp);
+            let rnd = packed.into_value();
+            prop_assert_eq!(timestamp, rnd);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_naive_date_time_sort_order() {
+        let strat = proptest::collection::vec(arb_naive_date_time(), 0..128);
+        proptest!(|(mut times in strat)| {
+            let mut packed: Vec<_> = times
+                .iter()
+                .copied()
+                .map(PackedNaiveDateTime::from_value)
+                .collect();
+
+            times.sort();
+            packed.sort();
+
+            for (time, packed) in times.into_iter().zip(packed.into_iter()) {
+                let rnd = packed.into_value();
+                prop_assert_eq!(time, rnd);
+            }
+        });
     }
 }

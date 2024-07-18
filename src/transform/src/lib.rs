@@ -101,6 +101,8 @@ pub struct TransformCtx<'a> {
     pub df_meta: &'a mut DataflowMetainfo,
 }
 
+const FOLD_CONSTANTS_LIMIT: usize = 10000;
+
 impl<'a> TransformCtx<'a> {
     /// Generates a [`TransformCtx`] instance for the local MIR optimization
     /// stage.
@@ -319,31 +321,59 @@ impl Transform for Fixpoint {
         // stable shape.
         let mut iter_no = 0;
         let mut seen = BTreeMap::new();
-        seen.insert(relation.clone(), iter_no);
+        seen.insert(relation.hash_to_u64(), iter_no);
+        let original = relation.clone();
         loop {
             let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
-                let original = relation.clone();
+                let prev = relation.clone();
                 self.apply_transforms(relation, ctx, format!("{i:04}"))?;
-                if *relation == original {
+                if *relation == prev {
+                    if prev_size > 100000 {
+                        tracing::warn!(%prev_size, "Very big MIR plan");
+                    }
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
-                let seen_i = seen.insert(relation.clone(), i);
+                let seen_i = seen.insert(relation.hash_to_u64(), i);
                 if let Some(seen_i) = seen_i {
-                    // We got into an infinite loop (e.g., we are oscillating between two plans).
-                    // This is not catastrophic, because we can just say we are done now,
-                    // but it would be great to eventually find a way to prevent these loops from
-                    // happening in the first place. We have several relevant issues, see
-                    // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
-                    mz_repr::explain::trace_plan(relation);
-                    soft_panic_or_log!(
-                        "Fixpoint {} detected a loop of length {} after {} iterations",
-                        self.name,
-                        i - seen_i,
-                        i
-                    );
-                    return Ok(());
+                    // Let's see whether this is just a hash collision, or a real loop: Run the
+                    // whole thing from the beginning up until `seen_i`, and compare all the plans
+                    // to the current plan from the outer `for`.
+                    // (It would not be enough to compare only the plan at `seen_i`, because
+                    // then we could miss a real loop if there is also a hash collision somewhere
+                    // in the middle of the loop, because then we'd compare the last plan of the
+                    // loop not with its actual match, but with the colliding plan.)
+                    let mut again = original.clone();
+                    // The `+2` is because:
+                    // - one `+1` is to finally get to the plan at `seen_i`,
+                    // - another `+1` is because we are comparing to `relation` only _before_
+                    //   calling `apply_transforms`.
+                    for j in 0..(seen_i + 2) {
+                        if again == *relation {
+                            // We really got into an infinite loop (e.g., we are oscillating between
+                            // two plans). This is not catastrophic, because we can just say we are
+                            // done now, but it would be great to eventually find a way to prevent
+                            // these loops from happening in the first place. We have several
+                            // relevant issues, see
+                            // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                            mz_repr::explain::trace_plan(relation);
+                            soft_panic_or_log!(
+                                "Fixpoint `{}` detected a loop of length {} after {} iterations",
+                                self.name,
+                                i - seen_i,
+                                i
+                            );
+                            return Ok(());
+                        }
+                        self.apply_transforms(
+                            &mut again,
+                            ctx,
+                            format!("collision detection {j:04}"),
+                        )?;
+                    }
+                    // If we got here, then this was just a hash collision! Just continue as if
+                    // nothing happened.
                 }
             }
             let current_size = relation.size();
@@ -363,17 +393,18 @@ impl Transform for Fixpoint {
                     self.limit
                 );
             } else {
-                return Err(TransformError::Internal(format!(
-                    "Fixpoint {} ran for {} iterations \
-                     without reaching a fixpoint or reducing the relation size; \
-                     current_size ({}) >= prev_size ({}); \
-                     transformed relation:\n{}",
+                // We failed to reach a fixed point, or find a sufficiently short cycle.
+                // This is not catastrophic, because we can just say we are done now,
+                // but it would be great to eventually find a way to prevent these loops from
+                // happening in the first place. We have several relevant issues, see
+                // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                mz_repr::explain::trace_plan(relation);
+                soft_panic_or_log!(
+                    "Fixpoint {} failed to reach a fixed point, or cycle of length at most {}",
                     self.name,
-                    iter_no,
-                    current_size,
-                    prev_size,
-                    relation.pretty()
-                )));
+                    self.limit,
+                );
+                return Ok(());
             }
         }
     }
@@ -464,7 +495,9 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+                Box::new(fold_constants::FoldConstants {
+                    limit: Some(FOLD_CONSTANTS_LIMIT),
+                }),
             ],
         }
     }
@@ -644,7 +677,9 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     Box::new(column_knowledge::ColumnKnowledge::default()),
-                    Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+                    Box::new(fold_constants::FoldConstants {
+                        limit: Some(FOLD_CONSTANTS_LIMIT),
+                    }),
                     Box::new(demand::Demand::default()),
                     Box::new(literal_lifting::LiteralLifting::default()),
                 ],
@@ -658,7 +693,9 @@ impl Optimizer {
             Box::new(canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
-            Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+            Box::new(fold_constants::FoldConstants {
+                limit: Some(FOLD_CONSTANTS_LIMIT),
+            }),
             // Remove threshold operators which have no effect.
             // Must be done at the very end of the physical pass, because before
             // that (at least at the moment) we cannot be sure that all trees
@@ -716,7 +753,9 @@ impl Optimizer {
                     // The last RelationCSE before JoinImplementation should be with
                     // inline_mfp = true.
                     Box::new(cse::relation_cse::RelationCSE::new(true)),
-                    Box::new(fold_constants::FoldConstants { limit: Some(10000) }),
+                    Box::new(fold_constants::FoldConstants {
+                        limit: Some(FOLD_CONSTANTS_LIMIT),
+                    }),
                 ],
             }),
             Box::new(

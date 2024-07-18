@@ -97,6 +97,7 @@ impl Coordinator {
             id: cluster_id,
             name: _,
             options,
+            strategy: _,
         }: AlterClusterPlan,
     ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
         use mz_catalog::memory::objects::ClusterVariant::*;

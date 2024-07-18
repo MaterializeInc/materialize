@@ -30,12 +30,12 @@ use mz_environmentd::test_util::{
     self, get_explain_timestamp, get_explain_timestamp_determination, try_get_explain_timestamp,
     MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
 };
-use mz_ore::assert_contains;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_ore::{assert_contains, assert_err, assert_ok};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
@@ -2164,52 +2164,28 @@ fn test_support_user_permissions() {
         .batch_execute("SET CLUSTER TO 'mz_catalog_server'")
         .unwrap();
 
-    assert!(internal_client
-        .query("SELECT * FROM materialize.public.t1", &[])
-        .is_err());
-    assert!(internal_client
-        .batch_execute("INSERT INTO materialize.public.t1 VALUES (1)")
-        .is_err());
-    assert!(internal_client
-        .batch_execute("CREATE TABLE t2 (a INT)")
-        .is_err());
+    assert_err!(internal_client.query("SELECT * FROM materialize.public.t1", &[]));
+    assert_err!(internal_client.batch_execute("INSERT INTO materialize.public.t1 VALUES (1)"));
+    assert_err!(internal_client.batch_execute("CREATE TABLE t2 (a INT)"));
 
-    assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+    assert_ok!(internal_client.query("SELECT * FROM mz_internal.mz_comments", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_catalog.mz_tables", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM pg_catalog.pg_namespace", &[]));
 
     internal_client
         .batch_execute("SET CLUSTER TO 'mz_system'")
         .unwrap();
-    assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+    assert_ok!(internal_client.query("SELECT * FROM mz_internal.mz_comments", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_catalog.mz_tables", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM pg_catalog.pg_namespace", &[]));
 
     internal_client
         .batch_execute("SET CLUSTER TO 'default'")
         .unwrap();
-    assert!(internal_client.query("SELECT * FROM t1", &[]).is_err());
-    assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_ok());
-    assert!(internal_client
-        .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_ok());
+    assert_err!(internal_client.query("SELECT * FROM t1", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_internal.mz_comments", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM mz_catalog.mz_tables", &[]));
+    assert_ok!(internal_client.query("SELECT * FROM pg_catalog.pg_namespace", &[]));
 }
 
 #[mz_ore::test]
@@ -2346,7 +2322,7 @@ fn test_coord_startup_blocking() {
     let server_started = Retry::default()
         .max_duration(Duration::from_secs(3))
         .retry(|_| rx.try_recv());
-    assert!(server_started.is_err(), "server should be blocked");
+    assert_err!(server_started, "server should be blocked");
 
     // Updating the system clock will allow the server to start.
     *now.lock().expect("lock poisoned") = i32::MAX.try_into().expect("known to fit");
@@ -2365,7 +2341,7 @@ fn test_peek_on_dropped_cluster() {
     let handle = thread::spawn(move || {
         // Run query asynchronously that will hang forever.
         let res = read_client.query_one("SELECT * FROM t AS OF 18446744073709551615", &[]);
-        assert!(res.is_err(), "cancelled query should return error");
+        assert_err!(res, "cancelled query should return error");
         let err = res.unwrap_err().unwrap_db_error();
         //TODO(jkosh44) This isn't actually an internal error but we often incorrectly give back internal errors.
         assert_eq!(
@@ -2615,7 +2591,7 @@ fn test_subscribe_on_dropped_source() {
     }
 
     fn assert_subscribe_error(res: Result<(), tokio_postgres::error::Error>) {
-        assert!(res.is_err());
+        assert_err!(res);
         assert!(res
             .unwrap_db_error()
             .message()
@@ -2703,7 +2679,7 @@ fn test_timelines_persist_after_failed_transaction() {
     let result = client.batch_execute("DROP SOURCE counter");
 
     // Assert the error we get back is from our fail_point
-    assert!(result.is_err());
+    assert_err!(result);
     let err = result.unwrap_err();
     assert!(err.to_string().contains("failpoint: Some(\"1\")"));
 
