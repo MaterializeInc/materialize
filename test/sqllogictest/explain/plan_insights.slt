@@ -15,6 +15,7 @@ mode cockroach
 statement ok
 CREATE TABLE t (a int)
 
+# Assert fast_path_limit is true. This must be done before adding the index.
 query T multiline
 EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
 ----
@@ -97,6 +98,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": 1000,
     "persist_count": []
   },
   "cluster": {
@@ -322,6 +324,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": []
   },
   "cluster": {
@@ -449,6 +452,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": []
   },
   "cluster": {
@@ -676,6 +680,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": []
   },
   "cluster": {
@@ -790,6 +795,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         }
       }
     },
+    "fast_path_limit": 1000,
     "persist_count": []
   },
   "cluster": {
@@ -1046,6 +1052,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
       }
     },
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": [
       {
         "database": "materialize",
@@ -1257,6 +1264,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
   "insights": {
     "imports": {},
     "fast_path_clusters": {},
+    "fast_path_limit": null,
     "persist_count": []
   },
   "cluster": {
