@@ -35,13 +35,13 @@ class ReproductionCodePrinter(BaseOutputPrinter):
     def __init__(
         self,
         input_data: ConsistencyTestInputData,
-        mode: OutputPrinterMode = OutputPrinterMode.PRINT,
+        print_mode: OutputPrinterMode = OutputPrinterMode.PRINT,
     ):
-        super().__init__(mode=mode)
+        super().__init__(print_mode=print_mode)
         self.input_data = input_data
 
-    def clone(self, mode: OutputPrinterMode):
-        return ReproductionCodePrinter(self.input_data, mode)
+    def clone(self, print_mode: OutputPrinterMode):
+        return ReproductionCodePrinter(self.input_data, print_mode)
 
     def get_reproduction_code_of_error(self, error: ValidationError) -> str:
         reproduction_code_generator = self.clone(OutputPrinterMode.COLLECT)

@@ -25,8 +25,8 @@ class OutputPrinterMode(Enum):
 
 class BaseOutputPrinter:
 
-    def __init__(self, mode: OutputPrinterMode = OutputPrinterMode.PRINT):
-        self.mode = mode
+    def __init__(self, print_mode: OutputPrinterMode = OutputPrinterMode.PRINT):
+        self.print_mode = print_mode
         self.collected_output = []
 
     def print_empty_line(self) -> None:
@@ -49,9 +49,9 @@ class BaseOutputPrinter:
         self._print_raw(adjusted_text)
 
     def _print_raw(self, sql: str) -> None:
-        if self.mode == OutputPrinterMode.PRINT:
+        if self.print_mode == OutputPrinterMode.PRINT:
             print(sql)
-        elif self.mode == OutputPrinterMode.COLLECT:
+        elif self.print_mode == OutputPrinterMode.COLLECT:
             self.collected_output.append(sql)
         else:
-            raise RuntimeError(f"Unsupported mode: {self.mode}")
+            raise RuntimeError(f"Unsupported mode: {self.print_mode}")
