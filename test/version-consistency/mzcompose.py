@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import argparse
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -57,6 +58,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--other-tag",
         type=str,
         default="common-ancestor",
+    )
+
+    parser.add_argument(
+        "--allow-same-version-comparison",
+        action=argparse.BooleanOptionalAction,
+        default=False,
     )
 
     args = test.parse_output_consistency_input_args(parser)
