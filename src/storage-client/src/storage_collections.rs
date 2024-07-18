@@ -1556,7 +1556,7 @@ where
                 None => data_shard_since,
             };
 
-            let mut collection_state = CollectionState::new(
+            let collection_state = CollectionState::new(
                 description,
                 initial_since,
                 write_frontier.clone(),
@@ -1601,18 +1601,6 @@ where
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Other(DataSourceOther::TableWrites) => {
-                    let register_ts = register_ts
-                        .as_ref()
-                        .expect("caller should have provided a register_ts when creating a table");
-                    // This register call advances the logical upper of the
-                    // table. The register call eventually circles that info
-                    // back to us, but some tests fail if we don't synchronously
-                    // update it in create_collections, so just do that now.
-                    let advance_to = mz_persist_types::StepForward::step_forward(register_ts);
-
-                    if collection_state.write_frontier.less_than(&advance_to) {
-                        collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
-                    }
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
