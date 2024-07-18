@@ -212,7 +212,7 @@ you **must** override the default value of `After-state only` to `false`.
     By default, the connector writes events for each table to a Kafka topic
     named `serverName.schemaName.tableName`.
 
-1. Start the Debezium Postgres connector using the configuration file:
+1. Start the PostgreSQL Debezium connector using the configuration file:
 
     ```bash
     export CURRENT_HOST='<your-host>'
@@ -227,7 +227,7 @@ you **must** override the default value of `After-state only` to `false`.
     curl http://$CURRENT_HOST:8083/connectors/your-connector/status
     ```
 
-    The first time it connects to a Postgres server, Debezium takes a
+    The first time it connects to a PostgreSQL server, Debezium takes a
     [consistent snapshot](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-snapshots)
     of the tables selected for replication, so you should see that the
     pre-existing records in the replicated table are initially pushed into your

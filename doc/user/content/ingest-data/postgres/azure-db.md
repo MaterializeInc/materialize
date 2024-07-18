@@ -100,7 +100,7 @@ to serve as your SSH bastion host.
 
 {{< /tabs >}}
 
-## C. Ingest Data in Materialize
+## C. Ingest data in Materialize
 
 ### 1. (Optional) Create a cluster
 

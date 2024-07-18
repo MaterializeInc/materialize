@@ -281,7 +281,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< /tabs >}}
 
-## C. Ingest Data in Materialize
+## C. Ingest data in Materialize
 
 ### 1. (Optional) Create a cluster
 

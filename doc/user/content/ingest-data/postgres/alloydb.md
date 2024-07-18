@@ -31,7 +31,7 @@ protocol to track changes in your database and propagate them to Materialize.
 To enable logical replication in AlloyDB, see the
 [AlloyDB documentation](https://cloud.google.com/datastream/docs/configure-your-source-postgresql-database#configure_alloydb_for_replication).
 
-### 2. Create a publication and a Materialize user
+### 2. Create a publication and a replication user
 
 {{% postgres-direct/create-a-publication-other %}}
 
@@ -108,7 +108,7 @@ network to allow traffic from the bastion host.
 
 {{< /tabs >}}
 
-## C. Ingest Data in Materialize
+## C. Ingest data in Materialize
 
 ### 1. (Optional) Create a cluster
 

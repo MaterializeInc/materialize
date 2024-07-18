@@ -45,7 +45,7 @@ Enable your PostgreSQL's logical replication.
        Restarting can affect database performance.
 
     1. In the SQL client connected to PostgreSQL, verify that replication is now
-  enabled; i.e., verify `wal_level` setting is set to `logical`.
+  enabled (i.e., verify `wal_level` setting is set to `logical`).
 
         ```postgres
         SHOW wal_level;
@@ -240,7 +240,7 @@ traffic from the bastion host.
 
 {{< /tabs >}}
 
-## C. Ingest Data in Materialize
+## C. Ingest data in Materialize
 
 ### 1. (Optional) Create a cluster
 
