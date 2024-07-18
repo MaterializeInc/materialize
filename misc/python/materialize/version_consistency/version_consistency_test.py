@@ -195,7 +195,7 @@ def sanitize_and_shorten_version_string(version: str) -> str:
 def main() -> int:
     test = VersionConsistencyTest()
     parser = argparse.ArgumentParser(
-        prog="postgres-consistency-test",
+        prog="version-consistency-test",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Test the consistency of different versions of mz",
     )
