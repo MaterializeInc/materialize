@@ -43,7 +43,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: builder-linux-aarch64
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -56,7 +56,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -67,7 +67,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: builder-linux-aarch64
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -78,7 +78,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: builder-linux-aarch64
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -89,7 +89,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -101,7 +101,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -112,7 +112,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-large
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -135,7 +135,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: builder-linux-aarch64
+        queue: linux-aarch64-medium
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -147,7 +147,7 @@ steps:
     timeout_in_minutes: 2880
     parallelism: 8
     agents:
-      queue: linux-aarch64-large
+      queue: linux-aarch64-medium
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark

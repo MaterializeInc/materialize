@@ -807,7 +807,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: linux-aarch64-large
+      queue: linux-aarch64-medium
     coverage: only
 
   - wait: ~

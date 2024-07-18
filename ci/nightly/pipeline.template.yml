@@ -65,7 +65,7 @@ steps:
         timeout_in_minutes: 720
         parallelism: 8
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -122,7 +122,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -220,7 +220,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
@@ -244,7 +244,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
@@ -256,7 +256,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
@@ -273,7 +273,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
@@ -300,7 +300,7 @@ steps:
         label: "Product limits"
         depends_on: build-aarch64
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
@@ -313,7 +313,7 @@ steps:
         agents:
           # A larger instance is needed due to the
           # many containers that are being created
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
@@ -512,10 +512,10 @@ steps:
       - id: checks-restart-cockroach
         label: "Checks + restart Cockroach"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           # A larger instance is needed due to frequent OOMs, same in all other platform-checks
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -524,9 +524,9 @@ steps:
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -535,9 +535,9 @@ steps:
       - id: checks-backup-restore-before-manipulate
         label: "Checks backup + restore between the two manipulate()"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -546,9 +546,9 @@ steps:
       - id: checks-backup-restore-after-manipulate
         label: "Checks backup + restore after manipulate()"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -557,9 +557,9 @@ steps:
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -568,9 +568,9 @@ steps:
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -580,9 +580,9 @@ steps:
         label: "Checks parallel + DROP/CREATE replica"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -592,9 +592,9 @@ steps:
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -604,9 +604,9 @@ steps:
         label: "Checks parallel + restart of the entire Mz"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -616,9 +616,9 @@ steps:
         label: "Checks parallel + restart of environmentd & storage clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -628,9 +628,9 @@ steps:
         label: "Checks parallel + kill storage clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -640,9 +640,9 @@ steps:
         label: "Checks parallel + restart Redpanda & Debezium"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -651,9 +651,9 @@ steps:
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -662,9 +662,9 @@ steps:
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -673,9 +673,9 @@ steps:
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -684,9 +684,9 @@ steps:
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -697,7 +697,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -706,9 +706,9 @@ steps:
       - id: checks-upgrade-clusterd-compute-first
         label: "Platform checks upgrade, restarting compute clusterd first"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -717,9 +717,9 @@ steps:
       - id: checks-upgrade-clusterd-compute-last
         label: "Platform checks upgrade, restarting compute clusterd last"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -728,9 +728,9 @@ steps:
       - id: checks-kill-clusterd-storage
         label: "Checks + kill storage clusterd"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -739,9 +739,9 @@ steps:
       - id: checks-restart-source-postgres
         label: "Checks + restart source Postgres"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -750,9 +750,9 @@ steps:
       - id: checks-restart-clusterd-compute
         label: "Checks + restart clusterd compute"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -761,10 +761,10 @@ steps:
       - id: checks-drop-create-default-replica
         label: "Checks + DROP/CREATE replica"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 90
         agents:
           # Seems to require more memory on aarch64
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -773,9 +773,9 @@ steps:
       - id: checks-toggle-persist-batch-columnar-format
         label: "Checks toggling persist batch columnar format"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -784,9 +784,9 @@ steps:
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -795,9 +795,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -806,9 +806,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -819,7 +819,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -828,11 +828,11 @@ steps:
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
@@ -850,6 +850,8 @@ steps:
         retry:
           automatic:
             - exit_status: 1
+              limit: 2
+            - exit_status: 255
               limit: 2
         agents:
           queue: linux-aarch64
@@ -873,8 +875,9 @@ steps:
         retry:
           automatic:
             - exit_status: 1
-              limit:
-                1
+              limit: 2
+            - exit_status: 255
+              limit: 2
         agents:
           queue: linux-aarch64
         inputs:
@@ -897,7 +900,9 @@ steps:
         retry:
           automatic:
             - exit_status: 1
-              limit: 1
+              limit: 2
+            - exit_status: 255
+              limit: 2
         agents:
           queue: linux-aarch64
         inputs:
@@ -920,7 +925,9 @@ steps:
         retry:
           automatic:
             - exit_status: 1
-              limit: 1
+              limit: 2
+            - exit_status: 255
+              limit: 2
         agents:
           queue: linux-aarch64
         inputs:
@@ -1355,7 +1362,7 @@ steps:
         timeout_in_minutes: 60
         agents:
           # Sporadic OoM otherwise
-          queue: linux-aarch64-large
+          queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1512,7 +1519,7 @@ steps:
             composition: copy-to-s3
             run: nightly
       agents:
-        queue: linux-aarch64-large
+        queue: linux-aarch64-medium
 
     - id: copy-to-s3-2-replicas
       label: "Copy To S3 (2 replicas)"
@@ -1524,7 +1531,7 @@ steps:
             run: nightly
             args: [--default-size=2]
       agents:
-        queue: linux-aarch64-large
+        queue: linux-aarch64-medium
 
   - group: "Language tests"
     key: language-tests
