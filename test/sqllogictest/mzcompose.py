@@ -76,17 +76,26 @@ def run_sqllogictest(
 
     c.up("cockroach")
 
-    junit_report_path = ci_util.junit_report_filename(c.name)
-    commands = create_slt_execution_commands(
-        args.replicas, run_config, args, junit_report_path
-    )
+    container_name = "sqllogictest"
 
-    try:
-        for command in commands:
-            container_name = "sqllogictest"
+    exceptions = []
+
+    for command, junit_report_path in create_slt_execution_commands(
+        args.replicas, run_config, args, c.name
+    ):
+        try:
             c.run(container_name, *command)
-    finally:
-        ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report_path)
+        except Exception as e:
+            # Don't fail here so that we can keep running the remaining
+            # commands. We want to run through all SLT files to catch all
+            # current errors before failing the test.
+            exceptions.append(e)
+        finally:
+            ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report_path)
+
+    if exceptions:
+        print(f"Further exceptions were raised:\n{exceptions[1:]}")
+        raise exceptions[0]
 
 
 class SltRunConfig:
@@ -164,19 +173,21 @@ class DefaultSltRunStepConfig(SltRunStepConfig):
 
 
 def create_slt_execution_commands(
-    replicas: int, run_config: SltRunConfig, args: Namespace, junit_report_path: Path
-) -> list[list[str]]:
+    replicas: int, run_config: SltRunConfig, args: Namespace, composition_name: str
+) -> list[tuple[list[str], Path]]:
     shard = buildkite.get_parallelism_index()
     shard_count = buildkite.get_parallelism_count()
 
-    commands = []
+    commands_and_junit_paths = []
 
-    for step in run_config.steps:
+    for i, step in enumerate(run_config.steps):
         step.configure(args)
+        # Since we run multiple commands, generate a unique junit report for each
+        junit_report_path = ci_util.junit_report_filename(f"{composition_name}-{i}")
         cmd = step.to_command(shard, shard_count, replicas, junit_report_path)
-        commands.append(cmd)
+        commands_and_junit_paths.append((cmd, junit_report_path))
 
-    return commands
+    return commands_and_junit_paths
 
 
 def compileFastSltConfig() -> SltRunConfig:
