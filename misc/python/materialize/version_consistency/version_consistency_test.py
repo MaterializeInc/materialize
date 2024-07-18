@@ -220,6 +220,11 @@ def main() -> int:
         action=argparse.BooleanOptionalAction,
         default=False,
     )
+    parser.add_argument(
+        "--test-explain",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     args = test.parse_output_consistency_input_args(parser)
 
@@ -232,7 +237,9 @@ def main() -> int:
     except InterfaceError:
         return 1
 
-    result = test.run_output_consistency_tests(mz_connection, args)
+    result = test.run_output_consistency_tests(
+        mz_connection, args, test_explain=args.test_explain
+    )
     return 0 if result.all_passed() else 1
 
 

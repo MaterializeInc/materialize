@@ -137,7 +137,7 @@ def main() -> int:
     except InterfaceError:
         return 1
 
-    result = test.run_output_consistency_tests(mz_connection, args)
+    result = test.run_output_consistency_tests(mz_connection, args, test_explain=False)
     return 0 if result.all_passed() else 1
 
 

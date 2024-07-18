@@ -54,9 +54,7 @@ from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
 class OutputConsistencyTest:
     def run_output_consistency_tests(
-        self,
-        connection: Connection,
-        args: argparse.Namespace,
+        self, connection: Connection, args: argparse.Namespace, test_explain: bool
     ) -> ConsistencyTestSummary:
         """Entry point for output consistency tests"""
 
@@ -71,6 +69,7 @@ class OutputConsistencyTest:
             args.max_iterations,
             args.avoid_expressions_expecting_db_error,
             args.disable_predefined_queries,
+            test_explain=test_explain,
         )
 
     def parse_output_consistency_input_args(
@@ -123,6 +122,7 @@ class OutputConsistencyTest:
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
         disable_predefined_queries: bool,
+        test_explain: bool,
     ) -> ConsistencyTestSummary:
         input_data = self.create_input_data()
 
@@ -144,7 +144,7 @@ class OutputConsistencyTest:
             split_and_retry_on_db_error=True,
             print_reproduction_code=True,
             disable_predefined_queries=disable_predefined_queries,
-            test_explain=False,
+            test_explain=test_explain,
         )
 
         output_printer = OutputPrinter(input_data, config.test_explain)
@@ -312,7 +312,7 @@ def main() -> int:
     except InterfaceError:
         return 1
 
-    result = test.run_output_consistency_tests(connection, args)
+    result = test.run_output_consistency_tests(connection, args, test_explain=False)
     return 0 if result.all_passed() else 1
 
 

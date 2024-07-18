@@ -66,6 +66,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=False,
     )
 
+    parser.add_argument(
+        "--test-explain",
+        default=False,
+        type=bool,
+        action=argparse.BooleanOptionalAction,
+    )
+
     args = test.parse_output_consistency_input_args(parser)
 
     port_mz_internal, port_mz_this, port_mz_other = 6875, 6875, 16875
@@ -95,7 +102,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         test.evaluation_strategy_name = args.evaluation_strategy
 
-        test_summary = test.run_output_consistency_tests(connection, args)
+        test_summary = test.run_output_consistency_tests(
+            connection, args, test_explain=args.test_explain
+        )
 
     upload_output_consistency_results_to_test_analytics(c, test_summary)
 

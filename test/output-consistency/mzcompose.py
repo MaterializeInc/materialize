@@ -37,7 +37,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = test.parse_output_consistency_input_args(parser)
     connection = c.sql_connection()
 
-    test_summary = test.run_output_consistency_tests(connection, args)
+    test_summary = test.run_output_consistency_tests(
+        connection, args, test_explain=False
+    )
 
     upload_output_consistency_results_to_test_analytics(c, test_summary)
 
