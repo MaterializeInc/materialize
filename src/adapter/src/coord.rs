@@ -2594,12 +2594,18 @@ impl Coordinator {
 
             write_frontier = self.least_valid_write(&storage_dependencies);
             if let Some(ts) = write_frontier.as_option() {
+                // Make sure all storage dependencies are readable at the chosen
+                // as_of by stepping back by one from the least write frontier
+                // at the inputs. This makes sure we get a readable timestamp
+                // regardless of the compaction_window.
+                let ts = ts.step_back().unwrap_or_else(Timestamp::minimum);
+
                 // If the index has a compaction window configured, we should hold back the `as_of`
                 // to ensure this window is queryable after the index was created. Doing so should
                 // not break compute reconciliation because the compute controller should have
                 // prevented replicas from compacting their installed dataflows into the compaction
                 // window.
-                let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(*ts));
+                let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(ts));
                 soft_assert_or_log!(
                     !max_compaction_frontier.is_empty(),
                     "`max_compaction_frontier` unexpectedly empty",
