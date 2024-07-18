@@ -70,7 +70,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
     NumericReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
-    DECIMAL_39_8_TYPE_IDENTIFIER,
+    DECIMAL_TYPE_IDENTIFIERS,
     DOUBLE_TYPE_IDENTIFIER,
     REAL_TYPE_IDENTIFIER,
 )
@@ -906,7 +906,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 col_index,
                 partial(
                     is_known_to_involve_exact_data_types,
-                    internal_data_type_identifiers={DECIMAL_39_8_TYPE_IDENTIFIER},
+                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
                 ),
                 True,
             ):
