@@ -544,7 +544,9 @@ impl CatalogState {
         let schema_id = self
             .ambient_schemas_by_name
             .get(schema_name)
-            .unwrap_or_else(|| panic!("[{system_object_mapping:?}] unknown ambient schema: {schema_name}\nstate: {self:?}"));
+            .unwrap_or_else(|| {
+                panic!("[{system_object_mapping:?}] unknown ambient schema: {schema_name}")
+            });
         let name = QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,

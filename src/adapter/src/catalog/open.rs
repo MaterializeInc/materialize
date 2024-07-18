@@ -321,7 +321,9 @@ impl Catalog {
         // diffs.
         let commit_ts = txn.commit_ts();
         let mut updates = into_consolidatable_updates(updates, commit_ts);
+        println!("Before consolidating: {updates:?}");
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        println!("After  consolidating: {updates:?}");
         soft_assert_no_log!(
             updates.iter().all(|(_, _, diff)| *diff == 1),
             "consolidated updates should be positive during startup: {updates:?}"
@@ -361,6 +363,21 @@ impl Catalog {
                     })
                 }
             }
+        }
+
+        println!("\n\n\npre-item updats:");
+        for update in &pre_item_updates {
+            println!("UPDATE: {update:?}");
+        }
+
+        println!("\n\n\nitem updats:");
+        for update in &item_updates {
+            println!("UPDATE: {update:?}");
+        }
+
+        println!("\n\n\npost-item updats:");
+        for update in &post_item_updates {
+            println!("UPDATE: {update:?}");
         }
 
         let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
