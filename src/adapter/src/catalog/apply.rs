@@ -55,7 +55,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{info_span, warn, Instrument};
+use tracing::{info, info_span, warn, Instrument};
 
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::util::index_sql;
@@ -100,11 +100,17 @@ impl CatalogState {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
+        info!("Applying updates for bootstrap");
+        for update in &updates {
+            info!("update: {update:?}");
+        }
+
         let mut groups: Vec<Vec<_>> = Vec::new();
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
             groups.push(updates.collect());
         }
         for updates in groups {
+            info!("First group of updates: {updates:?}");
             let mut apply_state = BootstrapApplyState::Updates(Vec::new());
             let mut retractions = InProgressRetractions::default();
 
@@ -538,7 +544,7 @@ impl CatalogState {
         let schema_id = self
             .ambient_schemas_by_name
             .get(schema_name)
-            .unwrap_or_else(|| panic!("unknown ambient schema: {schema_name}\nstate: {self:?}"));
+            .unwrap_or_else(|| panic!("[{system_object_mapping:?}] unknown ambient schema: {schema_name}\nstate: {self:?}"));
         let name = QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
