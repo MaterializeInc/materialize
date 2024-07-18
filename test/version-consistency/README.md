@@ -15,6 +15,11 @@ To start the tests from a shell, use
 bin/version-consistency-test --max-runtime-in-sec 60
 ```
 
+## Test explain plans
+
+Use `--test-explain` to test explain plans. You might want to set `--avoid-expressions-expecting-db-error` and reduce
+the number of columns per query with `--max-cols-per-query`.
+
 ## Query generation
 
 Queries are generated using the output consistency test framework, which is also used to ensure consistency between
