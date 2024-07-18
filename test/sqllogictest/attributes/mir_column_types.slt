@@ -73,15 +73,15 @@ Explained Query:
   Threshold // { types: "(bigint?, text?, date?)" }
     Union // { types: "(bigint?, text?, date?)" }
       Negate // { types: "(bigint?, text?, date?)" }
-        Project (#1, #3, #0) // { types: "(bigint?, text?, date?)" }
-          Join on=(#0 = #2) type=differential // { types: "(date?, bigint?, date?, text?)" }
-            ArrangeBy keys=[[#0]] // { types: "(date?, bigint?)" }
-              Reduce group_by=[#1] aggregates=[sum(#0)] // { types: "(date?, bigint?)" }
-                Project (#0, #2) // { types: "(integer?, date?)" }
-                  ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
+        Project (#3, #1, #0) // { types: "(bigint?, text?, date?)" }
+          Join on=(#0 = #2) type=differential // { types: "(date?, text?, date?, bigint?)" }
             ArrangeBy keys=[[#0]] // { types: "(date?, text?)" }
               Reduce group_by=[#1] aggregates=[max(#0)] // { types: "(date?, text?)" }
                 Project (#1, #2) // { types: "(text?, date?)" }
+                  ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
+            ArrangeBy keys=[[#0]] // { types: "(date?, bigint?)" }
+              Reduce group_by=[#1] aggregates=[sum(#0)] // { types: "(date?, bigint?)" }
+                Project (#0, #2) // { types: "(integer?, date?)" }
                   ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
       Constant // { types: "(bigint, text, date?)" }
         - (1, "hello", null)
@@ -145,15 +145,15 @@ Explained Query:
       Union // { types: "(boolean?, bigint)" }
         Negate // { types: "(boolean?, bigint)" }
           TopK limit=1 // { types: "(boolean?, bigint)" }
-            Project (#3, #1) // { types: "(boolean?, bigint)" }
-              Join on=(#0 = #2) type=differential // { types: "(double precision, bigint, double precision, boolean?)" }
+            Project (#1, #3) // { types: "(boolean?, bigint)" }
+              Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision, bigint)" }
+                ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
+                  Reduce group_by=[#0] aggregates=[min(#1)] // { types: "(double precision, boolean?)" }
+                    Get l0 // { types: "(double precision, boolean?)" }
                 ArrangeBy keys=[[#0]] // { types: "(double precision, bigint)" }
                   Reduce group_by=[#0] aggregates=[count(*)] // { types: "(double precision, bigint)" }
                     Project (#0) // { types: "(double precision)" }
                       Get l0 // { types: "(double precision, boolean?)" }
-                ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
-                  Reduce group_by=[#0] aggregates=[min(#1)] // { types: "(double precision, boolean?)" }
-                    Get l0 // { types: "(double precision, boolean?)" }
         Constant // { types: "(boolean?, bigint)" }
           - (null, 10)
   With

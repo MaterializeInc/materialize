@@ -495,15 +495,15 @@ LIMIT 10;
 Explained Query:
   Finish order_by=[#0 desc nulls_first] limit=10 output=[#0..=#2]
     Return
-      Project (#3, #0, #1)
+      Project (#1, #0, #3)
         Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Reduce group_by=[#0] aggregates=[count(*)]
-              Project (#3)
-                Get l0
           ArrangeBy keys=[[#0]]
             Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000))]
               Project (#0, #3)
+                Get l0
+          ArrangeBy keys=[[#0]]
+            Reduce group_by=[#0] aggregates=[count(*)]
+              Project (#3)
                 Get l0
     With
       cte l0 =
