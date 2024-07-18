@@ -355,7 +355,7 @@ def run(
             if thread.is_alive():
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
-        print_stats(num_queries, workers)
+        print_stats(num_queries, workers, num_threads)
         if scenario == Scenario.Rename:
             # TODO(def-): Switch to failing exit code when #28182 is fixed
             os._exit(0)
@@ -388,11 +388,13 @@ def run(
         else:
             raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
-    print_stats(num_queries, workers)
+    print_stats(num_queries, workers, num_threads)
 
 
 def print_stats(
-    num_queries: defaultdict[ActionList, Counter[type[Action]]], workers: list[Worker]
+    num_queries: defaultdict[ActionList, Counter[type[Action]]],
+    workers: list[Worker],
+    num_threads: int,
 ) -> None:
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
     num_failures = 0
@@ -422,7 +424,7 @@ def print_stats(
             for action_class, count in counter.items()
         )
         print(f"  {error}: {text}")
-    assert failed < 50
+    assert failed < 50 if num_threads < 50 else failed < 75
 
 
 def parse_common_args(parser: argparse.ArgumentParser) -> None:

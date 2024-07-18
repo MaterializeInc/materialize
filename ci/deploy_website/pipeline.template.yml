@@ -12,6 +12,6 @@ steps:
     branches: main
     timeout_in_minutes: 30
     agents:
-      queue: builder-linux-x86_64
+      queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy/website
