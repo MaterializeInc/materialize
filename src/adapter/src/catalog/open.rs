@@ -263,6 +263,7 @@ impl Catalog {
         };
 
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
+        println!("Sync updates: {updates:?}");
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
@@ -295,6 +296,7 @@ impl Catalog {
             migrated_builtins
         };
         let op_updates = txn.get_and_commit_op_updates();
+        println!("op_updates: {op_updates:?}");
         updates.extend(op_updates);
 
         // Seed the in-memory catalog with values that don't come from the durable catalog.
