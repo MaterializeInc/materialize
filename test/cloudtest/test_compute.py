@@ -163,6 +163,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
     )
 
 
+@pytest.mark.skip(reason="Keeps flaking, see #28327")
 def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     """Test that --cluster-replica-sizes mapping is respected"""
     # Some time for existing cluster drops to complete so we don't try to spin them up again
