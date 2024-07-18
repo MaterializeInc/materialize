@@ -3763,7 +3763,8 @@ impl Drop for AlterSinkReadyContext {
     }
 }
 
-/// todo: document
+/// A struct for tracking the ownership of a lock and a VecDeque to store to-be-done work after the
+/// lock is freed.
 #[derive(Debug)]
 struct LockedVecDeque<T> {
     items: VecDeque<T>,

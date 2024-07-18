@@ -1381,7 +1381,9 @@ pub enum TransactionOps<T> {
         /// The statement params.
         params: mz_sql::plan::Params,
     },
-    /// This transaction has run some _simple_ DDL and must do nothing else.
+    /// This transaction has run some _simple_ DDL and must do nothing else. Any statement/plan that
+    /// uses this must return false in `must_serialize_ddl()` because this is serialized instead in
+    /// `sequence_plan()` during `COMMIT`.
     DDL {
         /// Catalog operations that have already run, and must run before each subsequent op.
         ops: Vec<crate::catalog::Op>,

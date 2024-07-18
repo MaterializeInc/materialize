@@ -624,6 +624,7 @@ impl Coordinator {
                         // any cluster (no RETURNING) is always safe.
                     }
 
+                    // These statements must be kept in-sync with `must_serialize_ddl()`.
                     Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => {
                         let state = self.catalog().for_session(ctx.session()).state().clone();
                         let revision = self.catalog().transient_revision();
@@ -931,7 +932,7 @@ impl Coordinator {
         if Self::must_spawn_purification(stmt) {
             return false;
         }
-        // Some DDL is exempt. It is not great that weqkw are matching on Statements here, but
+        // Some DDL is exempt. It is not great that we are matching on Statements here because
         // different plans can be produced from the same top-level statement type (i.e., `ALTER
         // CONNECTION ROTATE KEYS`). But the whole point of this is to prevent things from being
         // planned in the first place, so we accept the abstraction leak.

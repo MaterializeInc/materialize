@@ -16,6 +16,7 @@ BEGIN;
 CREATE VIEW serial_ddl_v AS SELECT 1;
 ----
 COMPLETE 0
+COMPLETE 0
 
 # While conn1 has an open txn and is in single statement delayed txn mode, execute a DDL in another
 # connection which should not be blocked and succeed.
@@ -25,7 +26,9 @@ BEGIN;
 CREATE VIEW serial_ddl_w AS SELECT 1;
 ----
 COMPLETE 0
+COMPLETE 0
 
 simple conn=conn1
 COMMIT;
 ----
+COMPLETE 0

@@ -285,7 +285,8 @@ impl Coordinator {
                 | Plan::AbortTransaction(AbortTransactionPlan {
                     ref transaction_type,
                 }) => {
-                    // Serialize DDL transactions.
+                    // Serialize DDL transactions. Statements that use this mode must return false
+                    // in `must_serialize_ddl()`.
                     if ctx.session().transaction().is_ddl() {
                         if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
                             let prev = self
