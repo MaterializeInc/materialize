@@ -192,6 +192,13 @@ class PostExecutionInconsistencyIgnoreFilterBase:
                 involved_characteristics,
             )
 
+        if error.error_type == ValidationErrorType.EXPLAIN_PLAN_MISMATCH:
+            return self._shall_ignore_explain_plan_mismatch(
+                error,
+                query_template,
+                contains_aggregation,
+            )
+
         if error.error_type == ValidationErrorType.ROW_COUNT_MISMATCH:
             return self._shall_ignore_error_mismatch(
                 error, query_template, contains_aggregation
@@ -258,6 +265,14 @@ class PostExecutionInconsistencyIgnoreFilterBase:
     ) -> IgnoreVerdict:
         # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
         # expressions in other parts of the query like, for example, the WHERE part)!
+        return NoIgnore()
+
+    def _shall_ignore_explain_plan_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(
