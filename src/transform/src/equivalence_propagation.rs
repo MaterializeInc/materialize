@@ -356,12 +356,32 @@ impl EquivalencePropagation {
             MirRelationExpr::Reduce {
                 input,
                 group_key,
-                aggregates: _,
+                aggregates,
                 ..
             } => {
                 // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
                 // This may involve projection and permutation, to reposition the information appropriately.
                 // TODO: Non-null constraints likely push down into the support of the aggregate expressions.
+
+                // Apply any equivalences about the input to key and aggregate expressions.
+                let input_equivalences = derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                if let Some(input_equivalences) = input_equivalences {
+                    for key in group_key.iter_mut() {
+                        // Semijoin elimination currently fails if you do more advanced simplification than
+                        // literal substitution.
+                        let old_key = key.clone();
+                        input_equivalences.reduce_expr(key);
+                        if !key.is_literal() {
+                            key.clone_from(&old_key);
+                        }
+                    }
+                    for aggr in aggregates.iter_mut() {
+                        input_equivalences.reduce_expr(&mut aggr.expr);
+                    }
+                }
 
                 // To transform `outer_equivalences` to one about `input`, we will "pretend" to pre-pend all of
                 // the input columns, introduce equivalences about the evaluation of `group_key` on them
