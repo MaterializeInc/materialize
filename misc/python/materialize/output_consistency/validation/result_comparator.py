@@ -74,7 +74,10 @@ class ResultComparator:
 
         if validation_outcome.query_execution_succeeded_in_all_strategies:
             self.validate_outcomes_data(query_execution, validation_outcome)
-            validation_outcome.success_reason = "result data matches"
+            if query_execution.test_explain:
+                validation_outcome.success_reason = "explain plan matches"
+            else:
+                validation_outcome.success_reason = "result data matches"
         else:
             # error messages were already validated at metadata validation
             validation_outcome.success_reason = "error message matches"
@@ -277,9 +280,15 @@ class ResultComparator:
 
         for index in range(1, len(outcomes)):
             other_result = cast(QueryResult, outcomes[index])
-            self.validate_data_of_two_outcomes(
-                query_execution, result1, other_result, validation_outcome
-            )
+
+            if query_execution.test_explain:
+                self.validate_explain_plan(
+                    query_execution, result1, other_result, validation_outcome
+                )
+            else:
+                self.validate_data_of_two_outcomes(
+                    query_execution, result1, other_result, validation_outcome
+                )
 
     def validate_data_of_two_outcomes(
         self,
@@ -355,6 +364,49 @@ class ResultComparator:
                     location=f"row index {row_index}, column index {col_index} ('{expression_as_sql}')",
                 ),
             )
+
+    def validate_explain_plan(
+        self,
+        query_execution: QueryExecution,
+        outcome1: QueryResult,
+        outcome2: QueryResult,
+        validation_outcome: ValidationOutcome,
+    ) -> None:
+        num_columns1 = len(outcome1.result_rows[0])
+        num_columns2 = len(outcome2.result_rows[0])
+
+        assert num_columns1 == 1
+        assert num_columns2 == 1
+
+        explain_plan1 = outcome1.result_rows[0][0]
+        explain_plan2 = outcome2.result_rows[0][0]
+
+        explain_plan1 = explain_plan1.replace(
+            query_execution.query_template.get_db_object_name(outcome1.strategy),
+            "<db_object>",
+        )
+        explain_plan2 = explain_plan2.replace(
+            query_execution.query_template.get_db_object_name(outcome2.strategy),
+            "<db_object>",
+        )
+
+        if explain_plan1 == explain_plan2:
+            return
+
+        validation_outcome.add_error(
+            self.ignore_filter,
+            ValidationError(
+                query_execution,
+                ValidationErrorType.EXPLAIN_PLAN_MISMATCH,
+                "Explain plan differs",
+                details1=ValidationErrorDetails(
+                    strategy=outcome1.strategy, value=explain_plan1, sql=outcome1.sql
+                ),
+                details2=ValidationErrorDetails(
+                    strategy=outcome2.strategy, value=explain_plan2, sql=outcome2.sql
+                ),
+            ),
+        )
 
     def is_type_equal(self, value1: Any, value2: Any) -> bool:
         if value1 is None or value2 is None:
