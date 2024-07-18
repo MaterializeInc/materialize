@@ -75,19 +75,19 @@ Explained Query:
   With
     cte l2 =
       Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-        Project (#0) // { arity: 1 }
-          Filter (#2 > #1) // { arity: 3 }
+        Project (#1) // { arity: 1 }
+          Filter (#2 > #0) // { arity: 3 }
             CrossJoin type=delta // { arity: 3 }
               implementation
-                %0:l1 » %1:t2[×] » %2:t1[×] » %3:l0[×]
-                %1:t2 » %0:l1[×] » %2:t1[×] » %3:l0[×]
-                %2:t1 » %0:l1[×] » %1:t2[×] » %3:l0[×]
-                %3:l0 » %0:l1[×] » %1:t2[×] » %2:t1[×]
-              ArrangeBy keys=[[]] // { arity: 1 }
-                Get l1 // { arity: 1 }
+                %0:t2 » %1:l1[×] » %2:t1[×] » %3:l0[×]
+                %1:l1 » %0:t2[×] » %2:t1[×] » %3:l0[×]
+                %2:t1 » %0:t2[×] » %1:l1[×] » %3:l0[×]
+                %3:l0 » %0:t2[×] » %1:l1[×] » %2:t1[×]
               ArrangeBy keys=[[]] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   ReadStorage materialize.public.t2 // { arity: 2 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Get l1 // { arity: 1 }
               ArrangeBy keys=[[]] // { arity: 0 }
                 Project () // { arity: 0 }
                   ReadStorage materialize.public.t1 // { arity: 2 }
