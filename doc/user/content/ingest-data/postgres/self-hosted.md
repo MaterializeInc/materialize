@@ -51,7 +51,7 @@ Enable your PostgreSQL's logical replication.
         SHOW wal_level;
         ```
 
-### 2. Create a publication and a Materialize user
+### 2. Create a publication and a replication user
 
 {{% postgres-direct/create-a-publication-other %}}
 
@@ -267,7 +267,7 @@ start by selecting the relevant option.
 1. In the SQL client connected to Materialize, use the [`CREATE
    SECRET`](/sql/create-secret/) command to securely store the password for the
    `materialize` PostgreSQL user you created
-   [earlier](#2-create-a-publication-and-a-materialize-user):
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -295,7 +295,7 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your database and start ingesting data from the publication you created
-   [earlier](#2-create-a-publication-and-a-materialize-user):
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -367,7 +367,7 @@ start by selecting the relevant option.
     If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-materialize-user):
+   password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -395,7 +395,7 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Azure instance and start ingesting data from the publication you
-   created [earlier](#2-create-a-publication-and-a-materialize-user):
+   created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -420,7 +420,7 @@ start by selecting the relevant option.
 
 1. Back in the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
    command to securely store the password for the `materialize` PostgreSQL user you
-   created [earlier](#2-create-a-publication-and-a-materialize-user):
+   created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -448,7 +448,7 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your database and start ingesting data from the publication you created
-   [earlier](#2-create-a-publication-and-a-materialize-user):
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -467,7 +467,7 @@ start by selecting the relevant option.
 
 {{< /tabs >}}
 
-### 3. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 

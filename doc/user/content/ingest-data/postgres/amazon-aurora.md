@@ -33,7 +33,7 @@ logical replication, so it's not possible to use this service with
 Materialize.
 {{</ note >}}
 
-### 2. Create a publication and a Materialize user
+### 2. Create a publication and a replication user
 
 {{% postgres-direct/create-a-publication-aws %}}
 
@@ -256,7 +256,7 @@ start by selecting the relevant option.
    or your preferred SQL client connected to Materialize, use the [`CREATE
    SECRET`](/sql/create-secret/) command to securely store the password for the
    `materialize` PostgreSQL user you created
-   [earlier](#2-create-a-publication-and-a-materialize-user):
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -292,7 +292,7 @@ start by selecting the relevant option.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Aurora instance and start ingesting data from the publication you
-   created [earlier](#2-create-a-publication-and-a-materialize-user).
+   created [earlier](#2-create-a-publication-and-a-replication-user).
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -371,7 +371,7 @@ start by selecting the relevant option.
     If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-materialize-user):
+   password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -402,7 +402,7 @@ details for Materialize to use:
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Aurora instance via AWS PrivateLink and start ingesting data from the
    publication you created
-   [earlier](#2-create-a-publication-and-a-materialize-user):
+   [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -475,7 +475,7 @@ details for Materialize to use:
     If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-materialize-user):
+password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -505,7 +505,7 @@ password for the `materialize` PostgreSQL user you created [earlier](#2-create-a
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Aurora instance and start ingesting data from the publication you
-   created [earlier](#2-create-a-publication-and-a-materialize-user):
+   created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     CREATE SOURCE mz_source
@@ -524,7 +524,7 @@ password for the `materialize` PostgreSQL user you created [earlier](#2-create-a
 
 {{< /tabs >}}
 
-### 3. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 

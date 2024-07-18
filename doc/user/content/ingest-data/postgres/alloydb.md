@@ -138,7 +138,7 @@ Materialize to your AlloyDB instance and begin the data ingestion process.
 
 {{< /tabs >}}
 
-### 3. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 

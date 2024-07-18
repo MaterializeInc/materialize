@@ -27,7 +27,7 @@ protocol to track changes in your database and propagate them to Materialize.
 To enable logical replication in Cloud SQL, see the [Cloud SQL
 documentation](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance).
 
-### 2. Create a publication and a Materialize user
+### 2. Create a publication and a replication user
 
 {{% postgres-direct/create-a-publication-other %}}
 
@@ -132,7 +132,7 @@ start by selecting the relevant option.
 
 {{< /tabs >}}
 
-### 3. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
