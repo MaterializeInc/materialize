@@ -592,6 +592,10 @@ impl Coordinator {
                         // situation where optimizing takes a while and there a lots of clusters,
                         // which would delay peek execution by the product of those.
                         let opt_limit = mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION.get(catalog.system_config().dyncfgs());
+                        let target_instance = catalog
+                            .get_cluster(optimizer.cluster_id())
+                            .name
+                            .clone();
                         let enable_re_optimize =
                             !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
                                 && optimizer.duration() > opt_limit);
@@ -600,6 +604,7 @@ impl Coordinator {
                             raw_expr: plan.source.clone(),
                             catalog,
                             compute_instances,
+                            target_instance,
                             metrics: optimizer.metrics().clone(),
                             finishing: optimizer.finishing().clone(),
                             optimizer_config: optimizer.config().clone(),
