@@ -175,9 +175,8 @@ impl Analysis for Provenance {
                     for input_prov in input.iter() {
                         // Modify the column references and unset the `filter` field.
                         let mut columns = columns.clone();
-                        for c in 0..input_arities[index] {
-                            columns[c + prior_arity] = input_prov.columns[c].clone();
-                        }
+                        columns[prior_arity..(input_arities[index] + prior_arity)]
+                            .clone_from_slice(&input_prov.columns[..input_arities[index]]);
                         provenance.push(ProvenanceInfo {
                             id: input_prov.id,
                             columns,

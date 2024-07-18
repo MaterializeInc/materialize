@@ -52,7 +52,7 @@ impl crate::Transform for SemijoinElimination {
 }
 
 impl SemijoinElimination {
-    /// Traverse `expr`, consulting each `Join` stage and looking for semijoins that can be removed.    
+    /// Traverse `expr`, consulting each `Join` stage and looking for semijoins that can be removed.
     pub fn apply(&self, expr: &mut MirRelationExpr, derived: DerivedView) {
         let mut todo = vec![(expr, derived)];
         while let Some((expr, view)) = todo.pop() {
