@@ -202,8 +202,9 @@ where
             ..
         } = builder.finish();
         let key_stats = key_stats
+            .clone()
             .into_struct_stats()
-            .ok_or_else(|| "found non-StructStats when encoding updates, {key_stats:?}")?;
+            .ok_or_else(|| format!("found non-StructStats when encoding updates, {key_stats:?}"))?;
 
         Ok(((Some(key), Some(val)), PartStats { key: key_stats }))
     } else {

@@ -332,6 +332,12 @@ pub trait Schema2<T>: Debug + Send + Sync {
     type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn, FinishedStats = Self::Statistics>
         + Debug;
 
+    fn data_type(&self) -> arrow::datatypes::DataType {
+        use arrow::array::Array;
+        let (data, _stats) = self.encoder().expect("ok").finish();
+        data.data_type().clone()
+    }
+
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
     /// Returns a type that is able to decode instances of `T` from a type erased

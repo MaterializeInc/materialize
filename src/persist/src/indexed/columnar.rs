@@ -389,6 +389,9 @@ impl<'a> ColumnarRecordsRef<'a> {
             ));
         }
         validate_array("vals", &self.val_data)?;
+        // for val in self.val_data.iter() {
+        //     assert!(val.map_or(true, |v| v.is_empty()), "{val:?}");
+        // }
 
         if self.diffs.len() != self.len {
             return Err(format!(

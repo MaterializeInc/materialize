@@ -1314,6 +1314,7 @@ pub mod datadriven {
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::internal::state::BatchPart;
     use crate::internal::state_versions::EncodedRollup;
+    use crate::iter::ColumnarSort;
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
@@ -1640,6 +1641,8 @@ pub mod datadriven {
             val: Arc::new(UnitSchema),
         };
         if consolidate {
+            // let sort = ColumnarSort::new(schemas);
+            // let mut builder = C
             consolidate_updates(&mut updates);
         }
         let builder = BatchBuilderInternal::new(

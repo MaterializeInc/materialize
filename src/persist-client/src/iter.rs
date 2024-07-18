@@ -11,7 +11,7 @@
 
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder};
-use arrow_row::RowConverter;
+use arrow_row::{RowConverter, SortField};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -28,7 +28,9 @@ use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::collections::CollectionExt;
 use mz_ore::task::JoinHandle;
-use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
+use mz_persist::indexed::columnar::{
+    ColumnarRecords, ColumnarRecordsBuilder, ColumnarRecordsStructuredExt,
+};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
@@ -70,7 +72,7 @@ pub trait Sort: Send + Sync + Debug {
 }
 
 #[derive(Debug)]
-struct CodecSort;
+pub struct CodecSort;
 
 impl Sort for CodecSort {
     fn accepts(&self, _version: Version, format: BatchColumnarFormat) -> bool {
@@ -87,10 +89,26 @@ impl Sort for CodecSort {
 }
 
 #[derive(Debug)]
-struct ColumnarSort<K: Codec, V: Codec> {
-    schemas: Schemas<K, V>,
-    key_converter: RowConverter,
-    val_converter: RowConverter,
+pub struct ColumnarSort<K: Codec, V: Codec> {
+    pub schemas: Schemas<K, V>,
+    pub key_converter: RowConverter,
+    pub val_converter: RowConverter,
+}
+
+impl<K: Codec, V: Codec> ColumnarSort<K, V> {
+    pub fn new(schemas: Schemas<K, V>) -> Self {
+        Self {
+            key_converter: {
+                let fields = vec![SortField::new(schemas.key.data_type())];
+                RowConverter::new(fields).expect("ok")
+            },
+            val_converter: {
+                let fields = vec![SortField::new(schemas.val.data_type())];
+                RowConverter::new(fields).expect("ok")
+            },
+            schemas: schemas.clone(),
+        }
+    }
 }
 
 fn structure<A: Codec>(schema: &A::Schema, data: &BinaryArray) -> anyhow::Result<ArrayRef> {
@@ -103,7 +121,8 @@ fn structure<A: Codec>(schema: &A::Schema, data: &BinaryArray) -> anyhow::Result
 
     for bytes in data.iter() {
         if let Some(bytes) = bytes {
-            A::decode_from(&mut value, bytes, &mut storage).map_err(|e| anyhow!(e))?;
+            A::decode_from(&mut value, bytes, &mut storage)
+                .map_err(|e| anyhow!("weird: {bytes:?} {e:#?}"))?;
             encoder.append(&value);
         } else {
             encoder.append_null();
@@ -115,6 +134,7 @@ fn structure<A: Codec>(schema: &A::Schema, data: &BinaryArray) -> anyhow::Result
 }
 
 fn splat<A: Codec>(schema: &A::Schema, data: &dyn Array) -> anyhow::Result<BinaryArray> {
+    assert_eq!(data.null_count(), 0);
     let len = data.len();
     let mut decoder = Schema2::decoder_any(schema, data)?;
     let mut builder = BinaryBuilder::new();
@@ -122,13 +142,16 @@ fn splat<A: Codec>(schema: &A::Schema, data: &dyn Array) -> anyhow::Result<Binar
     let mut value: A = A::default();
     let mut buffer = vec![];
 
+    assert_eq!(data.null_count(), 0);
     for i in 0..len {
         if decoder.is_null(i) {
+            panic!("hmmm... {schema:?}");
             builder.append_null();
         } else {
             decoder.decode(i, &mut value);
             Codec::encode(&value, &mut buffer);
             builder.append_value(&buffer);
+            buffer.clear()
         }
     }
 
@@ -179,11 +202,13 @@ impl<K: Codec + Debug, V: Codec + Debug> Sort for ColumnarSort<K, V> {
             .expect("ok")
             .into_element();
         let parser = self.val_converter.parser();
+        assert_eq!(columns.values().null_count(), 0);
         let vals = self
             .val_converter
             .convert_rows(columns.values().iter().map(|v| parser.parse(v.unwrap())))
             .expect("ok")
             .into_element();
+        assert_eq!(vals.null_count(), 0);
         let ext = ColumnarRecordsStructuredExt {
             key: Some(keys.clone()),
             val: Some(vals.clone()),
@@ -229,7 +254,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
 
     fn key_lower(&self) -> &[u8] {
         match self {
-            FetchData::Unfetched { part, .. } => part.key_lower(),
+            FetchData::Unfetched { part, .. } => &[],
             FetchData::AlreadyFetched => &[],
         }
     }
@@ -409,6 +434,7 @@ where
         filter: FetchBatchFilter<T>,
         prefetch_budget_bytes: usize,
         split_old_runs: bool,
+        sort: Arc<dyn Sort>,
     ) -> Self {
         Self {
             context,
@@ -421,7 +447,7 @@ where
             filter,
             budget: prefetch_budget_bytes,
             split_old_runs,
-            sort: Arc::new(CodecSort),
+            sort,
             initial_state: None,
             drop_stash: None,
         }
@@ -480,7 +506,13 @@ where
         // runs if we change our sort order or have bugs, for example. Defend against this by
         // splitting up a run if it contains possibly-unconsolidated parts.
         let maybe_unconsolidated = run.iter().any(|(p, _)| match p {
-            ConsolidationPart::Queued { data } => data.maybe_unconsolidated(),
+            ConsolidationPart::Queued { data } => {
+                let format = match data {
+                    FetchData::Unfetched { part, .. } => part.format(),
+                    FetchData::AlreadyFetched => unreachable!(),
+                };
+                self.sort.accepts(Version::new(0, 200, 0), format)
+            }
             ConsolidationPart::Prefetched {
                 maybe_unconsolidated,
                 ..
@@ -665,6 +697,23 @@ where
         Ok(self.iter())
     }
 
+    /// Wait until data is available, then return an iterator over the next
+    /// consolidated chunk of output. If this method returns `None`, that all the data has been
+    /// exhausted and the full consolidated dataset has been returned.
+    pub(crate) async fn next_chunk(&mut self) -> anyhow::Result<Option<BlobTraceUpdates>> {
+        self.trim();
+        self.unblock_progress().await?;
+        let mut builder = ColumnarRecordsBuilder::default();
+        let Some(mut iter) = self.iter() else {
+            return Ok(None);
+        };
+        for (k, v, t, d) in iter {
+            assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
+        }
+        let records = builder.finish(&self.metrics.columnar);
+        Ok(Some(self.sort.disorder(records)))
+    }
+
     /// The size of the data that we _might_ be holding concurrently in memory. While this is
     /// normally kept less than the budget, it may burst over it temporarily, since we need at
     /// least one part in every run to continue making progress.
@@ -789,7 +838,7 @@ pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
     },
 }
 
-impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
+impl<'a, T: Timestamp, D> Debug for ConsolidationPartIter<'a, T, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ConsolidationPartIter::Encoded {
@@ -800,7 +849,7 @@ impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
             } => {
                 let mut f = f.debug_struct("Encoded");
                 f.field("cursor", cursor);
-                f.field("next", next);
+                // f.field("next", next);
                 f.finish()
             }
             ConsolidationPartIter::Sorted { part: _, cursors } => {
@@ -808,8 +857,9 @@ impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
                 f.field("cursors", &cursors.len());
                 f.finish()
             }
-            ConsolidationPartIter::Flattened { .. } => {
+            ConsolidationPartIter::Flattened { part, cursor } => {
                 let mut f = f.debug_struct("Flattened");
+                f.field("keys", &part.keys().iter().collect::<Vec<_>>());
                 f.finish()
             }
         }
@@ -920,7 +970,6 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
     context: &'a str,
     parts: Vec<ConsolidationPartIter<'a, T, D>>,
@@ -989,9 +1038,10 @@ where
                             // Don't want to log the entire KV, but it's interesting to know
                             // whether it's KVs going backwards or 'just' timestamps.
                             panic!(
-                                "data arrived at the consolidator out of order ({}, kvs equal? {}, {t0:?}, {t1:?})",
+                                "data arrived at the consolidator out of order ({}, kvs equal? {:?}, {t0:?}, {t1:?}) {:?}",
                                 self.context,
-                                (*k0, *v0) == (*k1, *v1)
+                                ((*k0, *v0), (*k1, *v1)),
+                                self.parts,
                             );
                         }
                     };
@@ -1222,6 +1272,7 @@ mod tests {
                 },
                 budget,
                 false,
+                Arc::new(CodecSort),
             );
 
             for run in runs {

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use arrow_row::{RowConverter, SortField};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -22,6 +23,7 @@ use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist::location::Blob;
+use mz_persist_types::columnar::Schema2;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -39,7 +41,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
+use crate::iter::{CodecSort, ColumnarSort, Consolidator, SPLIT_OLD_RUNS};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -694,7 +696,7 @@ where
             true,
         );
 
-        let mut consolidator = Consolidator::new(
+        let mut consolidator: Consolidator<T, D> = Consolidator::new(
             format!(
                 "{}[lower={:?},upper={:?}]",
                 shard_id,
@@ -711,6 +713,17 @@ where
             },
             prefetch_budget_bytes,
             cfg.split_old_runs,
+            Arc::new(ColumnarSort {
+                key_converter: {
+                    let fields = vec![SortField::new(real_schemas.key.data_type())];
+                    RowConverter::new(fields).expect("ok")
+                },
+                val_converter: {
+                    let fields = vec![SortField::new(real_schemas.val.data_type())];
+                    RowConverter::new(fields).expect("ok")
+                },
+                schemas: real_schemas.clone(),
+            }),
         );
 
         for (desc, parts) in runs {
@@ -727,16 +740,24 @@ where
         let mut val_vec = vec![];
         loop {
             let fetch_start = Instant::now();
-            let Some(updates) = consolidator.next().await? else {
+            let Some(updates) = consolidator.next_chunk().await? else {
                 break;
             };
             timings.part_fetching += fetch_start.elapsed();
-            for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
+            for ((k, v), t, d) in updates.records().iter() {
                 key_vec.clear();
                 key_vec.extend_from_slice(k);
                 val_vec.clear();
                 val_vec.extend_from_slice(v);
-                batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+                batch
+                    .add(
+                        &real_schemas,
+                        &key_vec,
+                        &val_vec,
+                        &T::decode(t),
+                        &D::decode(d),
+                    )
+                    .await?;
             }
             tokio::task::yield_now().await;
         }
@@ -875,9 +896,9 @@ mod tests {
         };
         let schemas = Schemas {
             key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
+            val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, (), u64, i64>::compact(
+        let res = Compactor::<String, String, u64, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
@@ -953,9 +974,9 @@ mod tests {
         };
         let schemas = Schemas {
             key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
+            val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, (), Product<u32, u32>, i64>::compact(
+        let res = Compactor::<String, String, Product<u32, u32>, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
