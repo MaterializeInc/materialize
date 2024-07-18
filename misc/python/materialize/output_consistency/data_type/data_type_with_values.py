@@ -43,9 +43,7 @@ class DataTypeWithValues:
         is_pg_compatible: bool = True,
     ) -> None:
         raw_value = self._create_raw_value(value, column_name, characteristics)
-
-        if not is_pg_compatible:
-            raw_value.is_postgres_compatible = False
+        raw_value.is_pg_compatible = is_pg_compatible
 
         self.raw_values.append(raw_value)
 

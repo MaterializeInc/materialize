@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from collections.abc import Callable
 
 from materialize.output_consistency.input_data.operations.all_operations_provider import (
     ALL_OPERATION_TYPES,
@@ -32,10 +33,9 @@ class ConsistencyTestOperationsInput:
 
         return filtered_operations
 
-    def remove_postgres_incompatible_data(self) -> None:
-        self._remove_postgres_incompatible_functions()
-
-    def _remove_postgres_incompatible_functions(self) -> None:
+    def remove_functions(
+        self, shall_remove: Callable[[DbOperationOrFunction], bool]
+    ) -> None:
         self.all_operation_types = [
-            op for op in self.all_operation_types if op.is_pg_compatible
+            op for op in self.all_operation_types if not shall_remove(op)
         ]

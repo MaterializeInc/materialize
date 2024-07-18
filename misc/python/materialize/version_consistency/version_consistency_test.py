@@ -29,6 +29,10 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
 )
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
+from materialize.output_consistency.operation.operation import DbOperationOrFunction
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
@@ -55,6 +59,9 @@ class VersionConsistencyTest(OutputConsistencyTest):
         self.mz2_connection: Connection | None = None
         self.evaluation_strategy_name: str | None = None
         self.allow_same_version_comparison = False
+        # values will be available after create_sql_executors is called
+        self.mz1_version: MzVersion | None = None
+        self.mz2_version: MzVersion | None = None
 
     def shall_run(self, sql_executors: SqlExecutors) -> bool:
         assert isinstance(sql_executors, MultiVersionSqlExecutors)
@@ -82,9 +89,23 @@ class VersionConsistencyTest(OutputConsistencyTest):
     ) -> SqlExecutors:
         assert self.mz2_connection is not None, "Second connection is not initialized"
 
+        mz1_sql_executor = create_sql_executor(
+            config, connection, output_printer, "mz1"
+        )
+        mz2_sql_executor = create_sql_executor(
+            config, self.mz2_connection, output_printer, "mz2"
+        )
+
+        self.mz1_version = MzVersion.parse_mz(
+            mz1_sql_executor.query_version(), drop_dev_suffix=True
+        )
+        self.mz2_version = MzVersion.parse_mz(
+            mz2_sql_executor.query_version(), drop_dev_suffix=True
+        )
+
         return MultiVersionSqlExecutors(
-            create_sql_executor(config, connection, output_printer, "mz1"),
-            create_sql_executor(config, self.mz2_connection, output_printer, "mz2"),
+            mz1_sql_executor,
+            mz2_sql_executor,
         )
 
     def create_result_comparator(
@@ -94,14 +115,11 @@ class VersionConsistencyTest(OutputConsistencyTest):
             ignore_filter, VersionConsistencyErrorMessageNormalizer()
         )
 
-    def create_inconsistency_ignore_filter(
-        self, sql_executors: SqlExecutors
-    ) -> GenericInconsistencyIgnoreFilter:
-        assert isinstance(sql_executors, MultiVersionSqlExecutors)
-        return VersionConsistencyIgnoreFilter(
-            sql_executors.executor.query_version(),
-            sql_executors.executor2.query_version(),
-        )
+    def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
+        assert self.mz1_version is not None
+        assert self.mz2_version is not None
+
+        return VersionConsistencyIgnoreFilter(self.mz1_version, self.mz2_version)
 
     def create_evaluation_strategies(
         self, sql_executors: SqlExecutors
@@ -143,6 +161,25 @@ class VersionConsistencyTest(OutputConsistencyTest):
             )
 
         return strategies
+
+    def filter_input_data(self, input_data: ConsistencyTestInputData) -> None:
+        input_data.operations_input.remove_functions(
+            self._is_operation_unsupported_in_any_versions
+        )
+
+    def _is_operation_unsupported_in_any_versions(
+        self, operation: DbOperationOrFunction
+    ) -> bool:
+        if operation.since_mz_version is None:
+            return False
+
+        assert self.mz1_version is not None
+        assert self.mz2_version is not None
+
+        return (
+            operation.since_mz_version > self.mz1_version
+            or operation.since_mz_version > self.mz2_version
+        )
 
 
 def sanitize_and_shorten_version_string(version: str) -> str:

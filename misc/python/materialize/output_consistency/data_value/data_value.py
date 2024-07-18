@@ -32,7 +32,7 @@ class DataValue(LeafExpression):
         data_type: DataType,
         value_identifier: str,
         characteristics: set[ExpressionCharacteristics],
-        is_postgres_compatible: bool = True,
+        is_pg_compatible: bool = True,
     ):
         column_name = (
             f"{data_type.internal_identifier.lower()}_{value_identifier.lower()}"
@@ -46,7 +46,7 @@ class DataValue(LeafExpression):
             False,
         )
         self.value = value
-        self.is_postgres_compatible = is_postgres_compatible
+        self.is_pg_compatible = is_pg_compatible
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         return self.data_type.resolve_return_type_spec(self.own_characteristics)

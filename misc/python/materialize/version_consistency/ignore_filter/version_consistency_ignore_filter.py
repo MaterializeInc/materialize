@@ -12,9 +12,6 @@ from materialize.mz_version import MzVersion
 from materialize.output_consistency.expression.expression import (
     Expression,
 )
-from materialize.output_consistency.expression.expression_with_args import (
-    ExpressionWithArgs,
-)
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_any_date_time_expression,
     is_operation_tagged,
@@ -55,9 +52,7 @@ MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
-    def __init__(self, mz1_version_string: str, mz2_version_string: str):
-        mz1_version = MzVersion.parse_mz(mz1_version_string, drop_dev_suffix=True)
-        mz2_version = MzVersion.parse_mz(mz2_version_string, drop_dev_suffix=True)
+    def __init__(self, mz1_version: MzVersion, mz2_version: MzVersion):
         lower_version, higher_version = (
             (mz1_version, mz2_version)
             if mz1_version < mz2_version
@@ -81,14 +76,6 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> IgnoreVerdict:
-        if not self._contains_only_available_operations(expression, self.lower_version):
-            return YesIgnore(f"Feature is not available in {self.lower_version}")
-
-        if not self._contains_only_available_operations(
-            expression, self.higher_version
-        ):
-            return YesIgnore(f"Feature is not available in {self.higher_version}")
-
         if (
             self.lower_version < MZ_VERSION_0_77_0 <= self.higher_version
             and is_any_date_time_expression(expression)
@@ -195,22 +182,6 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Contains on list and array introduced in PR 27959")
 
         return super().shall_ignore_expression(expression, row_selection)
-
-    def _contains_only_available_operations(
-        self, expression: Expression, mz_version: MzVersion
-    ) -> bool:
-        def is_newer_operation(expression: Expression) -> bool:
-            if not isinstance(expression, ExpressionWithArgs):
-                return False
-
-            if expression.operation.since_mz_version is None:
-                return False
-
-            feature_version = expression.operation.since_mz_version
-
-            return feature_version > mz_version
-
-        return not expression.matches(is_newer_operation, True)
 
 
 class VersionPostExecutionInconsistencyIgnoreFilter(

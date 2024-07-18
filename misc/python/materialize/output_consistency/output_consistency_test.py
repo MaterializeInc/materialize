@@ -144,16 +144,11 @@ class OutputConsistencyTest:
             use_autocommit=True,
             split_and_retry_on_db_error=True,
             print_reproduction_code=True,
-            postgres_compatible_mode=scenario
-            == EvaluationScenario.POSTGRES_CONSISTENCY,
             disable_predefined_queries=disable_predefined_queries,
         )
 
         output_printer.print_config(config)
         config.validate()
-
-        if config.postgres_compatible_mode:
-            input_data.remove_postgres_incompatible_data()
 
         randomized_picker = RandomizedPicker(config)
 
@@ -161,8 +156,13 @@ class OutputConsistencyTest:
 
         evaluation_strategies = self.create_evaluation_strategies(sql_executors)
 
-        ignore_filter = self.create_inconsistency_ignore_filter(sql_executors)
+        # prerequisite: sql_executors need to be created
+        self.filter_input_data(input_data)
 
+        # prerequisite: sql_executors need to be created
+        ignore_filter = self.create_inconsistency_ignore_filter()
+
+        # prerequisite: input data needs to be filtered
         expression_generator = ExpressionGenerator(
             config, randomized_picker, input_data
         )
@@ -174,6 +174,7 @@ class OutputConsistencyTest:
         output_printer.print_info(sql_executors.get_database_infos())
         output_printer.print_empty_line()
 
+        # prerequisite: input data needs to be filtered
         output_printer.print_info(input_data.get_stats())
         output_printer.print_empty_line()
 
@@ -215,6 +216,10 @@ class OutputConsistencyTest:
     def create_input_data(self) -> ConsistencyTestInputData:
         return ConsistencyTestInputData()
 
+    def filter_input_data(self, input_data: ConsistencyTestInputData) -> None:
+        # This allows to filter the input data when sql_executors are created
+        pass
+
     def create_sql_executors(
         self,
         config: ConsistencyTestConfiguration,
@@ -233,9 +238,7 @@ class OutputConsistencyTest:
     ) -> ResultComparator:
         return ResultComparator(ignore_filter)
 
-    def create_inconsistency_ignore_filter(
-        self, sql_executors: SqlExecutors
-    ) -> GenericInconsistencyIgnoreFilter:
+    def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return InternalOutputInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(
