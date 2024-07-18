@@ -1427,7 +1427,7 @@ steps:
     label: "Test for incident 70"
     depends_on: build-aarch64
     timeout_in_minutes: 15
-    skip: "Affected by #15209"
+    skip: "Affected by incidents-and-escalations#72"
     agents:
       queue: linux-aarch64
     plugins:
