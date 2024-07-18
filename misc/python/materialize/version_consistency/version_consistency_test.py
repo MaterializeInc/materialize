@@ -211,6 +211,11 @@ def main() -> int:
         choices=EVALUATION_STRATEGY_NAMES,
     )
     parser.add_argument(
+        "--other-tag",
+        type=str,
+        default="common-ancestor",
+    )
+    parser.add_argument(
         "--allow-same-version-comparison",
         action=argparse.BooleanOptionalAction,
         default=False,
