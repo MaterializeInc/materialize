@@ -18,9 +18,9 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     WithOptionValue,
 };
-use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
+use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
 use mz_storage_types::connections::PostgresConnection;
-use mz_storage_types::sources::SubsourceResolver;
+use mz_storage_types::sources::SourceReferenceResolver;
 use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
 
@@ -29,12 +29,12 @@ use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
 use super::error::PgSourcePurificationError;
-use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, RequestedSubsource};
+use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport};
 
 /// Ensure that we have select permissions on all tables; we have to do this before we
 /// start snapshotting because if we discover we cannot `COPY` from a table while
 /// snapshotting, we break the entire source.
-pub(super) async fn validate_requested_subsources_privileges(
+pub(super) async fn validate_requested_references_privileges(
     config: &Config,
     client: &Client,
     table_oids: &[Oid],
@@ -51,7 +51,7 @@ pub(super) async fn validate_requested_subsources_privileges(
 /// Additionally, modify `text_columns` so that they contain database-qualified
 /// references to the columns.
 pub(super) fn generate_text_columns(
-    subsource_resolver: &SubsourceResolver,
+    reference_resolver: &SourceReferenceResolver,
     references: &[PostgresTableDesc],
     text_columns: &mut [UnresolvedItemName],
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
@@ -73,7 +73,7 @@ pub(super) fn generate_text_columns(
         let qual_name = UnresolvedItemName(qual);
 
         let (mut fully_qualified_name, idx) =
-            subsource_resolver.resolve(&qual_name.0, 3).map_err(|e| {
+            reference_resolver.resolve(&qual_name.0, 3).map_err(|e| {
                 PlanError::InvalidOptionValue {
                     option_name: "TEXT COLUMNS".to_string(),
                     err: Box::new(e.into()),
@@ -254,24 +254,24 @@ pub fn generate_create_subsource_statements(
     Ok(subsources)
 }
 
-pub(super) struct PurifiedSubsources {
-    pub(super) subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+pub(super) struct PurifiedSourceExports {
+    pub(super) source_exports: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     pub(super) referenced_tables: Vec<PostgresTableDesc>,
     pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
 }
 
-// Purify the referenced subsources, return the list of subsource statements,
-// corresponding tables, and and additional fields necessary to update the source
-// options
-pub(super) async fn purify_subsources(
+// Purify the requested external references, returning a set of purified
+// source exports corresponding to external tables, and and additional
+// fields necessary to generate relevant statements and update statement options
+pub(super) async fn purify_source_exports(
     client: &Client,
     config: &mz_postgres_util::Config,
     publication: &str,
     connection: &PostgresConnection,
-    referenced_subsources: &mut Option<ReferencedSubsources>,
+    external_references: &mut Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
-) -> Result<PurifiedSubsources, PlanError> {
+) -> Result<PurifiedSourceExports, PlanError> {
     let mut publication_tables = mz_postgres_util::publication_info(client, publication).await?;
 
     if publication_tables.is_empty() {
@@ -280,14 +280,15 @@ pub(super) async fn purify_subsources(
         ))?;
     }
 
-    let subsource_resolver = SubsourceResolver::new(&connection.database, &publication_tables)?;
+    let reference_resolver =
+        SourceReferenceResolver::new(&connection.database, &publication_tables)?;
 
-    let mut validated_requested_subsources = vec![];
-    match referenced_subsources
+    let mut validated_references = vec![];
+    match external_references
         .as_mut()
-        .ok_or(PgSourcePurificationError::RequiresReferencedSubsources)?
+        .ok_or(PgSourcePurificationError::RequiresExternalReferences)?
     {
-        ReferencedSubsources::All => {
+        ExternalReferences::All => {
             for table in &publication_tables {
                 let external_reference = UnresolvedItemName::qualified(&[
                     Ident::new(&connection.database)?,
@@ -295,15 +296,15 @@ pub(super) async fn purify_subsources(
                     Ident::new(&table.name)?,
                 ]);
                 let subsource_name =
-                    super::subsource_name_gen(unresolved_source_name, &table.name)?;
-                validated_requested_subsources.push(RequestedSubsource {
+                    super::source_export_name_gen(unresolved_source_name, &table.name)?;
+                validated_references.push(RequestedSourceExport {
                     external_reference,
-                    subsource_name,
+                    name: subsource_name,
                     table,
                 });
             }
         }
-        ReferencedSubsources::SubsetSchemas(schemas) => {
+        ExternalReferences::SubsetSchemas(schemas) => {
             let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(client)
                 .await?
                 .into_iter()
@@ -336,20 +337,20 @@ pub(super) async fn purify_subsources(
                     Ident::new(&table.name)?,
                 ]);
                 let subsource_name =
-                    super::subsource_name_gen(unresolved_source_name, &table.name)?;
-                validated_requested_subsources.push(RequestedSubsource {
+                    super::source_export_name_gen(unresolved_source_name, &table.name)?;
+                validated_references.push(RequestedSourceExport {
                     external_reference,
-                    subsource_name,
+                    name: subsource_name,
                     table,
                 });
             }
         }
-        ReferencedSubsources::SubsetTables(subsources) => {
+        ExternalReferences::SubsetTables(references) => {
             // The user manually selected a subset of upstream tables so we need to
             // validate that the names actually exist and are not ambiguous
-            validated_requested_subsources.extend(super::subsource_gen(
-                subsources,
-                &subsource_resolver,
+            validated_references.extend(super::source_export_gen(
+                references,
+                &reference_resolver,
                 &publication_tables,
                 3,
                 unresolved_source_name,
@@ -357,24 +358,23 @@ pub(super) async fn purify_subsources(
         }
     };
 
-    if validated_requested_subsources.is_empty() {
+    // TODO: Remove this check once we allow creating a source with no exports and adding
+    // source-fed tables to that source later.
+    if validated_references.is_empty() {
         sql_bail!(
             "[internal error]: Postgres source must ingest at least one table, but {} matched none",
-            referenced_subsources.as_ref().unwrap().to_ast_string()
+            external_references.as_ref().unwrap().to_ast_string()
         );
     }
 
-    super::validate_subsource_names(&validated_requested_subsources)?;
+    super::validate_source_export_names(&validated_references)?;
 
-    let table_oids: Vec<_> = validated_requested_subsources
-        .iter()
-        .map(|r| r.table.oid)
-        .collect();
+    let table_oids: Vec<_> = validated_references.iter().map(|r| r.table.oid).collect();
 
-    validate_requested_subsources_privileges(config, client, &table_oids).await?;
+    validate_requested_references_privileges(config, client, &table_oids).await?;
 
     let mut text_column_map =
-        generate_text_columns(&subsource_resolver, &publication_tables, &mut text_columns)?;
+        generate_text_columns(&reference_resolver, &publication_tables, &mut text_columns)?;
 
     // Normalize options to contain full qualified values.
     text_columns.sort();
@@ -384,11 +384,11 @@ pub(super) async fn purify_subsources(
         .map(WithOptionValue::UnresolvedItemName)
         .collect();
 
-    let requested_subsources = validated_requested_subsources
+    let requested_subsources = validated_references
         .into_iter()
         .map(|r| {
             (
-                r.subsource_name,
+                r.name,
                 PurifiedSourceExport {
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::Postgres {
@@ -427,8 +427,8 @@ pub(super) async fn purify_subsources(
     // Trim any un-referred-to tables
     publication_tables.retain(|t| table_oids.contains(&t.oid));
 
-    Ok(PurifiedSubsources {
-        subsources: requested_subsources,
+    Ok(PurifiedSourceExports {
+        source_exports: requested_subsources,
         referenced_tables: publication_tables,
         normalized_text_columns,
     })

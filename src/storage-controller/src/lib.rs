@@ -887,7 +887,7 @@ where
                     .desc
                     .alter_compatible(ingestion_id, source_desc)?;
 
-                let subsource_resolver = cur_ingestion.desc.connection.get_subsource_resolver();
+                let reference_resolver = cur_ingestion.desc.connection.get_reference_resolver();
 
                 // Ensure updated `SourceDesc` contains reference to all
                 // current external references.
@@ -913,7 +913,7 @@ where
                         }
                     };
 
-                    if subsource_resolver
+                    if reference_resolver
                         .resolve_idx(&external_reference.0)
                         .is_err()
                     {

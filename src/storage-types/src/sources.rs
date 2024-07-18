@@ -182,7 +182,7 @@ impl<S> IngestionDescription<S> {
 
 impl<S: Clone> IngestionDescription<S> {
     pub fn source_exports_with_output_indices(&self) -> BTreeMap<GlobalId, SourceExport<usize, S>> {
-        let subsource_resolver = self.desc.connection.get_subsource_resolver();
+        let reference_resolver = self.desc.connection.get_reference_resolver();
 
         let mut source_exports = BTreeMap::new();
 
@@ -196,7 +196,7 @@ impl<S: Clone> IngestionDescription<S> {
         {
             let ingestion_output = match ingestion_output {
                 Some(ingestion_output) => {
-                    subsource_resolver
+                    reference_resolver
                         .resolve_idx(&ingestion_output.0)
                         .expect("must have all subsource references")
                         // output indices are the native details idx + 1 to
@@ -739,8 +739,9 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
 
-    /// Returns a [`SubsourceResolver`] for this source connection's subsources.
-    fn get_subsource_resolver(&self) -> SubsourceResolver;
+    /// Returns a [`SourceReferenceResolver`] for this source connection's source exports, keyed
+    /// by their external reference.
+    fn get_reference_resolver(&self) -> SourceReferenceResolver;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1040,12 +1041,12 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn get_subsource_resolver(&self) -> SubsourceResolver {
+    fn get_reference_resolver(&self) -> SourceReferenceResolver {
         match self {
-            Self::Kafka(conn) => conn.get_subsource_resolver(),
-            Self::Postgres(conn) => conn.get_subsource_resolver(),
-            Self::MySql(conn) => conn.get_subsource_resolver(),
-            Self::LoadGenerator(conn) => conn.get_subsource_resolver(),
+            Self::Kafka(conn) => conn.get_reference_resolver(),
+            Self::Postgres(conn) => conn.get_reference_resolver(),
+            Self::MySql(conn) => conn.get_reference_resolver(),
+            Self::LoadGenerator(conn) => conn.get_reference_resolver(),
         }
     }
 }
@@ -1378,21 +1379,21 @@ impl Schema<SourceData> for RelationDesc {
     }
 }
 
-/// Describes how subsource references should be organized in a multi-level
+/// Describes how external references should be organized in a multi-level
 /// hierarchy.
 ///
 /// For both PostgreSQL and MySQL sources, these levels of reference are
 /// intrinsic to the items which we're referencing. If there are other naming
 /// schemas for other types of sources we discover, we might need to revisit
 /// this.
-pub trait SubsourceCatalogReference {
+pub trait ExternalCatalogReference {
     /// The "second" level of namespacing for the reference.
     fn schema_name(&self) -> &str;
     /// The lowest level of namespacing for the reference.
     fn item_name(&self) -> &str;
 }
 
-impl SubsourceCatalogReference for mz_mysql_util::MySqlTableDesc {
+impl ExternalCatalogReference for mz_mysql_util::MySqlTableDesc {
     fn schema_name(&self) -> &str {
         &self.schema_name
     }
@@ -1402,7 +1403,7 @@ impl SubsourceCatalogReference for mz_mysql_util::MySqlTableDesc {
     }
 }
 
-impl SubsourceCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
+impl ExternalCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
     fn schema_name(&self) -> &str {
         &self.namespace
     }
@@ -1414,7 +1415,7 @@ impl SubsourceCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
 
 // This implementation provides a means of converting arbitrary objects into a
 // `SubsourceCatalogReference`, e.g. load generator view names.
-impl<'a> SubsourceCatalogReference for (&'a str, &'a str) {
+impl<'a> ExternalCatalogReference for (&'a str, &'a str) {
     fn schema_name(&self) -> &str {
         self.0
     }
@@ -1424,7 +1425,7 @@ impl<'a> SubsourceCatalogReference for (&'a str, &'a str) {
     }
 }
 
-/// Stores and resolves references to a `&[T: SubsourceCatalogTable]`.
+/// Stores and resolves references to a `&[T: ExternalCatalogReference]`.
 ///
 /// This is meant to provide an API to quickly look up a source's subsources.
 ///
@@ -1432,12 +1433,12 @@ impl<'a> SubsourceCatalogReference for (&'a str, &'a str) {
 /// implementation, which is empty and will not be able to resolve any
 /// references.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubsourceResolver {
+pub struct SourceReferenceResolver {
     inner: BTreeMap<Ident, BTreeMap<Ident, BTreeMap<Ident, usize>>>,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum SubsourceResolutionError {
+pub enum ExternalReferenceResolutionError {
     #[error("reference to {name} not found in source")]
     DoesNotExist { name: String },
     #[error(
@@ -1449,16 +1450,16 @@ pub enum SubsourceResolutionError {
     Ident(#[from] IdentError),
 }
 
-impl<'a> SubsourceResolver {
-    /// Constructs a new `SubsourceResolver` from a slice of `T:
+impl<'a> SourceReferenceResolver {
+    /// Constructs a new `SourceReferenceResolver` from a slice of `T:
     /// SubsourceCatalogReference`.
     ///
     /// # Errors
     /// - If any `&str` provided cannot be taken to an [`Ident`].
-    pub fn new<T: SubsourceCatalogReference>(
+    pub fn new<T: ExternalCatalogReference>(
         database: &str,
         referenceable_items: &'a [T],
-    ) -> Result<SubsourceResolver, SubsourceResolutionError> {
+    ) -> Result<SourceReferenceResolver, ExternalReferenceResolutionError> {
         // An index from table name -> schema name -> database name -> index in
         // `referenceable_items`.
         let mut inner = BTreeMap::new();
@@ -1478,7 +1479,7 @@ impl<'a> SubsourceResolver {
                 .or_insert(reference_idx);
         }
 
-        Ok(SubsourceResolver { inner })
+        Ok(SourceReferenceResolver { inner })
     }
 
     /// Returns the canonical reference and index from which it originated in
@@ -1501,7 +1502,7 @@ impl<'a> SubsourceResolver {
         &self,
         name: &[Ident],
         canonicalize_to_width: usize,
-    ) -> Result<(UnresolvedItemName, usize), SubsourceResolutionError> {
+    ) -> Result<(UnresolvedItemName, usize), ExternalReferenceResolutionError> {
         let (db, schema, idx) = self.resolve_inner(name)?;
 
         let item = name.last().expect("must have provided at least 1 element");
@@ -1525,7 +1526,7 @@ impl<'a> SubsourceResolver {
     ///
     /// # Errors
     /// - If `name` does not resolve to an item in `self.inner`.
-    pub fn resolve_idx(&self, name: &[Ident]) -> Result<usize, SubsourceResolutionError> {
+    pub fn resolve_idx(&self, name: &[Ident]) -> Result<usize, ExternalReferenceResolutionError> {
         let (_db, _schema, idx) = self.resolve_inner(name)?;
         Ok(idx)
     }
@@ -1542,19 +1543,19 @@ impl<'a> SubsourceResolver {
     /// 1. The "database"- or top-level namespace of the reference.
     /// 2. The "schema"- or second-level namespace of the reference.
     /// 3. The index to find the item in `referenceable_items` argument provided
-    ///    to `SubsourceResolver::new`.
+    ///    to `SourceReferenceResolver::new`.
     ///
     /// # Errors
     /// - If `name` does not resolve to an item in `self.inner`.
     fn resolve_inner<'name: 'a>(
         &'a self,
         name: &'name [Ident],
-    ) -> Result<(&'a Ident, &'a Ident, usize), SubsourceResolutionError> {
+    ) -> Result<(&'a Ident, &'a Ident, usize), ExternalReferenceResolutionError> {
         let get_provided_name = || UnresolvedItemName(name.to_vec()).to_string();
 
         // Names must be composed of 1..=3 elements.
         if !(1..=3).contains(&name.len()) {
-            Err(SubsourceResolutionError::DoesNotExist {
+            Err(ExternalReferenceResolutionError::DoesNotExist {
                 name: get_provided_name(),
             })?;
         }
@@ -1576,42 +1577,40 @@ impl<'a> SubsourceResolver {
         let schemas =
             self.inner
                 .get(item)
-                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
+                .ok_or_else(|| ExternalReferenceResolutionError::DoesNotExist {
                     name: get_provided_name(),
                 })?;
 
-        let schema =
-            match schema {
-                Some(schema) => schema,
-                None => schemas.keys().exactly_one().map_err(|_e| {
-                    SubsourceResolutionError::Ambiguous {
-                        name: get_provided_name(),
-                    }
-                })?,
-            };
+        let schema = match schema {
+            Some(schema) => schema,
+            None => schemas.keys().exactly_one().map_err(|_e| {
+                ExternalReferenceResolutionError::Ambiguous {
+                    name: get_provided_name(),
+                }
+            })?,
+        };
 
         let databases =
             schemas
                 .get(schema)
-                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
+                .ok_or_else(|| ExternalReferenceResolutionError::DoesNotExist {
                     name: get_provided_name(),
                 })?;
 
         let database = match database {
             Some(database) => database,
             None => databases.keys().exactly_one().map_err(|_e| {
-                SubsourceResolutionError::Ambiguous {
+                ExternalReferenceResolutionError::Ambiguous {
                     name: get_provided_name(),
                 }
             })?,
         };
 
-        let reference_idx =
-            databases
-                .get(database)
-                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
-                    name: get_provided_name(),
-                })?;
+        let reference_idx = databases.get(database).ok_or_else(|| {
+            ExternalReferenceResolutionError::DoesNotExist {
+                name: get_provided_name(),
+            }
+        })?;
 
         Ok((database, schema, *reference_idx))
     }

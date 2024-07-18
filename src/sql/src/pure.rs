@@ -53,7 +53,7 @@ use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SubsourceCatalogReference, SubsourceResolver,
+    ExternalCatalogReference, GenericSourceConnection, SourceConnection, SourceReferenceResolver,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -62,9 +62,9 @@ use rdkafka::admin::AdminClient;
 use uuid::Uuid;
 
 use crate::ast::{
-    AvroSchema, CreateSourceConnection, CreateSourceStatement, CreateSourceSubsource,
-    CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf, Format, FormatSpecifier,
-    ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
+    AvroSchema, CreateSourceConnection, CreateSourceStatement, CreateSubsourceStatement,
+    CsrConnectionAvro, CsrConnectionProtobuf, ExternalReferenceExport, ExternalReferences, Format,
+    FormatSpecifier, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
@@ -86,30 +86,31 @@ pub(crate) mod error;
 pub mod mysql;
 pub mod postgres;
 
-pub(crate) struct RequestedSubsource<'a, T> {
+pub(crate) struct RequestedSourceExport<'a, T> {
     external_reference: UnresolvedItemName,
-    subsource_name: UnresolvedItemName,
+    name: UnresolvedItemName,
     table: &'a T,
 }
 
-fn subsource_gen<'a, T: SubsourceCatalogReference>(
-    selected_subsources: &mut Vec<CreateSourceSubsource>,
-    resolver: &SubsourceResolver,
+/// Generates appropriate source exports for a set of external references to export from a source.
+fn source_export_gen<'a, T: ExternalCatalogReference>(
+    selected_references: &mut Vec<ExternalReferenceExport>,
+    resolver: &SourceReferenceResolver,
     references: &'a [T],
     canonical_width: usize,
     source_name: &UnresolvedItemName,
-) -> Result<Vec<RequestedSubsource<'a, T>>, PlanError> {
-    let mut validated_requested_subsources = vec![];
+) -> Result<Vec<RequestedSourceExport<'a, T>>, PlanError> {
+    let mut validated_exports = vec![];
 
-    for subsource in selected_subsources {
-        let subsource_name = match &subsource.subsource {
+    for reference in selected_references {
+        let name = match &reference.alias {
             Some(name) => {
                 let partial = normalize::unresolved_item_name(name.clone())?;
                 match partial.schema {
                     Some(_) => name.clone(),
                     // In cases when a prefix is not provided for the deferred name
                     // fallback to using the schema of the source with the given name
-                    None => subsource_name_gen(source_name, &partial.item)?,
+                    None => source_export_name_gen(source_name, &partial.item)?,
                 }
             }
             None => {
@@ -117,33 +118,33 @@ fn subsource_gen<'a, T: SubsourceCatalogReference>(
                 // the item as the subsource name to ensure it's created in the
                 // current schema or the source's schema if provided, not mirroring
                 // the schema of the reference.
-                subsource_name_gen(
+                source_export_name_gen(
                     source_name,
-                    &normalize::unresolved_item_name(subsource.reference.clone())?.item,
+                    &normalize::unresolved_item_name(reference.reference.clone())?.item,
                 )?
             }
         };
 
         let (external_reference, idx) =
-            resolver.resolve(&subsource.reference.0, canonical_width)?;
+            resolver.resolve(&reference.reference.0, canonical_width)?;
 
         let table = &references[idx];
 
-        validated_requested_subsources.push(RequestedSubsource {
+        validated_exports.push(RequestedSourceExport {
             external_reference,
-            subsource_name,
+            name,
             table,
         });
     }
 
-    Ok(validated_requested_subsources)
+    Ok(validated_exports)
 }
 
 /// Generates a subsource name by prepending source schema name if present
 ///
 /// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
 /// so that it's generated in the same schema as source
-fn subsource_name_gen(
+fn source_export_name_gen(
     source_name: &UnresolvedItemName,
     subsource_name: &String,
 ) -> Result<UnresolvedItemName, PlanError> {
@@ -154,23 +155,23 @@ fn subsource_name_gen(
 
 /// Validates the requested subsources do not have name conflicts with each other
 /// and that the same upstream table is not referenced multiple times.
-fn validate_subsource_names<T>(
-    requested_subsources: &[RequestedSubsource<T>],
+fn validate_source_export_names<T>(
+    requested_source_exports: &[RequestedSourceExport<T>],
 ) -> Result<(), PlanError> {
     // This condition would get caught during the catalog transaction, but produces a
     // vague, non-contextual error. Instead, error here so we can suggest to the user
     // how to fix the problem.
-    if let Some(name) = requested_subsources
+    if let Some(name) = requested_source_exports
         .iter()
-        .map(|subsource| &subsource.subsource_name)
+        .map(|subsource| &subsource.name)
         .duplicates()
         .next()
         .cloned()
     {
-        let mut upstream_references: Vec<_> = requested_subsources
+        let mut upstream_references: Vec<_> = requested_source_exports
             .into_iter()
             .filter_map(|subsource| {
-                if &subsource.subsource_name == &name {
+                if &subsource.name == &name {
                     Some(subsource.external_reference.clone())
                 } else {
                     None
@@ -186,20 +187,23 @@ fn validate_subsource_names<T>(
         })?;
     }
 
+    // TODO: Remove this when supporting source-fed tables which can ingest the same external
+    // reference.
+
     // We technically could allow multiple subsources to ingest the same upstream table, but
     // it is almost certainly an error on the user's end.
-    if let Some(name) = requested_subsources
+    if let Some(name) = requested_source_exports
         .iter()
-        .map(|subsource| &subsource.external_reference)
+        .map(|export| &export.external_reference)
         .duplicates()
         .next()
         .cloned()
     {
-        let mut target_names: Vec<_> = requested_subsources
+        let mut target_names: Vec<_> = requested_source_exports
             .into_iter()
-            .filter_map(|subsource| {
-                if &subsource.external_reference == &name {
-                    Some(subsource.subsource_name.clone())
+            .filter_map(|export| {
+                if &export.external_reference == &name {
+                    Some(export.name.clone())
                 } else {
                     None
                 }
@@ -570,7 +574,7 @@ async fn purify_create_source(
         format,
         envelope,
         include_metadata,
-        referenced_subsources,
+        external_references,
         progress_subsource,
         ..
     } = &mut create_source_stmt;
@@ -602,9 +606,9 @@ async fn purify_create_source(
             options: base_with_options,
             ..
         } => {
-            if let Some(referenced_subsources) = referenced_subsources {
+            if let Some(external_references) = external_references {
                 Err(KafkaSourcePurificationError::ReferencedSubsources(
-                    referenced_subsources.clone(),
+                    external_references.clone(),
                 ))?;
             }
 
@@ -773,16 +777,16 @@ async fn purify_create_source(
                 Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
             }
 
-            let postgres::PurifiedSubsources {
-                subsources,
+            let postgres::PurifiedSourceExports {
+                source_exports: subsources,
                 referenced_tables,
                 normalized_text_columns,
-            } = postgres::purify_subsources(
+            } = postgres::purify_source_exports(
                 &client,
                 &config,
                 &publication,
                 &connection,
-                referenced_subsources,
+                external_references,
                 text_columns,
                 source_name,
             )
@@ -899,14 +903,14 @@ async fn purify_create_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
-            let mysql::PurifiedSubsources {
-                subsources,
+            let mysql::PurifiedSourceExports {
+                source_exports: subsources,
                 tables,
                 normalized_text_columns,
                 normalized_ignore_columns,
-            } = mysql::purify_subsources(
+            } = mysql::purify_source_exports(
                 &mut conn,
-                referenced_subsources,
+                external_references,
                 text_columns,
                 ignore_columns,
                 source_name,
@@ -953,15 +957,15 @@ async fn purify_create_source(
             let (_load_generator, available_subsources) =
                 load_generator_ast_to_generator(&scx, generator, options, include_metadata)?;
 
-            match referenced_subsources {
-                Some(ReferencedSubsources::All) => {
+            match external_references {
+                Some(ExternalReferences::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => Err(LoadGeneratorSourcePurificationError::ForAllTables)?,
                     };
                     for (name, (_, desc)) in available_subsources {
                         let external_reference = UnresolvedItemName::from(name.clone());
-                        let subsource_name = subsource_name_gen(source_name, &name.item)?;
+                        let subsource_name = source_export_name_gen(source_name, &name.item)?;
                         requested_subsource_map.insert(
                             subsource_name,
                             PurifiedSourceExport {
@@ -973,10 +977,10 @@ async fn purify_create_source(
                         );
                     }
                 }
-                Some(ReferencedSubsources::SubsetSchemas(..)) => {
+                Some(ExternalReferences::SubsetSchemas(..)) => {
                     Err(LoadGeneratorSourcePurificationError::ForSchemas)?
                 }
-                Some(ReferencedSubsources::SubsetTables(_)) => {
+                Some(ExternalReferences::SubsetTables(_)) => {
                     Err(LoadGeneratorSourcePurificationError::ForTables)?
                 }
                 None => {
@@ -991,7 +995,7 @@ async fn purify_create_source(
     // Now that we know which subsources to create alongside this
     // statement, remove the references so it is not canonicalized as
     // part of the `CREATE SOURCE` statement in the catalog.
-    *referenced_subsources = None;
+    *external_references = None;
 
     // Generate progress subsource
 
@@ -1123,7 +1127,7 @@ async fn purify_alter_source(
 
     // If we don't need to handle added subsources, early return.
     let AlterSourceAction::AddSubsources {
-        subsources: targeted_subsources,
+        external_references,
         mut options,
     } = action
     else {
@@ -1182,19 +1186,18 @@ async fn purify_alter_source(
                 )
             }
 
-            let mut referenced_subsources =
-                Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            let mut references = Some(ExternalReferences::SubsetTables(external_references));
 
-            let postgres::PurifiedSubsources {
-                subsources,
+            let postgres::PurifiedSourceExports {
+                source_exports: subsources,
                 referenced_tables,
                 normalized_text_columns,
-            } = postgres::purify_subsources(
+            } = postgres::purify_source_exports(
                 &client,
                 &config,
                 &pg_source_connection.publication,
                 pg_connection,
-                &mut referenced_subsources,
+                &mut references,
                 text_columns,
                 &unresolved_source_name,
             )
@@ -1267,17 +1270,16 @@ async fn purify_alter_source(
                 )
                 .await?;
 
-            let mut referenced_subsources =
-                Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            let mut references = Some(ExternalReferences::SubsetTables(external_references));
 
-            let mysql::PurifiedSubsources {
-                subsources,
+            let mysql::PurifiedSourceExports {
+                source_exports: subsources,
                 tables,
                 normalized_text_columns,
                 normalized_ignore_columns,
-            } = mysql::purify_subsources(
+            } = mysql::purify_source_exports(
                 &mut conn,
-                &mut referenced_subsources,
+                &mut references,
                 text_columns,
                 ignore_columns,
                 &unresolved_source_name,

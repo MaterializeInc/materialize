@@ -254,8 +254,8 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
             .collect()
     }
 
-    fn get_subsource_resolver(&self) -> super::SubsourceResolver {
-        super::SubsourceResolver::default()
+    fn get_reference_resolver(&self) -> super::SourceReferenceResolver {
+        super::SourceReferenceResolver::default()
     }
 }
 

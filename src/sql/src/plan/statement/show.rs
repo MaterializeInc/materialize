@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateSourceSubsource, ObjectType, ReferencedSubsources, ShowCreateClusterStatement,
+    ExternalReferenceExport, ExternalReferences, ObjectType, ShowCreateClusterStatement,
     ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
     SystemObjectType, UnresolvedItemName, WithOptionValue,
 };
@@ -1041,7 +1041,7 @@ fn humanize_sql_for_show_create(
                     // `FOR ALL TABLES`. However, this would change if #26765
                     // landed.
                     curr_references.clear();
-                    stmt.referenced_subsources = Some(ReferencedSubsources::All);
+                    stmt.external_references = Some(ExternalReferences::All);
                 }
                 CreateSourceConnection::Kafka { .. }
                 | CreateSourceConnection::LoadGenerator { .. } => {}
@@ -1051,13 +1051,13 @@ fn humanize_sql_for_show_create(
             if !curr_references.is_empty() {
                 let mut subsources: Vec<_> = curr_references
                     .into_iter()
-                    .map(|(reference, name)| CreateSourceSubsource {
+                    .map(|(reference, name)| ExternalReferenceExport {
                         reference,
-                        subsource: Some(name),
+                        alias: Some(name),
                     })
                     .collect();
                 subsources.sort();
-                stmt.referenced_subsources = Some(ReferencedSubsources::SubsetTables(subsources));
+                stmt.external_references = Some(ExternalReferences::SubsetTables(subsources));
             }
         }
         _ => (),

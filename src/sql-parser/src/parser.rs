@@ -2764,14 +2764,14 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::LParen)?;
             let subsources = self.parse_comma_separated(Parser::parse_subsource_references)?;
             self.expect_token(&Token::RParen)?;
-            Some(ReferencedSubsources::SubsetTables(subsources))
+            Some(ExternalReferences::SubsetTables(subsources))
         } else if self.parse_keywords(&[FOR, SCHEMAS]) {
             self.expect_token(&Token::LParen)?;
             let schemas = self.parse_comma_separated(Parser::parse_identifier)?;
             self.expect_token(&Token::RParen)?;
-            Some(ReferencedSubsources::SubsetSchemas(schemas))
+            Some(ExternalReferences::SubsetSchemas(schemas))
         } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
-            Some(ReferencedSubsources::All)
+            Some(ExternalReferences::All)
         } else {
             None
         };
@@ -2802,13 +2802,13 @@ impl<'a> Parser<'a> {
             envelope,
             if_not_exists,
             key_constraint,
-            referenced_subsources,
+            external_references: referenced_subsources,
             progress_subsource,
             with_options,
         }))
     }
 
-    fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource, ParserError> {
+    fn parse_subsource_references(&mut self) -> Result<ExternalReferenceExport, ParserError> {
         let reference = self.parse_item_name()?;
         let subsource = if self.parse_one_of_keywords(&[AS, INTO]).is_some() {
             Some(self.parse_item_name()?)
@@ -2816,9 +2816,9 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(CreateSourceSubsource {
+        Ok(ExternalReferenceExport {
             reference,
-            subsource,
+            alias: subsource,
         })
     }
 
@@ -4843,7 +4843,7 @@ impl<'a> Parser<'a> {
                         source_name,
                         if_exists,
                         action: AlterSourceAction::AddSubsources {
-                            subsources,
+                            external_references: subsources,
                             options,
                         },
                     })
