@@ -211,21 +211,15 @@ def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
     if parallelism_count == 1:
         return items
 
-    if is_in_buildkite():
-        _upload_shard_info_metadata(
-            [
-                to_identifier(item)
-                for item in items
-                if _accepted_by_shard(
-                    to_identifier(item), parallelism_index, parallelism_count
-                )
-            ]
-        )
-    return [
+    accepted_items = [
         item
         for item in items
         if _accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
     ]
+
+    if is_in_buildkite() and accepted_items:
+        _upload_shard_info_metadata(list(map(to_identifier, accepted_items)))
+    return accepted_items
 
 
 def _validate_parallelism_configuration() -> None:

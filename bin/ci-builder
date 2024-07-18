@@ -203,15 +203,8 @@ case "$cmd" in
             --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
-            --env BUILDKITE_CI_API_KEY
             --env CANARY_LOADTEST_APP_PASSWORD
             --env CANARY_LOADTEST_PASSWORD
-            --env CI
-            --env CI_SANITIZER
-            --env CI_COVERAGE_ENABLED
-            --env CI_FINAL_PREFLIGHT_CHECK_VERSION
-            --env CI_FINAL_PREFLIGHT_CHECK_ROLLBACK
-            --env CI_TEST_SELECTION
             --env CLOUDTEST_CLUSTER_DEFINITION_FILE
             --env COMMON_ANCESTOR_OVERRIDE
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
@@ -230,7 +223,6 @@ case "$cmd" in
             --env PRODUCTION_SANDBOX_APP_PASSWORD
             --env PYPI_TOKEN
             --env MZ_DEV_BUILD_SHA
-            --env BUILDKITE_SENTRY_DSN
             # For Miri with nightly Rust
             --env ZOOKEEPER_ADDR
             --env KAFKA_ADDRS
@@ -239,7 +231,6 @@ case "$cmd" in
             --env COCKROACH_URL
             # For ci-closed-issues-detect
             --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
-            --env GITHUB_TOKEN
         )
 
         if [[ $detach_container == "true" ]]; then
@@ -250,7 +241,7 @@ case "$cmd" in
             args+=("--name=$container_name_param")
         fi
 
-        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
+        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE|CI)' | sed 's/=.*//'); do
             args+=(--env "$env")
         done
         if [[ -t 1 ]]; then

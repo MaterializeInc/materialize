@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import os
+import shlex
 import subprocess
 import sys
 import webbrowser
@@ -625,7 +627,16 @@ To see the available workflows, run:
             # test analytics, even if the workflow doesn't define more granular
             # test cases.
             with composition.test_case(f"workflow-{args.workflow}"):
-                composition.workflow(args.workflow, *args.unknown_subargs[1:])
+                ci_extra_args = json.loads(os.getenv("CI_EXTRA_ARGS", "{}"))
+                buildkite_step_key = os.getenv("BUILDKITE_STEP_KEY")
+                extra_args = (
+                    shlex.split(ci_extra_args[buildkite_step_key])
+                    if buildkite_step_key and buildkite_step_key in ci_extra_args
+                    else []
+                )
+                composition.workflow(
+                    args.workflow, *args.unknown_subargs[1:], *extra_args
+                )
 
             if self.shall_generate_junit_report(args.find):
                 junit_suite = self.generate_junit_suite(composition)

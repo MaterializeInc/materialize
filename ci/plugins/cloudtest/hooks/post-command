@@ -86,4 +86,5 @@ sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge
 mapfile -t artifacts < <(printf "run.log\nkubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\njournalctl-merge.log\nkail-output.log\n"; find . -name 'junit_*.xml')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
+unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}"

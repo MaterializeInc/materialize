@@ -394,7 +394,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--scenario",
         metavar="SCENARIO",
         type=str,
-        default=os.getenv("MZCOMPOSE_SCENARIO", default="Scenario"),
+        default="Scenario",
         help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
     )
 
@@ -480,7 +480,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
 
-    if len(scenarios_scheduled_to_run) == 0 and buildkite.is_in_buildkite():
+    if (
+        len(scenarios_scheduled_to_run) == 0
+        and buildkite.is_in_buildkite()
+        and not os.getenv("CI_EXTRA_ARGS")
+    ):
         raise FailedTestExecutionError(
             error_summary="No scenarios were selected", errors=[]
         )
