@@ -35,13 +35,15 @@ class ReproductionCodePrinter(BaseOutputPrinter):
     def __init__(
         self,
         input_data: ConsistencyTestInputData,
+        test_explain: bool,
         print_mode: OutputPrinterMode = OutputPrinterMode.PRINT,
     ):
         super().__init__(print_mode=print_mode)
         self.input_data = input_data
+        self.test_explain = test_explain
 
     def clone(self, print_mode: OutputPrinterMode):
-        return ReproductionCodePrinter(self.input_data, print_mode)
+        return ReproductionCodePrinter(self.input_data, self.test_explain, print_mode)
 
     def get_reproduction_code_of_error(self, error: ValidationError) -> str:
         reproduction_code_generator = self.clone(OutputPrinterMode.COLLECT)
@@ -153,6 +155,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 evaluation_strategy,
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
+                self.test_explain,
                 override_db_object_name=query_template.custom_db_object_name
                 or evaluation_strategy.simple_db_object_name,
             )

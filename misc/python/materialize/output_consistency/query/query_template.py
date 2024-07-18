@@ -69,6 +69,7 @@ class QueryTemplate:
         strategy: EvaluationStrategy,
         output_format: QueryOutputFormat,
         query_column_selection: QueryColumnByIndexSelection,
+        explain: bool,
         override_db_object_name: str | None = None,
     ) -> str:
         db_object_name = self.get_db_object_name(strategy, override_db_object_name)
@@ -83,7 +84,7 @@ class QueryTemplate:
         offset_clause = self._create_offset_clause()
 
         sql = f"""
-SELECT{space_separator}{column_sql}
+{'EXPLAIN ' if explain else ''}SELECT{space_separator}{column_sql}
 FROM{space_separator}{db_object_name}
 {where_clause}
 {order_by_clause}

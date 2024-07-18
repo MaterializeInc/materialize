@@ -29,10 +29,13 @@ class OutputPrinter(BaseOutputPrinter):
     def __init__(
         self,
         input_data: ConsistencyTestInputData,
+        test_explain: bool,
         print_mode: OutputPrinterMode = OutputPrinterMode.PRINT,
     ):
-        self.reproduction_code_printer = ReproductionCodePrinter(input_data)
         super().__init__(print_mode=print_mode)
+        self.reproduction_code_printer = ReproductionCodePrinter(
+            input_data, test_explain
+        )
 
     def print_sql(self, sql: str) -> None:
         self._print_executable(sql)

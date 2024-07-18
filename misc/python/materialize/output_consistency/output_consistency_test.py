@@ -126,7 +126,6 @@ class OutputConsistencyTest:
     ) -> ConsistencyTestSummary:
         input_data = self.create_input_data()
 
-        output_printer = OutputPrinter(input_data)
         scenario = self.get_scenario()
 
         config = ConsistencyTestConfiguration(
@@ -145,8 +144,10 @@ class OutputConsistencyTest:
             split_and_retry_on_db_error=True,
             print_reproduction_code=True,
             disable_predefined_queries=disable_predefined_queries,
+            test_explain=False,
         )
 
+        output_printer = OutputPrinter(input_data, config.test_explain)
         output_printer.print_config(config)
         config.validate()
 

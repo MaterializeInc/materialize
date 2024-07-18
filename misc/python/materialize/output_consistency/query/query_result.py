@@ -26,14 +26,18 @@ from materialize.output_consistency.selection.selection import (
 class QueryExecution:
     """An executed query with the outcomes of the different evaluation strategies"""
 
-    def __init__(self, query_template: QueryTemplate, query_id: str):
+    def __init__(
+        self, query_template: QueryTemplate, query_id: str, test_explain: bool
+    ):
         self.generic_sql = query_template.to_sql(
             DummyEvaluation(),
             QueryOutputFormat.MULTI_LINE,
             ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+            test_explain,
         )
         self.query_id = query_id
         self.query_template = query_template
+        self.test_explain = test_explain
         self.outcomes: list[QueryOutcome] = []
         self.durations: list[float] = []
 

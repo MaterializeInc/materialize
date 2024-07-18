@@ -30,6 +30,7 @@ class ConsistencyTestConfiguration:
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
         disable_predefined_queries: bool,
+        test_explain: bool,
     ):
         self.scenario = scenario
         self.queries_per_tx = queries_per_tx
@@ -46,6 +47,7 @@ class ConsistencyTestConfiguration:
         self.max_iterations = max_iterations
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.disable_predefined_queries = disable_predefined_queries
+        self.test_explain = test_explain
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:
