@@ -13,6 +13,8 @@ import pg8000
 from pg8000 import Connection
 from pg8000.exceptions import InterfaceError
 
+from materialize import buildkite
+from materialize.mzcompose.composition import Composition
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -44,6 +46,10 @@ from materialize.output_consistency.runner.test_runner import ConsistencyTestRun
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.validation.result_comparator import ResultComparator
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
 
 class OutputConsistencyTest:
@@ -239,6 +245,37 @@ class OutputConsistencyTest:
             DataFlowRenderingEvaluation(),
             ConstantFoldingEvaluation(),
         ]
+
+
+def upload_output_consistency_results_to_test_analytics(
+    c: Composition,
+    test_summary: ConsistencyTestSummary,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=test_summary.all_passed())
+
+    test_analytics.output_consistency.add_stats(
+        count_executed_queries=test_summary.count_executed_query_templates,
+        count_successful_queries=test_summary.count_successful_query_templates,
+        count_ignored_error_queries=test_summary.count_ignored_error_query_templates,
+        count_failures=len(test_summary.failures),
+        count_predefined_queries=test_summary.count_predefined_queries,
+        count_available_data_types=test_summary.count_available_data_types,
+        count_available_op_variants=test_summary.count_available_op_variants,
+        count_used_ops=test_summary.count_used_ops(),
+        count_generated_select_expressions=test_summary.count_generated_select_expressions,
+        count_ignored_select_expressions=test_summary.count_ignored_select_expressions,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        print(f"Uploading results failed! {e}")
 
 
 def connect(host: str, port: int, user: str, password: str | None = None) -> Connection:

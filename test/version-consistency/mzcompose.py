@@ -10,8 +10,12 @@
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
+from materialize.output_consistency.output_consistency_test import (
+    upload_output_consistency_results_to_test_analytics,
+)
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
 )
@@ -29,6 +33,7 @@ SERVICES = [
     Postgres(),
     Materialized(name="mz_this"),  # Overridden below
     Materialized(name="mz_other"),  # Overridden below
+    Mz(app_password=""),
 ]
 
 
@@ -84,6 +89,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test.evaluation_strategy_name = args.evaluation_strategy
 
         test_summary = test.run_output_consistency_tests(connection, args)
+
+    upload_output_consistency_results_to_test_analytics(c, test_summary)
 
     if not test_summary.all_passed():
         raise FailedTestExecutionError(errors=test_summary.failures)

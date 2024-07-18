@@ -133,6 +133,9 @@ class DbOperationOrFunction:
 
         return False
 
+    def count_variants(self) -> int:
+        return self.max_param_count - self.min_param_count + 1
+
 
 class DbOperation(DbOperationOrFunction):
     """A database operation (e.g., `a + b`)"""
@@ -276,6 +279,8 @@ class DbFunctionWithCustomPattern(DbFunction):
             tags=tags,
         )
         self.pattern_per_param_count = pattern_per_param_count
+        self.min_param_count = min(pattern_per_param_count.keys())
+        self.max_param_count = max(pattern_per_param_count.keys())
 
     def to_pattern(self, args_count: int) -> str:
         self.validate_args_count_in_range(args_count)
@@ -286,6 +291,9 @@ class DbFunctionWithCustomPattern(DbFunction):
             )
 
         return self.pattern_per_param_count[args_count]
+
+    def count_variants(self) -> int:
+        return len(self.pattern_per_param_count)
 
 
 def match_function_by_name(
