@@ -26,6 +26,9 @@ view](/concepts/views/#non-materialized-views) causes view results to be
 to queries within the cluster, even for queries that do not use the index
 key(s).
 
+Indexes preserve monotonicity information.  As such, for indexed
+non-materialized views, results can be monotonic.
+
 ## Indexes and materialized views
 
 In Materialize, indexing a
@@ -34,6 +37,9 @@ materialized views maintain the up-to-date results in durable storage, indexes
 on materialized views serve up-to-date results without themselves performing the
 incremental computation. The in-memory results are accessible to queries within
 the cluster, even for queries that do not use the index key(s).
+
+Although indexes preserve monotonicity information, materialized views do
+**not**. As such, for (indexed or non-indexed) materialized views, results are not monotonic.
 
 ## Indexes and clusters
 

@@ -78,6 +78,11 @@ indexes in each cluster you are referencing the materialized view in.
 this exists+add detail about using indexes to optimize materialized view
 stacking."
 
+### Monotonicity
+
+Although [indexes](/concepts/indexes) preserve monotonicity information,  [Materialized
+views](/concepts/views/#materialized-views) do not. That is, for materialized views (indexed or non-indexed), results are not monotonic.
+
 ### Non-null assertions
 
 Because materialized views may be created on arbitrary queries, it may not in

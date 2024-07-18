@@ -100,6 +100,15 @@ cause Materialize to install a dataflow to determine and maintain the results of
 the view. This dataflow may have a memory footprint itself, in addition to that
 of the index.
 
+### Monotonicity
+
+Indexes preserve monotonicity information whereas [materialized
+views](/concepts/views/#materialized-views) do not.  As such:
+
+- For indexed non-materialized views, results can be monotonic.
+
+- For materialized views (indexed or non-indexed), results are not monotonic.
+
 ## Examples
 
 ### Optimizing joins with indexes

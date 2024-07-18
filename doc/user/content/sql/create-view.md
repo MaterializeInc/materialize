@@ -16,6 +16,9 @@ The results of a view can be incrementally maintained **in memory** within a
 This allows you to serve queries without the overhead of
 materializing the view.
 
+Because indexes preserve monotonicity information, results can be monotonic for
+indexed non-materialized views.
+
 ## Syntax
 
 {{< diagram "create-view.svg" >}}

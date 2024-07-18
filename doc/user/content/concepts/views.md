@@ -51,7 +51,12 @@ that [cluster](/concepts/clusters/). The in-memory up-to-date results are
 accessible to queries within the cluster, even for queries that do not use the
 index key(s).
 
-Indexes are local to a cluster.
+#### Considerations for indexed non-materialized views
+
+- Indexes are local to a cluster.
+
+- Indexes preserve monotonicity information. As such, for indexed
+  non-materialized views, results can be monotonic.
 
 See also:
 
@@ -95,6 +100,13 @@ computation. The in-memory up-to-date results are accessible to queries within
 the cluster, even for queries that do not use the index key(s).
 
 Indexes are local to a cluster.
+
+#### Considerations for indexed materialized views
+
+- Indexes are local to a cluster.
+
+- Materialized views do **not** preserve monotonicity information. As such, for
+  (indexed or non-indexed) materialized views, results are not monotonic.
 
 See also:
 
