@@ -80,7 +80,7 @@ pub fn optimize_dataflow(
         transform_ctx,
     )?;
 
-    optimize_dataflow_monotonic(dataflow)?;
+    optimize_dataflow_monotonic(dataflow, transform_ctx)?;
 
     prune_and_annotate_dataflow_index_imports(
         dataflow,
@@ -397,13 +397,17 @@ where
     Ok(())
 }
 
-/// Propagates information about monotonic inputs through operators.
+/// Propagates information about monotonic inputs through operators,
+/// using [`mz_repr::optimize::OptimizerFeatures`] from `ctx` for [`crate::analysis::Analysis`].
 #[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
     fields(path.segment ="monotonic")
 )]
-pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+pub fn optimize_dataflow_monotonic(
+    dataflow: &mut DataflowDesc,
+    ctx: &mut TransformCtx,
+) -> Result<(), TransformError> {
     let mut monotonic_ids = BTreeSet::new();
     for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter() {
         if *is_monotonic {
@@ -427,11 +431,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
     let monotonic_flag = MonotonicFlag::default();
 
     for build_desc in dataflow.objects_to_build.iter_mut() {
-        monotonic_flag.apply(
-            build_desc.plan.as_inner_mut(),
-            &monotonic_ids,
-            &mut BTreeSet::new(),
-        )?;
+        monotonic_flag.transform(build_desc.plan.as_inner_mut(), ctx, &monotonic_ids)?;
     }
 
     mz_repr::explain::trace_plan(dataflow);

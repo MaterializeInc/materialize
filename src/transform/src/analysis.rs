@@ -10,14 +10,14 @@
 //! Traits and types for reusable expression analysis
 
 pub mod equivalences;
+pub mod monotonic;
 
 use mz_expr::MirRelationExpr;
-
-pub use common::{Derived, DerivedBuilder, DerivedView};
 
 pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
+pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
@@ -718,6 +718,7 @@ mod unique_keys {
 mod non_negative {
 
     use super::{Analysis, Derived, Lattice};
+    use crate::analysis::common_lattice::BoolLattice;
     use mz_expr::{Id, MirRelationExpr};
 
     /// Analysis that determines if all accumulations at all times are non-negative.
@@ -793,20 +794,7 @@ mod non_negative {
         }
 
         fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
-            Some(Box::new(NNLattice))
-        }
-    }
-
-    struct NNLattice;
-
-    impl Lattice<bool> for NNLattice {
-        fn top(&self) -> bool {
-            true
-        }
-        fn meet_assign(&self, into: &mut bool, item: bool) -> bool {
-            let changed = *into && !item;
-            *into = *into && item;
-            changed
+            Some(Box::new(BoolLattice))
         }
     }
 
@@ -1854,6 +1842,25 @@ mod cardinality {
                 CardinalityEstimate::Estimate(OrderedFloat(estimate)) => write!(f, "{estimate}"),
                 CardinalityEstimate::Unknown => write!(f, "<UNKNOWN>"),
             }
+        }
+    }
+}
+
+mod common_lattice {
+    use crate::analysis::Lattice;
+
+    pub struct BoolLattice;
+
+    impl Lattice<bool> for BoolLattice {
+        // `true` > `false`.
+        fn top(&self) -> bool {
+            true
+        }
+        // `false` is the greatest lower bound. `into` changes if it's true and `item` is false.
+        fn meet_assign(&self, into: &mut bool, item: bool) -> bool {
+            let changed = *into && !item;
+            *into = *into && item;
+            changed
         }
     }
 }
