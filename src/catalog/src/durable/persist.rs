@@ -280,12 +280,16 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Fetch the current upper of the catalog state.
     #[mz_ore::instrument]
     async fn current_upper(&mut self) -> Timestamp {
-        self.write_handle
-            .fetch_recent_upper()
-            .await
-            .as_option()
-            .cloned()
-            .expect("we use a totally ordered time and never finalize the shard")
+        match self.mode {
+            Mode::Writable | Mode::Readonly => self
+                .write_handle
+                .fetch_recent_upper()
+                .await
+                .as_option()
+                .cloned()
+                .expect("we use a totally ordered time and never finalize the shard"),
+            Mode::Savepoint => self.upper,
+        }
     }
 
     /// Appends `updates` iff the current global upper of the catalog is `self.upper`.
@@ -296,6 +300,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         &mut self,
         updates: Vec<(S, Diff)>,
     ) -> Result<Timestamp, CatalogError> {
+        assert_eq!(self.mode, Mode::Writable);
+
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindRaw = kind.into();
             ((Into::<SourceData>::into(kind), ()), self.upper, diff)
