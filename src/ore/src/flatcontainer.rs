@@ -101,12 +101,14 @@ mod tuple {
             where
                $(<$name as Region>::Index: Index),*
             {
+                #[inline]
                 fn clone(&self) -> Self {
                     Self {
                         $([<container $name>]: self.[<container $name>].clone(),)*
                     }
                 }
 
+                #[inline]
                 fn clone_from(&mut self, source: &Self) {
                     $(self.[<container $name>].clone_from(&source.[<container $name>]);)*
                 }
@@ -298,12 +300,14 @@ mod tuple {
             type Diff<'a> = RR::ReadItem<'a> where Self: 'a;
             type DiffOwned = RR::Owned;
 
+            #[inline]
             fn into_parts<'a>(
                 ((key, val), time, diff): Self::ReadItem<'a>,
             ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
                 (key, val, time, diff)
             }
 
+            #[inline]
             fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
             where
                 Self: 'a,
@@ -311,6 +315,7 @@ mod tuple {
                 KR::reborrow(item)
             }
 
+            #[inline]
             fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
             where
                 Self: 'a,
@@ -318,6 +323,7 @@ mod tuple {
                 VR::reborrow(item)
             }
 
+            #[inline]
             fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
             where
                 Self: 'a,
@@ -325,6 +331,7 @@ mod tuple {
                 TR::reborrow(item)
             }
 
+            #[inline]
             fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
             where
                 Self: 'a,
@@ -438,6 +445,7 @@ mod lgalloc {
     }
 
     impl<T: Clone> Clone for LgAllocOwnedRegion<T> {
+        #[inline]
         fn clone(&self) -> Self {
             Self {
                 slices: self.slices.clone(),
@@ -445,6 +453,7 @@ mod lgalloc {
             }
         }
 
+        #[inline]
         fn clone_from(&mut self, source: &Self) {
             self.slices.clone_from(&source.slices);
             self.offsets.clone_from(&source.offsets);
@@ -675,6 +684,7 @@ mod item {
     }
 
     impl<R: Region + Clone> Clone for ItemRegion<R> {
+        #[inline]
         fn clone(&self) -> Self {
             Self {
                 inner: self.inner.clone(),
@@ -682,6 +692,7 @@ mod item {
             }
         }
 
+        #[inline]
         fn clone_from(&mut self, source: &Self) {
             self.inner.clone_from(&source.inner);
             self.storage.clone_from(&source.storage);
@@ -689,6 +700,7 @@ mod item {
     }
 
     impl<R: Region> Default for ItemRegion<R> {
+        #[inline]
         fn default() -> Self {
             Self {
                 inner: R::default(),
@@ -704,6 +716,7 @@ mod item {
             Self: 'a;
         type Index = MzIndex;
 
+        #[inline]
         fn merge_regions<'a>(regions: impl Iterator<Item = &'a Self> + Clone) -> Self
         where
             Self: 'a,
@@ -714,10 +727,12 @@ mod item {
             }
         }
 
+        #[inline]
         fn index(&self, index: Self::Index) -> Self::ReadItem<'_> {
             self.inner.index(self.storage[*index])
         }
 
+        #[inline]
         fn reserve_regions<'a, I>(&mut self, regions: I)
         where
             Self: 'a,
@@ -728,16 +743,19 @@ mod item {
             self.storage.reserve(regions.map(|r| r.storage.len()).sum());
         }
 
+        #[inline]
         fn clear(&mut self) {
             self.inner.clear();
             self.storage.clear();
         }
 
+        #[inline]
         fn heap_size<F: FnMut(usize, usize)>(&self, mut callback: F) {
             self.inner.heap_size(&mut callback);
             self.storage.heap_size(callback);
         }
 
+        #[inline]
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b>
         where
             Self: 'a,
@@ -779,6 +797,7 @@ mod lgallocvec {
         type ReadItem<'a> = &'a T where Self: 'a;
         type Index = MzIndex;
 
+        #[inline]
         fn merge_regions<'a>(regions: impl Iterator<Item = &'a Self> + Clone) -> Self
         where
             Self: 'a,
@@ -786,10 +805,12 @@ mod lgallocvec {
             Self::with_capacity(regions.map(LgAllocVec::len).sum())
         }
 
+        #[inline]
         fn index(&self, index: Self::Index) -> Self::ReadItem<'_> {
             &self[*index]
         }
 
+        #[inline]
         fn reserve_regions<'a, I>(&mut self, regions: I)
         where
             Self: 'a,
@@ -798,15 +819,18 @@ mod lgallocvec {
             self.reserve(regions.map(LgAllocVec::len).sum());
         }
 
+        #[inline]
         fn clear(&mut self) {
             self.clear();
         }
 
+        #[inline]
         fn heap_size<F: FnMut(usize, usize)>(&self, mut callback: F) {
             let size_of_t = std::mem::size_of::<T>();
             callback(self.len() * size_of_t, self.capacity() * size_of_t);
         }
 
+        #[inline]
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b>
         where
             Self: 'a,
@@ -816,26 +840,32 @@ mod lgallocvec {
     }
 
     impl<T> Storage<T> for LgAllocVec<T> {
+        #[inline]
         fn with_capacity(capacity: usize) -> Self {
             Self::with_capacity(capacity)
         }
 
+        #[inline]
         fn reserve(&mut self, additional: usize) {
             self.reserve(additional);
         }
 
+        #[inline]
         fn clear(&mut self) {
             self.clear();
         }
 
+        #[inline]
         fn heap_size<F: FnMut(usize, usize)>(&self, callback: F) {
             self.heap_size(callback);
         }
 
+        #[inline]
         fn len(&self) -> usize {
             self.len()
         }
 
+        #[inline]
         fn is_empty(&self) -> bool {
             self.is_empty()
         }
@@ -846,14 +876,17 @@ mod lgallocvec {
         where
             Self: 'a;
 
+        #[inline]
         fn index(&self, index: usize) -> T {
             self[index]
         }
 
+        #[inline]
         fn push(&mut self, item: T) {
             self.push(item);
         }
 
+        #[inline]
         fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I)
         where
             I::IntoIter: ExactSizeIterator,
@@ -863,12 +896,14 @@ mod lgallocvec {
             }
         }
 
+        #[inline]
         fn iter(&self) -> Self::Iter<'_> {
             self.iter().copied()
         }
     }
 
     impl<T: Clone> Push<T> for LgAllocVec<T> {
+        #[inline]
         fn push(&mut self, item: T) -> Self::Index {
             self.push(item);
             MzIndex(self.len() - 1)
@@ -876,6 +911,7 @@ mod lgallocvec {
     }
 
     impl<T: Clone> Push<&T> for LgAllocVec<T> {
+        #[inline]
         fn push(&mut self, item: &T) -> Self::Index {
             self.push(item.clone());
             MzIndex(self.len() - 1)
@@ -883,6 +919,7 @@ mod lgallocvec {
     }
 
     impl<T: Clone> Push<&&T> for LgAllocVec<T> {
+        #[inline]
         fn push(&mut self, item: &&T) -> Self::Index {
             self.push((*item).clone());
             MzIndex(self.len() - 1)
@@ -890,6 +927,7 @@ mod lgallocvec {
     }
 
     impl<T: Clone, D> ReserveItems<D> for LgAllocVec<T> {
+        #[inline]
         fn reserve_items<I>(&mut self, items: I)
         where
             I: Iterator<Item = D> + Clone,
