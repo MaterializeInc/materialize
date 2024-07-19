@@ -324,13 +324,13 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
         metrics: &Metrics,
     ) -> Self {
         maybe_unconsolidated |= part.maybe_unconsolidated();
-        let records = part.to_columnar(filter, &metrics.columnar);
-        let part = if maybe_unconsolidated {
-            records.sorted_by(|a, b| T::decode(a).cmp(&T::decode(b)), &metrics.columnar)
-        } else {
-            records
-        };
+        let part = part.to_columnar(filter, &metrics.columnar);
         let part = sort.order(BlobTraceUpdates::Row(part));
+        let part = if maybe_unconsolidated {
+            part.sorted_by(|a, b| T::decode(a).cmp(&T::decode(b)), &metrics.columnar)
+        } else {
+            part
+        };
         Self::Columnar {
             records: part,
             index: 0,
@@ -339,7 +339,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 
     fn kvt_lower(&mut self) -> Option<(&[u8], &[u8], T)> {
         match self {
-            ConsolidationPart::Queued { data } => Some((data.key_lower(), &[], T::minimum())),
+            ConsolidationPart::Queued { data } => Some((&[], &[], T::minimum())),
             ConsolidationPart::Prefetched { key_lower, .. } => {
                 Some((key_lower.as_slice(), &[], T::minimum()))
             }
