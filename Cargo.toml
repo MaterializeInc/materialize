@@ -176,7 +176,6 @@ default-members = [
     "src/pgwire-common",
     "src/postgres-client",
     "src/postgres-util",
-    "src/proc",
     "src/prof",
     "src/prof-http",
     "src/proto",
