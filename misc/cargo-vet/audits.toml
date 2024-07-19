@@ -368,6 +368,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "3.0.4"
 
+[[audits.jemalloc_pprof]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.4.2"
+
 [[audits.json-patch]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
@@ -472,6 +477,11 @@ version = "0.2.8"
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.16.0+8.10.0"
+
+[[audits.mappings]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.5.1"
 
 [[audits.memchr]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -677,6 +687,11 @@ version = "0.2.5@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.2.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.pprof_util]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
 
 [[audits.proc-macro2]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

@@ -18,8 +18,9 @@ use axum::routing::{self, Router};
 use cfg_if::cfg_if;
 use http::StatusCode;
 use mz_build_info::BuildInfo;
-use mz_prof::{ProfStartTime, StackProfile};
+use mz_prof::StackProfileExt;
 use once_cell::sync::Lazy;
+use pprof_util::{ProfStartTime, StackProfile};
 
 cfg_if! {
     if #[cfg(any(not(feature = "jemalloc"), miri))] {
@@ -98,7 +99,7 @@ async fn time_prof<'a>(
         if #[cfg(any(not(feature = "jemalloc"), miri))] {
             ctl_lock = ();
         } else {
-            ctl_lock = if let Some(ctl) = mz_prof::jemalloc::PROF_CTL.as_ref() {
+            ctl_lock = if let Some(ctl) = jemalloc_pprof::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
                 borrow.deactivate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 Some(borrow)
@@ -246,10 +247,13 @@ mod enabled {
     use headers::ContentType;
     use http::header::{HeaderMap, CONTENT_DISPOSITION};
     use http::{HeaderValue, StatusCode};
+    use jemalloc_pprof::{JemallocProfCtl, PROF_CTL};
+    use mappings::MAPPINGS;
     use mz_build_info::BuildInfo;
     use mz_ore::cast::CastFrom;
-    use mz_prof::ever_symbolized;
-    use mz_prof::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
+    use mz_prof::jemalloc::{JemallocProfCtlExt, JemallocStats};
+    use mz_prof::{ever_symbolized, StackProfileExt};
+    use pprof_util::parse_jeheap;
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
@@ -344,7 +348,7 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r)
+                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let stats = borrow
                     .stats()
@@ -372,7 +376,7 @@ mod enabled {
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let r = BufReader::new(f);
-                let stacks = parse_jeheap(r)
+                let stacks = parse_jeheap(r, MAPPINGS.as_deref())
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 let stats = borrow
                     .stats()
@@ -452,7 +456,7 @@ mod enabled {
             .dump()
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let dump_reader = BufReader::new(dump_file);
-        let profile = parse_jeheap(dump_reader)
+        let profile = parse_jeheap(dump_reader, MAPPINGS.as_deref())
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         let pprof = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
         Ok(pprof)

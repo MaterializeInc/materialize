@@ -3275,6 +3275,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "453ad9f582a441959e5f0d088b02ce04cfe8d51a8eaf077f12ac6d3e94164ca6"
 
 [[package]]
+name = "jemalloc_pprof"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96368c0fc161a0a1a20b3952b6fd31ee342fffc87ed9e48ac1ed49fb25686655"
+dependencies = [
+ "anyhow",
+ "libc",
+ "mappings",
+ "once_cell",
+ "pprof_util",
+ "tempfile",
+ "tikv-jemalloc-ctl",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3792,6 +3809,19 @@ name = "maplit"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
+
+[[package]]
+name = "mappings"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fa2605f461115ef6336342b12f0d8cabdfd7b258fed86f5f98c725535843601"
+dependencies = [
+ "anyhow",
+ "libc",
+ "once_cell",
+ "pprof_util",
+ "tracing",
+]
 
 [[package]]
 name = "match_cfg"
@@ -5776,28 +5806,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-proc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "mz-ore",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-prof"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "backtrace",
  "flate2",
+ "jemalloc_pprof",
  "libc",
  "mz-build-tools",
  "mz-ore",
- "mz-proc",
  "once_cell",
  "pprof",
+ "pprof_util",
  "prost",
  "prost-build",
  "tempfile",
@@ -5819,6 +5840,8 @@ dependencies = [
  "headers",
  "http 0.2.9",
  "include_dir",
+ "jemalloc_pprof",
+ "mappings",
  "mime",
  "mz-build-info",
  "mz-http-util",
@@ -5826,6 +5849,7 @@ dependencies = [
  "mz-ore",
  "mz-prof",
  "once_cell",
+ "pprof_util",
  "serde",
  "tokio",
  "tracing",
@@ -7704,6 +7728,19 @@ dependencies = [
  "symbolic-demangle",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "pprof_util"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36a97c97faba2c539e30e8a3e625ad152fb1f38c297078b8078b2205c25778d2"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "num",
+ "paste",
+ "prost",
 ]
 
 [[package]]
