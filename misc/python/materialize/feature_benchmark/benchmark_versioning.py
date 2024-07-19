@@ -10,7 +10,7 @@ from pathlib import Path
 
 from materialize import MZ_ROOT
 
-FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.0.0"
+FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.1.0"
 FEATURE_BENCHMARK_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 
 FEATURE_BENCHMARK_FRAMEWORK_DIR = Path(__file__).resolve().parent

@@ -1586,6 +1586,8 @@ class CreateWebhookSourceAction(Action):
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            if not potential_clusters:
+                return False
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
@@ -1638,6 +1640,8 @@ class CreateKafkaSourceAction(Action):
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            if not potential_clusters:
+                return False
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
@@ -1705,6 +1709,8 @@ class CreateMySqlSourceAction(Action):
             source_id = exe.db.mysql_source_id
             exe.db.mysql_source_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            if not potential_clusters:
+                return False
             schema = self.rng.choice(exe.db.schemas)
             cluster = self.rng.choice(potential_clusters)
         with schema.lock, cluster.lock:
@@ -1772,6 +1778,8 @@ class CreatePostgresSourceAction(Action):
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            if not potential_clusters:
+                return False
             schema = self.rng.choice(exe.db.schemas)
             cluster = self.rng.choice(potential_clusters)
         with schema.lock, cluster.lock:
@@ -1834,6 +1842,8 @@ class CreateKafkaSinkAction(Action):
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            if not potential_clusters:
+                return False
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
         with schema.lock, cluster.lock:
