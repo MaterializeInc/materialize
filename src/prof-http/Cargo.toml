@@ -18,11 +18,14 @@ headers = "0.3.8"
 http = "0.2.8"
 include_dir = "0.7.3"
 once_cell = "1.16.0"
+mappings = "0.5.0"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 mz-prof = { path = "../prof", default-features = false }
+jemalloc_pprof = { version = "0.4.1", optional = true }
+pprof_util = "0.4"
 serde = { version = "1.0.152", features = ["derive"] }
 tokio = { version = "1.38.0", features = ["time"] }
 tracing = { version = "0.1.37", optional = true }
@@ -42,7 +45,7 @@ default = ["workspace-hack"]
 # access to the file system.
 dev-web = ["tracing"]
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["mz-prof/jemalloc"]
+jemalloc = ["mz-prof/jemalloc", "jemalloc_pprof"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux

@@ -16,14 +16,13 @@
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use mz_ore::cast::{CastFrom, TryCastFrom};
-use mz_proc::BuildId;
+use pprof_util::{StackProfile, WeightedStack};
 use prost::Message;
 
 mod pprof_types;
@@ -32,39 +31,23 @@ pub mod time;
 #[cfg(feature = "jemalloc")]
 pub mod jemalloc;
 
-#[derive(Copy, Clone, Debug)]
-pub enum ProfStartTime {
-    Instant(Instant),
-    TimeImmemorial,
-}
-
-#[derive(Clone, Debug)]
-pub struct WeightedStack {
-    pub addrs: Vec<usize>,
-    pub weight: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct Mapping {
-    pub memory_start: usize,
-    pub memory_end: usize,
-    pub memory_offset: usize,
-    pub file_offset: u64,
-    pub pathname: PathBuf,
-    pub build_id: Option<BuildId>,
-}
-
-#[derive(Default)]
-pub struct StackProfile {
-    annotations: Vec<String>,
-    // The second element is the index in `annotations`, if one exists.
-    stacks: Vec<(WeightedStack, Option<usize>)>,
-    mappings: Vec<Mapping>,
-}
-
-impl StackProfile {
+pub trait StackProfileExt {
     /// Writes out the `.mzfg` format, which is fully described in flamegraph.js.
-    pub fn to_mzfg(&self, symbolize: bool, header_extra: &[(&str, &str)]) -> String {
+    fn to_mzfg(&self, symbolize: bool, header_extra: &[(&str, &str)]) -> String;
+    /// Converts the profile into the pprof format.
+    ///
+    /// pprof encodes profiles as gzipped protobuf messages of the Profile message type
+    /// (see `pprof/profile.proto`).
+    fn to_pprof(
+        &self,
+        sample_type: (&str, &str),
+        period_type: (&str, &str),
+        anno_key: Option<String>,
+    ) -> Vec<u8>;
+}
+
+impl StackProfileExt for StackProfile {
+    fn to_mzfg(&self, symbolize: bool, header_extra: &[(&str, &str)]) -> String {
         // All the unwraps in this function are justified by the fact that
         // String's fmt::Write impl is infallible.
         use std::fmt::Write;
@@ -112,11 +95,7 @@ mz_fg_version: 1
         builder
     }
 
-    /// Converts the profile into the pprof format.
-    ///
-    /// pprof encodes profiles as gzipped protobuf messages of the Profile message type
-    /// (see `pprof/profile.proto`).
-    pub fn to_pprof(
+    fn to_pprof(
         &self,
         sample_type: (&str, &str),
         period_type: (&str, &str),
@@ -274,52 +253,6 @@ impl StringTable {
         let mut vec: Vec<_> = self.0.into_iter().collect();
         vec.sort_by_key(|(_, idx)| *idx);
         vec.into_iter().map(|(s, _)| s).collect()
-    }
-}
-
-pub struct StackProfileIter<'a> {
-    inner: &'a StackProfile,
-    idx: usize,
-}
-
-impl<'a> Iterator for StackProfileIter<'a> {
-    type Item = (&'a WeightedStack, Option<&'a str>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (stack, anno) = self.inner.stacks.get(self.idx)?;
-        self.idx += 1;
-        let anno = anno.map(|idx| self.inner.annotations.get(idx).unwrap().as_str());
-        Some((stack, anno))
-    }
-}
-
-impl StackProfile {
-    pub fn push_stack(&mut self, stack: WeightedStack, annotation: Option<&str>) {
-        let anno_idx = if let Some(annotation) = annotation {
-            Some(
-                self.annotations
-                    .iter()
-                    .position(|anno| annotation == anno.as_str())
-                    .unwrap_or_else(|| {
-                        self.annotations.push(annotation.to_string());
-                        self.annotations.len() - 1
-                    }),
-            )
-        } else {
-            None
-        };
-        self.stacks.push((stack, anno_idx))
-    }
-
-    pub fn push_mapping(&mut self, mapping: Mapping) {
-        self.mappings.push(mapping);
-    }
-
-    pub fn iter(&self) -> StackProfileIter<'_> {
-        StackProfileIter {
-            inner: self,
-            idx: 0,
-        }
     }
 }
 
