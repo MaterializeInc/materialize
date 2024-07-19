@@ -427,7 +427,7 @@ where
 
 /// A batch of differential updates that vary over some partial order. This type maintains the data
 /// as a set of chains that allows for efficient extraction of batches given a frontier.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ChainBatch<D, T, R> {
     /// A list of chains (sets of mutually comparable times) sorted by the partial order.
     chains: Vec<VecDeque<(D, T, R)>>,
@@ -485,11 +485,7 @@ impl<D, T: Timestamp, R> ChainBatch<D, T, R> {
                             {
                                 r1.plus_equals(&r);
                             }
-                            if r1.is_zero() {
-                                None
-                            } else {
-                                Some((d1, t1, r1))
-                            }
+                            Some((d1, t1, r1))
                         }
                     }
                 }
@@ -991,5 +987,12 @@ mod test {
         )];
         assert_eq!(expected, reclock_compact_remap);
         assert_eq!(expected, compact_reclock_remap);
+    }
+
+    #[mz_ore::test]
+    fn test_chainbatch_merge() {
+        let a = ChainBatch::from_iter([('a', 0, 1)]);
+        let b = ChainBatch::from_iter([('a', 0, -1), ('a', 1, 1)]);
+        assert_eq!(a.merge_with(b), ChainBatch::from_iter([('a', 1, 1)]));
     }
 }
