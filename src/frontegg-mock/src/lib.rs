@@ -635,14 +635,17 @@ async fn handle_create_sso_config(
     let config_storage = SSOConfigStorage {
         id: Uuid::new_v4().to_string(),
         enabled: new_config.enabled,
-        sso_endpoint: new_config.sso_endpoint,
-        public_certificate: BASE64.encode(new_config.public_certificate.as_bytes()),
+        sso_endpoint: new_config.sso_endpoint.unwrap_or_default(),
+        public_certificate: new_config
+            .public_certificate
+            .map(|cert| BASE64.encode(cert.as_bytes()))
+            .unwrap_or_default(),
         sign_request: new_config.sign_request,
-        acs_url: new_config.acs_url,
-        sp_entity_id: new_config.sp_entity_id,
-        config_type: new_config.config_type,
-        oidc_client_id: new_config.oidc_client_id,
-        oidc_secret: new_config.oidc_secret,
+        acs_url: new_config.acs_url.unwrap_or_default(),
+        sp_entity_id: new_config.sp_entity_id.unwrap_or_default(),
+        config_type: new_config.config_type.unwrap_or_else(|| "saml".to_string()),
+        oidc_client_id: new_config.oidc_client_id.unwrap_or_default(),
+        oidc_secret: new_config.oidc_secret.unwrap_or_default(),
         domains: Vec::new(),
         groups: Vec::new(),
         default_roles: DefaultRoles {
@@ -756,14 +759,14 @@ async fn handle_create_domain(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
     Json(mut new_domain): Json<Domain>,
-) -> Result<Json<Domain>, StatusCode> {
+) -> Result<Json<DomainResponse>, StatusCode> {
     let mut configs = context.sso_configs.lock().unwrap();
     if let Some(config) = configs.get_mut(&config_id) {
         new_domain.id = Uuid::new_v4().to_string();
         new_domain.sso_config_id = config_id;
         new_domain.validated = false;
         config.domains.push(new_domain.clone());
-        Ok(Json(new_domain))
+        Ok(Json(DomainResponse::from(new_domain)))
     } else {
         Err(StatusCode::NOT_FOUND)
     }
@@ -789,7 +792,11 @@ async fn handle_set_default_roles(
     let mut configs = context.sso_configs.lock().unwrap();
     if let Some(config) = configs.get_mut(&config_id) {
         config.default_roles = default_roles.clone();
-        config.role_ids.clone_from(&default_roles.role_ids);
+        for role_id in &default_roles.role_ids {
+            if !config.role_ids.contains(role_id) {
+                config.role_ids.push(role_id.clone());
+            }
+        }
         Ok((StatusCode::CREATED, Json(default_roles)))
     } else {
         Err(StatusCode::NOT_FOUND)
@@ -1075,23 +1082,25 @@ struct UserRolesMetadata {
 
 #[derive(Deserialize)]
 pub struct SSOConfigCreateRequest {
+    #[serde(default)]
     pub enabled: bool,
     #[serde(rename = "ssoEndpoint")]
-    pub sso_endpoint: String,
+    pub sso_endpoint: Option<String>,
     #[serde(rename = "publicCertificate")]
-    pub public_certificate: String,
+    pub public_certificate: Option<String>,
+    #[serde(default)]
     #[serde(rename = "signRequest")]
     pub sign_request: bool,
     #[serde(rename = "acsUrl")]
-    pub acs_url: String,
+    pub acs_url: Option<String>,
     #[serde(rename = "spEntityId")]
-    pub sp_entity_id: String,
+    pub sp_entity_id: Option<String>,
     #[serde(rename = "type")]
-    pub config_type: String,
+    pub config_type: Option<String>,
     #[serde(rename = "oidcClientId")]
-    pub oidc_client_id: String,
+    pub oidc_client_id: Option<String>,
     #[serde(rename = "oidcSecret")]
-    pub oidc_secret: String,
+    pub oidc_secret: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1191,6 +1200,8 @@ pub struct Domain {
     pub validated: bool,
     #[serde(default, rename = "ssoConfigId")]
     pub sso_config_id: String,
+    #[serde(skip_deserializing)]
+    pub txt_record: String,
 }
 
 #[derive(Serialize)]
@@ -1200,6 +1211,8 @@ pub struct DomainResponse {
     pub validated: bool,
     #[serde(rename = "ssoConfigId")]
     pub sso_config_id: String,
+    #[serde(rename = "txtRecord")]
+    pub txt_record: String,
 }
 
 #[derive(Deserialize)]
@@ -1284,11 +1297,19 @@ impl From<SSOConfigStorage> for SSOConfigResponse {
 
 impl From<Domain> for DomainResponse {
     fn from(domain: Domain) -> Self {
+        let txt_record = format!(
+            "_saml-domain-challenge.{}.{}.{}",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            domain.domain
+        );
+
         DomainResponse {
             id: domain.id,
             domain: domain.domain,
             validated: domain.validated,
             sso_config_id: domain.sso_config_id,
+            txt_record,
         }
     }
 }
