@@ -263,6 +263,7 @@ impl Catalog {
         };
 
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
+        assert!(!updates.is_empty(), "initial catalog snapshot is missing");
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
