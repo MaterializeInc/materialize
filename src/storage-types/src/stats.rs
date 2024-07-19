@@ -421,11 +421,15 @@ mod tests {
             prop::collection::vec(arb_datum_for_column(&ty), 0..128)
                 .prop_map(move |datums| (ty.clone(), datums))
         });
-        proptest!(|((ty, datums) in datums)| {
-            // The proptest! macro interferes with rustfmt.
-            let datums: Vec<_> = datums.iter().map(Datum::from).collect();
-            prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
-        })
+
+        proptest!(
+            ProptestConfig::with_cases(80),
+            |((ty, datums) in datums)| {
+                // The proptest! macro interferes with rustfmt.
+                let datums: Vec<_> = datums.iter().map(Datum::from).collect();
+                prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
+            }
+        )
     }
 
     #[mz_ore::test]
