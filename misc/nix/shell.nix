@@ -10,10 +10,10 @@
 { pkgs ? import <nixpkgs> {} }:
 with pkgs;
 
-stdenv.mkDerivation rec {
+stdenv.mkDerivation {
   name = "materialize";
   buildInputs = with pkgs; [
-    libclang
+    clang
     rustPlatform.bindgenHook
     cmake
     perl
@@ -35,5 +35,7 @@ stdenv.mkDerivation rec {
     darwin.apple_sdk.frameworks.Foundation
   ];
 
-  RUSTFLAGS = "-Cdebuginfo=1 -Csymbol-mangling-version=v0";
+  RUSTFLAGS = "-Cdebuginfo=1 -Csymbol-mangling-version=v0"
+    + lib.optionalString stdenv.isLinux
+      " -Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols";
 }
