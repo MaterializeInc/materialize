@@ -57,6 +57,8 @@ impl PlanValidity {
         }
     }
 
+    /// WARNING: This is currently a no-op and `check` will always succeed.
+    ///
     /// Sets the required `transient_revision` of the catalog. Should only be used by serialized
     /// statements (and thus should never fail for users), but here as an internal failsafe against
     /// programming errors.
@@ -77,7 +79,25 @@ impl PlanValidity {
         match self {
             PlanValidity::RequireRevision { required_revision } => {
                 if catalog.transient_revision() != *required_revision {
-                    return Err(AdapterError::DDLTransactionRace);
+                    // TODO: We would like to use this as a programming check that no catalog
+                    // revisions were made as a double-check that all DDLs are serialized. However,
+                    // since only *most* DDLs are serialized (see `must_serialize_ddl()` for those
+                    // that aren't), it is possible for two DDLs to run concurrently and the catalog
+                    // revision to increment during the off-thread work from this DDL. For example,
+                    // a CREATE VIEW could be off-thread optimizing while an ALTER SECRET runs and
+                    // increments the revision. For now we assume this check is not strictly needed
+                    // because we have thought medium hard about the DDLs that do not require
+                    // serialization, so they do not pose a correctness problem when executing
+                    // concurrently with any other DDL.
+                    //
+                    // If we want to remove the need to even think at all about DDL ordering
+                    // correctness we would need to refactor all calls to catalog_transact to
+                    // require passing the serialized DDL lock. Statements would be responsible for
+                    // getting the lock at the latest possible correct time. ALTER SECRET for
+                    // example could acquire the lock after interacting with k8s, but most other
+                    // DDLs would get the lock for their entire sequencing duration.
+
+                    //soft_panic_or_log!("another DDL executed while this assumed it was serial");
                 }
                 Ok(())
             }
@@ -320,10 +340,8 @@ mod tests {
                         *validity = PlanValidity::require_transient_revision(100);
                     }),
                     Box::new(|res| {
-                        assert_contains!(
-                            res.expect_err("must err").to_string(),
-                            "object state changed while transaction was in progress"
-                        )
+                        // This check is a no-op.
+                        assert!(res.is_ok());
                     }),
                 ),
                 (
