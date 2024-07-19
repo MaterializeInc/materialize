@@ -1184,12 +1184,12 @@ where
                 }
                 ComputeSinkConnection::ContinualTaskInsert(conn) => {
                     let target_metadata = self
-                        .storage_controller
+                        .storage_collections
                         .collection_metadata(conn.target_id)
                         .map_err(|_| DataflowCreationError::CollectionMissing(id))?
                         .clone();
                     let retract_from_metadata = self
-                        .storage_controller
+                        .storage_collections
                         .collection_metadata(conn.retract_from_id)
                         .map_err(|_| DataflowCreationError::CollectionMissing(id))?
                         .clone();

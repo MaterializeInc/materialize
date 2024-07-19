@@ -13,15 +13,13 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_compute_types::sinks::{ComputeSinkDesc, ContinualTaskInsertConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Diagnostics;
-use mz_persist_txn::metrics::Metrics as TxnMetrics;
-use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
@@ -29,6 +27,8 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::PersistEpoch;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_txn_wal::metrics::Metrics as TxnMetrics;
+use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::Scope;
@@ -60,6 +60,8 @@ where
                 &mut scope,
                 sink_id,
                 Arc::clone(&compute_state.persist_clients),
+                &compute_state.txns_ctx,
+                &compute_state.worker_config,
                 self.retract_from_metadata.clone(),
                 Some(as_of.clone()),
                 SnapshotMode::Include,
@@ -67,6 +69,7 @@ where
                 None,             // no MFP
                 compute_state.dataflow_max_inflight_bytes(),
                 start_signal,
+                |error| panic!("continual_task: {error}"),
             );
 
         // Massage everything into SourceData.

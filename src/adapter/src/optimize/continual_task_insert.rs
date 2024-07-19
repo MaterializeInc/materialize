@@ -12,10 +12,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mz_compute_types::continual_task_insert::{ContinualTaskInsertDesc, PersistTableConnection};
 use mz_compute_types::plan::Plan;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
-use mz_expr::refresh_schedule::RefreshSchedule;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
@@ -112,12 +110,6 @@ pub struct GlobalMirPlan {
     df_meta: DataflowMetainfo,
 }
 
-impl GlobalMirPlan {
-    pub fn df_desc(&self) -> &MirDataflowDescription {
-        &self.df_desc
-    }
-}
-
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
 #[derive(Clone, Debug)]
@@ -129,16 +121,6 @@ pub struct GlobalLirPlan {
 impl GlobalLirPlan {
     pub fn df_desc(&self) -> &LirDataflowDescription {
         &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-
-    pub fn desc(&self) -> &RelationDesc {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink = sink_exports.values().next().expect("valid sink");
-        &sink.from_desc
     }
 }
 
@@ -167,12 +149,6 @@ impl Optimize<HirRelationExpr> for Optimizer {
     }
 }
 
-impl LocalMirPlan {
-    pub fn expr(&self) -> OptimizedMirRelationExpr {
-        OptimizedMirRelationExpr(self.expr.clone())
-    }
-}
-
 /// This is needed only because the pipeline in the bootstrap code starts from an
 /// [`OptimizedMirRelationExpr`] attached to a [`mz_catalog::memory::objects::CatalogItem`].
 impl Optimize<OptimizedMirRelationExpr> for Optimizer {
@@ -194,7 +170,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let expr = OptimizedMirRelationExpr(plan.expr);
         let mut df_meta = plan.df_meta;
 
-        let mut rel_typ = expr.typ();
+        let rel_typ = expr.typ();
 
         let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
 

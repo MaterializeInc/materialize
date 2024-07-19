@@ -69,10 +69,10 @@ impl Coordinator {
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features());
 
         // Transient ID for any dataflows we might have to render.
-        let view_id = self.allocate_transient_id()?;
+        let view_id = self.allocate_transient_id();
 
         // We're making up a task ID because we're not storing the task in the catalog. Only for this PoC, of course!
-        let task_id = self.allocate_transient_id()?;
+        let task_id = self.allocate_transient_id();
 
         let raw_expr = expr.clone();
 

@@ -226,6 +226,7 @@ impl Coordinator {
                     let result = self
                         .sequence_create_type(ctx.session(), plan, resolved_ids)
                         .await;
+                    ctx.retire(result);
                 }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
