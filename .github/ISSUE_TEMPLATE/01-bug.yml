@@ -27,6 +27,7 @@ body:
     validations:
       required: true
   - type: textarea
+    id: issue
     attributes:
       label: What is the issue?
       description: |

@@ -18,5 +18,6 @@ body:
       value: |
         Thanks for your interest in Materialize. Please be as detailed as possible in your feature request.
   - type: textarea
+    id: feature-request
     attributes:
       label: Feature request
