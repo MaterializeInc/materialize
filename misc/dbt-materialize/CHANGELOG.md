@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.8.3 - 2024-07-19
 
 * Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
 
