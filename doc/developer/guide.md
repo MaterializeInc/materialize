@@ -190,7 +190,7 @@ nix-shell misc/nix/shell.nix
 [nix-shell]$ rustup install stable # If not installed already
 ```
 
-Materialize can then be build inside this shell. Note that CockroachDB is not included in the above configuration
+Materialize can then be built inside this shell. Note that CockroachDB is not included in the above configuration
 and needs to be installed separately, as described above. Also, IDEs will not be able to access the installed
 dependencies unless they are started from within the `nix-shell` environment:
 
@@ -214,8 +214,7 @@ access token for use with HTTPS][github-https].
 Optionally, you may need to also clone the associated submodules:
 
 ```shell
-git submodule init
-git submodule update --recursive
+git submodule update --init --recursive
 ```
 
 Then you can build Materialize. Because Materialize is a collection of several
