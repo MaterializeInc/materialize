@@ -90,7 +90,6 @@ work but are not supported. Our recommended installation methods are:
 - macOS: [Homebrew](https://brew.sh)
 - Linux: System package manager if possible, or [community package repositories](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) if necessary
 - Windows: [Microsoft App Store](https://apps.microsoft.com/detail/python-3-11/9NRWMJP3717K?hl=en-US&gl=US)
-- Cross-platform: [Nix] [flake](../../misc/nix)
 
 If none of the above work well for you, these are a few other methods that have
 worked for us in the past, but are not formally supported:
@@ -180,6 +179,26 @@ location, set `$CONFLUENT_HOME` to this location and add `$CONFLUENT_HOME/bin`
 to your $PATH. I found this to be the most convenient way to get confluent
 and it also works in a distro neutral way (if you are using, Arch Linux for example).
 
+### Nix
+
+Optionally, you can use [nix][Nix] to install all required dependencies on both Linux and macOS,
+using the provided [`shell.nix`](../../misc/nix). [Install nix][nix-manual] and use `nix-shell` to enter an
+environment that is isolated from the main OS.
+
+```bash
+nix-shell misc/nix/shell.nix
+[nix-shell]$ rustup install stable # If not installed already
+```
+
+Materialize can then be built inside this shell. Note that CockroachDB is not included in the above configuration
+and needs to be installed separately, as described above. Also, IDEs will not be able to access the installed
+dependencies unless they are started from within the `nix-shell` environment:
+
+```bash
+code . # Linux
+/Applications/Visual\ Studio\ Code.app/Contents/MacOS/Electron # MacOS
+```
+
 ## Building Materialize
 
 First, clone this repository:
@@ -191,6 +210,12 @@ git clone git@github.com:MaterializeInc/materialize.git
 Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
+
+Optionally, you may need to also clone the associated submodules:
+
+```shell
+git submodule update --init --recursive
+```
 
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
@@ -345,9 +370,11 @@ See the [style guide](style.md) for additional recommendations on code style.
 ### Required Tools
 Linting requires the following tools and Cargo packages to be installed:
 * buf ([installation guide](https://buf.build/docs/installation))
+* shellcheck ([installation guide](https://hackage.haskell.org/package/ShellCheck#installing))
 * cargo-about (`cargo install cargo-about`)
 * cargo-hakari (`cargo install cargo-hakari`)
 * cargo-deplint (`cargo install cargo-deplint`)
+* cargo-deny (`cargo install cargo-deny`)
 
 ## Submitting and reviewing changes
 
@@ -491,19 +518,14 @@ version = "0.26.0"
 
 In principle, any text editor can be used to edit Rust code.
 
-By default, we recommend that developers without a strong preference of editor use
-Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
+By default, we recommend that developers without a strong preference of an editor use
+[Visual Studio Code] with the [rust-analyzer] plugin.
+This is the most mainstream
 setup for developing Materialize, and the one for which you are the most likely
-to be able to get help if something goes wrong. It's important to note that you
-**should not** install the "Rust" plugin, as it is known to
-conflict with Rust-Analyzer; the latter has far more advanced code navigation
-features and is the de-facto standard for developing Rust. If you use
-Rust-Analyzer, you may wish to change the target directory so it does not
-conflict with other cargo commands.  You can do this by adding to the cargo
-check extra args "--target-dir" and "$NEWTARGET".
+to be able to get help if something goes wrong.
 
 Visual Studio Code also works well for editing Python; to work on the Python code
-in the Materialize repository, install the official Python extension from Microsoft
+in the Materialize repository, install the [official Python extension][vscode-python] from Microsoft
 and add the following to your `settings.json`.
 
 ``` json
@@ -527,12 +549,12 @@ If you are using Rust-Analyzer, you should configure it to conform to our
 * `imports.granularity.group` = `module`
 * `imports.prefix` = `crate`
 
-Besides Rust-Analyzer, the only other known tool with good code navigation features
-is CLion along with its Rust plugin. This is a good choice for developers who prefer
+[RustRover] is another option for an IDE with good code navigation features.
+This is a good choice for developers who prefer
 the JetBrains ecosystem, but we no longer recommend it by default, since
 Rust-Analyzer has long since caught up to it in maturity. If you are a
 Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
-JetBrains license. If you're not yet sure you want to use CLion, you can
+JetBrains license. If you're not yet sure you want to use RustRover, you can
 use the 30-day free trial.
 
 ### Editor add-ons
@@ -606,12 +628,16 @@ source /path/to/materialize/misc/completions/zsh/*
 [forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach
 [Kubernetes]: https://kubernetes.io
 [materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils
-[Nix]: https://nixos.org
+[Nix]: https://nix.dev/tutorials/first-steps/ad-hoc-shell-environments
+[nix-manual]: https://nix.dev/manual/nix/2.18/installation/installing-binary
 [Python]: https://www.python.org
 [rust-dec]: https://github.com/MaterializeInc/rust-dec
 [Rust]: https://www.rust-lang.org
+[rust-analyzer]: https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
 [Python]: https://www.python.org
-[Nix]: https://nixos.wiki/wiki/Flakes
+[vscode-python]: https://marketplace.visualstudio.com/items?itemName=ms-python.python
+[Visual Studio Code]: https://code.visualstudio.com
+[RustRover]: https://www.jetbrains.com/rust/
