@@ -1883,6 +1883,9 @@ impl Schema2<SourceData> for RelationDesc {
 mod tests {
     use bytes::Bytes;
     use mz_ore::assert_err;
+    use mz_persist::indexed::columnar::arrow::realloc_array;
+    use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::arrow::ArrayProtobuf;
     use mz_repr::{arb_datum_for_scalar, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -1954,11 +1957,28 @@ mod tests {
 
     #[track_caller]
     fn roundtrip_source_data(desc: RelationDesc, datas: Vec<SourceData>) {
+        let metrics = ColumnarMetrics::disconnected();
         let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
         for data in &datas {
             encoder.append(data);
         }
         let (col, _stats) = encoder.finish();
+
+        // Reallocate our arrays with lgalloc.
+        let col = realloc_array(&col, &metrics);
+
+        // Roundtrip through ProtoArray format.
+        {
+            let field = Field::new("k_s", col.data_type().clone(), col.is_nullable());
+            let field = Arc::new(field);
+            let proto = col.clone().into_proto(Arc::clone(&field));
+            let bytes = proto.encode_to_vec();
+            let proto = mz_persist_types::arrow::ProtoArray::decode(&bytes[..]).unwrap();
+            let (field_rnd, col_rnd) = StructArray::from_proto(proto).unwrap();
+
+            assert_eq!(&*field, &field_rnd);
+            assert_eq!(col, col_rnd);
+        }
 
         // Encode to Parquet.
         let mut buf = Vec::new();

@@ -1639,6 +1639,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::arrow::ArrayProtobuf;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
@@ -1665,7 +1666,22 @@ mod tests {
             encoder.append(row);
         }
         let (col, stats) = encoder.finish();
+
+        // Exercise reallocating columns with lgalloc.
         let col = realloc_array(&col, metrics);
+        // Exercise our ProtoArray format.
+        {
+            let field = Field::new("ok", col.data_type().clone(), col.is_nullable());
+            let field = Arc::new(field);
+            let proto = col.clone().into_proto(Arc::clone(&field));
+            let bytes = proto.encode_to_vec();
+            let proto = mz_persist_types::arrow::ProtoArray::decode(&bytes[..]).unwrap();
+            let (field_rnd, col_rnd) = StructArray::from_proto(proto).unwrap();
+
+            assert_eq!(&*field, &field_rnd);
+            assert_eq!(col, col_rnd);
+        }
+
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
         // Collect all of our lower and upper bounds.

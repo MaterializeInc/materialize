@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use crate::columnar::{Schema, Schema2};
 
+pub mod arrow;
 pub mod codec_impls;
 pub mod columnar;
 pub mod dyn_col;

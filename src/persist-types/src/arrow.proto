@@ -1,0 +1,120 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// BE CAREFUL! Unlike other Materialize Protos, Persist's messages need to
+// be forward-compatible and roundtrip losslessly between versions. Consider
+// making your Proto changes in a release before you populate non-default values,
+// or guard the code changes behind a feature flag.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package mz_persist_types.arrow;
+
+message NullArray {
+    uint64 len = 1;
+}
+
+message BooleanArray {
+    BooleanBuffer buffer = 1;
+}
+
+message U64Array {
+    repeated uint64 values = 1;
+}
+
+message I64Array {
+    repeated int64 values = 1;
+}
+
+message F32Array {
+    repeated float values = 1;
+}
+
+message F64Array {
+    repeated double values = 1;
+}
+
+message PrimitiveArray {
+    Buffer data = 1;
+}
+
+message FixedSizeArray {
+    Buffer data = 1;
+    int32 size = 2;
+}
+
+message VariableSizeArray {
+    Buffer data = 1;
+    repeated int32 offsets = 2;
+}
+
+message ListArray {
+    Array values = 1;
+    repeated int32 offsets = 2;
+}
+
+message MapArray {
+    Array values = 1;
+    repeated int32 offsets = 2;
+    bool sorted = 3;
+}
+
+message StructArray {
+    repeated Array children = 1;
+}
+
+message Array {
+    string name = 1;
+    bool nullable = 2;
+    NullBuffer nulls = 3;
+
+    // Protobuf tags [1, 15] get encoded in a single byte, so order these by
+    // what is most common.
+    oneof kind {
+        VariableSizeArray string = 4;
+        VariableSizeArray binary = 5;
+        FixedSizeArray fixed_binary = 6;
+        I64Array int32 = 7;
+        I64Array int64 = 8;
+        U64Array uint32 = 9;
+        U64Array uint64 = 10;
+        F32Array float32 = 11;
+        F64Array float64 = 12;
+        StructArray struct = 13;
+        ListArray list = 14;
+
+        // Note: 15 is intentionally unused. It's a bet that future Persist
+        // folks will maybe want to add a new array type and leverage the
+        // single byte optimization.
+
+        U64Array uint8 = 16;
+        BooleanArray boolean = 17;
+        NullArray null = 18;
+        I64Array int8 = 19;
+        I64Array int16 = 20;
+        U64Array uint16 = 21;
+        MapArray map = 22;
+    }
+}
+
+message Buffer {
+    bytes data = 1;
+}
+
+message BooleanBuffer {
+    Buffer buffer = 1;
+    uint64 offset = 2;
+    uint64 length = 3;
+}
+
+message NullBuffer {
+    BooleanBuffer buf = 1;
+}
