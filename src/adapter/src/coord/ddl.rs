@@ -162,7 +162,7 @@ impl Coordinator {
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
             Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
-                // Adds these ops to our transaction, bailing if the Catalog has changed since we
+                // Sets these ops to our transaction, bailing if the Catalog has changed since we
                 // ran the transaction.
                 session.transaction_mut().add_ops(TransactionOps::DDL {
                     ops: new_ops,

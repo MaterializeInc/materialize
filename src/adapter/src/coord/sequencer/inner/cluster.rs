@@ -14,8 +14,9 @@ use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::DEFAULT_REPLICA_LOGGING_INTERVAL;
 use mz_ore::instrument;
 use mz_sql::catalog::ObjectType;
+use mz_sql::plan;
 use mz_sql::plan::{AlterClusterPlan, AlterOptionParameter};
-use mz_sql::{plan, session::metadata::SessionMetadata};
+use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::catalog::ReplicaCreateDropReason;

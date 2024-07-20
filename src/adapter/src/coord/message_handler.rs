@@ -231,6 +231,9 @@ impl Coordinator {
                 Message::SchedulingDecisions(decisions) => {
                     self.handle_scheduling_decisions(decisions).await;
                 }
+                Message::DeferredStatementReady => {
+                    self.handle_deferred_statement().await;
+                }
             }
         }
         .instrument(span)

@@ -25,14 +25,19 @@ use crate::AdapterError;
 /// A struct to hold information about the validity of plans and if they should be abandoned after
 /// doing work off of the Coordinator thread.
 #[derive(Debug, Clone)]
-pub struct PlanValidity {
-    /// The most recent revision at which this plan was verified as valid.
-    transient_revision: u64,
-    /// Objects on which the plan depends.
-    dependency_ids: BTreeSet<GlobalId>,
-    cluster_id: Option<ComputeInstanceId>,
-    replica_id: Option<ReplicaId>,
-    role_metadata: RoleMetadata,
+pub enum PlanValidity {
+    /// Requires a specific transient revision.
+    RequireRevision { required_revision: u64 },
+    /// Checks various catalog IDs. Uses the transient revision only as a cache marker.
+    Checks {
+        /// The most recent revision at which this plan was verified as valid.
+        transient_revision: u64,
+        /// Objects on which the plan depends.
+        dependency_ids: BTreeSet<GlobalId>,
+        cluster_id: Option<ComputeInstanceId>,
+        replica_id: Option<ReplicaId>,
+        role_metadata: RoleMetadata,
+    },
 }
 
 impl PlanValidity {
@@ -43,7 +48,7 @@ impl PlanValidity {
         replica_id: Option<ReplicaId>,
         role_metadata: RoleMetadata,
     ) -> Self {
-        PlanValidity {
+        PlanValidity::Checks {
             transient_revision,
             dependency_ids,
             cluster_id,
@@ -52,74 +57,115 @@ impl PlanValidity {
         }
     }
 
+    /// WARNING: This is currently a no-op and `check` will always succeed.
+    ///
+    /// Sets the required `transient_revision` of the catalog. Should only be used by serialized
+    /// statements (and thus should never fail for users), but here as an internal failsafe against
+    /// programming errors.
+    pub fn require_transient_revision(required_revision: u64) -> Self {
+        PlanValidity::RequireRevision { required_revision }
+    }
+
+    /// Panics if not called on a Checks variant.
     pub fn extend_dependencies(&mut self, ids: impl Iterator<Item = GlobalId>) {
-        self.dependency_ids.extend(ids);
+        let Self::Checks { dependency_ids, .. } = self else {
+            unreachable!();
+        };
+        dependency_ids.extend(ids);
     }
 
     /// Returns an error if the current catalog no longer has all dependencies.
     pub fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
-        if self.transient_revision == catalog.transient_revision() {
-            return Ok(());
-        }
-        // If the transient revision changed, we have to recheck. If successful, bump the revision
-        // so next check uses the above fast path.
-        if let Some(cluster_id) = self.cluster_id {
-            let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
-                return Err(AdapterError::ChangedPlan(format!(
-                    "cluster {} was removed",
-                    cluster_id
-                )));
-            };
+        match self {
+            PlanValidity::RequireRevision { required_revision } => {
+                if catalog.transient_revision() != *required_revision {
+                    // TODO: We would like to use this as a programming check that no catalog
+                    // revisions were made as a double-check that all DDLs are serialized. However,
+                    // since only *most* DDLs are serialized (see `must_serialize_ddl()` for those
+                    // that aren't), it is possible for two DDLs to run concurrently and the catalog
+                    // revision to increment during the off-thread work from this DDL. For example,
+                    // a CREATE VIEW could be off-thread optimizing while an ALTER SECRET runs and
+                    // increments the revision. For now we assume this check is not strictly needed
+                    // because we have thought medium hard about the DDLs that do not require
+                    // serialization, so they do not pose a correctness problem when executing
+                    // concurrently with any other DDL.
+                    //
+                    // If we want to remove the need to even think at all about DDL ordering
+                    // correctness we would need to refactor all calls to catalog_transact to
+                    // require passing the serialized DDL lock. Statements would be responsible for
+                    // getting the lock at the latest possible correct time. ALTER SECRET for
+                    // example could acquire the lock after interacting with k8s, but most other
+                    // DDLs would get the lock for their entire sequencing duration.
 
-            if let Some(replica_id) = self.replica_id {
-                if cluster.replica(replica_id).is_none() {
-                    return Err(AdapterError::ChangedPlan(format!(
-                        "replica {} of cluster {} was removed",
-                        replica_id, cluster_id
-                    )));
+                    //soft_panic_or_log!("another DDL executed while this assumed it was serial");
                 }
+                Ok(())
             }
-        }
-        // It is sufficient to check that all the dependency_ids still exist because we assume:
-        // - Ids do not mutate.
-        // - Ids are not reused.
-        // - If an id was dropped, this will detect it and error.
-        for id in &self.dependency_ids {
-            if catalog.try_get_entry(id).is_none() {
-                return Err(AdapterError::ChangedPlan(format!(
-                    "dependency was removed: {id}",
-                )));
-            }
-        }
-        if catalog
-            .try_get_role(&self.role_metadata.current_role)
-            .is_none()
-        {
-            return Err(AdapterError::Unauthorized(
-                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.current_role.clone()),
-            ));
-        }
-        if catalog
-            .try_get_role(&self.role_metadata.session_role)
-            .is_none()
-        {
-            return Err(AdapterError::Unauthorized(
-                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.session_role.clone()),
-            ));
-        }
+            PlanValidity::Checks {
+                transient_revision,
+                dependency_ids,
+                cluster_id,
+                replica_id,
+                role_metadata,
+            } => {
+                if *transient_revision == catalog.transient_revision() {
+                    return Ok(());
+                }
+                // If the transient revision changed, we have to recheck. If successful, bump the revision
+                // so next check uses the above fast path.
+                if let Some(cluster_id) = cluster_id {
+                    let Some(cluster) = catalog.try_get_cluster(*cluster_id) else {
+                        return Err(AdapterError::ChangedPlan(format!(
+                            "cluster {} was removed",
+                            cluster_id
+                        )));
+                    };
 
-        if catalog
-            .try_get_role(&self.role_metadata.authenticated_role)
-            .is_none()
-        {
-            return Err(AdapterError::Unauthorized(
-                UnauthorizedError::ConcurrentRoleDrop(
-                    self.role_metadata.authenticated_role.clone(),
-                ),
-            ));
+                    if let Some(replica_id) = replica_id {
+                        if cluster.replica(*replica_id).is_none() {
+                            return Err(AdapterError::ChangedPlan(format!(
+                                "replica {} of cluster {} was removed",
+                                replica_id, cluster_id
+                            )));
+                        }
+                    }
+                }
+                // It is sufficient to check that all the dependency_ids still exist because we assume:
+                // - Ids do not mutate.
+                // - Ids are not reused.
+                // - If an id was dropped, this will detect it and error.
+                for id in dependency_ids.iter() {
+                    if catalog.try_get_entry(id).is_none() {
+                        return Err(AdapterError::ChangedPlan(format!(
+                            "dependency was removed: {id}",
+                        )));
+                    }
+                }
+                if catalog.try_get_role(&role_metadata.current_role).is_none() {
+                    return Err(AdapterError::Unauthorized(
+                        UnauthorizedError::ConcurrentRoleDrop(role_metadata.current_role.clone()),
+                    ));
+                }
+                if catalog.try_get_role(&role_metadata.session_role).is_none() {
+                    return Err(AdapterError::Unauthorized(
+                        UnauthorizedError::ConcurrentRoleDrop(role_metadata.session_role.clone()),
+                    ));
+                }
+
+                if catalog
+                    .try_get_role(&role_metadata.authenticated_role)
+                    .is_none()
+                {
+                    return Err(AdapterError::Unauthorized(
+                        UnauthorizedError::ConcurrentRoleDrop(
+                            role_metadata.authenticated_role.clone(),
+                        ),
+                    ));
+                }
+                *transient_revision = catalog.transient_revision();
+                Ok(())
+            }
         }
-        self.transient_revision = catalog.transient_revision();
-        Ok(())
     }
 }
 
@@ -201,7 +247,10 @@ mod tests {
                 (Box::new(|_validity| {}), Box::new(|res| assert_ok!(res))),
                 (
                     Box::new(|validity| {
-                        validity.cluster_id = Some(ClusterId::User(3));
+                        let PlanValidity::Checks { cluster_id, .. } = validity else {
+                            panic!();
+                        };
+                        *cluster_id = Some(ClusterId::User(3));
                     }),
                     Box::new(|res| {
                         assert_contains!(
@@ -212,8 +261,16 @@ mod tests {
                 ),
                 (
                     Box::new(|validity| {
-                        validity.cluster_id = Some(some_system_cluster.id);
-                        validity.replica_id = Some(ReplicaId::User(4));
+                        let PlanValidity::Checks {
+                            cluster_id,
+                            replica_id,
+                            ..
+                        } = validity
+                        else {
+                            panic!();
+                        };
+                        *cluster_id = Some(some_system_cluster.id);
+                        *replica_id = Some(ReplicaId::User(4));
                     }),
                     Box::new(|res| {
                         assert_contains!(
@@ -238,7 +295,10 @@ mod tests {
                 ),
                 (
                     Box::new(|validity| {
-                        validity.role_metadata.current_role = RoleId::User(5);
+                        let PlanValidity::Checks { role_metadata, .. } = validity else {
+                            panic!();
+                        };
+                        role_metadata.current_role = RoleId::User(5);
                     }),
                     Box::new(|res| {
                         assert_contains!(
@@ -249,7 +309,10 @@ mod tests {
                 ),
                 (
                     Box::new(|validity| {
-                        validity.role_metadata.session_role = RoleId::User(5);
+                        let PlanValidity::Checks { role_metadata, .. } = validity else {
+                            panic!();
+                        };
+                        role_metadata.session_role = RoleId::User(5);
                     }),
                     Box::new(|res| {
                         assert_contains!(
@@ -260,13 +323,34 @@ mod tests {
                 ),
                 (
                     Box::new(|validity| {
-                        validity.role_metadata.authenticated_role = RoleId::User(5);
+                        let PlanValidity::Checks { role_metadata, .. } = validity else {
+                            panic!();
+                        };
+                        role_metadata.authenticated_role = RoleId::User(5);
                     }),
                     Box::new(|res| {
                         assert_contains!(
                             res.expect_err("must err").to_string(),
                             "role u5 was concurrently dropped"
                         )
+                    }),
+                ),
+                (
+                    Box::new(|validity| {
+                        *validity = PlanValidity::require_transient_revision(100);
+                    }),
+                    Box::new(|res| {
+                        // This check is a no-op.
+                        assert!(res.is_ok());
+                    }),
+                ),
+                (
+                    Box::new(|validity| {
+                        *validity =
+                            PlanValidity::require_transient_revision(catalog.transient_revision());
+                    }),
+                    Box::new(|res| {
+                        assert!(res.is_ok());
                     }),
                 ),
             ];

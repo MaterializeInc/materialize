@@ -993,3 +993,122 @@ pub fn resolve_cluster_for_materialized_view<'a>(
         Some(in_cluster) => in_cluster.id,
     })
 }
+
+/// Statement classification as documented by [`plan`].
+#[derive(Debug, Clone, Copy)]
+pub enum StatementClassification {
+    ACL,
+    DDL,
+    DML,
+    Other,
+    SCL,
+    Show,
+    TCL,
+}
+
+impl StatementClassification {
+    pub fn is_ddl(&self) -> bool {
+        matches!(self, StatementClassification::DDL)
+    }
+}
+
+impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassification {
+    fn from(value: &Statement<T>) -> Self {
+        use StatementClassification::*;
+
+        match value {
+            // DDL statements.
+            Statement::AlterCluster(_) => DDL,
+            Statement::AlterConnection(_) => DDL,
+            Statement::AlterIndex(_) => DDL,
+            Statement::AlterObjectRename(_) => DDL,
+            Statement::AlterObjectSwap(_) => DDL,
+            Statement::AlterRetainHistory(_) => DDL,
+            Statement::AlterRole(_) => DDL,
+            Statement::AlterSecret(_) => DDL,
+            Statement::AlterSetCluster(_) => DDL,
+            Statement::AlterSink(_) => DDL,
+            Statement::AlterSource(_) => DDL,
+            Statement::AlterSystemSet(_) => DDL,
+            Statement::AlterSystemReset(_) => DDL,
+            Statement::AlterSystemResetAll(_) => DDL,
+            Statement::AlterTableAddColumn(_) => DDL,
+            Statement::Comment(_) => DDL,
+            Statement::CreateCluster(_) => DDL,
+            Statement::CreateClusterReplica(_) => DDL,
+            Statement::CreateConnection(_) => DDL,
+            Statement::CreateDatabase(_) => DDL,
+            Statement::CreateIndex(_) => DDL,
+            Statement::CreateRole(_) => DDL,
+            Statement::CreateSchema(_) => DDL,
+            Statement::CreateSecret(_) => DDL,
+            Statement::CreateSink(_) => DDL,
+            Statement::CreateWebhookSource(_) => DDL,
+            Statement::CreateSource(_) => DDL,
+            Statement::CreateSubsource(_) => DDL,
+            Statement::CreateTable(_) => DDL,
+            Statement::CreateTableFromSource(_) => DDL,
+            Statement::CreateType(_) => DDL,
+            Statement::CreateView(_) => DDL,
+            Statement::CreateMaterializedView(_) => DDL,
+            Statement::DropObjects(_) => DDL,
+            Statement::DropOwned(_) => DDL,
+
+            // `ACL` statements.
+            Statement::AlterOwner(_) => ACL,
+            Statement::GrantRole(_) => ACL,
+            Statement::RevokeRole(_) => ACL,
+            Statement::GrantPrivileges(_) => ACL,
+            Statement::RevokePrivileges(_) => ACL,
+            Statement::AlterDefaultPrivileges(_) => ACL,
+            Statement::ReassignOwned(_) => ACL,
+
+            // DML statements.
+            Statement::Copy(_) => DML,
+            Statement::Delete(_) => DML,
+            Statement::ExplainPlan(_) => DML,
+            Statement::ExplainPushdown(_) => DML,
+            Statement::ExplainTimestamp(_) => DML,
+            Statement::ExplainSinkSchema(_) => DML,
+            Statement::Insert(_) => DML,
+            Statement::Select(_) => DML,
+            Statement::Subscribe(_) => DML,
+            Statement::Update(_) => DML,
+
+            // `SHOW` statements.
+            Statement::Show(ShowStatement::ShowColumns(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateConnection(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateCluster(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateIndex(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateSink(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateSource(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateMaterializedView(_)) => Show,
+            Statement::Show(ShowStatement::ShowObjects(_)) => Show,
+
+            // SCL statements.
+            Statement::Close(_) => SCL,
+            Statement::Deallocate(_) => SCL,
+            Statement::Declare(_) => SCL,
+            Statement::Discard(_) => SCL,
+            Statement::Execute(_) => SCL,
+            Statement::Fetch(_) => SCL,
+            Statement::Prepare(_) => SCL,
+            Statement::ResetVariable(_) => SCL,
+            Statement::SetVariable(_) => SCL,
+            Statement::Show(ShowStatement::ShowVariable(_)) => SCL,
+
+            // TCL statements.
+            Statement::Commit(_) => TCL,
+            Statement::Rollback(_) => TCL,
+            Statement::SetTransaction(_) => TCL,
+            Statement::StartTransaction(_) => TCL,
+
+            // Other statements.
+            Statement::Raise(_) => Other,
+            Statement::Show(ShowStatement::InspectShard(_)) => Other,
+            Statement::ValidateConnection(_) => Other,
+        }
+    }
+}

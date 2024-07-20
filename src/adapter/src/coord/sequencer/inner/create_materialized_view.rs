@@ -356,13 +356,8 @@ impl Coordinator {
             });
         }
 
-        let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
-            expr_depends_on.clone(),
-            Some(*cluster_id),
-            None,
-            session.role_metadata().clone(),
-        );
+        let validity =
+            PlanValidity::require_transient_revision(self.catalog().transient_revision());
 
         // Check whether we can read all inputs at all the REFRESH AT times.
         if let Some(refresh_schedule) = refresh_schedule {

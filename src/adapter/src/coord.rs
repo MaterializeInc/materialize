@@ -228,6 +228,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         /// Permit which limits how many group commits we run at once.
         Option<GroupCommitPermit>,
     ),
+    DeferredStatementReady,
     AdvanceTimelines,
     DropReadHolds(Vec<ReadHoldsInner<Timestamp>>),
     ClusterEvent(ClusterEvent),
@@ -363,6 +364,7 @@ impl Message {
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::CheckSchedulingPolicies => "check_scheduling_policies",
             Message::SchedulingDecisions { .. } => "scheduling_decision",
+            Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
 }
@@ -994,6 +996,10 @@ pub struct ConnMeta {
     /// any, is cleared.
     drop_sinks: BTreeSet<GlobalId>,
 
+    /// Lock for the Coordinator's deferred statements that is dropped on transaction clear.
+    #[serde(skip)]
+    deferred_lock: Option<OwnedMutexGuard<()>>,
+
     /// Channel on which to send notices to a session.
     #[serde(skip)]
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
@@ -1596,10 +1602,8 @@ pub struct Coordinator {
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
-    /// Serializes accesses to write critical sections.
-    write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
-    write_lock_wait_group: VecDeque<Deferred>,
+    write_lock_wait_group: LockedVecDeque<Deferred>,
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
@@ -1612,6 +1616,16 @@ pub struct Coordinator {
     /// For non-realtime timelines, nothing pushes the timestamps forward, so we must do
     /// it manually.
     advance_timelines_interval: tokio::time::Interval,
+
+    /// Serialized DDL. DDL must be serialized because:
+    /// - Many of them do off-thread work and need to verify the catalog is in a valid state, but
+    ///   [`PlanValidity`] does not currently support tracking all changes. Doing that correctly
+    ///   seems to be more difficult than it's worth, so we would instead re-plan and re-sequence
+    ///   the statements.
+    /// - Re-planning a statement is hard because Coordinator and Session state is mutated at
+    ///   various points, and we would need to correctly reset those changes before re-planning and
+    ///   re-sequencing.
+    serialized_ddl: LockedVecDeque<DeferredPlanStatement>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -3468,12 +3482,12 @@ pub fn serve(
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
                     pending_linearize_read_txns: BTreeMap::new(),
+                    serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     staged_cancellation: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
-                    write_lock: Arc::new(tokio::sync::Mutex::new(())),
-                    write_lock_wait_group: VecDeque::new(),
+                    write_lock_wait_group: LockedVecDeque::new(),
                     pending_writes: Vec::new(),
                     advance_timelines_interval,
                     secrets_controller,
@@ -3747,4 +3761,67 @@ impl Drop for AlterSinkReadyContext {
             ctx.retire(Err(AdapterError::Canceled));
         }
     }
+}
+
+/// A struct for tracking the ownership of a lock and a VecDeque to store to-be-done work after the
+/// lock is freed.
+#[derive(Debug)]
+struct LockedVecDeque<T> {
+    items: VecDeque<T>,
+    lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl<T> LockedVecDeque<T> {
+    pub fn new() -> Self {
+        Self {
+            items: VecDeque::new(),
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    pub fn mutex(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.lock)
+    }
+
+    pub fn try_lock_owned(&self) -> Result<OwnedMutexGuard<()>, tokio::sync::TryLockError> {
+        Arc::clone(&self.lock).try_lock_owned()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn push_back(&mut self, value: T) {
+        self.items.push_back(value)
+    }
+
+    pub fn pop_front(&mut self) -> Option<T> {
+        self.items.pop_front()
+    }
+
+    pub fn remove(&mut self, index: usize) -> Option<T> {
+        self.items.remove(index)
+    }
+
+    pub fn iter(&self) -> std::collections::vec_deque::Iter<'_, T> {
+        self.items.iter()
+    }
+}
+
+#[derive(Debug)]
+struct DeferredPlanStatement {
+    ctx: ExecuteContext,
+    ps: PlanStatement,
+}
+
+#[derive(Debug)]
+enum PlanStatement {
+    Statement {
+        stmt: Arc<Statement<Raw>>,
+        params: Params,
+    },
+    Plan {
+        plan: mz_sql::plan::Plan,
+        resolved_ids: ResolvedIds,
+    },
 }
