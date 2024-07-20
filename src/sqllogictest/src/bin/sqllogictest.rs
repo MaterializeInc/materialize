@@ -233,7 +233,7 @@ async fn main() -> ExitCode {
                                 );
                             }
                             if let Some((_, junit_suite)) = &mut junit {
-                                let mut test_case = if o.any_failed() {
+                                let mut test_case = if o.any_failed() && !args.no_fail {
                                     let mut result = junit_report::TestCase::failure(
                                         &entry.path().to_string_lossy(),
                                         start_time.elapsed(),

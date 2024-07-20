@@ -957,6 +957,9 @@ WHERE credits_per_hour > credits_per_hour;
 # Regression test for https://github.com/MaterializeInc/materialize/issues/20199
 
 statement ok
+DROP ROLE IF EXISTS r2 CASCADE;
+
+statement ok
 CREATE ROLE r2;
 
 statement ok
