@@ -48,12 +48,6 @@ def gen_cmd(args: list[str]):
         help="Path to a Cargo.toml file to generate a BUILD.bazel for.",
         nargs="?",
     )
-    parser.add_argument(
-        "--skip-repin",
-        help="Skip re-pinning Bazel workspace dependencies",
-        action="store_true",
-        default=False,
-    )
 
     gen_args = parser.parse_args(args=args)
     if gen_args.path:
@@ -61,7 +55,7 @@ def gen_cmd(args: list[str]):
     else:
         path = None
 
-    gen(path, gen_args.skip_repin)
+    gen(path)
 
 
 def output_path_cmd(args: list[str]):
@@ -77,16 +71,13 @@ def bazel_cmd(args: list[str]):
     subprocess.run(["bazel"] + args, check=True)
 
 
-def gen(path, skip_repin=False):
+def gen(path):
     """
     Generates BUILD.bazel files from Cargo.toml.
 
     Defaults to generating for the entire Cargo Workspace, or only a single
     Cargo.toml, if a path is provided.
     """
-
-    if not skip_repin:
-        repin_deps()
 
     if not path:
         path = MZ_ROOT / "Cargo.toml"
@@ -112,13 +103,6 @@ def output_path(target) -> pathlib.Path:
     cmd_args = ["bazel", "cquery", f"{target}", "--output=files"]
     path = subprocess.check_output(cmd_args, text=True)
     return pathlib.Path(path)
-
-
-def repin_deps():
-    """Re-pins the crate_universe dependencies for our main Bazel workspace."""
-    repin_env = os.environ.copy()
-    repin_env["CARGO_BAZEL_REPIN"] = "1"
-    subprocess.run(["bazel", "sync", "--only=crates_io"], env=repin_env, check=True)
 
 
 if __name__ == "__main__":

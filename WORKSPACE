@@ -271,7 +271,6 @@ load("@rules_rust//crate_universe:defs.bzl", "crates_repository", "crate")
 crates_repository(
     name = "crates_io",
     cargo_lockfile = "//:Cargo.lock",
-    lockfile = "//misc/bazel:Cargo.crates_io.lock",
     rust_version = RUST_VERSION,
     annotations = {
         "decnumber-sys": [crate.annotation(
