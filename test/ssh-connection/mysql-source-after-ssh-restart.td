@@ -25,7 +25,7 @@ INSERT INTO dummy VALUES (4);
 4
 
 > SELECT bool_and(error IS NULL)
-  FROM mz_internal.mz_source_statuses
+  FROM mz_catalog_unstable.mz_source_statuses
   WHERE
       name
       IN (

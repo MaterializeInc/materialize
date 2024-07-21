@@ -729,7 +729,7 @@ u4  free  u2  2  u1
 u3  billed  u2  2  u1
 
 query T
-SELECT id FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
+SELECT id FROM mz_catalog_unstable.mz_internal_cluster_replicas WHERE id LIKE 'u%'
 ----
 u3
 u4

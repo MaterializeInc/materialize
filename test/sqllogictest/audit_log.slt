@@ -215,7 +215,7 @@ SELECT occurred_at::text = '1970-01-01 00:00:00.666+00' FROM mz_audit_events ORD
 false
 
 query TTTTBBBT
-SELECT replica_id, cluster_name, replica_name, size, created_at IS NOT NULL, dropped_at IS NOT NULL, created_at < dropped_at, credits_per_hour FROM mz_internal.mz_cluster_replica_history ORDER BY created_at
+SELECT replica_id, cluster_name, replica_name, size, created_at IS NOT NULL, dropped_at IS NOT NULL, created_at < dropped_at, credits_per_hour FROM mz_catalog_unstable.mz_cluster_replica_history ORDER BY created_at
 ----
 u1  quickstart  r1  2  true  false  NULL  1
 u2  foo  r  1  true  true  true  1

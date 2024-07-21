@@ -210,7 +210,7 @@ FROM
             FROM
               mz_catalog.mz_objects AS o
                 JOIN
-                  mz_internal.mz_object_oid_alias AS a
+                  mz_catalog_unstable.mz_object_oid_alias AS a
                   ON o.type = a.object_type
             WHERE
               oid = CAST($1 AS pg_catalog.oid)

@@ -66,7 +66,7 @@ true
 # When all clusters are running, there should be no/little visible lag.
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
     local_lag > INTERVAL '5s' OR
@@ -78,7 +78,7 @@ true
 > ALTER CLUSTER source SET (REPLICATION FACTOR 0)
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
     local_lag > INTERVAL '5s' OR
@@ -91,13 +91,13 @@ true
 > ALTER CLUSTER compute SET (REPLICATION FACTOR 0)
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects o ON (id = object_id)
   WHERE local_lag > INTERVAL '5s'
 idx
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE global_lag > INTERVAL '5s'
 idx
@@ -109,7 +109,7 @@ snk
 > ALTER CLUSTER compute SET (REPLICATION FACTOR 1)
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
     local_lag > INTERVAL '5s' OR
@@ -120,13 +120,13 @@ snk
 > ALTER CLUSTER sink SET (REPLICATION FACTOR 0)
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE local_lag > INTERVAL '5s'
 snk
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE global_lag > INTERVAL '5s'
 snk
@@ -136,7 +136,7 @@ snk
 > ALTER CLUSTER sink SET (REPLICATION FACTOR 1)
 
 > SELECT name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
     local_lag > INTERVAL '5s' OR
@@ -155,7 +155,7 @@ snk
   AS SELECT * FROM mv_empty;
 
 > SELECT local_lag, global_lag
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE name = 'mv_behind_empty'
 <null> <null>
@@ -165,7 +165,7 @@ snk
 > ALTER CLUSTER compute SET (REPLICATION FACTOR 1)
 
 > SELECT local_lag, global_lag
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE name = 'mv_behind_empty'
 00:00:00 00:00:00
@@ -176,14 +176,14 @@ snk
 > ALTER CLUSTER source SET (REPLICATION FACTOR 0)
 
 > SELECT o.name, d.name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects o ON (o.id = object_id)
   JOIN mz_objects d ON (d.id = slowest_local_input_id)
   WHERE o.name = 'idx'
 idx src
 
 > SELECT o.name, d.name
-  FROM mz_internal.mz_materialization_lag
+  FROM mz_catalog_unstable.mz_materialization_lag
   JOIN mz_objects o ON (o.id = object_id)
   JOIN mz_objects d ON (d.id = slowest_global_input_id)
   WHERE o.name in ('idx', 'mv', 'snk')

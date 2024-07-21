@@ -20,9 +20,9 @@ CREATE INDEX i ON mz_views()
 ----
 COMPLETE 0
 
-# Test that creating indexes on objects in the mz_internal schema fails
+# Test that creating indexes on objects in the mz_catalog_unstable schema fails
 simple conn=mz_system,user=mz_system
-CREATE INDEX illegal_sys_ind ON mz_internal.mz_comments (id)
+CREATE INDEX illegal_sys_ind ON mz_catalog_unstable.mz_comments (id)
 ----
 db error: ERROR: cannot create index with unstable dependencies
 DETAIL: The object depends on the following unstable objects:

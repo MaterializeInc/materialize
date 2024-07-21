@@ -10,7 +10,7 @@
 # This test script runs after the SSH bastion host has been terminated.
 
 # Ensure they all are marked as broken for ssh reasons
-> SELECT status FROM mz_internal.mz_source_statuses st
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   WHERE error LIKE 'ssh:%'
   AND s.name in ('fixed_text', 'dynamic_text', 'fixed_plus_csr', 'dynamic_plus_csr')

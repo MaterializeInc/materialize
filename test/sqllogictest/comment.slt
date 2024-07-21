@@ -30,7 +30,7 @@ statement ok
 COMMENT ON TABLE a IS 'foo_table';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 table  NULL  foo_table
 
@@ -49,7 +49,7 @@ statement ok
 COMMENT ON COLUMN a.y IS 'load_bearing';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 table  NULL  foo_table
 table  2  load_bearing
@@ -77,7 +77,7 @@ statement ok
 COMMENT ON COLUMN b.ts IS 'utc_timestamp';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 table  NULL  foo_table
 table  2  load_bearing
@@ -97,7 +97,7 @@ statement ok
 DROP TABLE a;
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 table  NULL foo_table
 table  1  utc_timestamp
@@ -115,7 +115,7 @@ statement ok
 COMMENT ON COLUMN b.ts IS NULL
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 
 query IT
@@ -141,7 +141,7 @@ statement ok
 COMMENT ON VIEW c IS 'this_is_a_view';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 index NULL  speed_up
 view  NULL  this_is_a_view
@@ -164,7 +164,7 @@ statement ok
 COMMENT ON COLUMN c.col_1 IS 'this_works';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 view  1  this_works
 view  NULL  this_is_a_view
@@ -185,7 +185,7 @@ statement ok
 COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 view  1  this_works
 view  NULL  this_is_a_view
@@ -226,7 +226,7 @@ statement ok
 DROP MATERIALIZED VIEW mv;
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 
 query IT
@@ -243,7 +243,7 @@ statement ok
 COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 cluster NULL careful_now
 cluster-replica NULL second_replicator
@@ -265,7 +265,7 @@ statement ok
 COMMENT ON COLUMN my_webhook.body IS 'json_blob';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 source  1  json_blob
 source  NULL  all_the_data
@@ -317,7 +317,7 @@ statement ok
 COMMENT ON TYPE custom_type IS 'custom_type_comment';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 source   1      json_blob
 type     NULL   supercool_list
@@ -340,7 +340,7 @@ statement ok
 COMMENT ON COLUMN custom_type.y IS 'custom_type_y_comment';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 source   1      json_blob
 type     NULL   supercool_list
@@ -376,7 +376,7 @@ statement ok
 COMMENT ON SECRET my_secret IS 'supersecret';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 secret NULL supersecret
 type NULL supercool_list
@@ -419,7 +419,7 @@ statement ok
 DROP TYPE int4_list;
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 database NULL this_is_my_db
 schema NULL this_is_my_schema
@@ -452,7 +452,7 @@ statement ok
 COMMENT ON ROLE student IS 'limited_role';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 role NULL limited_role
 
@@ -482,7 +482,7 @@ COMMENT ON ROLE teacher IS 'foo';
 COMPLETE 0
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 role NULL foo
 role NULL limited_role
@@ -510,7 +510,7 @@ statement ok
 DROP ROLE teacher;
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 
 query IT
@@ -529,7 +529,7 @@ COMMENT ON DATABASE materialize IS 'main_db';
 COMPLETE 0
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_catalog_unstable.mz_comments;
 ----
 database  NULL  main_db
 

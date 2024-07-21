@@ -34,7 +34,7 @@ from
       from
         mz_introspection.mz_dataflow_arrangement_sizes as ref_0
       where pg_catalog.date(
-          CAST((select "updated_at" from mz_internal.mz_cluster_replica_statuses limit 1 offset 5)
+          CAST((select "updated_at" from mz_catalog_unstable.mz_cluster_replica_statuses limit 1 offset 5)
              as timestamptz)) < (select "o_orderdate" from public.orders limit 1 offset 1)
       limit 140) as subq_0
 where subq_0."c5" > subq_0."c5"

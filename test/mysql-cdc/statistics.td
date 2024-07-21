@@ -48,7 +48,7 @@ true
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -58,7 +58,7 @@ $ set-from-sql var=previous-offset-committed
 SELECT
     (SUM(u.offset_committed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
 
 
@@ -72,7 +72,7 @@ INSERT INTO t1 VALUES ('two');
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -82,7 +82,7 @@ $ set-from-sql var=pre-restart-offset-committed
 SELECT
     (SUM(u.offset_committed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
@@ -100,7 +100,7 @@ INSERT INTO t1 VALUES ('three');
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name
   ORDER BY s.name

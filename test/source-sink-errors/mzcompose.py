@@ -117,7 +117,7 @@ class KafkaTransactionLogGreaterThan1:
             dedent(
                 f"""
                 > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hints,0}}' ~* '{hint}')
-                  FROM mz_internal.mz_sink_status_history
+                  FROM mz_catalog_unstable.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'kafka_sink' and status = 'stalled'
                 true true
@@ -213,7 +213,7 @@ class KafkaDisruption:
             dedent(
                 f"""
                 > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_source_statuses
+                  FROM mz_catalog_unstable.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
                 """
@@ -231,7 +231,7 @@ class KafkaDisruption:
                 2
 
                 > SELECT status, error
-                  FROM mz_internal.mz_source_statuses
+                  FROM mz_catalog_unstable.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
                 """
@@ -320,7 +320,7 @@ class KafkaSinkDisruption:
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that there is a stalled status with the expected error.
                 > SELECT bool_or(error ~* '{error}'), bool_or(details->'namespaced'->>'kafka' ~* '{error}')
-                  FROM mz_internal.mz_sink_status_history
+                  FROM mz_catalog_unstable.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'sink1' and status = 'stalled'
                 true true
@@ -333,7 +333,7 @@ class KafkaSinkDisruption:
             dedent(
                 """
                 > SELECT status, error
-                  FROM mz_internal.mz_sink_statuses
+                  FROM mz_catalog_unstable.mz_sink_statuses
                   WHERE name = 'sink1'
                 running <null>
                 """
@@ -412,7 +412,7 @@ class PgDisruption:
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that the latest stall has the error we expect.
                 > SELECT error ~* '{error}'
-                    FROM mz_internal.mz_source_status_history
+                    FROM mz_catalog_unstable.mz_source_status_history
                     JOIN mz_sources ON mz_sources.id = source_id
                     WHERE (
                         name = 'source1' OR name = 'pg_source'
@@ -431,7 +431,7 @@ class PgDisruption:
                 INSERT INTO source1 VALUES (3);
 
                 > SELECT status, error
-                  FROM mz_internal.mz_source_statuses
+                  FROM mz_catalog_unstable.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
@@ -541,7 +541,7 @@ disruptions: list[Disruption] = [
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test the detection and reporting of source/sink errors by
-    introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
+    introducing a Disruption and then checking the mz_catalog_unstable.mz_*_statuses tables
     """
 
     parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])

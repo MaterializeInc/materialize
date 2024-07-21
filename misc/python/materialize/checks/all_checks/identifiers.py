@@ -210,7 +210,7 @@ class Identifiers(Check):
         """
         if self.base_version >= MzVersion(0, 72, 0):
             cmds += f"""
-        > SELECT object_sub_id, comment FROM mz_internal.mz_comments JOIN mz_tables ON mz_internal.mz_comments.id = mz_tables.id WHERE name = {sq(self.ident["table"])};
+        > SELECT object_sub_id, comment FROM mz_internal.mz_comments JOIN mz_tables ON mz_comments.id = mz_tables.id WHERE name = {sq(self.ident["table"])};
         <null> {dq_print(self.ident["comment_table"])}
         1 {dq_print(self.ident["comment_column"])}
         """

@@ -549,17 +549,7 @@ mz_storage_usage
 mz_timezone_abbreviations
 mz_timezone_names
 
-# Check default sources, tables, and views in mz_catalog_unstable.
-
 > SHOW SOURCES FROM mz_catalog_unstable
-
-> SHOW TABLES FROM mz_catalog_unstable
-
-> SHOW VIEWS FROM mz_catalog_unstable
-
-# Check default sources, tables, and views in mz_internal.
-
-> SHOW SOURCES FROM mz_internal
 name                                           type   size  cluster
 ------------------------------------------------------------------
 mz_aws_privatelink_connection_status_history source <null>  <null>
@@ -581,7 +571,7 @@ mz_statement_execution_history               source <null>  <null>
 mz_statement_lifecycle_history               source <null>  <null>
 mz_storage_shards                            source <null>  <null>
 
-> SHOW TABLES FROM mz_internal
+> SHOW TABLES FROM mz_catalog_unstable
 name
 ----
 mz_aggregates
@@ -605,7 +595,7 @@ mz_subscriptions
 mz_type_pg_metadata
 mz_webhook_sources
 
-> SHOW VIEWS FROM mz_internal
+> SHOW VIEWS FROM mz_catalog_unstable
 name
 -------------------------------------
 mz_activity_log_thinned
@@ -662,6 +652,20 @@ pg_namespace_all_databases
 pg_description_all_databases
 pg_attrdef_all_databases
 pg_attribute_all_databases
+
+# Check default sources, tables, and views in mz_internal.
+
+> SHOW SOURCES FROM mz_internal
+name                                           type   size  cluster
+------------------------------------------------------------------
+
+> SHOW TABLES FROM mz_internal
+name
+----
+
+> SHOW VIEWS FROM mz_internal
+name
+-------------------------------------
 
 # Check default sources, tables, and views in mz_introspection.
 

@@ -126,12 +126,12 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=2
 1
 2
 
-> SELECT count(status) > 0 FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON sink_id = id WHERE name = 'snk_backup' AND status = 'stalled';
+> SELECT count(status) > 0 FROM mz_catalog_unstable.mz_sink_status_history JOIN mz_sinks ON sink_id = id WHERE name = 'snk_backup' AND status = 'stalled';
 true
 
 > ALTER CONNECTION kafka_backup SET (BROKER 'kafka:9092');
 
-> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'snk_backup';
+> SELECT status FROM mz_catalog_unstable.mz_sink_statuses WHERE name = 'snk_backup';
 running
 
 $ kafka-verify-data format=avro sink=materialize.public.snk_backup sort-messages=true

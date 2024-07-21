@@ -67,7 +67,7 @@ mammalmore    moose    2
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name

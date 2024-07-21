@@ -108,7 +108,7 @@ text
 1
 
 # TODO: why are these paused and not stalled with errors?
-> SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
+> SELECT name, status, error FROM mz_catalog_unstable.mz_source_statuses WHERE type != 'progress'
 name            status    error
 -------------------------------
 good_source     running   <null>

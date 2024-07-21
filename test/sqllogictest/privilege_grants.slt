@@ -2355,14 +2355,14 @@ REVOKE SELECT ON TABLE mz_objects FROM joe
 db error: ERROR: system item 'mz_catalog.mz_objects' cannot be modified
 
 simple conn=mz_system,user=mz_system
-GRANT SELECT ON TABLE mz_internal.mz_sink_statuses TO joe
+GRANT SELECT ON TABLE mz_catalog_unstable.mz_sink_statuses TO joe
 ----
-db error: ERROR: system item 'mz_internal.mz_sink_statuses' cannot be modified
+db error: ERROR: system item 'mz_catalog_unstable.mz_sink_statuses' cannot be modified
 
 simple conn=mz_system,user=mz_system
-REVOKE SELECT ON TABLE mz_internal.mz_sink_statuses FROM joe
+REVOKE SELECT ON TABLE mz_catalog_unstable.mz_sink_statuses FROM joe
 ----
-db error: ERROR: system item 'mz_internal.mz_sink_statuses' cannot be modified
+db error: ERROR: system item 'mz_catalog_unstable.mz_sink_statuses' cannot be modified
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE bool TO joe
@@ -4727,33 +4727,33 @@ materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_notices,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_optimizer_notices,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_activity_log,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_activity_log_thinned,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_activity_log_thinned,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_statement_execution_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_statement_execution_history_redacted,SELECT,NO,YES
 COMPLETE 41
 
 simple conn=mz_system,user=mz_system
@@ -4797,33 +4797,33 @@ materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
-mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
-mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_notices,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_sql_text,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_optimizer_notices,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_activity_log,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_activity_log_thinned,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_notices_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_activity_log_thinned,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_statement_execution_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_recent_sql_text_redacted,SELECT,NO,YES
+mz_system,mz_monitor,materialize,mz_catalog_unstable,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_catalog_unstable,mz_statement_execution_history_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_monitor_redacted,materialize,mz_catalog_unstable,mz_statement_execution_history_redacted,SELECT,NO,YES
 COMPLETE 41
 
 simple conn=mz_system,user=mz_system

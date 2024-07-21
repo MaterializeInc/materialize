@@ -514,14 +514,14 @@ $ set-from-sql var=webhook-source-id
 SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 
 $ set-from-sql var=webhook-source-shard-id
-SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+SELECT shard_id FROM mz_catalog_unstable.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 
-> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+> SELECT COUNT(*) FROM mz_catalog_unstable.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 1
 
 > DROP SOURCE webhook_bytes CASCADE;
 
-> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+> SELECT COUNT(*) FROM mz_catalog_unstable.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 0
 
 $ check-shard-tombstone shard-id=${webhook-source-shard-id}

@@ -8,7 +8,7 @@
 -- by the Apache License, Version 2.0.
 
 select *
-from mz_internal.mz_source_statuses
+from mz_catalog_unstable.mz_source_statuses
 join mz_sources using (id)
 join mz_schemas on (schema_id = mz_schemas.id)
 join mz_databases on (database_id = mz_databases.id)

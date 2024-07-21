@@ -45,14 +45,14 @@ statement ok
 GRANT r5 TO r4
 
 query TTT
-SELECT * FROM mz_internal.mz_show_role_members ORDER BY role, member
+SELECT * FROM mz_catalog_unstable.mz_show_role_members ORDER BY role, member
 ----
 r2  r1  mz_system
 r3  r2  mz_system
 r5  r4  mz_system
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_role_members ORDER BY role, member
+SELECT * FROM mz_catalog_unstable.mz_show_my_role_members ORDER BY role, member
 ----
 r2,r1,mz_system
 r3,r2,mz_system
@@ -94,7 +94,7 @@ GRANT CREATECLUSTER ON SYSTEM TO PUBLIC;
 COMPLETE 0
 
 query TTT
-SELECT * FROM mz_internal.mz_show_system_privileges ORDER BY grantee
+SELECT * FROM mz_catalog_unstable.mz_show_system_privileges ORDER BY grantee
 ----
 mz_system  PUBLIC       CREATECLUSTER
 mz_system  materialize  CREATEDB
@@ -106,7 +106,7 @@ mz_system  r2           CREATEROLE
 mz_system  r4           CREATECLUSTER
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_system_privileges ORDER BY grantee
+SELECT * FROM mz_catalog_unstable.mz_show_my_system_privileges ORDER BY grantee
 ----
 mz_system,PUBLIC,CREATECLUSTER
 mz_system,r1,CREATEDB
@@ -132,7 +132,7 @@ statement ok
 GRANT USAGE ON CLUSTER c TO PUBLIC
 
 query TTTT
-SELECT * FROM mz_internal.mz_show_cluster_privileges ORDER BY name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_cluster_privileges ORDER BY name, grantee
 ----
 materialize  PUBLIC       c        USAGE
 materialize  materialize  c        USAGE
@@ -146,7 +146,7 @@ mz_system    materialize  quickstart  USAGE
 mz_system    materialize  quickstart  CREATE
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_cluster_privileges ORDER BY name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_my_cluster_privileges ORDER BY name, grantee
 ----
 materialize,PUBLIC,c,USAGE
 materialize,r1,c,USAGE
@@ -173,7 +173,7 @@ statement ok
 GRANT CREATE ON DATABASE d TO PUBLIC
 
 query TTTT
-SELECT * FROM mz_internal.mz_show_database_privileges ORDER BY name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_database_privileges ORDER BY name, grantee
 ----
 materialize  PUBLIC       d            CREATE
 materialize  materialize  d            USAGE
@@ -187,7 +187,7 @@ mz_system    materialize  materialize  USAGE
 mz_system    materialize  materialize  CREATE
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_database_privileges ORDER BY name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_my_database_privileges ORDER BY name, grantee
 ----
 materialize,PUBLIC,d,CREATE
 materialize,r1,d,USAGE
@@ -214,7 +214,7 @@ statement ok
 GRANT USAGE ON SCHEMA s TO PUBLIC
 
 query TTTTT
-SELECT * FROM mz_internal.mz_show_schema_privileges ORDER BY database, name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_schema_privileges ORDER BY database, name, grantee
 ----
 materialize  PUBLIC       d            public  USAGE
 materialize  materialize  d            public  USAGE
@@ -231,7 +231,7 @@ materialize  r5           materialize  s       USAGE
 materialize  r5           materialize  s       CREATE
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_schema_privileges ORDER BY database, name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_my_schema_privileges ORDER BY database, name, grantee
 ----
 materialize,PUBLIC,d,public,USAGE
 mz_system,PUBLIC,materialize,public,USAGE
@@ -258,7 +258,7 @@ statement ok
 GRANT INSERT ON TABLE t TO PUBLIC
 
 query TTTTTTT
-SELECT * FROM mz_internal.mz_show_object_privileges ORDER BY database, schema, name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_object_privileges ORDER BY database, schema, name, grantee
 ----
 materialize  PUBLIC       materialize  public  t  table  INSERT
 materialize  materialize  materialize  public  t  table  DELETE
@@ -271,7 +271,7 @@ materialize  r2           materialize  public  t  table  SELECT
 materialize  r5           materialize  public  t  table  DELETE
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_object_privileges ORDER BY database, schema, name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_my_object_privileges ORDER BY database, schema, name, grantee
 ----
 materialize,PUBLIC,materialize,public,t,table,INSERT
 materialize,r1,materialize,public,t,table,INSERT
@@ -282,7 +282,7 @@ COMPLETE 4
 # SHOW ALL PRIVILEGES
 
 query TTTTTTT
-SELECT * FROM mz_internal.mz_show_all_privileges ORDER BY object_type, database, schema, name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_all_privileges ORDER BY object_type, database, schema, name, grantee
 ----
 materialize  PUBLIC       NULL         NULL    c            cluster   USAGE
 materialize  materialize  NULL         NULL    c            cluster   USAGE
@@ -336,7 +336,7 @@ materialize  r2           materialize  public  t            table  SELECT
 materialize  r5           materialize  public  t            table  DELETE
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_all_my_privileges ORDER BY object_type, database, schema, name, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_all_my_privileges ORDER BY object_type, database, schema, name, grantee
 ----
 materialize,PUBLIC,NULL,NULL,c,cluster,USAGE
 materialize,r1,NULL,NULL,c,cluster,USAGE
@@ -475,7 +475,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE r5 GRANT CREATE ON DATABASES TO PUBLIC
 COMPLETE 0
 
 query TTTTTT
-SELECT * FROM mz_internal.mz_show_default_privileges ORDER BY object_type, database, schema, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_default_privileges ORDER BY object_type, database, schema, grantee
 ----
 materialize  materialize  s     connection  r3      USAGE
 r5           NULL         NULL  database    PUBLIC  CREATE
@@ -487,7 +487,7 @@ materialize  NULL         NULL  table       r1      SELECT
 PUBLIC       NULL         NULL  type        PUBLIC  USAGE
 
 simple conn=r1,user=r1
-SELECT * FROM mz_internal.mz_show_my_default_privileges ORDER BY object_type, database, schema, grantee
+SELECT * FROM mz_catalog_unstable.mz_show_my_default_privileges ORDER BY object_type, database, schema, grantee
 ----
 materialize,materialize,s,connection,r3,USAGE
 r5,NULL,NULL,database,PUBLIC,CREATE

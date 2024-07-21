@@ -247,12 +247,12 @@ SELECT
     mpsh.prepared_at,
     mst.redacted_sql
 FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    mz_catalog_unstable.mz_statement_execution_history AS mseh
         LEFT JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
+            mz_catalog_unstable.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
-            (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
+            (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_catalog_unstable.mz_sql_text) mst
             ON mpsh.sql_hash = mst.sql_hash
 ORDER BY mseh.began_at;",
             &[],
@@ -364,12 +364,12 @@ fn test_statement_logging_basic() {
     mseh.rows_returned,
     mseh.execution_timestamp
 FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    mz_catalog_unstable.mz_statement_execution_history AS mseh
         LEFT JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
+            mz_catalog_unstable.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
-            (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) AS mst
+            (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_catalog_unstable.mz_sql_text) AS mst
             ON mpsh.sql_hash = mst.sql_hash
 WHERE mst.sql ~~ 'SELECT%'
 AND mst.sql !~~ '%unique string to prevent this query showing up in results after retries%'
@@ -490,8 +490,8 @@ fn test_statement_logging_throttling() {
                     "SELECT
     sql,
     throttled_count
-FROM mz_internal.mz_prepared_statement_history mpsh
-JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
+FROM mz_catalog_unstable.mz_prepared_statement_history mpsh
+JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_catalog_unstable.mz_sql_text) mst
 ON mpsh.sql_hash = mst.sql_hash
 WHERE sql IN ('SELECT 1', 'SELECT 2')",
                     &[],
@@ -570,12 +570,12 @@ fn test_statement_logging_subscribes() {
     mpsh.prepared_at,
     mseh.execution_strategy
 FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    mz_catalog_unstable.mz_statement_execution_history AS mseh
         LEFT JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
+            mz_catalog_unstable.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
-            mz_internal.mz_sql_text AS mst
+            mz_catalog_unstable.mz_sql_text AS mst
             ON mpsh.sql_hash = mst.sql_hash
 WHERE mst.sql ~~ 'SUBSCRIBE%'
 ORDER BY mseh.began_at",
@@ -624,12 +624,12 @@ fn test_statement_logging_sampling_inner(
         .query(
             "SELECT mst.sql
 FROM
-    mz_internal.mz_statement_execution_history AS mseh
+    mz_catalog_unstable.mz_statement_execution_history AS mseh
         JOIN
-            mz_internal.mz_prepared_statement_history AS mpsh
+            mz_catalog_unstable.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
         JOIN
-            mz_internal.mz_sql_text AS mst
+            mz_catalog_unstable.mz_sql_text AS mst
             ON mpsh.sql_hash = mst.sql_hash
 WHERE mst.sql ~~ 'SELECT%'
 ORDER BY mseh.began_at ASC;",
@@ -1118,7 +1118,7 @@ fn test_storage_usage_collection_interval() {
             .retry(|_| {
                 let row = client.query_one(
                     "SELECT max(collection_timestamp)
-                    FROM mz_internal.mz_storage_usage_by_shard",
+                    FROM mz_catalog_unstable.mz_storage_usage_by_shard",
                     &[],
                 )?;
                 // mz_storage_usage_by_shard may not be populated yet, which would result in a NULL ts.
@@ -1139,7 +1139,7 @@ fn test_storage_usage_collection_interval() {
             .retry(|_| {
                 client.query_one(
                     "SELECT shard_id
-                     FROM mz_internal.mz_storage_shards s
+                     FROM mz_catalog_unstable.mz_storage_shards s
                      JOIN mz_objects o ON o.id = s.object_id
                      WHERE o.name = $1",
                     &[&name],
@@ -1159,7 +1159,7 @@ fn test_storage_usage_collection_interval() {
             .retry(|_| {
                 client.query_one(
                     "SELECT coalesce(sum(size_bytes), 0)::uint8 AS size
-                     FROM mz_internal.mz_storage_usage_by_shard
+                     FROM mz_catalog_unstable.mz_storage_usage_by_shard
                      WHERE shard_id = $1 AND collection_timestamp = $2",
                     &[&shard_id, &collection_timestamp],
                 )
@@ -1442,7 +1442,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
                 client
                     .query_one(
-                        "SELECT (EXTRACT(EPOCH FROM MAX(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        "SELECT (EXTRACT(EPOCH FROM MAX(collection_timestamp)) * 1000)::integer FROM mz_catalog_unstable.mz_storage_usage_by_shard;",
                         &[],
                     )
                     .map_err(|e| e.to_string()).unwrap()
@@ -1453,7 +1453,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         let initial_server_usage_records = client
             .query_one(
                 "SELECT COUNT(*)::integer AS number
-                     FROM mz_internal.mz_storage_usage_by_shard",
+                     FROM mz_catalog_unstable.mz_storage_usage_by_shard",
                 &[],
             )
             .unwrap()
@@ -1485,7 +1485,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
                 client
                     .query_one(
-                        "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_catalog_unstable.mz_storage_usage_by_shard;",
                         &[],
                     )
                     .map_err(|e| e.to_string()).unwrap()
@@ -2694,7 +2694,7 @@ fn test_cancel_ws() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
+                        "SELECT s.connection_id::text FROM mz_catalog_unstable.mz_subscriptions b JOIN mz_catalog_unstable.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -2976,7 +2976,7 @@ fn test_github_20262() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
+                        "SELECT s.connection_id::text FROM mz_catalog_unstable.mz_subscriptions b JOIN mz_catalog_unstable.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);

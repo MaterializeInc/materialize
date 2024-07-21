@@ -289,7 +289,7 @@ SELECT 'mz_tables'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tabl
 true
 
 query T
-SELECT 'mz_internal.mz_recent_activity_log'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_recent_activity_log')
+SELECT 'mz_catalog_unstable.mz_recent_activity_log'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_recent_activity_log')
 ----
 true
 

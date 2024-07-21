@@ -21,5 +21,5 @@
 # snapshot.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
-> SELECT write_frontier FROM mz_internal.mz_frontiers f JOIN mz_objects o ON f.object_id = o.id WHERE o.name = 'two';
+> SELECT write_frontier FROM mz_catalog_unstable.mz_frontiers f JOIN mz_objects o ON f.object_id = o.id WHERE o.name = 'two';
 0
