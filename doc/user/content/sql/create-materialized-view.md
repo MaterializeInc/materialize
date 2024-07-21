@@ -9,12 +9,10 @@ menu:
 
 {{< note >}}
 
-In Materialize, [indexes on non-materialized
-views](/concepts/views/#non-materialized-views) **maintain and incrementally
-update view results in memory** for the cluster where you create the index.  For
-more information, see [Non-materialized
-views](/concepts/views/#non-materialized-views) and [`CREATE
-VIEW`](/sql/create-view).
+As an alternative to materialized views, [indexes on
+views](/concepts/views/#views) **maintain and incrementally update view results
+in memory** for the cluster where you create the index.  For more information,
+see [Views](/concepts/views/#views) and [`CREATE VIEW`](/sql/create-view).
 
 {{</ note >}}
 
@@ -25,8 +23,6 @@ A materialized view specifies a [cluster](/concepts/clusters/) that
 is tasked with keeping its results up-to-date, but **can be referenced in
 any cluster**. This allows you to effectively decouple the computational
 resources used for view maintenance from the resources used for query serving.
-
-
 
 ## Syntax
 
@@ -65,7 +61,7 @@ view. It's a good idea to create a materialized view if:
 * The final consumer of the view is a sink or a [`SUBSCRIBE`](../subscribe) operation.
 
 On the other hand, if you only need to access a view from a single cluster, you
-should consider creating a [non-materialized view](../create-view) and building
+should consider creating a [view](../create-view) and building
 an index on it instead. The index will incrementally maintain the results of
 the view updated in memory within that cluster, allowing you to avoid the costs
 and latency overhead of materialization.
@@ -91,10 +87,6 @@ indexes in each cluster you are referencing the materialized view in.
 this exists+add detail about using indexes to optimize materialized view
 stacking."
 
-### Monotonicity
-
-Although [indexes](/concepts/indexes) preserve monotonicity information,  [Materialized
-views](/concepts/views/#materialized-views) do not. That is, for materialized views (indexed or non-indexed), results are not monotonic.
 
 ### Non-null assertions
 
@@ -397,6 +389,11 @@ The privileges required to execute this statement are:
 - `CREATE` privileges on the containing cluster.
 - `USAGE` privileges on all types used in the materialized view definition.
 - `USAGE` privileges on the schemas that all types in the statement are contained in.
+
+## Additional Information
+
+- Materialized views are not monotonic; that is, materialized views cannot be
+  recognized as append-only.
 
 ## Related pages
 

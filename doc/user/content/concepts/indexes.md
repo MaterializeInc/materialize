@@ -12,22 +12,28 @@ aliases:
 
 ## Overview
 
-Indexes can [optimize query performance](/transform-data/optimization).  In
-addition, because indexes in Materialize are maintained in memory, indexing a
-view (non-materialized and materialized) may provide further performance
-improvements.
+In Materialize, indexes represent query results stored in memory within a
+[cluster](/concepts/clusters/).  You can create indexes on
+[sources](/concepts/sources/), [views](/concepts/views/#views), or [materialized
+views](/concepts/views/#materialized-views).
+
+Indexes can [optimize query performance](/transform-data/optimization).
+For example, indexes in Materialize can:
+
+- Provide faster sequential access.
+
+- Provide fast random access for queries selecting individual keys.
+
+Additionally, because indexes in Materialize are maintained in memory, indexing
+views and materialized views can provide further performance improvements.
 
 ## Indexes and views
 
-In Materialize, indexing a [non-materialized
-view](/concepts/views/#non-materialized-views) causes view results to be
-**maintained and incrementally updated in memory** within the
+In Materialize, indexes on a [view](/concepts/views/#views) **maintain and
+incrementally update** view results in memory within the
 [cluster](/concepts/clusters/). The in-memory up-to-date results are accessible
 to queries within the cluster, even for queries that do not use the index
 key(s).
-
-Indexes preserve monotonicity information.  As such, for indexed
-non-materialized views, results can be monotonic.
 
 ## Indexes and materialized views
 
@@ -38,9 +44,6 @@ on materialized views serve up-to-date results without themselves performing the
 incremental computation. The in-memory results are accessible to queries within
 the cluster, even for queries that do not use the index key(s).
 
-Although indexes preserve monotonicity information, materialized views do
-**not**. As such, for (indexed or non-indexed) materialized views, results are not monotonic.
-
 ## Indexes and clusters
 
 Indexes are local to a cluster. Queries in a different cluster cannot use the
@@ -48,5 +51,10 @@ indexes in another cluster.
 
 ## Related pages
 
+- [Optimization](/transform-data/optimization)
 - [Views](/concepts/views)
 - [`CREATE INDEX`](/sql/create-index)
+
+<style>
+red { color: Red; font-weight: 500; }
+</style>

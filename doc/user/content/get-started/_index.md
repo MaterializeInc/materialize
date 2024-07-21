@@ -47,8 +47,7 @@ In Materialize, you don't have to make such compromises. Materialize supports
 incrementally updated view results that are **always fresh** (even when using
 complex SQL statements, like multi-way joins with aggregations) for *both*:
 
-- [Non-materialized views **with an
-index**](/concepts/views/#indexes-and-non-materialized-views) and
+- [Views **with an index**](/concepts/views/#indexes-and-views) and
 
 - [Materialized views](/concepts/views/#materialized-views).
 
