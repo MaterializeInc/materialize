@@ -211,8 +211,8 @@ c_repositories()
 # Rules for building Rust crates, and several convienence macros for building all transitive
 # dependencies.
 
-RULES_RUST_VERSION = "0.44.0"
-RULES_RUST_INTEGRITY = "sha256-pt9MIrs/tDVzpMQIjvbQ+v44oOzQ+FrSH/2IiAAzcDA="
+RULES_RUST_VERSION = "0.48.0"
+RULES_RUST_INTEGRITY = "sha256-Weev1uz2QztBlDA88JX6A1N72SucD1V8lBsaliM0TTg="
 
 maybe(
     http_archive,
