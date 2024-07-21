@@ -526,6 +526,64 @@ materialize  NULL         NULL  table       r1      INSERT
 materialize  NULL         NULL  table       r1      SELECT
 PUBLIC       NULL         NULL  type        PUBLIC  USAGE
 
+# Prepration to be able to drop roles
+statement ok
+REVOKE r2 FROM r1
+
+statement ok
+REVOKE r3 FROM r2
+
+statement ok
+REVOKE r5 FROM r4
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON SYSTEM FROM r1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON SYSTEM FROM r2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON SYSTEM FROM r4;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM PUBLIC;
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER c CASCADE;
+
+statement ok
+DROP DATABASE d CASCADE;
+
+statement ok
+DROP SCHEMA S CASCADE;
+
+statement ok
+DROP TABLE T CASCADE;
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE ALL ON TABLES FROM r1
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC REVOKE ALL ON SCHEMAS FROM r4
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE r5 REVOKE ALL ON DATABASES FROM PUBLIC
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE r1, r2, r3, r4, r5
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system
