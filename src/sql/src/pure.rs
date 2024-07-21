@@ -29,7 +29,7 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
-use mz_repr::{strconv, Timestamp};
+use mz_repr::{strconv, RelationVersion, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -315,6 +315,7 @@ pub(crate) fn add_materialize_comments(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 ),
+                version: RelationVersion::Latest,
             };
 
             if let Some(comments_map) = catalog.get_item_comments(&object_id) {
@@ -335,7 +336,7 @@ pub(crate) fn add_materialize_comments(
                 }
 
                 // Getting comments on columns in the item
-                if let Ok(desc) = item.desc(&full_name) {
+                if let Ok(desc) = item.desc(&full_name, RelationVersion::Latest) {
                     for (pos, column_name) in desc.iter_names().enumerate() {
                         let comment = comments_map.get(&Some(pos + 1));
                         if let Some(comment_str) = comment {
@@ -1114,6 +1115,7 @@ async fn purify_alter_source(
         qualifiers: item.name().qualifiers.clone(),
         full_name,
         print_id: true,
+        version: RelationVersion::Latest,
     };
     let connection_name = desc.connection.name();
 
@@ -1675,6 +1677,7 @@ pub fn purify_create_materialized_view_options(
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: catalog.resolve_full_name(item.name()),
                     print_id: false,
+                    version: RelationVersion::Latest,
                 },
                 args: FunctionArgs::Args {
                     args: Vec::new(),

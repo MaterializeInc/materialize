@@ -51,8 +51,8 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
-    ScalarType,
+    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, RelationVersion,
+    Row, RowArena, ScalarType,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -224,7 +224,10 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
+    let desc = table.desc(
+        &scx.catalog.resolve_full_name(table.name()),
+        RelationVersion::Latest,
+    )?;
     let mut defaults = table
         .table_details()
         .expect("attempted to insert into non-table")
@@ -356,7 +359,7 @@ pub fn plan_insert_query(
 
     let returning = {
         let (scope, typ) = if let ResolvedItemName::Item { full_name, .. } = table_name {
-            let desc = table.desc(&full_name)?;
+            let desc = table.desc(&full_name, RelationVersion::Latest)?;
             let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
             let typ = desc.typ().clone();
             (scope, typ)
@@ -420,7 +423,10 @@ pub fn plan_copy_item(
     let item = scx.get_item_by_resolved_name(&item_name)?;
 
     let mut desc = item
-        .desc(&scx.catalog.resolve_full_name(item.name()))?
+        .desc(
+            &scx.catalog.resolve_full_name(item.name()),
+            RelationVersion::Latest,
+        )?
         .into_owned();
 
     let mut ordering = Vec::with_capacity(columns.len());
@@ -504,7 +510,10 @@ pub fn plan_copy_from_rows(
     let scx = StatementContext::new(Some(pcx), catalog);
 
     let table = catalog.get_item(&id);
-    let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
+    let desc = table.desc(
+        &catalog.resolve_full_name(table.name()),
+        RelationVersion::Latest,
+    )?;
 
     let mut defaults = table
         .table_details()
@@ -643,7 +652,10 @@ pub fn plan_mutation_query_inner(
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
-    let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
+    let desc = item.desc(
+        &qcx.scx.catalog.resolve_full_name(item.name()),
+        RelationVersion::Latest,
+    )?;
     let relation_type = qcx.relation_type(&get);
 
     if using.is_empty() {
@@ -6179,7 +6191,10 @@ impl<'a> QueryContext<'a> {
                 let name = full_name.into();
                 let item = self.scx.get_item(&id);
                 let desc = item
-                    .desc(&self.scx.catalog.resolve_full_name(item.name()))?
+                    .desc(
+                        &self.scx.catalog.resolve_full_name(item.name()),
+                        RelationVersion::Latest,
+                    )?
                     .clone();
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.id()),

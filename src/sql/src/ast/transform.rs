@@ -122,7 +122,7 @@ impl<'a, 'ast> VisitMut<'ast, Raw> for CreateSqlRewriteSchema<'a> {
         item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match item_name {
-            RawItemName::Name(n) | RawItemName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            RawItemName::Name(n) | RawItemName::Id(_, n, _) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
 }
@@ -383,7 +383,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
 
     fn visit_item_name(&mut self, item_name: &'ast <Raw as AstInfo>::ItemName) {
         match item_name {
-            RawItemName::Name(n) | RawItemName::Id(_, n) => self.visit_unresolved_item_name(n),
+            RawItemName::Name(n) | RawItemName::Id(_, n, _) => self.visit_unresolved_item_name(n),
         }
     }
 }
@@ -450,7 +450,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
         item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match item_name {
-            RawItemName::Name(n) | RawItemName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            RawItemName::Name(n) | RawItemName::Id(_, n, _) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
 }
@@ -474,7 +474,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
         item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match item_name {
-            RawItemName::Id(id, _) => {
+            RawItemName::Id(id, _, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,
                     Err(_) => panic!("invalid persisted global id {id}"),

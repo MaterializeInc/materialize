@@ -249,6 +249,13 @@ CREATE TABLE t (x int4) WITH (RETAIN HISTORY = FOR '1 day')
 CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1 day"))) }] })
 
 parse-statement
+CREATE TABLE t (x int, y text VERSION ADDED 1, z text VERSION ADDED 2 VERSION DROPPED 3 VERSION ADDED 4) WITH (RETAIN HISTORY = FOR '1 day')
+----
+CREATE TABLE t (x int4, y text VERSION ADDED 1, z text VERSION ADDED 2 VERSION DROPPED 3 VERSION ADDED 4) WITH (RETAIN HISTORY = FOR '1 day')
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("y"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Versioned { action: Added, version: Number("1") } }] }, ColumnDef { name: Ident("z"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Versioned { action: Added, version: Number("2") } }, ColumnOptionDef { name: None, option: Versioned { action: Dropped, version: Number("3") } }, ColumnOptionDef { name: None, option: Versioned { action: Added, version: Number("4") } }] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1 day"))) }] })
+
+parse-statement
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
 ----
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
-use mz_repr::{strconv, GlobalId};
+use mz_repr::{strconv, GlobalId, RelationVersion};
 use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Ident,
     KafkaBroker, RefreshOptionValue, ReplicaDefinition,
@@ -63,6 +63,7 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
             qualifiers: secret.name().qualifiers.clone(),
             full_name: catalog.resolve_full_name(secret.name()),
             print_id: false,
+            version: RelationVersion::Latest,
         };
         Some(WithOptionValue::Secret(name))
     }
@@ -108,6 +109,7 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
             qualifiers: item.name().qualifiers.clone(),
             full_name: catalog.resolve_full_name(item.name()),
             print_id: false,
+            version: RelationVersion::Latest,
         };
         Some(WithOptionValue::Item(name))
     }

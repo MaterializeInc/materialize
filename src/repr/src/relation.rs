@@ -638,3 +638,35 @@ impl fmt::Display for NotNullViolation {
         )
     }
 }
+
+/// Describes a [`RelationDesc`] at a specific version of a [`VersionedRelationDesc`].
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RelationVersion {
+    Specific(u64),
+    Latest,
+}
+
+/// A [`RelationDesc`] that maintains a history of the changes made to it.
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionedRelationDesc {
+    root: RelationDesc,
+}
+
+impl VersionedRelationDesc {
+    pub fn new(root: RelationDesc) -> Self {
+        VersionedRelationDesc { root }
+    }
+
+    pub fn at_version(&self, version: RelationVersion) -> RelationDesc {
+        match version {
+            RelationVersion::Latest => self.root.clone(),
+            RelationVersion::Specific(_) => panic!("don't yet support versioning RelationDesc"),
+        }
+    }
+}
+
+impl From<RelationDesc> for VersionedRelationDesc {
+    fn from(value: RelationDesc) -> Self {
+        VersionedRelationDesc::new(value)
+    }
+}

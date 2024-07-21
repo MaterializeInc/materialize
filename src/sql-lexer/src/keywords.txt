@@ -25,6 +25,7 @@
 
 Access
 Add
+Added
 Addresses
 Aggregate
 Aligned
@@ -134,6 +135,7 @@ Doc
 Dot
 Double
 Drop
+Dropped
 Eager
 Element
 Else

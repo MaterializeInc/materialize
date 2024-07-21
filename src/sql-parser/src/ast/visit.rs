@@ -119,7 +119,7 @@
 //!     }
 //!     fn visit_item_name(&mut self, name: &'ast <Raw as AstInfo>::ItemName) {
 //!         match name {
-//!             RawItemName::Name(n) | RawItemName::Id(_, n) => {
+//!             RawItemName::Name(n) | RawItemName::Id(_, n, _) => {
 //!                 for node in &n.0 {
 //!                     self.idents.push(node);
 //!                     visit::visit_ident(self, node);
