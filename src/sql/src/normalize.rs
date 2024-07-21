@@ -270,7 +270,7 @@ pub fn create_statement(
             if_not_exists,
             key_constraint: _,
             with_options: _,
-            referenced_subsources: _,
+            external_references: _,
             progress_subsource: _,
         }) => {
             *name = allocate_name(name)?;

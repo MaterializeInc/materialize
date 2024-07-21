@@ -49,6 +49,8 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_sql::plan::StatementContext;
+use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::mysql::{MySqlSourceDetails, ProtoMySqlSourceDetails};
 use mz_storage_types::sources::postgres::{
@@ -382,25 +384,37 @@ impl Coordinator {
         &mut self,
         session: &Session,
         params: Params,
-        id: GlobalId,
+        source_name: ResolvedItemName,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
-        create_subsource_stmts: Vec<CreateSubsourceStatement<Aug>>,
+        subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let mut subsources = Vec::with_capacity(create_subsource_stmts.len());
-        for subsource_stmt in create_subsource_stmts {
+        let mut subsource_plans = Vec::with_capacity(subsources.len());
+
+        // Generate subsource statements
+        let conn_catalog = self.catalog().for_system_session();
+        let pcx = plan::PlanContext::zero();
+        let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+
+        let source_id = *source_name.item_id();
+        let subsource_stmts = generate_subsource_statements(&scx, source_name, subsources)?;
+
+        for subsource_stmt in subsource_stmts {
             let s = self
                 .plan_subsource(session, &params, subsource_stmt)
                 .await?;
-            subsources.push(s);
+            subsource_plans.push(s);
         }
 
         let action = mz_sql::plan::AlterSourceAction::AddSubsourceExports {
-            subsources,
+            subsources: subsource_plans,
             options,
         };
 
         Ok((
-            Plan::AlterSource(mz_sql::plan::AlterSourcePlan { id, action }),
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
+                id: source_id,
+                action,
+            }),
             ResolvedIds(BTreeSet::new()),
         ))
     }
@@ -414,9 +428,9 @@ impl Coordinator {
         params: Params,
         progress_stmt: CreateSubsourceStatement<Aug>,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
-        subsource_stmts: Vec<CreateSubsourceStatement<Aug>>,
+        subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let mut create_source_plans = Vec::with_capacity(subsource_stmts.len() + 2);
+        let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 
         // 1. First plan the progress subsource.
         //
@@ -440,15 +454,11 @@ impl Coordinator {
 
         create_source_plans.push(progress_plan);
 
-        // 2. Then plan the main source.
-        //
-        // The subsources need this to exist in order to set their `OF SOURCE`
-        // correctly.
         source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
 
         let resolved_ids = mz_sql::names::visit_dependencies(&source_stmt);
 
-        // Plan primary source.
+        // 2. Then plan the main source.
         let source_plan = match self.plan_statement(
             ctx.session(),
             Statement::CreateSource(source_stmt),
@@ -468,6 +478,13 @@ impl Coordinator {
             print_id: true,
         };
 
+        // Generate subsource statements
+        let conn_catalog = self.catalog().for_system_session();
+        let pcx = plan::PlanContext::zero();
+        let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+
+        let subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
+
         create_source_plans.push(CreateSourcePlanBundle {
             source_id,
             plan: source_plan,
@@ -475,8 +492,7 @@ impl Coordinator {
         });
 
         // 3. Finally, plan all the subsources
-        for mut stmt in subsource_stmts {
-            stmt.of_source = Some(of_source.clone());
+        for stmt in subsource_stmts {
             let plan = self.plan_subsource(ctx.session(), &params, stmt).await?;
             create_source_plans.push(plan);
         }

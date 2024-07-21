@@ -887,7 +887,7 @@ where
                     .desc
                     .alter_compatible(ingestion_id, source_desc)?;
 
-                let subsource_resolver = cur_ingestion.desc.connection.get_subsource_resolver();
+                let reference_resolver = cur_ingestion.desc.connection.get_reference_resolver();
 
                 // Ensure updated `SourceDesc` contains reference to all
                 // current external references.
@@ -913,7 +913,7 @@ where
                         }
                     };
 
-                    if subsource_resolver
+                    if reference_resolver
                         .resolve_idx(&external_reference.0)
                         .is_err()
                     {
@@ -2235,7 +2235,7 @@ where
                         .await
                         .map_err(|_| StorageError::ReadBeforeSince(remap_id))?;
 
-                    tracing::debug!(?id, type_ = source_conn.name(), upstream = ?source_conn.upstream_name(), "fetching real time recency");
+                    tracing::debug!(?id, type_ = source_conn.name(), upstream = ?source_conn.external_reference(), "fetching real time recency");
 
                     let result = rtr::real_time_recency_ts(source_conn, id, config, as_of, remap_subscribe)
                         .await.map_err(|e| {

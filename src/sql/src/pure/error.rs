@@ -12,7 +12,7 @@ use std::sync::Arc;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
+use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
 use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
@@ -30,7 +30,7 @@ pub enum PgSourcePurificationError {
         schemas: Vec<String>,
     },
     #[error("missing TABLES specification")]
-    RequiresReferencedSubsources,
+    RequiresExternalReferences,
     #[error("insufficient privileges")]
     UserLacksUsageOnSchemas { user: String, schemas: Vec<String> },
     #[error("insufficient privileges")]
@@ -105,7 +105,7 @@ impl PgSourcePurificationError {
                 "If trying to use the output of SHOW CREATE SOURCE, remove the DETAILS option."
                     .into(),
             ),
-            Self::RequiresReferencedSubsources => {
+            Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
             Self::UnrecognizedTypes {
@@ -128,7 +128,7 @@ impl PgSourcePurificationError {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum KafkaSourcePurificationError {
     #[error("{} is only valid for multi-output sources", .0.to_ast_string())]
-    ReferencedSubsources(ReferencedSubsources),
+    ReferencedSubsources(ExternalReferences),
     #[error("KAFKA CONNECTION without TOPIC")]
     ConnectionMissingTopic,
     #[error("{0} is not a KAFKA CONNECTION")]
@@ -250,7 +250,7 @@ pub enum MySqlSourcePurificationError {
     #[error("No tables found")]
     EmptyDatabase,
     #[error("missing TABLES specification")]
-    RequiresReferencedSubsources,
+    RequiresExternalReferences,
     #[error("No tables found in referenced schemas")]
     NoTablesFoundForSchemas(Vec<String>),
 }
@@ -308,7 +308,7 @@ impl MySqlSourcePurificationError {
             Self::ReplicationSettingsError(_) => {
                 Some("Set the necessary MySQL database system settings.".into())
             }
-            Self::RequiresReferencedSubsources => {
+            Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
             Self::InvalidTableReference(_) => Some(

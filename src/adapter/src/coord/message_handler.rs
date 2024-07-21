@@ -524,28 +524,28 @@ impl Coordinator {
             PurifiedStatement::PurifiedCreateSource {
                 create_progress_subsource_stmt,
                 create_source_stmt,
-                create_subsource_stmts,
+                subsources,
             } => {
                 self.plan_purified_create_source(
                     &ctx,
                     params,
                     create_progress_subsource_stmt,
                     create_source_stmt,
-                    create_subsource_stmts,
+                    subsources,
                 )
                 .await
             }
             PurifiedStatement::PurifiedAlterSourceAddSubsources {
-                altered_id,
+                source_name,
                 options,
-                create_subsource_stmts,
+                subsources,
             } => {
                 self.plan_purified_alter_source_add_subsource(
                     ctx.session(),
                     params,
-                    altered_id,
+                    source_name,
                     options,
-                    create_subsource_stmts,
+                    subsources,
                 )
                 .await
             }

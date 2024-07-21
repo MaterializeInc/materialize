@@ -54,7 +54,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         "load-generator"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         None
     }
 
@@ -123,15 +123,15 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         vec![]
     }
 
-    fn get_subsource_resolver(&self) -> super::SubsourceResolver {
+    fn get_reference_resolver(&self) -> super::SourceReferenceResolver {
         let views: Vec<_> = self
             .load_generator
             .views()
             .into_iter()
             .map(|(name, _)| (self.load_generator.schema_name(), name))
             .collect();
-        super::SubsourceResolver::new(LOAD_GENERATOR_DATABASE_NAME, &views)
-            .expect("already validated that SubsourceResolver elements are valid")
+        super::SourceReferenceResolver::new(LOAD_GENERATOR_DATABASE_NAME, &views)
+            .expect("already validated that SourceReferenceResolver elements are valid")
     }
 }
 

@@ -107,7 +107,7 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         "postgres"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         None
     }
 
@@ -133,12 +133,12 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         vec![]
     }
 
-    fn get_subsource_resolver(&self) -> super::SubsourceResolver {
-        super::SubsourceResolver::new(
+    fn get_reference_resolver(&self) -> super::SourceReferenceResolver {
+        super::SourceReferenceResolver::new(
             &self.publication_details.database,
             &self.publication_details.tables,
         )
-        .expect("already validated that SubsourceResolver elements are valid")
+        .expect("already validated that SourceReferenceResolver elements are valid")
     }
 }
 

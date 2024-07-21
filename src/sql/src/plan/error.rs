@@ -30,7 +30,7 @@ use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
-use mz_storage_types::sources::SubsourceResolutionError;
+use mz_storage_types::sources::ExternalReferenceResolutionError;
 
 use crate::catalog::{
     CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
@@ -262,7 +262,7 @@ pub enum PlanError {
         limit: Duration,
     },
     RetainHistoryRequired,
-    SubsourceResolutionError(SubsourceResolutionError),
+    SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -884,8 +884,8 @@ impl From<IdentError> for PlanError {
     }
 }
 
-impl From<SubsourceResolutionError> for PlanError {
-    fn from(e: SubsourceResolutionError) -> Self {
+impl From<ExternalReferenceResolutionError> for PlanError {
+    fn from(e: ExternalReferenceResolutionError) -> Self {
         PlanError::SubsourceResolutionError(e)
     }
 }

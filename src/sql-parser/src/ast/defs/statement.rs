@@ -979,7 +979,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
-    pub referenced_subsources: Option<ReferencedSubsources>,
+    pub external_references: Option<ExternalReferences>,
     pub progress_subsource: Option<DeferredItemName<T>>,
 }
 
@@ -1022,7 +1022,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(envelope);
         }
 
-        if let Some(subsources) = &self.referenced_subsources {
+        if let Some(subsources) = &self.external_references {
             f.write_str(" ");
             f.write_node(subsources);
         }
@@ -1041,40 +1041,42 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 }
 impl_display_t!(CreateSourceStatement);
 
-/// A selected subsource in a FOR TABLES (..) statement
+/// A selected external reference in a FOR TABLES (..) statement
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CreateSourceSubsource {
+pub struct ExternalReferenceExport {
     pub reference: UnresolvedItemName,
-    pub subsource: Option<UnresolvedItemName>,
+    pub alias: Option<UnresolvedItemName>,
 }
 
-impl AstDisplay for CreateSourceSubsource {
+impl AstDisplay for ExternalReferenceExport {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.reference);
-        if let Some(subsource) = &self.subsource {
+        if let Some(alias) = &self.alias {
             f.write_str(" AS ");
-            f.write_node(subsource);
+            f.write_node(alias);
         }
     }
 }
-impl_display!(CreateSourceSubsource);
+impl_display!(ExternalReferenceExport);
 
+/// Specifies which set of external references to generate a source export
+/// for in a `CREATE SOURCE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ReferencedSubsources {
+pub enum ExternalReferences {
     /// A subset defined with FOR TABLES (...)
-    SubsetTables(Vec<CreateSourceSubsource>),
+    SubsetTables(Vec<ExternalReferenceExport>),
     /// A subset defined with FOR SCHEMAS (...)
     SubsetSchemas(Vec<Ident>),
     /// FOR ALL TABLES
     All,
 }
 
-impl AstDisplay for ReferencedSubsources {
+impl AstDisplay for ExternalReferences {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::SubsetTables(subsources) => {
+            Self::SubsetTables(tables) => {
                 f.write_str("FOR TABLES (");
-                f.write_node(&display::comma_separated(subsources));
+                f.write_node(&display::comma_separated(tables));
                 f.write_str(")");
             }
             Self::SubsetSchemas(schemas) => {
@@ -1086,7 +1088,7 @@ impl AstDisplay for ReferencedSubsources {
         }
     }
 }
-impl_display!(ReferencedSubsources);
+impl_display!(ExternalReferences);
 
 /// An option in a `CREATE SUBSOURCE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -2462,7 +2464,7 @@ pub enum AlterSourceAction<T: AstInfo> {
     SetOptions(Vec<CreateSourceOption<T>>),
     ResetOptions(Vec<CreateSourceOptionName>),
     AddSubsources {
-        subsources: Vec<CreateSourceSubsource>,
+        external_references: Vec<ExternalReferenceExport>,
         options: Vec<AlterSourceAddSubsourceOption<T>>,
     },
     DropSubsources {
@@ -2505,7 +2507,7 @@ impl<T: AstInfo> AstDisplay for AlterSourceAction<T> {
                 }
             }
             AlterSourceAction::AddSubsources {
-                subsources,
+                external_references: subsources,
                 options,
             } => {
                 f.write_str("ADD SUBSOURCE ");

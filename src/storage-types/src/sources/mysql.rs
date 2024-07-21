@@ -170,7 +170,7 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
         "mysql"
     }
 
-    fn upstream_name(&self) -> Option<&str> {
+    fn external_reference(&self) -> Option<&str> {
         None
     }
 
@@ -196,9 +196,9 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
         vec![]
     }
 
-    fn get_subsource_resolver(&self) -> super::SubsourceResolver {
-        super::SubsourceResolver::new("mysql", &self.details.tables)
-            .expect("already validated that SubsourceResolver elements are valid")
+    fn get_reference_resolver(&self) -> super::SourceReferenceResolver {
+        super::SourceReferenceResolver::new("mysql", &self.details.tables)
+            .expect("already validated that SourceReferenceResolver elements are valid")
     }
 }
 

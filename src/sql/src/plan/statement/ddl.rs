@@ -102,7 +102,7 @@ use mz_storage_types::sources::postgres::{
     ProtoPostgresSourcePublicationDetails,
 };
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SubsourceResolver, Timeline,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceReferenceResolver, Timeline,
 };
 use prost::Message;
 
@@ -634,7 +634,7 @@ pub fn plan_create_source(
         key_constraint,
         include_metadata,
         with_options,
-        referenced_subsources,
+        external_references: referenced_subsources,
         progress_subsource,
     } = &stmt;
 
@@ -825,8 +825,8 @@ pub fn plan_create_source(
             let publication_details = PostgresSourcePublicationDetails::from_proto(details)
                 .map_err(|e| sql_err!("{}", e))?;
 
-            let subsource_resolver =
-                SubsourceResolver::new(&connection.database, &publication_details.tables)
+            let reference_resolver =
+                SourceReferenceResolver::new(&connection.database, &publication_details.tables)
                     .expect("references validated during purification");
 
             let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
@@ -835,7 +835,7 @@ pub fn plan_create_source(
             for name in text_columns {
                 let (col, qual) = name.0.split_last().expect("must have at least one element");
 
-                let idx = subsource_resolver
+                let idx = reference_resolver
                     .resolve_idx(qual)
                     .expect("known to exist from purification");
 
