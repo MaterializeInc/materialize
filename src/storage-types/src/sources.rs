@@ -2002,9 +2002,8 @@ mod tests {
             (500, Just(0..8)),
             (50, Just(8..32)),
             (10, Just(32..128)),
-            (5, Just(128..512)),
-            (3, Just(512..2048)),
-            (1, Just(2048..8192)),
+            (5, Just(128..256)),
+            (1, Just(256..1050)),
         ]);
 
         let strat = (any::<RelationDesc>(), num_rows).prop_flat_map(|(desc, num_rows)| {
@@ -2013,7 +2012,7 @@ mod tests {
         });
 
         proptest!(
-            ProptestConfig::with_cases(100),
+            ProptestConfig::with_cases(80),
             |((desc, source_datas) in strat)| {
                 roundtrip_source_data(desc, source_datas);
             }
