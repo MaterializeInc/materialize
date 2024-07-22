@@ -3809,7 +3809,10 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     .map(|cg| {
                         cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)).into()
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
+                if column_names.is_empty(){
+                    sql_bail!("regexp_extract must specify at least one capture group");
+                }
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::RegexpExtract(regex),
