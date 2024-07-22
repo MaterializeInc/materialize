@@ -111,6 +111,11 @@ impl ColumnarRecords {
         &self.key_data
     }
 
+    /// The vals in this columnar records as an array.
+    pub fn vals(&self) -> &BinaryArray {
+        &self.val_data
+    }
+
     /// The number of logical bytes in the represented data, excluding offsets
     /// and lengths.
     pub fn goodbytes(&self) -> usize {
