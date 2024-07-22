@@ -24,6 +24,8 @@ use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router, TypedHeader};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use chrono::{DateTime, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, TokenData};
 use mz_frontegg_auth::{ApiTokenResponse, ClaimMetadata, ClaimTokenType, Claims};
 use mz_ore::now::NowFn;
@@ -41,6 +43,15 @@ const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
 const USER_PATH: &str = "/identity/resources/users/v1/:id";
 const USER_CREATE_PATH: &str = "/identity/resources/users/v2";
 const ROLES_PATH: &str = "/identity/resources/roles/v2";
+const SSO_CONFIGS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations";
+const SSO_CONFIG_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id";
+const SSO_CONFIG_DOMAINS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/domains";
+const SSO_CONFIG_DOMAIN_PATH: &str =
+    "/frontegg/team/resources/sso/v1/configurations/:id/domains/:domain_id";
+const SSO_CONFIG_GROUPS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/groups";
+const SSO_CONFIG_GROUP_PATH: &str =
+    "/frontegg/team/resources/sso/v1/configurations/:id/groups/:group_id";
+const SSO_CONFIG_ROLES_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/roles";
 
 pub struct FronteggMockServer {
     pub base_url: String,
@@ -130,6 +141,7 @@ impl FronteggMockServer {
             enable_auth: Arc::clone(&enable_auth),
             auth_requests: Arc::clone(&auth_requests),
             roles: Arc::new(roles),
+            sso_configs: Mutex::new(BTreeMap::new()),
         });
 
         let router = Router::new()
@@ -141,6 +153,40 @@ impl FronteggMockServer {
             .route(USER_PATH, get(handle_get_user).delete(handle_delete_user))
             .route(USER_CREATE_PATH, post(handle_create_user))
             .route(ROLES_PATH, get(handle_roles_request))
+            .route(
+                SSO_CONFIGS_PATH,
+                get(handle_list_sso_configs).post(handle_create_sso_config),
+            )
+            .route(
+                SSO_CONFIG_PATH,
+                get(handle_get_sso_config)
+                    .patch(handle_update_sso_config)
+                    .delete(handle_delete_sso_config),
+            )
+            .route(
+                SSO_CONFIG_DOMAINS_PATH,
+                get(handle_list_domains).post(handle_create_domain),
+            )
+            .route(
+                SSO_CONFIG_DOMAIN_PATH,
+                get(handle_get_domain)
+                    .patch(handle_update_domain)
+                    .delete(handle_delete_domain),
+            )
+            .route(
+                SSO_CONFIG_GROUPS_PATH,
+                get(handle_list_group_mappings).post(handle_create_group_mapping),
+            )
+            .route(
+                SSO_CONFIG_GROUP_PATH,
+                get(handle_get_group_mapping)
+                    .patch(handle_update_group_mapping)
+                    .delete(handle_delete_group_mapping),
+            )
+            .route(
+                SSO_CONFIG_ROLES_PATH,
+                get(handle_get_default_roles).put(handle_set_default_roles),
+            )
             .layer(middleware::from_fn_with_state(
                 Arc::clone(&context),
                 latency_middleware,
@@ -570,6 +616,356 @@ async fn handle_roles_request(State(context): State<Arc<Context>>) -> Json<UserR
     Json(response)
 }
 
+async fn handle_list_sso_configs(
+    State(context): State<Arc<Context>>,
+) -> Result<Json<Vec<SSOConfigResponse>>, StatusCode> {
+    let configs = context.sso_configs.lock().unwrap();
+    let config_list: Vec<SSOConfigResponse> = configs
+        .values()
+        .cloned()
+        .map(SSOConfigResponse::from)
+        .collect();
+    Ok(Json(config_list))
+}
+
+async fn handle_create_sso_config(
+    State(context): State<Arc<Context>>,
+    Json(new_config): Json<SSOConfigCreateRequest>,
+) -> Result<(StatusCode, Json<SSOConfigResponse>), StatusCode> {
+    let config_storage = SSOConfigStorage {
+        id: Uuid::new_v4().to_string(),
+        enabled: new_config.enabled,
+        sso_endpoint: new_config.sso_endpoint.unwrap_or_default(),
+        public_certificate: new_config
+            .public_certificate
+            .map(|cert| BASE64.encode(cert.as_bytes()))
+            .unwrap_or_default(),
+        sign_request: new_config.sign_request,
+        acs_url: new_config.acs_url.unwrap_or_default(),
+        sp_entity_id: new_config.sp_entity_id.unwrap_or_default(),
+        config_type: new_config.config_type.unwrap_or_else(|| "saml".to_string()),
+        oidc_client_id: new_config.oidc_client_id.unwrap_or_default(),
+        oidc_secret: new_config.oidc_secret.unwrap_or_default(),
+        domains: Vec::new(),
+        groups: Vec::new(),
+        default_roles: DefaultRoles {
+            role_ids: Vec::new(),
+        },
+        generated_verification: Some(Uuid::new_v4().to_string()),
+        created_at: Some(Utc::now()),
+        updated_at: Some(Utc::now()),
+        config_metadata: None,
+        override_active_tenant: Some(true),
+        sub_account_access_limit: Some(0),
+        skip_email_domain_validation: Some(false),
+        role_ids: Vec::new(),
+    };
+
+    let mut configs = context.sso_configs.lock().unwrap();
+    configs.insert(config_storage.id.clone(), config_storage.clone());
+
+    let response = SSOConfigResponse::from(config_storage);
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn handle_get_sso_config(
+    State(context): State<Arc<Context>>,
+    Path(id): Path<String>,
+) -> Result<Json<SSOConfigResponse>, StatusCode> {
+    let configs = context.sso_configs.lock().unwrap();
+    configs
+        .get(&id)
+        .cloned()
+        .map(SSOConfigResponse::from)
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn handle_update_sso_config(
+    State(context): State<Arc<Context>>,
+    Path(id): Path<String>,
+    Json(updated_config): Json<SSOConfigUpdateRequest>,
+) -> Result<Json<SSOConfigResponse>, StatusCode> {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&id) {
+        if let Some(enabled) = updated_config.enabled {
+            config.enabled = enabled;
+        }
+        if let Some(sso_endpoint) = updated_config.sso_endpoint {
+            config.sso_endpoint = sso_endpoint;
+        }
+        if let Some(public_certificate) = updated_config.public_certificate {
+            config.public_certificate = BASE64.encode(public_certificate.as_bytes());
+        }
+        if let Some(sign_request) = updated_config.sign_request {
+            config.sign_request = sign_request;
+        }
+        if let Some(acs_url) = updated_config.acs_url {
+            config.acs_url = acs_url;
+        }
+        if let Some(sp_entity_id) = updated_config.sp_entity_id {
+            config.sp_entity_id = sp_entity_id;
+        }
+        if let Some(config_type) = updated_config.config_type {
+            config.config_type = config_type;
+        }
+        if let Some(oidc_client_id) = updated_config.oidc_client_id {
+            config.oidc_client_id = oidc_client_id;
+        }
+        if let Some(oidc_secret) = updated_config.oidc_secret {
+            config.oidc_secret = oidc_secret;
+        }
+
+        config.updated_at = Some(Utc::now());
+
+        let response = SSOConfigResponse::from(config.clone());
+        Ok(Json(response))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_delete_sso_config(
+    State(context): State<Arc<Context>>,
+    Path(id): Path<String>,
+) -> StatusCode {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if configs.remove(&id).is_some() {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+async fn handle_list_domains(
+    State(context): State<Arc<Context>>,
+    Path(config_id): Path<String>,
+) -> Result<Json<Vec<DomainResponse>>, StatusCode> {
+    let configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get(&config_id) {
+        let domains: Vec<DomainResponse> = config
+            .domains
+            .iter()
+            .cloned()
+            .map(DomainResponse::from)
+            .collect();
+        Ok(Json(domains))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_create_domain(
+    State(context): State<Arc<Context>>,
+    Path(config_id): Path<String>,
+    Json(mut new_domain): Json<Domain>,
+) -> Result<Json<DomainResponse>, StatusCode> {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&config_id) {
+        new_domain.id = Uuid::new_v4().to_string();
+        new_domain.sso_config_id = config_id;
+        new_domain.validated = false;
+        config.domains.push(new_domain.clone());
+        Ok(Json(DomainResponse::from(new_domain)))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_get_default_roles(
+    State(context): State<Arc<Context>>,
+    Path(config_id): Path<String>,
+) -> Result<Json<DefaultRoles>, StatusCode> {
+    let configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get(&config_id) {
+        Ok(Json(config.default_roles.clone()))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_set_default_roles(
+    State(context): State<Arc<Context>>,
+    Path(config_id): Path<String>,
+    Json(default_roles): Json<DefaultRoles>,
+) -> Result<(StatusCode, Json<DefaultRoles>), StatusCode> {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&config_id) {
+        config.default_roles = default_roles.clone();
+        for role_id in &default_roles.role_ids {
+            if !config.role_ids.contains(role_id) {
+                config.role_ids.push(role_id.clone());
+            }
+        }
+        Ok((StatusCode::CREATED, Json(default_roles)))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_get_domain(
+    State(context): State<Arc<Context>>,
+    Path((config_id, domain_id)): Path<(String, String)>,
+) -> Result<Json<DomainResponse>, StatusCode> {
+    let configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get(&config_id) {
+        config
+            .domains
+            .iter()
+            .find(|domain| domain.id == domain_id)
+            .cloned()
+            .map(DomainResponse::from)
+            .map(Json)
+            .ok_or(StatusCode::NOT_FOUND)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_update_domain(
+    State(context): State<Arc<Context>>,
+    Path((config_id, domain_id)): Path<(String, String)>,
+    Json(updated_domain): Json<DomainUpdateRequest>,
+) -> Result<Json<DomainResponse>, StatusCode> {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&config_id) {
+        if let Some(domain) = config.domains.iter_mut().find(|d| d.id == domain_id) {
+            if let Some(new_domain) = updated_domain.domain {
+                domain.domain = new_domain;
+            }
+            if let Some(new_validated) = updated_domain.validated {
+                domain.validated = new_validated;
+            }
+            Ok(Json(DomainResponse::from(domain.clone())))
+        } else {
+            Err(StatusCode::NOT_FOUND)
+        }
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_delete_domain(
+    State(context): State<Arc<Context>>,
+    Path((config_id, domain_id)): Path<(String, String)>,
+) -> StatusCode {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&config_id) {
+        let initial_len = config.domains.len();
+        config.domains.retain(|d| d.id != domain_id);
+        if config.domains.len() < initial_len {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        }
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+async fn handle_list_group_mappings(
+    State(context): State<Arc<Context>>,
+    Path(config_id): Path<String>,
+) -> Result<Json<Vec<GroupMappingResponse>>, StatusCode> {
+    let configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get(&config_id) {
+        let groups: Vec<GroupMappingResponse> = config
+            .groups
+            .iter()
+            .cloned()
+            .map(GroupMappingResponse::from)
+            .collect();
+        Ok(Json(groups))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_create_group_mapping(
+    State(context): State<Arc<Context>>,
+    Path(config_id): Path<String>,
+    Json(new_group): Json<GroupMapping>,
+) -> Result<Json<GroupMappingResponse>, StatusCode> {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&config_id) {
+        let group = GroupMapping {
+            id: Uuid::new_v4().to_string(),
+            group: new_group.group,
+            role_ids: new_group.role_ids,
+            sso_config_id: config_id,
+            enabled: true,
+        };
+        config.groups.push(group.clone());
+        Ok(Json(GroupMappingResponse::from(group)))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_get_group_mapping(
+    State(context): State<Arc<Context>>,
+    Path((config_id, group_id)): Path<(String, String)>,
+) -> Result<Json<GroupMappingResponse>, StatusCode> {
+    let configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get(&config_id) {
+        config
+            .groups
+            .iter()
+            .find(|g| g.id == group_id)
+            .cloned()
+            .map(GroupMappingResponse::from)
+            .map(Json)
+            .ok_or(StatusCode::NOT_FOUND)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_update_group_mapping(
+    State(context): State<Arc<Context>>,
+    Path((config_id, group_id)): Path<(String, String)>,
+    Json(updated_group): Json<GroupMappingUpdateRequest>,
+) -> Result<Json<GroupMappingResponse>, StatusCode> {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&config_id) {
+        if let Some(group) = config.groups.iter_mut().find(|g| g.id == group_id) {
+            if let Some(new_group) = updated_group.group {
+                group.group = new_group;
+            }
+            if let Some(new_role_ids) = updated_group.role_ids {
+                group.role_ids = new_role_ids;
+            }
+            if let Some(new_enabled) = updated_group.enabled {
+                group.enabled = new_enabled;
+            }
+            Ok(Json(GroupMappingResponse::from(group.clone())))
+        } else {
+            Err(StatusCode::NOT_FOUND)
+        }
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_delete_group_mapping(
+    State(context): State<Arc<Context>>,
+    Path((config_id, group_id)): Path<(String, String)>,
+) -> StatusCode {
+    let mut configs = context.sso_configs.lock().unwrap();
+    if let Some(config) = configs.get_mut(&config_id) {
+        let initial_len = config.groups.len();
+        config.groups.retain(|g| g.id != group_id);
+        if config.groups.len() < initial_len {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        }
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+// Structs and Enums
 #[derive(Deserialize)]
 struct AuthUserRequest {
     email: String,
@@ -684,6 +1080,251 @@ struct UserRolesMetadata {
     total_pages: usize,
 }
 
+#[derive(Deserialize)]
+pub struct SSOConfigCreateRequest {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(rename = "ssoEndpoint")]
+    pub sso_endpoint: Option<String>,
+    #[serde(rename = "publicCertificate")]
+    pub public_certificate: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "signRequest")]
+    pub sign_request: bool,
+    #[serde(rename = "acsUrl")]
+    pub acs_url: Option<String>,
+    #[serde(rename = "spEntityId")]
+    pub sp_entity_id: Option<String>,
+    #[serde(rename = "type")]
+    pub config_type: Option<String>,
+    #[serde(rename = "oidcClientId")]
+    pub oidc_client_id: Option<String>,
+    #[serde(rename = "oidcSecret")]
+    pub oidc_secret: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SSOConfigStorage {
+    pub id: String,
+    pub enabled: bool,
+    pub sso_endpoint: String,
+    pub public_certificate: String,
+    pub sign_request: bool,
+    pub acs_url: String,
+    pub sp_entity_id: String,
+    pub config_type: String,
+    pub oidc_client_id: String,
+    pub oidc_secret: String,
+    pub domains: Vec<Domain>,
+    pub groups: Vec<GroupMapping>,
+    pub default_roles: DefaultRoles,
+    pub generated_verification: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub config_metadata: Option<serde_json::Value>,
+    pub override_active_tenant: Option<bool>,
+    pub skip_email_domain_validation: Option<bool>,
+    pub sub_account_access_limit: Option<i32>,
+    pub role_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct SSOConfigResponse {
+    pub id: String,
+    pub enabled: bool,
+    #[serde(rename = "ssoEndpoint")]
+    pub sso_endpoint: String,
+    #[serde(rename = "publicCertificate")]
+    pub public_certificate: String,
+    #[serde(rename = "signRequest")]
+    pub sign_request: bool,
+    #[serde(rename = "acsUrl")]
+    pub acs_url: String,
+    #[serde(rename = "spEntityId")]
+    pub sp_entity_id: String,
+    #[serde(rename = "type")]
+    pub config_type: String,
+    #[serde(rename = "oidcClientId")]
+    pub oidc_client_id: String,
+    #[serde(rename = "oidcSecret")]
+    pub oidc_secret: String,
+    pub domains: Vec<DomainResponse>,
+    pub groups: Vec<GroupMappingResponse>,
+    #[serde(rename = "defaultRoles")]
+    pub default_roles: DefaultRoles,
+    #[serde(rename = "generatedVerification")]
+    pub generated_verification: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: DateTime<Utc>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: DateTime<Utc>,
+    #[serde(rename = "configMetadata")]
+    pub config_metadata: Option<serde_json::Value>,
+    #[serde(rename = "overrideActiveTenant")]
+    pub override_active_tenant: bool,
+    #[serde(rename = "skipEmailDomainValidation")]
+    pub skip_email_domain_validation: bool,
+    #[serde(rename = "subAccountAccessLimit")]
+    pub sub_account_access_limit: i32,
+    #[serde(rename = "roleIds")]
+    pub role_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SSOConfigUpdateRequest {
+    pub enabled: Option<bool>,
+    #[serde(rename = "ssoEndpoint")]
+    pub sso_endpoint: Option<String>,
+    #[serde(rename = "publicCertificate")]
+    pub public_certificate: Option<String>,
+    #[serde(rename = "signRequest")]
+    pub sign_request: Option<bool>,
+    #[serde(rename = "acsUrl")]
+    pub acs_url: Option<String>,
+    #[serde(rename = "spEntityId")]
+    pub sp_entity_id: Option<String>,
+    #[serde(rename = "type")]
+    pub config_type: Option<String>,
+    #[serde(rename = "oidcClientId")]
+    pub oidc_client_id: Option<String>,
+    #[serde(rename = "oidcSecret")]
+    pub oidc_secret: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Domain {
+    #[serde(default)]
+    pub id: String,
+    pub domain: String,
+    #[serde(default)]
+    pub validated: bool,
+    #[serde(default, rename = "ssoConfigId")]
+    pub sso_config_id: String,
+    #[serde(skip_deserializing)]
+    pub txt_record: String,
+}
+
+#[derive(Serialize)]
+pub struct DomainResponse {
+    pub id: String,
+    pub domain: String,
+    pub validated: bool,
+    #[serde(rename = "ssoConfigId")]
+    pub sso_config_id: String,
+    #[serde(rename = "txtRecord")]
+    pub txt_record: String,
+}
+
+#[derive(Deserialize)]
+pub struct DomainUpdateRequest {
+    pub domain: Option<String>,
+    pub validated: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMapping {
+    #[serde(default)]
+    pub id: String,
+    pub group: String,
+    #[serde(default, rename = "roleIds")]
+    pub role_ids: Vec<String>,
+    #[serde(default, rename = "ssoConfigId")]
+    pub sso_config_id: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct GroupMappingResponse {
+    pub id: String,
+    pub group: String,
+    #[serde(rename = "roleIds")]
+    pub role_ids: Vec<String>,
+    #[serde(rename = "ssoConfigId")]
+    pub sso_config_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+pub struct GroupMappingUpdateRequest {
+    pub group: Option<String>,
+    #[serde(rename = "roleIds")]
+    pub role_ids: Option<Vec<String>>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DefaultRoles {
+    #[serde(rename = "roleIds")]
+    pub role_ids: Vec<String>,
+}
+
+impl From<SSOConfigStorage> for SSOConfigResponse {
+    fn from(storage: SSOConfigStorage) -> Self {
+        SSOConfigResponse {
+            id: storage.id,
+            enabled: storage.enabled,
+            sso_endpoint: storage.sso_endpoint,
+            public_certificate: storage.public_certificate,
+            sign_request: storage.sign_request,
+            acs_url: storage.acs_url,
+            sp_entity_id: storage.sp_entity_id,
+            config_type: storage.config_type,
+            oidc_client_id: storage.oidc_client_id,
+            oidc_secret: storage.oidc_secret,
+            domains: storage
+                .domains
+                .into_iter()
+                .map(DomainResponse::from)
+                .collect(),
+            groups: storage
+                .groups
+                .into_iter()
+                .map(GroupMappingResponse::from)
+                .collect(),
+            default_roles: storage.default_roles,
+            generated_verification: storage.generated_verification,
+            created_at: storage.created_at.unwrap_or_else(Utc::now),
+            updated_at: storage.updated_at.unwrap_or_else(Utc::now),
+            config_metadata: storage.config_metadata,
+            override_active_tenant: storage.override_active_tenant.unwrap_or(false),
+            skip_email_domain_validation: storage.skip_email_domain_validation.unwrap_or(false),
+            sub_account_access_limit: storage.sub_account_access_limit.unwrap_or(0),
+            role_ids: storage.role_ids,
+        }
+    }
+}
+
+impl From<Domain> for DomainResponse {
+    fn from(domain: Domain) -> Self {
+        let txt_record = format!(
+            "_saml-domain-challenge.{}.{}.{}",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            domain.domain
+        );
+
+        DomainResponse {
+            id: domain.id,
+            domain: domain.domain,
+            validated: domain.validated,
+            sso_config_id: domain.sso_config_id,
+            txt_record,
+        }
+    }
+}
+
+impl From<GroupMapping> for GroupMappingResponse {
+    fn from(group: GroupMapping) -> Self {
+        GroupMappingResponse {
+            id: group.id,
+            group: group.group,
+            role_ids: group.role_ids,
+            sso_config_id: group.sso_config_id,
+            enabled: group.enabled,
+        }
+    }
+}
 enum RefreshTokenTarget {
     User(AuthUserRequest),
     ApiToken(ApiToken),
@@ -706,4 +1347,5 @@ struct Context {
     enable_auth: Arc<AtomicBool>,
     auth_requests: Arc<Mutex<u64>>,
     roles: Arc<Vec<UserRole>>,
+    sso_configs: Mutex<BTreeMap<String, SSOConfigStorage>>,
 }
