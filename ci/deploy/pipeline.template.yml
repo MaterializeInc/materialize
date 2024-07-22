@@ -12,7 +12,7 @@ steps:
     branches: main
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
+      queue: linux-x86_64
     concurrency: 1
     concurrency_group: deploy/devsite
 
