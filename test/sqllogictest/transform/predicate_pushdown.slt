@@ -1006,6 +1006,9 @@ Target cluster: quickstart
 
 EOF
 
+statement ok
+DROP ROLE r2;
+
 # Regression test for https://github.com/MaterializeInc/materialize/issues/22257
 # The transitive closure computation in `inline_if_not_too_big` has to do more than one step here. For this, later map
 # expressions should mention only the previous map expression, but not earlier ones. Also, there has to be at least
