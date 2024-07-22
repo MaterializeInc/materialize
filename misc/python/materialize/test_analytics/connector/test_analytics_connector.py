@@ -20,6 +20,8 @@ from materialize.test_analytics.config.mz_db_config import MzDbConfig
 
 
 class TestAnalyticsUploadError(Exception):
+    __test__ = False
+
     def __init__(self, message: str, sql: str):
         super().__init__(message)
         # storing it here as well makes it easier to access the message
@@ -32,6 +34,8 @@ class TestAnalyticsUploadError(Exception):
 
 @dataclass
 class TestAnalyticsSettings:
+    __test__ = False
+
     uploads_enabled: bool
     min_required_data_version_for_uploads: int
 

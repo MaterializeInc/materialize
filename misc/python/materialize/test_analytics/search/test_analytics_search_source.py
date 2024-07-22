@@ -22,6 +22,7 @@ ANY_BRANCH_VALUE = "*"
 
 
 class TestAnalyticsDataSource:
+    __test__ = False
 
     def __init__(
         self,
