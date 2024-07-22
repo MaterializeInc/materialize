@@ -74,7 +74,6 @@ maybe(
     integrity = RULES_CC_INTEGRITY,
     strip_prefix = "rules_cc-{0}".format(RULES_CC_VERSION),
     urls = [
-        "https://mirror.bazel.build/bazelbuild/rules_cc/releases/download/{0}/rules_cc-{0}.tar.gz".format(RULES_CC_VERSION),
         "https://github.com/bazelbuild/rules_cc/releases/download/{0}/rules_cc-{0}.tar.gz".format(RULES_CC_VERSION),
     ],
 )
@@ -183,7 +182,6 @@ maybe(
     integrity = RULES_PERL_INTEGRITY,
     strip_prefix = "rules_perl-{0}".format(RULES_PERL_VERISON),
     urls = [
-        "https://mirror.bazel.build/bazelbuild/rules_perl/archive/refs/tags/{0}.tar.gz".format(RULES_PERL_VERISON),
         "https://github.com/bazelbuild/rules_perl/archive/refs/tags/{0}.tar.gz".format(RULES_PERL_VERISON),
     ],
 )
