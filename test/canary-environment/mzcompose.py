@@ -8,8 +8,11 @@
 # by the Apache License, Version 2.0.
 
 import os
+import ssl
 from textwrap import dedent
 from urllib.parse import quote
+
+import pg8000
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.dbt import Dbt
@@ -196,6 +199,22 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("dbt", persistent=True)
+
+    con = pg8000.connect(
+        host=MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME,
+        user="postgres",
+        database="postgres",
+        password=MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD,
+        ssl_context=ssl.SSLContext(),
+    )
+    try:
+        result = con.run("SELECT COUNT(*) FROM pg_replication_slots")
+        assert (
+            result[0][0] == 1
+        ), f"RDS Postgres has wrong number of pg_replication_slots {result[0][0]}, please fix manually to prevent Postgres from going out of disk from stalled Materialize connections"
+    finally:
+        con.close()
+
     c.exec("dbt", "dbt", "test", workdir="/workdir")
 
 
