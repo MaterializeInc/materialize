@@ -61,7 +61,7 @@ impl RustType<proto::ArrayData> for arrow::array::ArrayData {
         let nulls = nulls
             .map(|n| n.into_rust())
             .transpose()?
-            .map(|b| NullBuffer::new(b));
+            .map(NullBuffer::new);
 
         let mut builder = ArrayDataBuilder::new(data_type)
             .len(usize::cast_from(length))
