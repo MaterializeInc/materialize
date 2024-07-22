@@ -59,6 +59,10 @@ REGEX_PARAM = EnumConstantOperationParam(
     [".*", "A+", "[ab]"], add_quotes=True, invalid_value="ab("
 )
 
+REGEX_PARAM_WITH_GROUP = EnumConstantOperationParam(
+    ["(.)", "(.*)", "(A+)", "([ab])"], add_quotes=True, invalid_value="ab("
+)
+
 REGEX_FLAG_PARAM = EnumConstantOperationParam(
     ["i", "g", "n"], add_quotes=True, optional=True
 )
@@ -125,7 +129,7 @@ ARRAY_DIMENSION_PARAM = EnumConstantOperationParam(
 
 RECORD_FIELD_PARAM = EnumConstantOperationParam(
     # do not use "*" because it will mess up the column mapping between query and result
-    ["f1", "f2", "f3", "f4"],
+    ["f1", "f2", "f3", "f4", "key", "value"],
     add_quotes=False,
     add_invalid_value=True,
 )
