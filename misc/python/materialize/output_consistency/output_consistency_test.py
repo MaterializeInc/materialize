@@ -56,14 +56,16 @@ from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 class OutputConsistencyTest:
     def run_output_consistency_tests(
         self,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         args: argparse.Namespace,
         query_output_mode: QueryOutputMode,
     ) -> ConsistencyTestSummary:
         """Entry point for output consistency tests"""
 
         return self._run_output_consistency_tests_internal(
-            connection,
+            default_connection,
+            mz_system_connection,
             args.seed,
             args.dry_run,
             args.fail_fast,
@@ -116,7 +118,8 @@ class OutputConsistencyTest:
 
     def _run_output_consistency_tests_internal(
         self,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         random_seed: str,
         dry_run: bool,
         fail_fast: bool,
@@ -157,7 +160,9 @@ class OutputConsistencyTest:
 
         randomized_picker = RandomizedPicker(config)
 
-        sql_executors = self.create_sql_executors(config, connection, output_printer)
+        sql_executors = self.create_sql_executors(
+            config, default_connection, mz_system_connection, output_printer
+        )
 
         evaluation_strategies = self.create_evaluation_strategies(sql_executors)
 
@@ -228,11 +233,14 @@ class OutputConsistencyTest:
     def create_sql_executors(
         self,
         config: ConsistencyTestConfiguration,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection | None,
         output_printer: OutputPrinter,
     ) -> SqlExecutors:
         return SqlExecutors(
-            create_sql_executor(config, connection, output_printer, "mz")
+            create_sql_executor(
+                config, default_connection, mz_system_connection, output_printer, "mz"
+            )
         )
 
     def get_scenario(self) -> EvaluationScenario:
@@ -308,16 +316,22 @@ def main() -> int:
 
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
+    parser.add_argument("--system-port", default=6877, type=int)
     args = test.parse_output_consistency_input_args(parser)
-    db_user = "materialize"
+    default_db_user = "materialize"
+    mz_system_db_user = "mz_system"
 
     try:
-        connection = connect(args.host, args.port, db_user)
+        default_connection = connect(args.host, args.port, default_db_user)
+        mz_system_connection = connect(args.host, args.system_port, mz_system_db_user)
     except InterfaceError:
         return 1
 
     result = test.run_output_consistency_tests(
-        connection, args, query_output_mode=QueryOutputMode.SELECT
+        default_connection,
+        mz_system_connection,
+        args,
+        query_output_mode=QueryOutputMode.SELECT,
     )
     return 0 if result.all_passed() else 1
 

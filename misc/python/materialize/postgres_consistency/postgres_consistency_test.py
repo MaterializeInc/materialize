@@ -61,16 +61,19 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     def create_sql_executors(
         self,
         config: ConsistencyTestConfiguration,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         output_printer: OutputPrinter,
     ) -> SqlExecutors:
         if self.pg_connection is None:
             raise RuntimeError("Postgres connection is not initialized")
 
         return PgSqlExecutors(
-            create_sql_executor(config, connection, output_printer, "mz"),
             create_sql_executor(
-                config, self.pg_connection, output_printer, "pg", is_mz=False
+                config, default_connection, mz_system_connection, output_printer, "mz"
+            ),
+            create_sql_executor(
+                config, self.pg_connection, None, output_printer, "pg", is_mz=False
             ),
         )
 
@@ -122,6 +125,7 @@ def main() -> int:
 
     parser.add_argument("--mz-host", default="localhost", type=str)
     parser.add_argument("--mz-port", default=6875, type=int)
+    parser.add_argument("--mz-system-port", default=6877, type=int)
     parser.add_argument("--pg-host", default="localhost", type=str)
     parser.add_argument("--pg-port", default=5432, type=int)
     parser.add_argument("--pg-password", default=None, type=str)
@@ -130,6 +134,7 @@ def main() -> int:
     try:
         mz_db_user = "materialize"
         mz_connection = connect(args.mz_host, args.mz_port, mz_db_user)
+        mz_system_connection = connect(args.mz_host, args.mz_system_port, mz_db_user)
 
         pg_db_user = "postgres"
         test.pg_connection = connect(
@@ -139,7 +144,10 @@ def main() -> int:
         return 1
 
     result = test.run_output_consistency_tests(
-        mz_connection, args, query_output_mode=QueryOutputMode.SELECT
+        mz_connection,
+        mz_system_connection,
+        args,
+        query_output_mode=QueryOutputMode.SELECT,
     )
     return 0 if result.all_passed() else 1
 

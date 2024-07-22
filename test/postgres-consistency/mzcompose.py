@@ -40,7 +40,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     test = PostgresConsistencyTest()
     args = test.parse_output_consistency_input_args(parser)
-    connection = c.sql_connection()
+    default_connection = c.sql_connection()
+    mz_system_connection = c.sql_connection(user="mz_system", port=6877)
     test.pg_connection = c.sql_connection(
         service="postgres",
         user="postgres",
@@ -48,7 +49,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     test_summary = test.run_output_consistency_tests(
-        connection, args, query_output_mode=QueryOutputMode.SELECT
+        default_connection,
+        mz_system_connection,
+        args,
+        query_output_mode=QueryOutputMode.SELECT,
     )
 
     upload_output_consistency_results_to_test_analytics(c, test_summary)
