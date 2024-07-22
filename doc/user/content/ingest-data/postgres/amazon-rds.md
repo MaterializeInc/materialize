@@ -16,6 +16,10 @@ menu:
 This page shows you how to stream data from [Amazon RDS for PostgreSQL](https://aws.amazon.com/rds/postgresql/)
 to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
+
 ## Before you begin
 
 {{% postgres-direct/before-you-begin %}}

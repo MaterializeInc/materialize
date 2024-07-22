@@ -62,6 +62,13 @@ Diagrams from [rr.red-dove.com/ui](https://rr.red-dove.com/ui):
 This is a note.
 {{</ note >}}
 
+### `tip` shortcode
+
+{{< tip >}}
+This is a tip.
+{{</ tip >}}
+
+
 ### `warning` shortcode
 
 {{< warning >}}

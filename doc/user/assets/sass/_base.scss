@@ -103,6 +103,12 @@ body.dark {
     --note-border: #b9a61545;
     --note-after: #fbe2d9;
     --note-gutter: #ffe600;
+
+    --tip: #3f3b4291;
+    --tip-border: #983fb1;
+    --tip-after: #761c91;
+    --tip-gutter: #b115b9;
+
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right
     // color, as that implies encouragement rather than caution.
@@ -141,6 +147,12 @@ body.light {
     --note-border: #b9a61545;
     --note-after: #fbe2d9;
     --note-gutter: #7b7b29;
+
+    --tip: #f4e3fd91;
+    --tip-border: #983fb1;
+    --tip-after: #761c91;
+    --tip-gutter: #b115b9;
+
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right
     // color, as that implies encouragement rather than caution.
@@ -232,6 +244,7 @@ nav {
 
 p > a,
 .note > a,
+.tip > a,
 .link-with-code {
     color: var(--link);
 

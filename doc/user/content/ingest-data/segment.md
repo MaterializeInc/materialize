@@ -12,6 +12,10 @@ aliases:
 This guide walks through the steps to ingest data from [Segment](https://segment.com/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
+
 ### Before you begin
 
 Ensure that you have:

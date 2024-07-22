@@ -15,7 +15,12 @@ menu:
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
 with the Postgres ones. We should include spill to disk in the guidance then."
 
-Because [Redpanda](https://vectorized.io/) is Kafka API-compatible, Materialize can process data from it in the same way it processes data from Kafka sources.
+Because [Redpanda](https://vectorized.io/) is Kafka API-compatible, Materialize
+can process data from it in the same way it processes data from Kafka sources.
+
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
 
 ## Configuration
 

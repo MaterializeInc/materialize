@@ -19,6 +19,10 @@ troubleshooting guidance for slow or unresponsive queries, check out the
 [`Transform data` troubleshooting](/transform-data/troubleshooting) guide
 instead.
 
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
+
 ## Why isn't my source ingesting data?
 
 First, check the status of your source in the Materialize console by navigating

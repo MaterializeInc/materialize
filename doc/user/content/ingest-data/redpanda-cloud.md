@@ -17,6 +17,10 @@ This guide goes through the required steps to connect Materialize to a Redpanda
 Cloud cluster. If you already have a Redpanda Cloud cluster up and running,
 skip straight to [Step 2](#step-2-create-a-user).
 
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
+
 ## Step 1. Create a Redpanda Cloud cluster
 
 {{< note >}}

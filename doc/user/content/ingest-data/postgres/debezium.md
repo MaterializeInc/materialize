@@ -20,6 +20,10 @@ changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the
 upstream database and publishes them as events to Kafka using Kafka
 Connect-compatible connectors.
 
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
+
 ## A. Configure database
 
 **Minimum requirements:** PostgreSQL 11+

@@ -11,6 +11,10 @@ When you [sign up for Materialize](https://materialize.com/register/), you get a
 free trial account so you can explore the product and start building! This page
 answers some frequently asked questions about free trials.
 
+{{< tip >}}
+For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< /tip >}}
+
 ## What are the limits of a free trial?
 
 In Materialize, [clusters](/concepts/clusters/) are the pools of
@@ -36,7 +40,7 @@ is under the rate limit of 4 credits per hour.
 
 7 days.
 
-If you need additional time, please [chat with our team](http://materialize.com/convert-account/).
+If you need additional time, please [chat with our team](http://materialize.com/convert-account/?utm_campaign=General&utm_source=documentation).
 Otherwise, Materialize will delete your resources and data at the end of the
 trial period.
 
@@ -73,7 +77,7 @@ Error: creating cluster replica would violate max_credit_consumption_rate limit 
 Hint: Drop an existing cluster replica or contact support to request a limit increase.
 ```
 
-If you need additional resources during your trial, [chat with our team](http://materialize.com/convert-account/).
+If you need additional resources during your trial, [chat with our team](http://materialize.com/convert-account/?utm_campaign=General&utm_source=documentation).
 
 ## How do I get help during my trial?
 
