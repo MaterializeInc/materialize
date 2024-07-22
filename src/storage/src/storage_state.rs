@@ -170,6 +170,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let command_sequencer = internal_control::setup_command_sequencer(timely_worker);
         let command_sequencer = Rc::new(RefCell::new(command_sequencer));
 
+        let storage_configuration =
+            StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs());
+
         // Similar to the internal command sequencer, it is very important that
         // we only create the async worker once because a) the worker state is
         // re-used when a new client connects and b) commands that have already
@@ -195,6 +198,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let async_worker = async_storage_worker::AsyncStorageWorker::new(
             thread::current(),
             Arc::clone(&persist_clients),
+            Arc::clone(storage_configuration.config_set()),
         );
         let async_worker = Rc::new(RefCell::new(async_worker));
         let cluster_memory_limit = instance_context.cluster_memory_limit;
@@ -222,10 +226,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
             async_worker,
-            storage_configuration: StorageConfiguration::new(
-                connection_context,
-                mz_dyncfgs::all_dyncfgs(),
-            ),
+            storage_configuration,
             dataflow_parameters: DataflowParameters::new(
                 shared_rocksdb_write_buffer_manager,
                 cluster_memory_limit,

@@ -105,6 +105,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "timestamp_oracle": "postgres",
     "wait_catalog_consolidation_on_startup": "true",
     "persist_batch_record_part_format": "true",
+    "storage_use_reclock_v2": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

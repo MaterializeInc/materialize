@@ -48,21 +48,24 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::capture::UnboundedTokioCapture;
+use mz_timely_util::capture::{PusherCapture, UnboundedTokioCapture};
 use mz_timely_util::containers::stack::StackWrapper;
 use mz_timely_util::operator::StreamExt as _;
+use mz_timely_util::reclock::reclock;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Leave, Partition};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Inspect, Leave, Partition};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
@@ -179,14 +182,6 @@ where
 
     let mut tokens = vec![];
 
-    let reclock_follower = ReclockFollower::new(config.as_of.clone());
-
-    let (source_tx, source_rx) = config.metrics.get_instrumented_source_channel(
-        config.id,
-        config.worker_id,
-        config.worker_count,
-        "source_data",
-    );
     let (source_upper_tx, source_upper_rx) = config.metrics.get_instrumented_source_channel(
         config.id,
         config.worker_id,
@@ -200,32 +195,84 @@ where
             .get_source_metrics(&config.name, id, worker_id),
     );
 
-    let (remap_stream, remap_token) = remap_operator(
-        scope,
-        config.clone(),
-        source_upper_rx,
-        source_connection.timestamp_desc(),
-    );
+    let timestamp_desc = source_connection.timestamp_desc();
+
+    let (remap_collection, remap_token) =
+        remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
     // Need to broadcast the remap changes to all workers.
-    let remap_stream = remap_stream.inner.broadcast().as_collection();
+    let remap_collection = remap_collection.inner.broadcast().as_collection();
     tokens.push(remap_token);
 
-    let reclocked_resume_stream = reclock_committed_upper(
-        &remap_stream,
+    let committed_upper = reclock_committed_upper(
+        &remap_collection,
         config.as_of.clone(),
         committed_upper,
         id,
         Arc::clone(&source_metrics),
     );
 
-    let (health, source_tokens) = {
+    let use_reclock_v2 = dyncfgs::STORAGE_USE_RECLOCK_V2.get(&config.config.config_set());
+    let (streams, health, source_tokens) = if use_reclock_v2 {
+        let (reclock_pusher, reclocked) = reclock(&remap_collection, config.as_of.clone());
+
+        let streams = demux_subsources(config.clone(), reclocked);
+
         let config = config.clone();
         scope.parent.scoped("SourceTimeDomain", move |scope| {
             let (source, source_upper, health_stream, source_tokens) = source_render_operator(
                 scope,
                 config.clone(),
                 source_connection,
-                reclocked_resume_stream,
+                committed_upper,
+                start_signal,
+            );
+
+            source
+                .inner
+                .map(move |((output, result), from_time, diff)| {
+                    let result = match result {
+                        Ok(msg) => Ok(SourceOutput {
+                            key: msg.key.clone(),
+                            value: msg.value.clone(),
+                            metadata: msg.metadata.clone(),
+                            from_time: from_time.clone(),
+                        }),
+                        Err(err) => Err(err.clone()),
+                    };
+                    ((*output, result), from_time.clone(), *diff)
+                })
+                .capture_into(PusherCapture(reclock_pusher));
+            // The use of an _unbounded_ queue here is justified as it matches the unbounded
+            // buffers that lie between ordinary timely operators.
+            source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
+
+            (streams, health_stream.leave(), source_tokens)
+        })
+    } else {
+        let reclock_follower = ReclockFollower::new(config.as_of.clone());
+
+        let (source_tx, source_rx) = config.metrics.get_instrumented_source_channel(
+            config.id,
+            config.worker_id,
+            config.worker_count,
+            "source_data",
+        );
+
+        let streams = reclock_operator(
+            scope,
+            config.clone(),
+            reclock_follower,
+            source_rx,
+            remap_collection,
+            source_metrics,
+        );
+
+        scope.parent.scoped("SourceTimeDomain", move |scope| {
+            let (source, source_upper, health_stream, source_tokens) = source_render_operator(
+                scope,
+                config.clone(),
+                source_connection,
+                committed_upper,
                 start_signal,
             );
 
@@ -234,19 +281,11 @@ where
             source.inner.capture_into(UnboundedTokioCapture(source_tx));
             source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
 
-            (health_stream.leave(), source_tokens)
+            (streams, health_stream.leave(), source_tokens)
         })
     };
-    tokens.extend(source_tokens);
 
-    let streams = reclock_operator(
-        scope,
-        config,
-        reclock_follower,
-        source_rx,
-        remap_stream,
-        source_metrics,
-    );
+    tokens.extend(source_tokens);
 
     (streams, health, tokens)
 }
@@ -830,6 +869,110 @@ where
                 Err(err) => Err(((output, err), ts, diff.into())),
             },
         );
+
+    // We use the output index from the source export to route values to its ok
+    // and err streams. There is one partition per source export; however,
+    // source export indices can be non-contiguous, so we need to ensure we have
+    // at least as many as we reference.
+    let partition_count = u64::cast_from(
+        source_exports
+            .values()
+            .map(|export| export.ingestion_output)
+            .max()
+            .expect("source exports must have elements")
+            + 1,
+    );
+
+    let ok_streams: Vec<_> = ok_muxed_stream
+        .partition(partition_count, |((output, data), time, diff)| {
+            (u64::cast_from(output), (data, time, diff))
+        })
+        .into_iter()
+        .map(|stream| stream.as_collection())
+        .collect();
+
+    let err_streams: Vec<_> = err_muxed_stream
+        .partition(partition_count, |((output, err), time, diff)| {
+            (u64::cast_from(output), (err, time, diff))
+        })
+        .into_iter()
+        .map(|stream| stream.as_collection())
+        .collect();
+
+    ok_streams.into_iter().zip_eq(err_streams).collect()
+}
+
+/// Demultiplexes a combined stream of all subsources into individual collections per subsource
+fn demux_subsources<G, FromTime>(
+    config: RawSourceCreationConfig,
+    input: Collection<G, (usize, Result<SourceOutput<FromTime>, DataflowError>), Diff>,
+) -> Vec<(
+    Collection<G, SourceOutput<FromTime>, Diff>,
+    Collection<G, DataflowError, Diff>,
+)>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    FromTime: SourceTimestamp,
+{
+    let RawSourceCreationConfig {
+        name,
+        id,
+        source_exports,
+        worker_id,
+        worker_count: _,
+        timestamp_interval: _,
+        storage_metadata: _,
+        as_of: _,
+        resume_uppers,
+        source_resume_uppers: _,
+        metrics,
+        now: _,
+        persist_clients: _,
+        source_statistics: _,
+        shared_remap_upper: _,
+        config: _,
+        remap_collection_id: _,
+        busy_signal: _,
+    } = config;
+
+    // TODO(guswynn): expose function
+    let bytes_read_counter = metrics.source_defs.bytes_read.clone();
+    let source_metrics = metrics.get_source_metrics(&name, id, worker_id);
+
+    // Compute the overall resume upper to report for the ingestion
+    let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
+    source_metrics
+        .resume_upper
+        .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
+
+    let input = input.inner.inspect_core(move |event| match event {
+        Ok((_, data)) => {
+            for ((_idx, result), _time, _diff) in data.iter() {
+                if let Ok(msg) = result {
+                    bytes_read_counter.inc_by(u64::cast_from(msg.key.byte_len()));
+                    bytes_read_counter.inc_by(u64::cast_from(msg.value.byte_len()));
+                }
+            }
+        }
+        Err([time]) => source_metrics.capability.set(time.into()),
+        Err([]) => source_metrics
+            .capability
+            .set(mz_repr::Timestamp::MAX.into()),
+        // `mz_repr::Timestamp` is totally ordered and so there can be at most one element in the
+        // frontier. If this ever changes we need to rethink how we surface this in metrics. We
+        // will notice when that happens because the `expect()` will fail.
+        Err(_) => unreachable!("there can be at most one element for totally ordered times"),
+    });
+
+    // TODO(petrosagg): output the two streams directly
+    type CB<C> = CapacityContainerBuilder<C>;
+    let (ok_muxed_stream, err_muxed_stream) = input.map_fallible::<CB<_>, CB<_>, _, _, _>(
+        "reclock-demux-ok-err",
+        |((output, r), ts, diff)| match r {
+            Ok(ok) => Ok(((output, ok), ts, diff)),
+            Err(err) => Err(((output, err), ts, diff.into())),
+        },
+    );
 
     // We use the output index from the source export to route values to its ok
     // and err streams. There is one partition per source export; however,
