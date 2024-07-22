@@ -14,6 +14,7 @@ from typing import Any
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    is_table_function,
     matches_fun_by_name,
 )
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
@@ -171,6 +172,16 @@ class PostgresResultComparator(ResultComparator):
             return value
 
         return match.group(1) + " " + match.group(2)
+
+    def ignore_row_order(self, expression: Expression) -> bool:
+        if expression.matches(
+            is_table_function,
+            True,
+        ):
+            # inconsistent sort order
+            return True
+
+        return False
 
     def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
         if expression.matches(

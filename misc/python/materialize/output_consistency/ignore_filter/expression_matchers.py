@@ -244,3 +244,9 @@ def is_known_to_return_non_integer_number(expression: Expression):
         return return_type_spec.always_floating_type
 
     return False
+
+
+def is_table_function(expression: Expression) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        return expression.operation.is_table_function
+    return False
