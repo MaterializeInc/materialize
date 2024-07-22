@@ -608,9 +608,11 @@ where
                 if x.val_schema != self.placeholder_val_schema {
                     assert_eq!(*v, x.val_schema);
                 }
-                if x.key_schema == self.placeholder_key_schema
-                    || x.val_schema == self.placeholder_val_schema
-                {
+                if x.key_schema == self.placeholder_key_schema {
+                    // HACK: In prod, we use UnitSchema for val, which always
+                    // compares as equal to itself, including the default.
+                    // Fixing this would be pretty invasive, so just sniff using
+                    // the key schema.
                     self.metrics.placeholder_schema_apply.inc();
                 }
                 u.push((unapplied, unapplied_ts));

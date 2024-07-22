@@ -382,6 +382,8 @@ impl TxnsCodecRow {
             .with_column("shard_id", ScalarType::String.nullable(false))
             .with_column("ts", ScalarType::UInt64.nullable(false))
             .with_column("batch", ScalarType::Bytes.nullable(true))
+            .with_column("key_schema", ScalarType::Bytes.nullable(true))
+            .with_column("val_schema", ScalarType::Bytes.nullable(true))
     }
 }
 

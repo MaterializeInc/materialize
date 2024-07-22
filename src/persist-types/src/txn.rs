@@ -104,7 +104,7 @@ pub trait TxnsDataSchema: Debug + PartialEq {
     /// Decode a schema previous encoded with this schema's
     /// [TxnsDataSchema::encode].
     ///
-    /// This must perfectly round-trip Self through [TxnsDataSchema::decode]. If
+    /// This must perfectly round-trip Self through [TxnsDataSchema::encode]. If
     /// the encode function for this schema ever changes, decode must be able to
     /// handle bytes output by all previous versions of encode.
     ///

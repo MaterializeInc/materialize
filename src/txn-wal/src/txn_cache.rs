@@ -1125,6 +1125,10 @@ pub(crate) struct DataRegistered<KS, VS, T> {
 }
 
 impl<KS, VS, T: Timestamp + TotalOrder> DataRegistered<KS, VS, T> {
+    /// Returns whether the given time is included in this registration record.
+    ///
+    /// If it is, indicates this by returning a `Some` of the schemas at that
+    /// time. If it's not, returns a `None`.
     pub(crate) fn contains(&self, ts: &T) -> Option<(&KS, &VS)> {
         let contains = &self.register_ts <= ts && self.forget_ts.as_ref().map_or(true, |x| ts <= x);
         contains.then_some((&self.key_schema, &self.val_schema))
