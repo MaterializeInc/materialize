@@ -33,6 +33,7 @@ TEST_ANALYTICS_DATA_VERSION: int = 10
 
 
 class TestAnalyticsDb:
+    __test__ = False
 
     def __init__(self, config: MzDbConfig):
         self.config = config
