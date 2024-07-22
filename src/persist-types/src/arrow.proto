@@ -74,7 +74,7 @@ message StructArray {
 message Array {
     string name = 1;
     bool nullable = 2;
-    NullBuffer nulls = 3;
+    BooleanBuffer nulls = 3;
 
     // Protobuf tags [1, 15] get encoded in a single byte, so order these by
     // what is most common.
@@ -113,8 +113,4 @@ message BooleanBuffer {
     Buffer buffer = 1;
     uint64 offset = 2;
     uint64 length = 3;
-}
-
-message NullBuffer {
-    BooleanBuffer buf = 1;
 }

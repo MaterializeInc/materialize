@@ -150,7 +150,7 @@ impl ArrayProtobuf for BooleanArray {
         proto::Array {
             name: field.name().clone(),
             nullable: field.is_nullable(),
-            nulls: nulls.into_proto(),
+            nulls: nulls.map(|n| n.into_inner().into_proto()),
             kind: Some(proto::array::Kind::Boolean(array)),
         }
     }
@@ -168,7 +168,10 @@ impl ArrayProtobuf for BooleanArray {
         };
 
         let bool_buffer: BooleanBuffer = array.buffer.into_rust_if_some("buffer")?;
-        let nulls = nulls.into_rust()?;
+        let nulls = nulls
+            .map(|n| n.into_rust())
+            .transpose()?
+            .map(NullBuffer::new);
         let field = Field::new(name, DataType::Boolean, nullable);
         let array = BooleanArray::new(bool_buffer, nulls);
 
@@ -180,7 +183,7 @@ macro_rules! primitive_array {
     ($rust_ty:ty, $arrow_array:ty, $proto_var:ident, $proto_array:ident) => {
         impl ArrayProtobuf for $arrow_array {
             fn into_proto(self, field: Arc<Field>) -> proto::Array {
-                let nulls = self.logical_nulls().into_proto();
+                let nulls = self.logical_nulls().map(|n| n.into_inner().into_proto());
                 let values = self.values().iter().map(|x| (*x).into()).collect();
                 let array = proto::$proto_array { values };
 
@@ -220,7 +223,10 @@ macro_rules! primitive_array {
                     .collect::<Result<_, _>>()?;
                 let buffer = ScalarBuffer::from(values);
 
-                let nulls = nulls.into_rust()?;
+                let nulls = nulls
+                    .map(|n| n.into_rust())
+                    .transpose()?
+                    .map(NullBuffer::new);
                 let array = <$arrow_array>::new(buffer, nulls);
                 let field = Field::new(name, array.data_type().clone(), nullable);
 
@@ -262,7 +268,7 @@ where
         proto::Array {
             name: field.name().clone(),
             nullable: field.is_nullable(),
-            nulls: nulls.into_proto(),
+            nulls: nulls.map(|n| n.into_inner().into_proto()),
             kind: Some(kind),
         }
     }
@@ -275,7 +281,10 @@ where
             kind,
         } = proto;
         let kind = kind.ok_or_else(|| TryFromProtoError::missing_field("kind"))?;
-        let nulls = nulls.into_rust()?;
+        let nulls = nulls
+            .map(|n| n.into_rust())
+            .transpose()?
+            .map(NullBuffer::new);
 
         let array = match (T::DATA_TYPE, kind) {
             (DataType::Binary, proto::array::Kind::Binary(array)) => {
@@ -315,7 +324,7 @@ impl ArrayProtobuf for FixedSizeBinaryArray {
         proto::Array {
             name: field.name().clone(),
             nullable: field.is_nullable(),
-            nulls: nulls.into_proto(),
+            nulls: nulls.map(|n| n.into_inner().into_proto()),
             kind: Some(proto::array::Kind::FixedBinary(array)),
         }
     }
@@ -332,7 +341,10 @@ impl ArrayProtobuf for FixedSizeBinaryArray {
             return Err(TryFromProtoError::missing_field("kind.fixed_size"));
         };
 
-        let nulls = nulls.into_rust()?;
+        let nulls = nulls
+            .map(|n| n.into_rust())
+            .transpose()?
+            .map(NullBuffer::new);
         let values = array.data.into_rust_if_some("data")?;
         let array = FixedSizeBinaryArray::new(array.size, values, nulls);
         let field = Field::new(name, array.data_type().clone(), nullable);
@@ -353,7 +365,7 @@ impl ArrayProtobuf for ListArray {
         proto::Array {
             name: field.name().clone(),
             nullable: field.is_nullable(),
-            nulls: nulls.into_proto(),
+            nulls: nulls.map(|n| n.into_inner().into_proto()),
             kind: Some(proto::array::Kind::List(array)),
         }
     }
@@ -378,7 +390,10 @@ impl ArrayProtobuf for ListArray {
             ArrayProtobuf::from_proto(*values)?;
         let values_field = Arc::new(values_field);
 
-        let nulls: Option<NullBuffer> = nulls.into_rust()?;
+        let nulls: Option<NullBuffer> = nulls
+            .map(|n| n.into_rust())
+            .transpose()?
+            .map(NullBuffer::new);
         let offsets = ScalarBuffer::from(array.offsets);
         let offsets = OffsetBuffer::new(offsets);
 
@@ -402,7 +417,7 @@ impl ArrayProtobuf for MapArray {
         proto::Array {
             name: field.name().clone(),
             nullable: field.is_nullable(),
-            nulls: nulls.into_proto(),
+            nulls: nulls.map(|n| n.into_inner().into_proto()),
             kind: Some(proto::array::Kind::Map(array)),
         }
     }
@@ -427,7 +442,10 @@ impl ArrayProtobuf for MapArray {
 
         let offsets = ScalarBuffer::from(array.offsets);
         let offsets = OffsetBuffer::new(offsets);
-        let nulls = nulls.into_rust()?;
+        let nulls = nulls
+            .map(|n| n.into_rust())
+            .transpose()?
+            .map(NullBuffer::new);
 
         let array = MapArray::new(
             Arc::new(entries_field),
@@ -457,7 +475,7 @@ impl ArrayProtobuf for StructArray {
         proto::Array {
             name: field.name().clone(),
             nullable: field.is_nullable(),
-            nulls: nulls.into_proto(),
+            nulls: nulls.map(|n| n.into_inner().into_proto()),
             kind: Some(proto::array::Kind::Struct(array)),
         }
     }
@@ -485,7 +503,10 @@ impl ArrayProtobuf for StructArray {
         }
 
         let fields = Fields::from(fields);
-        let nulls = nulls.into_rust()?;
+        let nulls = nulls
+            .map(|n| n.into_rust())
+            .transpose()?
+            .map(NullBuffer::new);
 
         let array = StructArray::new(fields, arrays, nulls);
         let field = Field::new(name, array.data_type().clone(), nullable);
@@ -563,19 +584,5 @@ impl RustType<proto::BooleanBuffer> for arrow::buffer::BooleanBuffer {
         let length = usize::cast_from(length);
 
         Ok(BooleanBuffer::new(buffer, offset, length))
-    }
-}
-
-impl RustType<proto::NullBuffer> for arrow::buffer::NullBuffer {
-    fn into_proto(&self) -> proto::NullBuffer {
-        proto::NullBuffer {
-            buf: Some(self.inner().into_proto()),
-        }
-    }
-
-    fn from_proto(proto: proto::NullBuffer) -> Result<Self, mz_proto::TryFromProtoError> {
-        let proto::NullBuffer { buf } = proto;
-        let buf = buf.into_rust_if_some("buf")?;
-        Ok(NullBuffer::new(buf))
     }
 }
