@@ -467,15 +467,14 @@ impl columnation::Columnation for Timestamp {
 }
 
 mod flatcontainer {
-    use flatcontainer::IntoOwned;
+    use flatcontainer::{IntoOwned, MirrorRegion};
     use mz_ore::flatcontainer::MzRegionPreference;
-    use mz_ore::region::LgAllocVec;
 
     use crate::Timestamp;
 
     impl MzRegionPreference for Timestamp {
         type Owned = Self;
-        type Region = LgAllocVec<Timestamp>;
+        type Region = MirrorRegion<Timestamp>;
     }
 
     impl<'a> IntoOwned<'a> for Timestamp {

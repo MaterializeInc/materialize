@@ -136,7 +136,7 @@ pub(super) fn construct<A: Allocate>(
                 )
                 .as_collection(move |op, ()| {
                     packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*op)),
+                        Datum::UInt64(u64::cast_from(op)),
                         Datum::UInt64(u64::cast_from(worker_id)),
                     ])
                 })

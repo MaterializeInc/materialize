@@ -11,6 +11,9 @@
 
 #![allow(dead_code, missing_docs)]
 
+pub use crate::row_spine::{RowRowSpine, RowSpine, RowValSpine};
+use crate::typedefs::spines::MzFlatLayout;
+pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
@@ -19,16 +22,11 @@ use differential_dataflow::trace::implementations::merge_batcher_col::Columnatio
 use differential_dataflow::trace::implementations::ord_neu::{FlatValSpine, OrdValBatch};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use mz_ore::flatcontainer::{
-    MzOffsetOptimized, MzRegionPreference, MzTupleABCRegion, MzTupleABRegion,
-};
+use mz_ore::flatcontainer::{ItemRegion, MzIndexOptimized, MzRegionPreference};
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
+use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use timely::dataflow::ScopeParent;
-
-pub use crate::row_spine::{RowRowSpine, RowSpine, RowValSpine};
-use crate::typedefs::spines::MzFlatLayout;
-pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
 
 pub(crate) mod spines {
     use std::rc::Rc;
@@ -41,7 +39,7 @@ pub(crate) mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
-    use mz_ore::flatcontainer::{MzOffsetOptimized, MzRegion};
+    use mz_ore::flatcontainer::{MzIndex, MzIndexOptimized, MzRegion};
     use mz_timely_util::containers::stack::StackWrapper;
     use timely::container::columnation::{Columnation, TimelyStack};
     use timely::container::flatcontainer::FlatStack;
@@ -91,10 +89,10 @@ pub(crate) mod spines {
 
     impl<KR, VR, TR, RR> Update for MzFlatLayout<KR, VR, TR, RR>
     where
-        KR: MzRegion,
-        VR: MzRegion,
-        TR: MzRegion,
-        RR: MzRegion,
+        KR: MzRegion<Index = MzIndex>,
+        VR: MzRegion<Index = MzIndex>,
+        TR: MzRegion<Index = MzIndex>,
+        RR: MzRegion<Index = MzIndex>,
         KR::Owned: Ord + Clone + 'static,
         VR::Owned: Ord + Clone + 'static,
         TR::Owned: Ord + Clone + Lattice + Timestamp + 'static,
@@ -116,10 +114,10 @@ pub(crate) mod spines {
     /// to the optimized variant, we might be able to remove this implementation.
     impl<KR, VR, TR, RR> Layout for MzFlatLayout<KR, VR, TR, RR>
     where
-        KR: MzRegion,
-        VR: MzRegion,
-        TR: MzRegion,
-        RR: MzRegion,
+        KR: MzRegion<Index = MzIndex>,
+        VR: MzRegion<Index = MzIndex>,
+        TR: MzRegion<Index = MzIndex>,
+        RR: MzRegion<Index = MzIndex>,
         KR::Owned: Ord + Clone + 'static,
         VR::Owned: Ord + Clone + 'static,
         TR::Owned: Ord + Clone + Lattice + Timestamp + 'static,
@@ -130,10 +128,10 @@ pub(crate) mod spines {
         for<'a> RR::ReadItem<'a>: Copy + Ord,
     {
         type Target = Self;
-        type KeyContainer = FlatStack<KR, MzOffsetOptimized>;
-        type ValContainer = FlatStack<VR, MzOffsetOptimized>;
-        type TimeContainer = FlatStack<TR, MzOffsetOptimized>;
-        type DiffContainer = FlatStack<RR, MzOffsetOptimized>;
+        type KeyContainer = FlatStack<KR, MzIndexOptimized>;
+        type ValContainer = FlatStack<VR, MzIndexOptimized>;
+        type TimeContainer = FlatStack<TR, MzIndexOptimized>;
+        type DiffContainer = FlatStack<RR, MzIndexOptimized>;
         type OffsetContainer = OffsetOptimized;
     }
 }
@@ -184,15 +182,15 @@ pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
 pub type FlatKeyValBatch<K, V, T, R> = OrdValBatch<MzFlatLayout<K, V, T, R>>;
 pub type FlatKeyValSpine<K, V, T, R, C> = FlatValSpine<
     MzFlatLayout<K, V, T, R>,
-    MzTupleABCRegion<MzTupleABRegion<K, V>, T, R>,
+    ItemRegion<TupleABCRegion<TupleABRegion<K, V>, T, R>>,
     C,
-    MzOffsetOptimized,
+    MzIndexOptimized,
 >;
 pub type FlatKeyValSpineDefault<K, V, T, R, C> = FlatKeyValSpine<
-    <K as MzRegionPreference>::Region,
-    <V as MzRegionPreference>::Region,
-    <T as MzRegionPreference>::Region,
-    <R as MzRegionPreference>::Region,
+    ItemRegion<<K as MzRegionPreference>::Region>,
+    ItemRegion<<V as MzRegionPreference>::Region>,
+    ItemRegion<<T as MzRegionPreference>::Region>,
+    ItemRegion<<R as MzRegionPreference>::Region>,
     C,
 >;
 pub type FlatKeyValAgent<K, V, T, R, C> = TraceAgent<FlatKeyValSpine<K, V, T, R, C>>;

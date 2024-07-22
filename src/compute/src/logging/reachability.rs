@@ -16,7 +16,7 @@ use std::rc::Rc;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_ore::flatcontainer::{MzOffsetOptimized, MzRegionPreference, OwnedRegionOpinion};
+use mz_ore::flatcontainer::{ItemRegion, MzIndexOptimized, MzRegionPreference, OwnedRegionOpinion};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
 use mz_timely_util::containers::PreallocatingCapacityContainerBuilder;
@@ -39,7 +39,7 @@ use crate::typedefs::{FlatKeyValSpineDefault, RowRowSpine};
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    event_queue: EventQueue<FlatStack<ReachabilityEventRegion, MzOffsetOptimized>>,
+    event_queue: EventQueue<FlatStack<ReachabilityEventRegion, MzIndexOptimized>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_index = worker.index();
@@ -55,10 +55,10 @@ pub(super) fn construct<A: Allocate>(
             usize,
             Option<Timestamp>,
         );
-        type UpdatesRegion = <((UpdatesKey, ()), Timestamp, Diff) as MzRegionPreference>::Region;
+        type UpdatesRegion =
+            ItemRegion<<((UpdatesKey, ()), Timestamp, Diff) as MzRegionPreference>::Region>;
 
-        type CB =
-            PreallocatingCapacityContainerBuilder<FlatStack<UpdatesRegion, MzOffsetOptimized>>;
+        type CB = PreallocatingCapacityContainerBuilder<FlatStack<UpdatesRegion, MzIndexOptimized>>;
         let (updates, token) = Some(event_queue.link).mz_replay::<_, CB, _>(
             scope,
             "reachability logs",
@@ -103,7 +103,7 @@ pub(super) fn construct<A: Allocate>(
                 );
 
                 let updates =
-                    updates.as_collection(move |(&update_type, addr, &source, &port, ts), _| {
+                    updates.as_collection(move |(update_type, addr, source, port, ts), _| {
                         let row_arena = RowArena::default();
                         let update_type = if update_type { "source" } else { "target" };
                         let binding = SharedRow::get();
@@ -119,7 +119,7 @@ pub(super) fn construct<A: Allocate>(
                             Datum::UInt64(u64::cast_from(port)),
                             Datum::UInt64(u64::cast_from(worker_index)),
                             Datum::String(update_type),
-                            Datum::from(ts.copied()),
+                            Datum::from(ts),
                         ];
                         row_builder.packer().extend(key.iter().map(|k| datums[*k]));
                         let key_row = row_builder.clone();

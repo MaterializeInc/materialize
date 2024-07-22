@@ -385,7 +385,7 @@ mod flatcontainer {
     use differential_dataflow::lattice::Lattice;
     use differential_dataflow::operators::arrange::Arranged;
     use differential_dataflow::trace::TraceReader;
-    use mz_ore::flatcontainer::{MzRegion, MzRegionPreference};
+    use mz_ore::flatcontainer::{MzIndex, MzRegion, MzRegionPreference};
     use timely::container::flatcontainer::{IntoOwned, Region};
     use timely::dataflow::Scope;
     use timely::progress::Timestamp;
@@ -399,10 +399,10 @@ mod flatcontainer {
         Self: Clone,
         G: Scope<Timestamp = T::Owned>,
         G::Timestamp: Lattice + Ord + MzRegionPreference,
-        K: MzRegion,
-        V: MzRegion,
-        T: MzRegion,
-        R: MzRegion,
+        K: MzRegion<Index = MzIndex>,
+        V: MzRegion<Index = MzIndex>,
+        T: MzRegion<Index = MzIndex>,
+        R: MzRegion<Index = MzIndex>,
         K::Owned: Clone + Ord,
         V::Owned: Clone + Ord,
         T::Owned: Lattice + for<'a> PartialOrder<<T as Region>::ReadItem<'a>> + Timestamp,

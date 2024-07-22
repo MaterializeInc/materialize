@@ -16,14 +16,13 @@ use std::time::Duration;
 
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
-use mz_ore::flatcontainer::{MzOffsetOptimized, MzRegionPreference, OwnedRegionOpinion};
-use mz_ore::region::LgAllocVec;
+use mz_ore::flatcontainer::{ItemRegion, MzIndexOptimized, MzRegionPreference, OwnedRegionOpinion};
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::containers::PreallocatingCapacityContainerBuilder;
 use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
-use timely::container::flatcontainer::FlatStack;
+use timely::container::flatcontainer::{FlatStack, IntoOwned, MirrorRegion};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -158,7 +157,7 @@ pub(super) fn construct<A: Allocate>(
             )
             .as_collection(move |id, name| {
                 packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*id)),
+                    Datum::UInt64(u64::cast_from(id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::String(name),
                 ])
@@ -191,7 +190,7 @@ pub(super) fn construct<A: Allocate>(
             .as_collection({
                 move |id, address| {
                     packer.pack_by_index(|packer, index| match index {
-                        0 => packer.push(Datum::UInt64(u64::cast_from(*id))),
+                        0 => packer.push(Datum::UInt64(u64::cast_from(id))),
                         1 => packer.push(Datum::UInt64(u64::cast_from(worker_id))),
                         2 => packer
                             .push_list(address.iter().map(|i| Datum::UInt64(u64::cast_from(*i)))),
@@ -272,7 +271,7 @@ pub(super) fn construct<A: Allocate>(
             )
             .as_collection(move |operator, _| {
                 packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*operator)),
+                    Datum::UInt64(u64::cast_from(operator)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
@@ -362,7 +361,7 @@ struct MessageCount {
 }
 
 type FlatStackFor<D> =
-    FlatStack<<(D, Timestamp, Diff) as MzRegionPreference>::Region, MzOffsetOptimized>;
+    FlatStack<ItemRegion<<(D, Timestamp, Diff) as MzRegionPreference>::Region>, MzIndexOptimized>;
 
 type Pusher<D> = Counter<Timestamp, FlatStackFor<D>, Tee<Timestamp, FlatStackFor<D>>>;
 type OutputSession<'a, D> =
@@ -395,7 +394,23 @@ struct ChannelDatum {
 
 impl MzRegionPreference for ChannelDatum {
     type Owned = Self;
-    type Region = LgAllocVec<Self>;
+    type Region = MirrorRegion<Self>;
+}
+
+impl<'a> IntoOwned<'a> for ChannelDatum {
+    type Owned = Self;
+
+    fn into_owned(self) -> Self::Owned {
+        self
+    }
+
+    fn clone_onto(self, other: &mut Self::Owned) {
+        *other = self;
+    }
+
+    fn borrow_as(owned: &'a Self::Owned) -> Self {
+        *owned
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -406,7 +421,23 @@ struct ParkDatum {
 
 impl MzRegionPreference for ParkDatum {
     type Owned = Self;
-    type Region = LgAllocVec<Self>;
+    type Region = MirrorRegion<Self>;
+}
+
+impl<'a> IntoOwned<'a> for ParkDatum {
+    type Owned = Self;
+
+    fn into_owned(self) -> Self::Owned {
+        self
+    }
+
+    fn clone_onto(self, other: &mut Self::Owned) {
+        *other = self;
+    }
+
+    fn borrow_as(owned: &'a Self::Owned) -> Self {
+        *owned
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -417,7 +448,23 @@ struct MessageDatum {
 
 impl MzRegionPreference for MessageDatum {
     type Owned = Self;
-    type Region = LgAllocVec<Self>;
+    type Region = MirrorRegion<Self>;
+}
+
+impl<'a> IntoOwned<'a> for MessageDatum {
+    type Owned = Self;
+
+    fn into_owned(self) -> Self::Owned {
+        self
+    }
+
+    fn clone_onto(self, other: &mut Self::Owned) {
+        *other = self;
+    }
+
+    fn borrow_as(owned: &'a Self::Owned) -> Self {
+        *owned
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -428,7 +475,23 @@ struct ScheduleHistogramDatum {
 
 impl MzRegionPreference for ScheduleHistogramDatum {
     type Owned = Self;
-    type Region = LgAllocVec<Self>;
+    type Region = MirrorRegion<Self>;
+}
+
+impl<'a> IntoOwned<'a> for ScheduleHistogramDatum {
+    type Owned = Self;
+
+    fn into_owned(self) -> Self::Owned {
+        self
+    }
+
+    fn clone_onto(self, other: &mut Self::Owned) {
+        *other = self;
+    }
+
+    fn borrow_as(owned: &'a Self::Owned) -> Self {
+        *owned
+    }
 }
 
 /// Event handler of the demux operator.

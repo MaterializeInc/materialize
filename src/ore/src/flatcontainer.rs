@@ -20,8 +20,7 @@ use flatcontainer::{OptionRegion, Push, Region, ReserveItems, StringRegion};
 use serde::{Deserialize, Serialize};
 
 pub use item::ItemRegion;
-pub use offset::MzOffsetOptimized;
-pub use tuple::*;
+pub use offset::MzIndexOptimized;
 
 /// Associate a type with a flat container region.
 pub trait MzRegionPreference: 'static {
@@ -45,7 +44,7 @@ impl std::ops::Deref for MzIndex {
 
 /// TODO
 pub trait MzRegion:
-    Region<Index = MzIndex>
+    Region
     + Push<<Self as Region>::Owned>
     + for<'a> Push<&'a <Self as Region>::Owned>
     + for<'a> Push<<Self as Region>::ReadItem<'a>>
@@ -56,7 +55,7 @@ pub trait MzRegion:
 }
 
 impl<R> MzRegion for R where
-    R: Region<Index = MzIndex>
+    R: Region
         + Push<<R as Region>::Owned>
         + for<'a> Push<&'a <Self as Region>::Owned>
         + for<'a> Push<<Self as Region>::ReadItem<'a>>
@@ -74,276 +73,30 @@ impl<R> MzRegion for R where
 pub struct OwnedRegionOpinion<T>(std::marker::PhantomData<T>);
 
 mod tuple {
-    use flatcontainer::{Index, Push, Region, ReserveItems};
+    use flatcontainer::impls::tuple::*;
     use paste::paste;
 
-    use crate::flatcontainer::{MzIndex, MzRegion, MzRegionPreference};
+    use crate::flatcontainer::MzRegionPreference;
 
     /// The macro creates the region implementation for tuples
     macro_rules! tuple_flatcontainer {
-    ($($name:ident)+) => (
-        paste! {
+        ($($name:ident)+) => (paste! {
             impl<$($name: MzRegionPreference),*> MzRegionPreference for ($($name,)*) {
                 type Owned = ($($name::Owned,)*);
-                type Region = [<MzTuple $($name)* Region >]<$($name::Region,)*>;
+                type Region = [<Tuple $($name)* Region >]<$($name::Region,)*>;
             }
-
-            /// A region for a tuple.
-            #[allow(non_snake_case)]
-            #[derive(Default, Debug)]
-            #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-            pub struct [<MzTuple $($name)* Region >]<$($name),*> {
-                $([<container $name>]: $name),*
-            }
-
-            #[allow(non_snake_case)]
-            impl<$($name: MzRegion),*> Clone for [<MzTuple $($name)* Region>]<$($name),*>
-            where
-               $(<$name as Region>::Index: Index),*
-            {
-                #[inline]
-                fn clone(&self) -> Self {
-                    Self {
-                        $([<container $name>]: self.[<container $name>].clone(),)*
-                    }
-                }
-
-                #[inline]
-                fn clone_from(&mut self, source: &Self) {
-                    $(self.[<container $name>].clone_from(&source.[<container $name>]);)*
-                }
-            }
-
-            #[allow(non_snake_case)]
-            impl<$($name: MzRegion),*> Region for [<MzTuple $($name)* Region>]<$($name),*>
-            where
-               $(<$name as Region>::Index: Index),*
-            {
-                type Owned = ($($name::Owned,)*);
-                type ReadItem<'a> = ($($name::ReadItem<'a>,)*) where Self: 'a;
-
-                type Index = MzIndex;
-
-                #[inline]
-                fn merge_regions<'a>(regions: impl Iterator<Item = &'a Self> + Clone) -> Self
-                where
-                    Self: 'a,
-                {
-                    Self {
-                        $([<container $name>]: $name::merge_regions(regions.clone().map(|r| &r.[<container $name>]))),*
-                    }
-                }
-
-                #[inline] fn index(&self, index: Self::Index) -> Self::ReadItem<'_> {
-                    (
-                        $(self.[<container $name>].index(index),)*
-                    )
-                }
-
-                #[inline(always)]
-                fn reserve_regions<'a, It>(&mut self, regions: It)
-                where
-                    Self: 'a,
-                    It: Iterator<Item = &'a Self> + Clone,
-                {
-                    $(self.[<container $name>].reserve_regions(regions.clone().map(|r| &r.[<container $name>]));)*
-                }
-
-                #[inline(always)]
-                fn clear(&mut self) {
-                    $(self.[<container $name>].clear();)*
-                }
-
-                #[inline]
-                fn heap_size<Fn: FnMut(usize, usize)>(&self, mut callback: Fn) {
-                    $(self.[<container $name>].heap_size(&mut callback);)*
-                }
-
-                #[inline]
-                fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> where Self: 'a {
-                    let ($($name,)*) = item;
-                    (
-                        $($name::reborrow($name),)*
-                    )
-                }
-            }
-
-            #[allow(non_camel_case_types)]
-            #[allow(non_snake_case)]
-            impl<$($name, [<$name _C>]: MzRegion ),*> Push<($($name,)*)> for [<MzTuple $($name)* Region>]<$([<$name _C>]),*>
-            where
-                $([<$name _C>]: Push<$name>),*
-            {
-                #[inline]
-                fn push(&mut self, item: ($($name,)*))
-                    -> <[<MzTuple $($name)* Region>]<$([<$name _C>]),*> as Region>::Index {
-                    let ($($name,)*) = item;
-                    $(let _index = self.[<container $name>].push($name);)*
-                    _index
-                }
-            }
-
-            #[allow(non_camel_case_types)]
-            #[allow(non_snake_case)]
-            impl<'a, $($name, [<$name _C>]),*> Push<&'a ($($name,)*)> for [<MzTuple $($name)* Region>]<$([<$name _C>]),*>
-            where
-                $([<$name _C>]: MzRegion + Push<&'a $name>),*
-            {
-                #[inline]
-                fn push(&mut self, item: &'a ($($name,)*))
-                    -> <[<MzTuple $($name)* Region>]<$([<$name _C>]),*> as Region>::Index {
-                    let ($($name,)*) = item;
-                    $(let _index = self.[<container $name>].push($name);)*
-                    _index
-                }
-            }
-
-            #[allow(non_camel_case_types)]
-            #[allow(non_snake_case)]
-            impl<'a, $($name, [<$name _C>]),*> ReserveItems<&'a ($($name,)*)> for [<MzTuple $($name)* Region>]<$([<$name _C>]),*>
-            where
-                $([<$name _C>]: MzRegion + ReserveItems<&'a $name>),*
-            {
-                #[inline]
-                fn reserve_items<It>(&mut self, items: It)
-                where
-                    It: Iterator<Item = &'a ($($name,)*)> + Clone,
-                {
-                        tuple_flatcontainer!(reserve_items self items $($name)* @ 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31);
-                }
-            }
-
-            #[allow(non_camel_case_types)]
-            #[allow(non_snake_case)]
-            impl<$($name, [<$name _C>]),*> ReserveItems<($($name,)*)> for [<MzTuple $($name)* Region>]<$([<$name _C>]),*>
-            where
-                $([<$name _C>]: MzRegion + ReserveItems<$name>),*
-            {
-                #[inline]
-                fn reserve_items<It>(&mut self, items: It)
-                where
-                    It: Iterator<Item = ($($name,)*)> + Clone,
-                {
-                        tuple_flatcontainer!(reserve_items_owned self items $($name)* @ 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31);
-                }
-            }
-        }
-    );
-    (reserve_items $self:ident $items:ident $name0:ident $($name:ident)* @ $num0:tt $($num:tt)*) => {
-        paste! {
-            $self.[<container $name0>].reserve_items($items.clone().map(|i| &i.$num0));
-            tuple_flatcontainer!(reserve_items $self $items $($name)* @ $($num)*);
-        }
-    };
-    (reserve_items $self:ident $items:ident @ $($num:tt)*) => {};
-    (reserve_items_owned $self:ident $items:ident $name0:ident $($name:ident)* @ $num0:tt $($num:tt)*) => {
-        paste! {
-            $self.[<container $name0>].reserve_items($items.clone().map(|i| i.$num0));
-            tuple_flatcontainer!(reserve_items_owned $self $items $($name)* @ $($num)*);
-        }
-    };
-    (reserve_items_owned $self:ident $items:ident @ $($num:tt)*) => {};
-}
+        });
+    }
 
     tuple_flatcontainer!(A);
     tuple_flatcontainer!(A B);
     tuple_flatcontainer!(A B C);
     tuple_flatcontainer!(A B C D);
     tuple_flatcontainer!(A B C D E);
-
-    #[cfg(feature = "differential")]
-    mod differential {
-        use differential_dataflow::difference::Semigroup;
-        use differential_dataflow::lattice::Lattice;
-        use differential_dataflow::trace::implementations::merge_batcher_flat::RegionUpdate;
-        use differential_dataflow::trace::implementations::Update;
-        use timely::progress::Timestamp;
-
-        use crate::flatcontainer::{MzRegion, MzTupleABCRegion, MzTupleABRegion};
-
-        impl<KR, VR, TR, RR> Update for MzTupleABCRegion<MzTupleABRegion<KR, VR>, TR, RR>
-        where
-            KR: MzRegion,
-            KR::Owned: Clone + Ord,
-            for<'a> KR::ReadItem<'a>: Copy + Ord,
-            VR: MzRegion,
-            VR::Owned: Clone + Ord,
-            for<'a> VR::ReadItem<'a>: Copy + Ord,
-            TR: MzRegion,
-            TR::Owned: Clone + Lattice + Ord + Timestamp,
-            for<'a> TR::ReadItem<'a>: Copy + Ord,
-            RR: MzRegion,
-            RR::Owned: Clone + Ord + Semigroup,
-            for<'a> RR::ReadItem<'a>: Copy + Ord,
-        {
-            type Key = KR::Owned;
-            type Val = VR::Owned;
-            type Time = TR::Owned;
-            type Diff = RR::Owned;
-        }
-
-        impl<KR, VR, TR, RR> RegionUpdate for MzTupleABCRegion<MzTupleABRegion<KR, VR>, TR, RR>
-        where
-            KR: MzRegion,
-            for<'a> KR::ReadItem<'a>: Copy + Ord,
-            VR: MzRegion,
-            for<'a> VR::ReadItem<'a>: Copy + Ord,
-            TR: MzRegion,
-            for<'a> TR::ReadItem<'a>: Copy + Ord,
-            RR: MzRegion,
-            for<'a> RR::ReadItem<'a>: Copy + Ord,
-        {
-            type Key<'a> = KR::ReadItem<'a> where Self: 'a;
-            type Val<'a> = VR::ReadItem<'a> where Self: 'a;
-            type Time<'a> = TR::ReadItem<'a> where Self: 'a;
-            type TimeOwned = TR::Owned;
-            type Diff<'a> = RR::ReadItem<'a> where Self: 'a;
-            type DiffOwned = RR::Owned;
-
-            #[inline]
-            fn into_parts<'a>(
-                ((key, val), time, diff): Self::ReadItem<'a>,
-            ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
-                (key, val, time, diff)
-            }
-
-            #[inline]
-            fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
-            where
-                Self: 'a,
-            {
-                KR::reborrow(item)
-            }
-
-            #[inline]
-            fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
-            where
-                Self: 'a,
-            {
-                VR::reborrow(item)
-            }
-
-            #[inline]
-            fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
-            where
-                Self: 'a,
-            {
-                TR::reborrow(item)
-            }
-
-            #[inline]
-            fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
-            where
-                Self: 'a,
-            {
-                RR::reborrow(item)
-            }
-        }
-    }
 }
 
 mod copy {
-    use crate::region::LgAllocVec;
+    use flatcontainer::MirrorRegion;
 
     use crate::flatcontainer::MzRegionPreference;
 
@@ -351,7 +104,7 @@ mod copy {
         ($index_type:ty) => {
             impl MzRegionPreference for $index_type {
                 type Owned = Self;
-                type Region = LgAllocVec<Self>;
+                type Region = MirrorRegion<Self>;
             }
         };
     }
@@ -781,6 +534,78 @@ mod item {
             self.storage.reserve(items.count());
         }
     }
+
+    #[cfg(feature = "differential")]
+    mod differential {
+        use differential_dataflow::trace::implementations::merge_batcher_flat::RegionUpdate;
+        use differential_dataflow::trace::implementations::Update;
+
+        use crate::flatcontainer::{ItemRegion, MzRegion};
+
+        impl<UR> Update for ItemRegion<UR>
+        where
+            UR: Update + MzRegion,
+            UR::Owned: Clone + Ord,
+            for<'a> UR::ReadItem<'a>: Copy + Ord,
+        {
+            type Key = UR::Key;
+            type Val = UR::Val;
+            type Time = UR::Time;
+            type Diff = UR::Diff;
+        }
+
+        impl<UR> RegionUpdate for ItemRegion<UR>
+        where
+            UR: RegionUpdate + MzRegion,
+            for<'a> UR::ReadItem<'a>: Copy + Ord,
+        {
+            type Key<'a> = UR::Key<'a> where Self: 'a;
+            type Val<'a> = UR::Val<'a> where Self: 'a;
+            type Time<'a> = UR::Time<'a> where Self: 'a;
+            type TimeOwned = UR::TimeOwned;
+            type Diff<'a> = UR::Diff<'a> where Self: 'a;
+            type DiffOwned = UR::DiffOwned;
+
+            #[inline]
+            fn into_parts<'a>(
+                item: Self::ReadItem<'a>,
+            ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
+                UR::into_parts(item)
+            }
+
+            #[inline]
+            fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
+            where
+                Self: 'a,
+            {
+                UR::reborrow_key(item)
+            }
+
+            #[inline]
+            fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
+            where
+                Self: 'a,
+            {
+                UR::reborrow_val(item)
+            }
+
+            #[inline]
+            fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
+            where
+                Self: 'a,
+            {
+                UR::reborrow_time(item)
+            }
+
+            #[inline]
+            fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
+            where
+                Self: 'a,
+            {
+                UR::reborrow_diff(item)
+            }
+        }
+    }
 }
 
 mod lgallocvec {
@@ -967,47 +792,56 @@ mod offset {
 
     /// TODO
     #[derive(Default, Clone, Debug)]
-    pub struct MzOffsetOptimized(IndexOptimized);
+    pub struct MzIndexOptimized(IndexOptimized);
 
-    impl Storage<MzIndex> for MzOffsetOptimized {
+    impl Storage<MzIndex> for MzIndexOptimized {
+        #[inline]
         fn with_capacity(capacity: usize) -> Self {
             Self(IndexOptimized::with_capacity(capacity))
         }
 
+        #[inline]
         fn reserve(&mut self, additional: usize) {
             self.0.reserve(additional)
         }
 
+        #[inline]
         fn clear(&mut self) {
             self.0.clear();
         }
 
+        #[inline]
         fn heap_size<F: FnMut(usize, usize)>(&self, callback: F) {
             self.0.heap_size(callback);
         }
 
+        #[inline]
         fn len(&self) -> usize {
             self.0.len()
         }
 
+        #[inline]
         fn is_empty(&self) -> bool {
             self.0.is_empty()
         }
     }
 
-    impl IndexContainer<MzIndex> for MzOffsetOptimized {
+    impl IndexContainer<MzIndex> for MzIndexOptimized {
         type Iter<'a> = MzOffsetOptimizedIter<<IndexOptimized as IndexContainer<usize>>::Iter<'a>>
         where
             Self: 'a;
 
+        #[inline]
         fn index(&self, index: usize) -> MzIndex {
             MzIndex(self.0.index(index))
         }
 
+        #[inline]
         fn push(&mut self, item: MzIndex) {
             self.0.push(item.0);
         }
 
+        #[inline]
         fn extend<I: IntoIterator<Item = MzIndex>>(&mut self, iter: I)
         where
             I::IntoIter: ExactSizeIterator,
@@ -1015,8 +849,18 @@ mod offset {
             self.0.extend(iter.into_iter().map(|item| item.0));
         }
 
+        #[inline]
         fn iter(&self) -> Self::Iter<'_> {
             MzOffsetOptimizedIter(self.0.iter())
+        }
+    }
+
+    impl<'a> IntoIterator for &'a MzIndexOptimized {
+        type Item = MzIndex;
+        type IntoIter = MzOffsetOptimizedIter<<IndexOptimized as IndexContainer<usize>>::Iter<'a>>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.iter()
         }
     }
 
@@ -1030,6 +874,7 @@ mod offset {
     {
         type Item = MzIndex;
 
+        #[inline]
         fn next(&mut self) -> Option<Self::Item> {
             self.0.next().map(MzIndex)
         }
