@@ -222,6 +222,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
 
 use crate::proto::ProtoIdBatch;
+use crate::txns::DataWriteHandle;
 
 pub mod metrics;
 pub mod operator;
@@ -385,7 +386,7 @@ where
 /// This method is idempotent.
 pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     name: F,
-    txns_or_data_write: &mut WriteHandle<K, V, T, D>,
+    txns_or_data_write: &mut DataWriteHandle<K, V, T, D>,
     init_ts: T,
 ) where
     S: AsRef<str>,
@@ -396,7 +397,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     let name = name();
-    let empty: &[((&K, &V), &T, D)] = &[];
+    let name = name.as_ref();
     let Some(mut upper) = txns_or_data_write.shared_upper().into_option() else {
         // Shard is closed, which means the upper must be past init_ts.
         return;
@@ -405,17 +406,35 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
         if init_ts < upper {
             return;
         }
-        let res = small_caa(
-            || name.as_ref(),
-            txns_or_data_write,
-            empty,
-            upper,
-            init_ts.step_forward(),
-        )
-        .await;
+        let new_upper = init_ts.step_forward();
+        fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
+            xs.into_iter().fold(String::new(), |mut output, x| {
+                let _ = write!(output, "{}{:?}", sep, x);
+                output
+            })
+        }
+        debug!("CaA {} [{:?},{:?}) empty", name, upper, new_upper,);
+        let res = txns_or_data_write
+            .compare_and_append_schemaless(
+                &mut [],
+                Antichain::from_elem(upper.clone()),
+                Antichain::from_elem(new_upper.clone()),
+            )
+            .await
+            .expect("usage was valid");
         match res {
-            Ok(()) => return,
-            Err(current) => {
+            Ok(()) => {
+                debug!("CaA {} [{:?},{:?}) success", name, upper, new_upper);
+                return;
+            }
+            Err(UpperMismatch { current, .. }) => {
+                let current = current
+                    .into_option()
+                    .expect("txns shard should not be closed");
+                debug!(
+                    "CaA {} [{:?},{:?}) mismatch actual={:?}",
+                    name, upper, new_upper, current,
+                );
                 upper = current;
             }
         }
@@ -432,7 +451,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// to get the same answer.)
 #[instrument(level = "debug", fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
-    data_write: &mut WriteHandle<K, V, T, D>,
+    data_write: &mut DataWriteHandle<K, V, T, D>,
     batch_raws: &Vec<&[u8]>,
     commit_ts: T,
 ) where

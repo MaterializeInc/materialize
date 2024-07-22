@@ -2173,7 +2173,13 @@ pub mod datadriven {
         let mut batch_refs: Vec<_> = batches.iter_mut().collect();
 
         let () = writer
-            .compare_and_append_batch(batch_refs.as_mut_slice(), expected_upper, new_upper)
+            .wrapped
+            .compare_and_append_internal(
+                batch_refs.as_mut_slice(),
+                expected_upper,
+                new_upper,
+                writer.compact.as_ref(),
+            )
             .await?
             .map_err(|err| anyhow!("upper mismatch: {:?}", err))?;
 
@@ -2364,12 +2370,13 @@ pub mod tests {
                 )
                 .await;
             let (_, writer_maintenance) = write
+                .wrapped
                 .machine
                 .compare_and_append(
                     &batch.into_hollow_batch(),
-                    &write.writer_id,
+                    &write.wrapped.writer_id,
                     &HandleDebugState::default(),
-                    (write.cfg.now)(),
+                    (write.wrapped.cfg.now)(),
                 )
                 .await
                 .unwrap();

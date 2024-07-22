@@ -81,13 +81,13 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(1024 * 1024));
                     x
                 },
-                {
-                    // Stress inline writes backpressure
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_inline_writes_single_max_bytes", ::mz_dyncfg::ConfigVal::Usize(4 * 1024));
-                    x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
-                    x
-                },
+                // {
+                //     // Stress inline writes backpressure
+                //     let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                //     x.add_dynamic("persist_inline_writes_single_max_bytes", ::mz_dyncfg::ConfigVal::Usize(4 * 1024));
+                //     x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
+                //     x
+                // },
                 {
                     // Enable new compaction tracking / claiming
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();

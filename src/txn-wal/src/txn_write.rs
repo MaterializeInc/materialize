@@ -30,7 +30,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::proto::ProtoIdBatch;
-use crate::txns::{Tidy, TxnsHandle};
+use crate::txns::{DataWriteHandle, Tidy, TxnsHandle};
 
 /// Pending writes to a shard for an in-progress transaction.
 #[derive(Debug)]
@@ -285,7 +285,7 @@ where
                                     .commit_bytes
                                     .inc_by(u64::cast_from(batch.encoded_size_bytes()));
                             }
-                            handle.datas.put_write(data_write);
+                            handle.datas.put_write(DataWriteHandle::Schema(data_write));
                         }
                         return Ok(TxnApply {
                             is_empty: apply_is_empty,
@@ -308,7 +308,7 @@ where
                                 batches,
                             };
                             self.writes.insert(data_write.shard_id(), txn_write);
-                            handle.datas.put_write(data_write);
+                            handle.datas.put_write(DataWriteHandle::Schema(data_write));
                         }
                         let _ = handle.txns_cache.update_ge(&txns_upper).await;
                         continue;

@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
@@ -19,14 +20,16 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
+use mz_persist_client::batch::Batch;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
-use mz_persist_client::write::WriteHandle;
+use mz_persist_client::error::{InvalidUsage, UpperMismatch};
+use mz_persist_client::write::{SchemalessWriteHandle, WriteHandle};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::metrics::Metrics;
@@ -139,10 +142,6 @@ where
         client: PersistClient,
         metrics: Arc<Metrics>,
         txns_id: ShardId,
-        // TODO(txn): Get rid of these by introducing a SchemalessWriteHandle to
-        // persist.
-        key_schema: Arc<K::Schema>,
-        val_schema: Arc<V::Schema>,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
         let (mut txns_write, txns_read) = client
@@ -180,8 +179,6 @@ where
             datas: DataHandles {
                 client,
                 data_write: BTreeMap::new(),
-                key_schema,
-                val_schema,
             },
         }
     }
@@ -294,7 +291,7 @@ where
             for data_write in data_writes {
                 self.datas
                     .data_write
-                    .insert(data_write.shard_id(), data_write);
+                    .insert(data_write.shard_id(), DataWriteHandle::Schema(data_write));
             }
             let tidy = self.apply_le(&register_ts).await;
 
@@ -556,7 +553,7 @@ where
 
             let retractions = FuturesUnordered::new();
             for (data_id, unapplied) in unapplied_by_data {
-                let mut data_write = self.datas.take_write(&data_id).await;
+                let mut data_write = self.datas.take_data_write(&data_id).await;
                 retractions.push(async move {
                     let mut ret = Vec::new();
                     for (unapplied, unapplied_ts) in unapplied {
@@ -699,9 +696,7 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) client: PersistClient,
-    data_write: BTreeMap<ShardId, WriteHandle<K, V, T, D>>,
-    key_schema: Arc<K::Schema>,
-    val_schema: Arc<V::Schema>,
+    data_write: BTreeMap<ShardId, DataWriteHandle<K, V, T, D>>,
 }
 
 impl<K, V, T, D> DataHandles<K, V, T, D>
@@ -711,28 +706,79 @@ where
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
-    async fn open_data_write(&self, data_id: ShardId) -> WriteHandle<K, V, T, D> {
-        self.client
-            .open_writer(
-                data_id,
-                Arc::clone(&self.key_schema),
-                Arc::clone(&self.val_schema),
-                Diagnostics::from_purpose("txn data"),
-            )
-            .await
-            .expect("schema shouldn't change")
+    async fn open_data_write(&self, data_id: ShardId) -> DataWriteHandle<K, V, T, D> {
+        todo!("WIP")
+        // self.client
+        //     .open_writer(
+        //         data_id,
+        //         Arc::clone(&self.key_schema),
+        //         Arc::clone(&self.val_schema),
+        //         Diagnostics::from_purpose("txn data"),
+        //     )
+        //     .await
+        //     .expect("schema shouldn't change")
     }
 
-    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
+    pub(crate) async fn take_data_write(
+        &mut self,
+        data_id: &ShardId,
+    ) -> DataWriteHandle<K, V, T, D> {
         if let Some(data_write) = self.data_write.remove(data_id) {
             return data_write;
         }
         self.open_data_write(*data_id).await
     }
 
-    pub(crate) fn put_write(&mut self, data_write: WriteHandle<K, V, T, D>) {
+    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
+        todo!("WIP")
+    }
+
+    pub(crate) fn put_write(&mut self, data_write: DataWriteHandle<K, V, T, D>) {
+        // WIP don't override a Schemaless with a Schema
         self.data_write.insert(data_write.shard_id(), data_write);
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum DataWriteHandle<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    Schema(WriteHandle<K, V, T, D>),
+    Schemaless(SchemalessWriteHandle<K, V, T, D>),
+}
+
+impl<K, V, T, D> Deref for DataWriteHandle<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    type Target = SchemalessWriteHandle<K, V, T, D>;
+
+    fn deref(&self) -> &Self::Target {
+        todo!()
+    }
+}
+
+#[async_trait::async_trait]
+trait CompareAndAppendBatch<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    async fn compare_and_append_batch(
+        &mut self,
+        batches: &mut [&mut Batch<K, V, T, D>],
+        expected_upper: Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>;
 }
 
 #[cfg(test)]
@@ -770,8 +816,6 @@ mod tests {
                 client,
                 Arc::new(Metrics::new(&MetricsRegistry::new())),
                 txns_id,
-                Arc::new(StringSchema),
-                Arc::new(UnitSchema),
             )
             .await
         }

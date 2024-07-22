@@ -11,6 +11,7 @@
 
 use std::borrow::Borrow;
 use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
@@ -214,33 +215,24 @@ where
         &self.upper
     }
 
-    /// Appends the batch of updates to the shard and downgrades this handle's
-    /// upper to `new_upper` iff the current global upper of this shard is
-    /// `expected_upper`.
+    /// See [WriteHandle::compare_and_append_batch].
     ///
-    /// The innermost `Result` is `Ok` if the batch was successfully written. If
-    /// not, an `Upper` err containing the current global upper is returned.
-    ///
-    /// In contrast to [Self::append_batch], this linearizes mutations from all
-    /// writers. It's intended for use as an atomic primitive for timestamp
-    /// bindings, SQL tables, etc.
-    ///
-    /// A `new_upper` of the empty antichain "finishes" this shard, promising
-    /// that no more data is ever incoming.
-    ///
-    /// The batch may be empty, which allows for downgrading `upper` to
-    /// communicate progress. It is possible to heartbeat a writer lease by
-    /// calling this with `new_upper` equal to `self.upper()` and an empty
-    /// `updates` (making the call a no-op).
-    ///
-    /// IMPORTANT: In case of an erroneous result the caller is responsible for
-    /// the lifecycle of the `batch`. It can be deleted or it can be used to
-    /// retry with adjusted frontiers.
-    ///
-    /// The clunky multi-level Result is to enable more obvious error handling
-    /// in the caller. See <http://sled.rs/errors.html> for details.
+    /// WIP but no schemas means no compaction and no inline writes backpressure
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
-    pub async fn compare_and_append_batch(
+    pub async fn compare_and_append_schemaless(
+        &mut self,
+        batches: &mut [&mut Batch<K, V, T, D>],
+        expected_upper: Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
+    where
+        D: Send + Sync,
+    {
+        self.compare_and_append_internal(batches, expected_upper, new_upper, None)
+            .await
+    }
+
+    pub(crate) async fn compare_and_append_internal(
         &mut self,
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
@@ -477,19 +469,36 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(crate) cfg: PersistConfig,
-    pub(crate) metrics: Arc<Metrics>,
-    pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) gc: GarbageCollector<K, V, T, D>,
+    pub(crate) wrapped: SchemalessWriteHandle<K, V, T, D>,
     pub(crate) compact: Option<Compactor<K, V, T, D>>,
-    pub(crate) blob: Arc<dyn Blob>,
     pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
-    pub(crate) writer_id: WriterId,
-    pub(crate) debug_state: HandleDebugState,
     pub(crate) schemas: Schemas<K, V>,
+}
 
-    pub(crate) upper: Antichain<T>,
-    explicitly_expired: bool,
+impl<K, V, T, D> Deref for WriteHandle<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    type Target = SchemalessWriteHandle<K, V, T, D>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.wrapped
+    }
+}
+
+impl<K, V, T, D> DerefMut for WriteHandle<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.wrapped
+    }
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -525,19 +534,22 @@ where
             purpose: purpose.to_owned(),
         };
         let upper = machine.applier.clone_upper();
+        // WIP reduce duplication
         WriteHandle {
-            cfg,
-            metrics,
-            machine,
-            gc,
-            compact,
-            blob,
+            wrapped: SchemalessWriteHandle {
+                cfg,
+                metrics,
+                machine,
+                gc,
+                blob,
+                writer_id,
+                debug_state,
+                upper,
+                explicitly_expired: false,
+            },
             isolated_runtime,
-            writer_id,
-            debug_state,
+            compact,
             schemas,
-            upper,
-            explicitly_expired: false,
         }
     }
 
@@ -554,46 +566,6 @@ where
             purpose,
             read.schemas.clone(),
         )
-    }
-
-    /// This handle's shard id.
-    pub fn shard_id(&self) -> ShardId {
-        self.machine.shard_id()
-    }
-
-    /// A cached version of the shard-global `upper` frontier.
-    ///
-    /// This is the most recent upper discovered by this handle. It is
-    /// potentially more stale than [Self::shared_upper] but is lock-free and
-    /// allocation-free. This will always be less or equal to the shard-global
-    /// `upper`.
-    pub fn upper(&self) -> &Antichain<T> {
-        &self.upper
-    }
-
-    /// A less-stale cached version of the shard-global `upper` frontier.
-    ///
-    /// This is the most recently known upper for this shard process-wide, but
-    /// unlike [Self::upper] it requires a mutex and a clone. This will always be
-    /// less or equal to the shard-global `upper`.
-    pub fn shared_upper(&self) -> Antichain<T> {
-        self.machine.applier.clone_upper()
-    }
-
-    /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is
-    /// linearized with write operations.
-    ///
-    /// This requires fetching the latest state from consensus and is therefore a potentially
-    /// expensive operation.
-    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
-    pub async fn fetch_recent_upper(&mut self) -> &Antichain<T> {
-        // TODO: Do we even need to track self.upper on WriteHandle or could
-        // WriteHandle::upper just get the one out of machine?
-        self.machine
-            .applier
-            .fetch_upper(|current_upper| self.upper.clone_from(current_upper))
-            .await;
-        &self.upper
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -693,7 +665,13 @@ where
             .batch(updates, expected_upper.clone(), new_upper.clone())
             .await?;
         match self
-            .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper)
+            .wrapped
+            .compare_and_append_internal(
+                &mut [&mut batch],
+                expected_upper,
+                new_upper,
+                self.compact.as_ref(),
+            )
             .await
         {
             ok @ Ok(Ok(())) => ok,
@@ -745,7 +723,13 @@ where
     {
         loop {
             let res = self
-                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
+                .wrapped
+                .compare_and_append_internal(
+                    &mut [&mut batch],
+                    lower.clone(),
+                    upper.clone(),
+                    self.compact.as_ref(),
+                )
                 .await?;
             match res {
                 Ok(()) => {
@@ -819,139 +803,9 @@ where
     where
         D: Send + Sync,
     {
-        for batch in batches.iter() {
-            if self.machine.shard_id() != batch.shard_id() {
-                return Err(InvalidUsage::BatchNotFromThisShard {
-                    batch_shard: batch.shard_id(),
-                    handle_shard: self.machine.shard_id(),
-                });
-            }
-            check_data_version(&self.cfg.build_version, &batch.version);
-            if self.cfg.build_version > batch.version {
-                info!(
-                    shard_id =? self.machine.shard_id(),
-                    batch_version =? batch.version,
-                    writer_version =? self.cfg.build_version,
-                    "Appending batch from the past. This is fine but should be rare. \
-                    TODO: Error on very old versions once the leaked blob detector exists."
-                )
-            }
-        }
-
-        let lower = expected_upper.clone();
-        let upper = new_upper;
-        let since = Antichain::from_elem(T::minimum());
-        let desc = Description::new(lower, upper, since);
-
-        let mut received_inline_backpressure = false;
-        let maintenance = loop {
-            let any_batch_rewrite = batches
-                .iter()
-                .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
-            let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
-            for batch in batches.iter() {
-                let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
-                for run in batch.batch.runs() {
-                    // Mark the boundary if this is not the first run in the batch.
-                    let start_index = parts.len();
-                    if start_index != 0 {
-                        runs.push(start_index);
-                    }
-                    parts.extend_from_slice(run);
-                }
-                num_updates += batch.batch.len;
-            }
-
-            let heartbeat_timestamp = (self.cfg.now)();
-            let res = self
-                .machine
-                .compare_and_append(
-                    &HollowBatch::new(desc.clone(), parts, num_updates, runs),
-                    &self.writer_id,
-                    &self.debug_state,
-                    heartbeat_timestamp,
-                )
-                .await;
-
-            match res {
-                CompareAndAppendRes::Success(_seqno, maintenance) => {
-                    self.upper.clone_from(desc.upper());
-                    for batch in batches.iter_mut() {
-                        batch.mark_consumed();
-                    }
-                    break maintenance;
-                }
-                CompareAndAppendRes::InvalidUsage(invalid_usage) => return Err(invalid_usage),
-                CompareAndAppendRes::UpperMismatch(_seqno, current_upper) => {
-                    // We tried to to a compare_and_append with the wrong expected upper, that
-                    // won't work. Update the cached upper to the current upper.
-                    self.upper.clone_from(&current_upper);
-                    return Ok(Err(UpperMismatch {
-                        current: current_upper,
-                        expected: expected_upper,
-                    }));
-                }
-                CompareAndAppendRes::InlineBackpressure => {
-                    // We tried to write an inline part, but there was already
-                    // too much in state. Flush it out to s3 and try again.
-                    assert_eq!(received_inline_backpressure, false);
-                    received_inline_backpressure = true;
-
-                    let cfg = BatchBuilderConfig::new(&self.cfg, &self.writer_id);
-                    // We could have a large number of inline parts (imagine the
-                    // sharded persist_sink), do this flushing concurrently.
-                    let flush_batches = batches
-                        .iter_mut()
-                        .map(|batch| async {
-                            batch
-                                .flush_to_blob(
-                                    &cfg,
-                                    &self.metrics.inline.backpressure,
-                                    &self.isolated_runtime,
-                                    &self.schemas,
-                                )
-                                .await
-                        })
-                        .collect::<FuturesUnordered<_>>();
-                    let () = flush_batches.collect::<()>().await;
-
-                    for batch in batches.iter() {
-                        assert_eq!(batch.batch.inline_bytes(), 0);
-                    }
-
-                    continue;
-                }
-            }
-        };
-
-        maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
-
-        Ok(Ok(()))
-    }
-
-    /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
-    /// to append it to this shard.
-    pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
-        let shard_id: ShardId = batch
-            .shard_id
-            .into_rust()
-            .expect("valid transmittable batch");
-        assert_eq!(shard_id, self.machine.shard_id());
-
-        let ret = Batch {
-            batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg),
-            metrics: Arc::clone(&self.metrics),
-            shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
-            version: Version::parse(&batch.version).expect("valid transmittable batch"),
-            batch: batch
-                .batch
-                .into_rust_if_some("ProtoBatch::batch")
-                .expect("valid transmittable batch"),
-            blob: Arc::clone(&self.blob),
-            _phantom: std::marker::PhantomData,
-        };
-        assert_eq!(ret.shard_id(), self.machine.shard_id());
-        ret
+        self.wrapped
+            .compare_and_append_internal(batches, expected_upper, new_upper, self.compact.as_ref())
+            .await
     }
 
     /// Returns a [BatchBuilder] that can be used to write a batch of updates to
@@ -1023,32 +877,9 @@ where
         builder.finish(upper.clone()).await
     }
 
-    /// Blocks until the given `frontier` is less than the upper of the shard.
-    pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) {
-        let mut watch = self.machine.applier.watch();
-        let batch = self
-            .machine
-            .next_listen_batch(frontier, &mut watch, None, None)
-            .await;
-        if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
-            self.upper.clone_from(batch.desc.upper());
-        }
-        assert!(PartialOrder::less_than(frontier, &self.upper));
-    }
-
-    /// Politely expires this writer, releasing any associated state.
-    ///
-    /// There is a best-effort impl in Drop to expire a writer that wasn't
-    /// explictly expired with this method. When possible, explicit expiry is
-    /// still preferred because the Drop one is best effort and is dependant on
-    /// a tokio [Handle] being available in the TLC at the time of drop (which
-    /// is a bit subtle). Also, explicit expiry allows for control over when it
-    /// happens.
-    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
-    pub async fn expire(mut self) {
-        let (_, maintenance) = self.machine.expire_writer(&self.writer_id).await;
-        maintenance.start_performing(&self.machine, &self.gc);
-        self.explicitly_expired = true;
+    /// See [SchemalessWriteHandle::expire].
+    pub async fn expire(self) {
+        self.wrapped.expire().await
     }
 
     /// Test helper for an [Self::append] call that is expected to succeed.
@@ -1098,14 +929,16 @@ where
         expected_upper: T,
         new_upper: T,
     ) {
-        self.compare_and_append_batch(
-            batches,
-            Antichain::from_elem(expected_upper),
-            Antichain::from_elem(new_upper),
-        )
-        .await
-        .expect("invalid usage")
-        .expect("unexpected upper")
+        self.wrapped
+            .compare_and_append_internal(
+                batches,
+                Antichain::from_elem(expected_upper),
+                Antichain::from_elem(new_upper),
+                self.compact.as_ref(),
+            )
+            .await
+            .expect("invalid usage")
+            .expect("unexpected upper")
     }
 
     /// Test helper for an [Self::append] call that is expected to succeed.
@@ -1124,44 +957,6 @@ where
         )
         .await
         .expect("invalid usage")
-    }
-}
-
-impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
-    fn drop(&mut self) {
-        if self.explicitly_expired {
-            return;
-        }
-        let handle = match Handle::try_current() {
-            Ok(x) => x,
-            Err(_) => {
-                warn!("WriteHandle {} dropped without being explicitly expired, falling back to lease timeout", self.writer_id);
-                return;
-            }
-        };
-        let mut machine = self.machine.clone();
-        let gc = self.gc.clone();
-        let writer_id = self.writer_id.clone();
-        // Spawn a best-effort task to expire this write handle. It's fine if
-        // this doesn't run to completion, we'd just have to wait out the lease
-        // before the shard-global since is unblocked.
-        //
-        // Intentionally create the span outside the task to set the parent.
-        let expire_span = debug_span!("drop::expire");
-        handle.spawn_named(
-            || format!("WriteHandle::expire ({})", self.writer_id),
-            async move {
-                let (_, maintenance) = machine.expire_writer(&writer_id).await;
-                maintenance.start_performing(&machine, &gc);
-            }
-            .instrument(expire_span),
-        );
     }
 }
 
