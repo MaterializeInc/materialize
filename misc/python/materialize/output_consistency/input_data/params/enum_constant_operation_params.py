@@ -63,7 +63,7 @@ REGEX_PARAM_WITH_GROUP = EnumConstantOperationParam(
     ["(.)", "(.*)", "(A+)", "([ab])"], add_quotes=True, invalid_value="ab("
 )
 
-REGEX_FLAG_PARAM = EnumConstantOperationParam(
+REGEX_FLAG_OPTIONAL_PARAM = EnumConstantOperationParam(
     ["i", "g", "n"], add_quotes=True, optional=True
 )
 
@@ -119,7 +119,7 @@ COLLECTION_INDEX_PARAM = EnumConstantOperationParam(
     ["0", "1", "2", "8"], add_quotes=False, add_invalid_value=False
 )
 
-COLLECTION_INDEX_PARAM_OPT = EnumConstantOperationParam(
+COLLECTION_INDEX_OPTIONAL_PARAM = EnumConstantOperationParam(
     ["0", "1", "2", "8"], add_quotes=False, add_invalid_value=False, optional=True
 )
 

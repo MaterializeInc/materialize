@@ -17,7 +17,7 @@ from materialize.output_consistency.input_data.params.date_time_operation_param 
     TimeIntervalOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
-    REGEX_FLAG_PARAM,
+    REGEX_FLAG_OPTIONAL_PARAM,
     REGEX_PARAM,
     REGEX_PARAM_WITH_GROUP,
 )
@@ -142,7 +142,7 @@ TABLE_OPERATION_TYPES.append(
 TABLE_OPERATION_TYPES.append(
     DbFunction(
         "regexp_split_to_table",
-        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_OPTIONAL_PARAM],
         StringReturnTypeSpec(),
         is_table_function=True,
     ),
