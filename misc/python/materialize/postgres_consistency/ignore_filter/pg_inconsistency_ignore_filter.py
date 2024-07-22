@@ -297,14 +297,36 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             # do not explicitly require the TEXT type to be included because it can appear by applying || to two char values
             return YesIgnore("#27278: bpchar and char with coalesce")
 
-        if db_function.function_name_in_lower_case == "row" and expression.matches(
-            partial(
-                involves_data_type_categories,
-                data_type_categories={DataTypeCategory.RANGE, DataTypeCategory.ARRAY},
-            ),
-            True,
-        ):
-            return YesIgnore("#28130 / #28131: record type with array or ranges")
+        if db_function.function_name_in_lower_case == "row":
+            if expression.matches(
+                partial(
+                    involves_data_type_categories,
+                    data_type_categories={
+                        DataTypeCategory.RANGE,
+                        DataTypeCategory.ARRAY,
+                    },
+                ),
+                True,
+            ):
+                return YesIgnore("#28130 / #28131: record type with array or ranges")
+
+            if expression.matches(
+                partial(
+                    involves_data_type_category,
+                    data_type_category=DataTypeCategory.BYTEA,
+                ),
+                True,
+            ):
+                return YesIgnore("#28392: record type with bytea")
+
+            if expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
+                ),
+                True,
+            ):
+                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
         return NoIgnore()
 
@@ -608,7 +630,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#22020: unsupported timestamp precision")
 
         if "array_agg on arrays not yet supported" in mz_error_msg:
-            return YesIgnore("(no ticket)")
+            return YesIgnore("#28384: array_agg on arrays")
 
         if "field position must be greater than zero" in mz_error_msg:
             return YesIgnore("#22023: split_part")
