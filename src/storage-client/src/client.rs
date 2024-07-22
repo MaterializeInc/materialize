@@ -38,7 +38,7 @@ use timely::PartialOrder;
 use tonic::{Request, Status as TonicStatus, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
-use crate::metrics::RehydratingStorageClientMetrics;
+use crate::metrics::ReplicaMetrics;
 use crate::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
@@ -68,7 +68,7 @@ pub enum StorageProtoServiceTypes {}
 impl ProtoServiceTypes for StorageProtoServiceTypes {
     type PC = ProtoStorageCommand;
     type PR = ProtoStorageResponse;
-    type STATS = RehydratingStorageClientMetrics;
+    type STATS = ReplicaMetrics;
     const URL: &'static str = "/mz_storage_client.client.ProtoStorage/CommandResponseStream";
 }
 
