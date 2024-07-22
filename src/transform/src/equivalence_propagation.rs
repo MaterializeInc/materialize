@@ -181,8 +181,13 @@ impl EquivalencePropagation {
                 }
             }
             MirRelationExpr::LetRec { .. } => {
-                for (child, derived) in expr.children_mut().rev().zip(derived.children_rev()) {
-                    self.apply(child, derived, outer_equivalences.clone(), get_equivalences);
+                let mut child_iter = expr.children_mut().rev().zip(derived.children_rev());
+                // Continue in `body` with the outer equivalences.
+                let (body, view) = child_iter.next().unwrap();
+                self.apply(body, view, outer_equivalences, get_equivalences);
+                // Continue recursively, but without the outer equivalences supplied to `body`.
+                for (child, view) in child_iter {
+                    self.apply(child, view, EquivalenceClasses::default(), get_equivalences);
                 }
             }
             MirRelationExpr::Project { input, outputs } => {
