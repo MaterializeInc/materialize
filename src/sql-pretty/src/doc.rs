@@ -36,6 +36,72 @@ fn doc_display_pass<'a, T: AstDisplay>(v: &T) -> RcDoc<'a, ()> {
     RcDoc::text(v.to_ast_string())
 }
 
+pub(crate) fn doc_create_source<T: AstInfo>(v: &CreateSourceStatement<T>) -> RcDoc {
+    let mut docs = Vec::new();
+    let title = format!(
+        "CREATE SOURCE{}",
+        if v.if_not_exists {
+            " IF NOT EXISTS"
+        } else {
+            ""
+        }
+    );
+    let mut doc = doc_display_pass(&v.name);
+    let mut names = Vec::new();
+    names.extend(v.col_names.iter().map(doc_display_pass));
+    names.extend(v.key_constraint.iter().map(doc_display_pass));
+    if !names.is_empty() {
+        doc = nest(doc, bracket("(", comma_separated(names), ")"));
+    }
+    docs.push(nest_title(title, doc));
+    if let Some(cluster) = &v.in_cluster {
+        docs.push(nest_title("IN CLUSTER", doc_display_pass(cluster)));
+    }
+    docs.push(nest_title("FROM", doc_display_pass(&v.connection)));
+    if let Some(format) = &v.format {
+        docs.push(doc_display(format, "FormatSpecifier"));
+    }
+    if !v.include_metadata.is_empty() {
+        docs.push(nest_title(
+            "INCLUDE",
+            comma_separate(doc_display_pass, &v.include_metadata),
+        ));
+    }
+    if let Some(envelope) = &v.envelope {
+        docs.push(nest_title("ENVELOPE", doc_display_pass(envelope)));
+    }
+    if let Some(subsources) = &v.referenced_subsources {
+        docs.push(doc_referenced_subsources(subsources));
+    }
+    if let Some(progress) = &v.progress_subsource {
+        docs.push(nest_title("EXPOSE PROGRESS AS", doc_display_pass(progress)));
+    }
+    if !v.with_options.is_empty() {
+        docs.push(bracket(
+            "WITH (",
+            comma_separate(doc_display_pass, &v.with_options),
+            ")",
+        ));
+    }
+    RcDoc::intersperse(docs, Doc::line()).group()
+}
+
+fn doc_referenced_subsources(v: &ReferencedSubsources) -> RcDoc {
+    match v {
+        ReferencedSubsources::SubsetTables(subsources) => bracket(
+            "FOR TABLES (",
+            comma_separate(doc_display_pass, subsources),
+            ")",
+        ),
+        ReferencedSubsources::SubsetSchemas(schemas) => bracket(
+            "FOR SCHEMAS (",
+            comma_separate(doc_display_pass, schemas),
+            ")",
+        ),
+        ReferencedSubsources::All => RcDoc::text("FOR ALL TABLES"),
+    }
+}
+
 pub(crate) fn doc_copy<T: AstInfo>(v: &CopyStatement<T>) -> RcDoc {
     let relation = match &v.relation {
         CopyRelation::Named { name, columns } => {

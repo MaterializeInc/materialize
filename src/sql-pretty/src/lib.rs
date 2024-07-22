@@ -16,8 +16,8 @@ use pretty::RcDoc;
 use thiserror::Error;
 
 use crate::doc::{
-    doc_copy, doc_create_materialized_view, doc_create_view, doc_display, doc_insert,
-    doc_select_statement, doc_subscribe,
+    doc_copy, doc_create_materialized_view, doc_create_source, doc_create_view, doc_display,
+    doc_insert, doc_select_statement, doc_subscribe,
 };
 
 pub use crate::doc::doc_expr;
@@ -32,6 +32,7 @@ fn to_doc<T: AstInfo>(v: &Statement<T>) -> RcDoc {
         Statement::CreateMaterializedView(v) => doc_create_materialized_view(v),
         Statement::Copy(v) => doc_copy(v),
         Statement::Subscribe(v) => doc_subscribe(v),
+        Statement::CreateSource(v) => doc_create_source(v),
         _ => doc_display(v, "statement"),
     }
 }

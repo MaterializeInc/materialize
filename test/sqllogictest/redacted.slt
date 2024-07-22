@@ -96,7 +96,10 @@ EOF
 query T multiline
 SELECT regexp_replace(pretty_sql(redacted_create_sql), 'u[0-9]+', 'uX', 'g') FROM mz_sources WHERE name = 's'
 ----
-CREATE SOURCE materialize.public.s IN CLUSTER [uX] FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS materialize.public.s_progress];
+CREATE SOURCE materialize.public.s
+IN CLUSTER [uX]
+FROM LOAD GENERATOR COUNTER
+EXPOSE PROGRESS AS [uX AS materialize.public.s_progress];
 EOF
 
 statement ok
