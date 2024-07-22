@@ -40,6 +40,7 @@ from materialize.buildkite_insights.util.build_step_utils import (
 )
 from materialize.cli.mzcompose import JUNIT_ERROR_DETAILS_SEPARATOR
 from materialize.github import (
+    KnownGitHubIssue,
     for_github_re,
     get_known_issues_from_github,
 )
@@ -607,6 +608,8 @@ def annotate_logged_errors(
 
         store_annotation_in_test_analytics(test_analytics, annotation)
 
+    store_known_issues_in_test_analytics(test_analytics, known_issues)
+
     return len(unknown_errors)
 
 
@@ -864,6 +867,13 @@ def format_message_as_code_block(
 
     # Don't have too huge output, so truncate
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
+
+
+def store_known_issues_in_test_analytics(
+    test_analytics: TestAnalyticsDb, known_issues: list[KnownGitHubIssue]
+) -> None:
+    for issue in known_issues:
+        test_analytics.known_issues.add_issue(issue)
 
 
 def store_annotation_in_test_analytics(
