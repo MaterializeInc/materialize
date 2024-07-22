@@ -9,7 +9,7 @@
 
 //! A controller for a storage instance.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::num::NonZeroI64;
 use std::task::Poll;
@@ -21,12 +21,13 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::ReplicaId;
+use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::{
-    StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
+    Status, StatusUpdate, StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use timely::progress::Timestamp;
@@ -59,6 +60,10 @@ pub(crate) struct Instance<T> {
     epoch: ClusterStartupEpoch,
     /// Metrics tracked for this storage instance.
     metrics: InstanceMetrics,
+    /// A function that returns the current time.
+    now: NowFn,
+    /// Responses ready for delivery on the next call to [`Instance::recv`].
+    ready_responses: VecDeque<StorageResponse<T>>,
 }
 
 impl<T> Instance<T>
@@ -67,7 +72,7 @@ where
     StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Instance`].
-    pub fn new(envd_epoch: NonZeroI64, metrics: InstanceMetrics) -> Self {
+    pub fn new(envd_epoch: NonZeroI64, metrics: InstanceMetrics, now: NowFn) -> Self {
         let history = CommandHistory::new(metrics.for_history());
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
@@ -76,6 +81,8 @@ where
             history,
             epoch,
             metrics,
+            now,
+            ready_responses: Default::default(),
         };
 
         instance.send(StorageCommand::CreateTimely {
@@ -122,7 +129,11 @@ where
 
     /// Removes the identified replica from this storage instance.
     pub fn drop_replica(&mut self, id: ReplicaId) {
-        self.replicas.remove(&id);
+        let replica = self.replicas.remove(&id);
+
+        if replica.is_some() && self.replicas.is_empty() {
+            self.update_paused_statuses();
+        }
     }
 
     /// Rehydrates any failed replicas of this storage instance.
@@ -136,6 +147,41 @@ where
             let replica = self.replicas.remove(&id).expect("must exist");
             self.add_replica(id, replica.config);
         }
+    }
+
+    /// Sets the status to paused for all sources/sinks in the history.
+    fn update_paused_statuses(&mut self) {
+        let now = mz_ore::now::to_datetime((self.now)());
+        let make_update = |id, object_type| StatusUpdate {
+            id,
+            status: Status::Paused,
+            timestamp: now,
+            error: None,
+            hints: BTreeSet::from([format!(
+                "There is currently no replica running this {object_type}"
+            )]),
+            namespaced_errors: Default::default(),
+        };
+
+        self.history.reduce();
+
+        let mut status_updates = Vec::new();
+        for command in self.history.iter() {
+            match command {
+                StorageCommand::RunIngestions(cmds) => {
+                    let updates = cmds.iter().map(|c| make_update(c.id, "source"));
+                    status_updates.extend(updates);
+                }
+                StorageCommand::RunSinks(cmds) => {
+                    let updates = cmds.iter().map(|c| make_update(c.id, "sink"));
+                    status_updates.extend(updates);
+                }
+                _ => (),
+            }
+        }
+
+        let response = StorageResponse::StatusUpdates(status_updates);
+        self.ready_responses.push_back(response);
     }
 
     /// Sends a command to this storage instance.
@@ -157,6 +203,10 @@ where
         for replica in self.replicas.values_mut() {
             replica.send(command.clone());
         }
+
+        if command.installs_objects() && self.replicas.is_empty() {
+            self.update_paused_statuses();
+        }
     }
 
     /// Receives the next response from this storage instance.
@@ -171,6 +221,10 @@ where
     /// about its cancel safety.
     pub fn recv(&mut self) -> impl Future<Output = Option<StorageResponse<T>>> + '_ {
         std::future::poll_fn(|cx| {
+            if let Some(resp) = self.ready_responses.pop_front() {
+                return Poll::Ready(Some(resp));
+            }
+
             let receives = self.replicas.values_mut().map(|r| r.recv());
             let mut futs: FuturesUnordered<_> = receives.collect();
 
