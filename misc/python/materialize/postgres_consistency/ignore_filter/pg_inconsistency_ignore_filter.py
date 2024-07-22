@@ -630,7 +630,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#22020: unsupported timestamp precision")
 
         if "array_agg on arrays not yet supported" in mz_error_msg:
-            return YesIgnore("(no ticket)")
+            return YesIgnore("#28384: array_agg on arrays")
 
         if "field position must be greater than zero" in mz_error_msg:
             return YesIgnore("#22023: split_part")
