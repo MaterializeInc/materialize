@@ -36,6 +36,13 @@ pub struct ClusterStartupEpoch {
     replica: u64,
 }
 
+impl ClusterStartupEpoch {
+    /// Increases the replica incarnation counter.
+    pub fn bump_replica(&mut self) {
+        self.replica += 1;
+    }
+}
+
 impl RustType<ProtoClusterStartupEpoch> for ClusterStartupEpoch {
     fn into_proto(&self) -> ProtoClusterStartupEpoch {
         let Self { envd, replica } = self;

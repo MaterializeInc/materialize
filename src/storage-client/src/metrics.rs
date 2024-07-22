@@ -90,6 +90,7 @@ impl StorageControllerMetrics {
     }
 }
 
+#[derive(Debug)]
 pub struct InstanceMetrics {
     instance_id: StorageInstanceId,
     metrics: StorageControllerMetrics,

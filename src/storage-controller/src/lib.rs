@@ -89,9 +89,11 @@ use tracing::{debug, info, warn};
 
 use crate::rehydration::RehydratingStorageClient;
 use crate::statistics::StatsState;
+
 mod collection_mgmt;
 mod collection_status;
 mod history;
+mod instance;
 mod persist_handles;
 mod rehydration;
 mod rtr;

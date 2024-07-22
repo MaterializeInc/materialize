@@ -114,6 +114,20 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     RunSinks(Vec<RunSinkCommand<T>>),
 }
 
+impl<T> StorageCommand<T> {
+    /// Returns whether this command instructs the installation of storage objects.
+    pub fn installs_objects(&self) -> bool {
+        use StorageCommand::*;
+        match self {
+            CreateTimely { .. }
+            | InitializationComplete
+            | UpdateConfiguration(_)
+            | AllowCompaction(_) => false,
+            RunIngestions(_) | RunSinks(_) => true,
+        }
+    }
+}
+
 /// A command that starts ingesting the given ingestion description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RunIngestionCommand {
