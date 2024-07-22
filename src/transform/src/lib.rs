@@ -595,6 +595,7 @@ impl Optimizer {
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
                     Box::new(column_knowledge::ColumnKnowledge::default()),
+                    Box::new(equivalence_propagation::EquivalencePropagation::default()),
                     // Lifts the information `col1 = col2`
                     Box::new(demand::Demand::default()),
                     Box::new(FuseAndCollapse::default()),
@@ -678,6 +679,7 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     Box::new(column_knowledge::ColumnKnowledge::default()),
+                    Box::new(equivalence_propagation::EquivalencePropagation::default()),
                     Box::new(fold_constants::FoldConstants {
                         limit: Some(FOLD_CONSTANTS_LIMIT),
                     }),
