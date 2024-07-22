@@ -121,6 +121,20 @@ Alternatively, you can change the default value of the `cluster` configuration
 parameter for a specific user (i.e. role) using the [`ALTER
 ROLE...SET`](/sql/alter-role) command.
 
+#### Show system objects
+
+By default, DBeaver hides system objects in the database explorer. This
+includes tables, views, and other objects that start with `pg_` or `mz_`.
+
+To show system objects in the database explorer:
+
+1. Right-click on the database connection in the **Database Navigator**.
+1. Click on **Edit Connection**.
+1. In the **Connection settings** tab, check click **General**.
+1. Next to the **Navigator view**, click **Customize**.
+1. In the **Navigator settings** dialog, check **Show system objects**.
+1. Click **OK**.
+
 ### TablePlus
 
 {{< note >}}
