@@ -193,6 +193,17 @@ select_file(
     visibility = ["//visibility:public"],
 )
 
+select_file(
+    name = "libsnappy",
+    srcs = ":snappy",
+    subpath = "libsnappy.a",
+)
+copy_to_directory(
+    name = "snappy_lib",
+    srcs = [":libsnappy"],
+    visibility = ["//visibility:public"],
+)
+
 # Licensed to the Apache Software Foundation (ASF) under one or more
 # contributor license agreements.  See the NOTICE file distributed with
 # this work for additional information regarding copyright ownership.

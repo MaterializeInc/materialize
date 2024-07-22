@@ -1,13 +1,20 @@
+# Enables picking up host-OS specific config, i.e. adds support for the following:
+# `build:[ linux | macos | windows | freebsd | openbsd ]`
+common --enable_platform_specific_config
+
 # Required for remote caching to be effective.
 #
 # Otherwise Bazel will passthrough the current system's PATH in the execution
 # environment, which differs between systems and thus breaks remote caching.
 build --incompatible_strict_action_env
+# Prevent actions in the sandbox from accessing the network.
+build --sandbox_default_allow_network=false
 
-# We specify a minimum version of macOS to prevent different point releases on
-# developer machines from breaking the remote cache.
-common:macos --copt=-mmacosx-version-min=13.0
-common:macos --linkopt=-mmacosx-version-min=13.0
+# Bazel provides the macOS 14.5 SDK as the sysroot, we also set the minimum
+# version to prevent breaking the remote cache across developer machines.
+common:macos --copt=-mmacosx-version-min=14.0
+common:macos --linkopt=-mmacosx-version-min=14.0
+common --macos_sdk_version=14.0
 
 # Config for building protobuf.
 build --copt=-Wno-error=deprecated-declarations
@@ -17,9 +24,19 @@ build --copt=-Wno-error=deprecated-declarations
 # This script gets run before every build, see the script for more info.
 build --workspace_status_command "python3 misc/bazel/build-info/workspace_status.py"
 
-# Stream all test output by default, otherwise Bazel captures it all.
-test --test_output=streamed
+# Output all test output by default, this makes it most like cargo.
+#
+# Note: We used to have 'stream' here, but that forces Bazel to serialize test execution.
+test --test_output=all
 
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
 common --explain=bazel-explain.log
 common --verbose_explanations
+
+# Compress any artifacts larger than 2MiB with zstd.
+common --remote_cache_compression
+common --experimental_remote_cache_compression_threshold=2097152
+# Memoizes merkle tree calculations to improve the remote cache hit checking speed.
+common --experimental_remote_merkle_tree_cache
+# Number of merkle trees to memoize (default 1000).
+common --experimental_remote_merkle_tree_cache_size=5000

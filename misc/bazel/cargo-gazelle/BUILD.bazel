@@ -63,7 +63,6 @@ rust_doc_test(
 		normal = True,
 		normal_dev = True,
 	),
-
 )
 
 rust_binary(

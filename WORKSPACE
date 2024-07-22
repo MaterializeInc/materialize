@@ -74,7 +74,6 @@ maybe(
     integrity = RULES_CC_INTEGRITY,
     strip_prefix = "rules_cc-{0}".format(RULES_CC_VERSION),
     urls = [
-        "https://mirror.bazel.build/bazelbuild/rules_cc/releases/download/{0}/rules_cc-{0}.tar.gz".format(RULES_CC_VERSION),
         "https://github.com/bazelbuild/rules_cc/releases/download/{0}/rules_cc-{0}.tar.gz".format(RULES_CC_VERSION),
     ],
 )
@@ -183,7 +182,6 @@ maybe(
     integrity = RULES_PERL_INTEGRITY,
     strip_prefix = "rules_perl-{0}".format(RULES_PERL_VERISON),
     urls = [
-        "https://mirror.bazel.build/bazelbuild/rules_perl/archive/refs/tags/{0}.tar.gz".format(RULES_PERL_VERISON),
         "https://github.com/bazelbuild/rules_perl/archive/refs/tags/{0}.tar.gz".format(RULES_PERL_VERISON),
     ],
 )
@@ -211,8 +209,8 @@ c_repositories()
 # Rules for building Rust crates, and several convienence macros for building all transitive
 # dependencies.
 
-RULES_RUST_VERSION = "0.44.0"
-RULES_RUST_INTEGRITY = "sha256-pt9MIrs/tDVzpMQIjvbQ+v44oOzQ+FrSH/2IiAAzcDA="
+RULES_RUST_VERSION = "0.48.0"
+RULES_RUST_INTEGRITY = "sha256-Weev1uz2QztBlDA88JX6A1N72SucD1V8lBsaliM0TTg="
 
 maybe(
     http_archive,
@@ -271,7 +269,6 @@ load("@rules_rust//crate_universe:defs.bzl", "crates_repository", "crate")
 crates_repository(
     name = "crates_io",
     cargo_lockfile = "//:Cargo.lock",
-    lockfile = "//misc/bazel:Cargo.crates_io.lock",
     rust_version = RUST_VERSION,
     annotations = {
         "decnumber-sys": [crate.annotation(
@@ -291,12 +288,15 @@ crates_repository(
                 "ROCKSDB_STATIC": "true",
                 "ROCKSDB_LIB_DIR": "$(execpath :rocksdb_lib)",
                 "ROCKSDB_INCLUDE_DIR": "$(execpath :rocksdb_include)",
+                "SNAPPY_STATIC": "true",
+                "SNAPPY_LIB_DIR": "$(execpath :snappy_lib)",
             },
             build_script_data = [
                 ":rocksdb_lib",
                 ":rocksdb_include",
+                ":snappy_lib",
             ],
-            compile_data = [":rocksdb_lib"],
+            compile_data = [":rocksdb_lib", ":snappy_lib"],
         )],
         # TODO(parkmycar): Re-enable linking with a jemalloc built by Bazel.
         # "tikv-jemalloc-sys": [crate.annotation(

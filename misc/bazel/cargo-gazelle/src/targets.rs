@@ -199,11 +199,16 @@ impl ToBazelDefinition for RustLibrary {
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }
-        writeln!(w, ")\n")?;
+        writeln!(w, ")")?;
 
-        self.unit_test.format(&mut w)?;
-        writeln!(w)?;
-        self.doc_tests.format(&mut w)?;
+        if let Some(unit_test) = &self.unit_test {
+            writeln!(w)?;
+            unit_test.format(&mut w)?;
+        }
+        if let Some(doc_tests) = &self.doc_tests {
+            writeln!(w)?;
+            doc_tests.format(&mut w)?;
+        }
 
         Ok(())
     }
@@ -365,7 +370,7 @@ impl ToBazelDefinition for RustBinary {
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }
-        writeln!(w, ")\n")?;
+        writeln!(w, ")")?;
 
         Ok(())
     }
@@ -689,7 +694,7 @@ impl ToBazelDefinition for RustDocTest {
             self.crate_.format(&mut w)?;
             self.deps.format(&mut w)?;
         }
-        writeln!(w, "\n)")?;
+        writeln!(w, ")")?;
 
         Ok(())
     }
@@ -1033,7 +1038,10 @@ impl<'a> WorkspaceDependencies<'a> {
                     .filter(|link| link.from().id() == self.package.id())
                     // Tests and build scipts can rely on normal dependencies, so always make sure they're
                     // included.
-                    .filter(move |link| link.req_for_kind(kind).is_present())
+                    .filter(move |link| {
+                        link.req_for_kind(kind).is_present()
+                            || link.req_for_kind(DependencyKind::Normal).is_present()
+                    })
                     .map(|link| link.to())
                     // Ignore deps filtered out by the global config.
                     .filter(|meta| self.config.include_dep(meta.name()))
