@@ -148,8 +148,8 @@ where
 
     // Optionally we reuse instances of K and V and create instances of
     // K::Storage and V::Storage to reduce allocations.
-    let mut k_reuse: Option<K> = None;
-    let mut v_reuse: Option<V> = None;
+    let mut k_reuse = K::default();
+    let mut v_reuse = V::default();
     let mut k_storage = Some(K::Storage::default());
     let mut v_storage = Some(V::Storage::default());
 
@@ -158,25 +158,10 @@ where
         for ((k, v), t, d) in updates.iter() {
             let t = i64::from_le_bytes(t);
             let d = i64::from_le_bytes(d);
+            K::decode_from(&mut k_reuse, k, &mut k_storage)?;
+            V::decode_from(&mut v_reuse, v, &mut v_storage)?;
 
-            // Attempt to re-use allocations as much as possible.
-            match (k_reuse.as_mut(), v_reuse.as_mut()) {
-                (Some(k_reuse), Some(v_reuse)) => {
-                    K::decode_from(k_reuse, k, &mut k_storage)?;
-                    V::decode_from(v_reuse, v, &mut v_storage)?;
-
-                    builder.push(k_reuse, v_reuse, t, d);
-                }
-                (_, _) => {
-                    let k = K::decode(k)?;
-                    let v = V::decode(v)?;
-
-                    builder.push(&k, &v, t, d);
-
-                    k_reuse.replace(k);
-                    v_reuse.replace(v);
-                }
-            };
+            builder.push(&k_reuse, &v_reuse, t, d);
         }
 
         let Part2 {

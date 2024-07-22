@@ -149,8 +149,8 @@ where
 
 impl<K, V, T, D> Subscribe<K, V, T, D>
 where
-    K: Debug + Codec + Default,
-    V: Debug + Codec + Default,
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
@@ -370,8 +370,8 @@ where
 
 impl<K, V, T, D> Listen<K, V, T, D>
 where
-    K: Debug + Codec + Default,
-    V: Debug + Codec + Default,
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
@@ -1082,8 +1082,8 @@ where
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
-    K: Debug + Codec + Ord + Default,
-    V: Debug + Codec + Ord + Default,
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
