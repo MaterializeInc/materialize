@@ -290,12 +290,15 @@ crates_repository(
                 "ROCKSDB_STATIC": "true",
                 "ROCKSDB_LIB_DIR": "$(execpath :rocksdb_lib)",
                 "ROCKSDB_INCLUDE_DIR": "$(execpath :rocksdb_include)",
+                "SNAPPY_STATIC": "true",
+                "SNAPPY_LIB_DIR": "$(execpath :snappy_lib)",
             },
             build_script_data = [
                 ":rocksdb_lib",
                 ":rocksdb_include",
+                ":snappy_lib",
             ],
-            compile_data = [":rocksdb_lib"],
+            compile_data = [":rocksdb_lib", ":snappy_lib"],
         )],
         # TODO(parkmycar): Re-enable linking with a jemalloc built by Bazel.
         # "tikv-jemalloc-sys": [crate.annotation(
