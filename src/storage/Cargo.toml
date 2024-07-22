@@ -45,6 +45,7 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }

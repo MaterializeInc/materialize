@@ -6336,6 +6336,7 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-cluster",
+ "mz-dyncfg",
  "mz-dyncfgs",
  "mz-expr",
  "mz-http-util",

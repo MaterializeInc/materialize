@@ -56,7 +56,7 @@ impl StorageConfiguration {
     }
 
     /// Get a reference to the shared `ConfigSet`.
-    pub fn config_set(&self) -> &ConfigSet {
+    pub fn config_set(&self) -> &Arc<ConfigSet> {
         &self.config_set
     }
 
