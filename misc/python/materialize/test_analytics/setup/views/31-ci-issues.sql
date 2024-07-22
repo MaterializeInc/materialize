@@ -9,7 +9,7 @@
 
 CREATE OR REPLACE MATERIALIZED VIEW mv_ci_issues
 IN CLUSTER test_analytics AS
-    SELECT a.*, title, ci_regexp
+    SELECT a.*, title, ci_regexp, state
     FROM (
         SELECT
             issue,

@@ -17,20 +17,24 @@ class KnownIssuesStorage(BaseDataStorage):
         self,
         issue: KnownGitHubIssue,
     ) -> None:
-        issue_str = f"{issue.info['repository']['name']}/{issue.info['number']}"
+        issue_str = (
+            f"{issue.info['repository_url'].split('/')[-1]}/{issue.info['number']}"
+        )
         sql_statements = [
             f"""
             UPDATE issues
             SET title = {mz_sql_util.as_sanitized_literal(issue.info["title"])},
-                ci_regexp = {mz_sql_util.as_sanitized_literal(issue.regex.pattern)}
+                ci_regexp = {mz_sql_util.as_sanitized_literal(issue.regex.pattern.decode("utf-8"))},
+                state = {mz_sql_util.as_sanitized_literal(issue.info["state"])}
             WHERE issue = {mz_sql_util.as_sanitized_literal(issue_str)}
             ;
             """,
             f"""
-            INSERT INTO issues (issue, title, ci_regexp)
+            INSERT INTO issues (issue, title, ci_regexp, state)
                 SELECT {mz_sql_util.as_sanitized_literal(issue_str)},
                        {mz_sql_util.as_sanitized_literal(issue.info["title"])},
-                       {mz_sql_util.as_sanitized_literal(issue.regex.pattern)}
+                       {mz_sql_util.as_sanitized_literal(issue.regex.pattern)},
+                       {mz_sql_util.as_sanitized_literal(issue.info["state"])}
                 WHERE NOT EXISTS (
                     SELECT 1 FROM issues WHERE issue = {mz_sql_util.as_sanitized_literal(issue_str)}
                 )
