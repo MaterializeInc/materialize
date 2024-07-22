@@ -312,6 +312,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
             if expression.matches(
                 partial(
+                    involves_data_type_category,
+                    data_type_category=DataTypeCategory.BYTEA,
+                ),
+                True,
+            ):
+                return YesIgnore("#28392: record type with bytea")
+
+            if expression.matches(
+                partial(
                     is_known_to_involve_exact_data_types,
                     internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
                 ),
