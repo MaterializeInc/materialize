@@ -10,14 +10,18 @@
 //! A columnar representation of ((Key, Val), Time, i64) data suitable for in-memory
 //! reads and persistent storage.
 
-use std::fmt;
+use std::cmp::Ordering;
 use std::mem::size_of;
 use std::sync::Arc;
+use std::{fmt, iter};
 
-use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array};
+use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array, UInt32Array};
 use ::arrow::buffer::OffsetBuffer;
+use ::arrow::compute::FilterBuilder;
 use ::arrow::datatypes::ToByteSlice;
+use ::arrow::row::{RowConverter, SortField};
 use bytes::Bytes;
+use mz_ore::cast::CastFrom;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::gen::persist::ProtoColumnarRecords;
@@ -101,15 +105,101 @@ impl fmt::Debug for ColumnarRecords {
 }
 
 impl ColumnarRecords {
+    /// Make a new columnar records from existing data, asserting invariants.
+    pub fn new(
+        key_data: BinaryArray,
+        val_data: BinaryArray,
+        timestamps: Int64Array,
+        diffs: Int64Array,
+    ) -> Self {
+        let records = Self {
+            len: key_data.len(),
+            key_data,
+            val_data,
+            timestamps,
+            diffs,
+        };
+
+        records.borrow().validate().expect("valid");
+
+        records
+    }
+
     /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
     /// stored in Self.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    pub fn with_ext(&self, ext: ColumnarRecordsStructuredExt) -> Self {
+        let key_data = match ext.key {
+            None => BinaryArray::from_iter_values(iter::repeat(&[]).take(self.len)),
+            Some(s) => {
+                let fields: Vec<_> = s
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .map(|f| SortField::new(f.data_type().clone()))
+                    .collect();
+                let converter = RowConverter::new(fields).expect("normal");
+                let rows = converter
+                    .convert_columns(s.as_struct().columns())
+                    .expect("good");
+                let mut builder = BinaryBuilder::new();
+                for row in rows.iter() {
+                    builder.append_value(row.as_ref());
+                }
+                builder.finish()
+            }
+        };
+        let val_data = match ext.val {
+            None => BinaryArray::from_iter_values(iter::repeat(&[]).take(self.len)),
+            Some(s) => {
+                let fields: Vec<_> = s
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .map(|f| SortField::new(f.data_type().clone()))
+                    .collect();
+                let converter = RowConverter::new(fields).expect("normal");
+                let rows = converter
+                    .convert_columns(s.as_struct().columns())
+                    .expect("good");
+                let mut builder = BinaryBuilder::new();
+                for row in rows.iter() {
+                    builder.append_value(row.as_ref());
+                }
+                builder.finish()
+            }
+        };
+
+        Self {
+            len: self.len,
+            key_data,
+            val_data,
+            timestamps: self.timestamps.clone(),
+            diffs: self.diffs.clone(),
+        }
+    }
+
     /// The keys in this columnar records as an array.
     pub fn keys(&self) -> &BinaryArray {
         &self.key_data
+    }
+
+    /// The values in this columnar records as an array.
+    pub fn values(&self) -> &BinaryArray {
+        &self.val_data
+    }
+
+    /// The values in this columnar records as an array.
+    pub fn timestamps(&self) -> &Int64Array {
+        &self.timestamps
+    }
+
+    /// The values in this columnar records as an array.
+    pub fn diffs(&self) -> &Int64Array {
+        &self.diffs
     }
 
     /// The number of logical bytes in the represented data, excluding offsets
@@ -173,6 +263,81 @@ impl ColumnarRecords {
             diffs: realloc_array(concat(|c| &c.diffs).as_primitive(), metrics),
         }
     }
+
+    /// Apply a function to the timestamp of every row, filtering out the row when it returns `None`.
+    pub fn filter_map_ts(
+        &self,
+        filter_map: impl Fn([u8; 8]) -> Option<[u8; 8]>,
+        metrics: &ColumnarMetrics,
+    ) -> ColumnarRecords {
+        // We don't bother with unary_mut here, since that can't reuse a lgalloc allocation,
+        // so we'd end up copying in the only case that matters.
+        let timestamps = self
+            .timestamps
+            .unary_opt(|t: i64| filter_map(t.to_le_bytes()).map(i64::from_le_bytes));
+
+        if timestamps.null_count() == 0 {
+            return Self {
+                len: self.len,
+                key_data: self.key_data.clone(),
+                val_data: self.val_data.clone(),
+                timestamps: realloc_array(&timestamps, metrics),
+                diffs: self.diffs.clone(),
+            };
+        }
+
+        let non_null = ::arrow::compute::is_not_null(&timestamps).expect("infallible");
+        let filter = FilterBuilder::new(&non_null).optimize().build();
+        let do_filter = |array: &dyn Array| filter.filter(array).expect("valid filter len");
+
+        let timestamps = realloc_array(do_filter(&timestamps).as_primitive(), metrics);
+        Self {
+            len: timestamps.len(),
+            key_data: realloc_array(do_filter(&self.key_data).as_binary(), metrics),
+            val_data: realloc_array(do_filter(&self.val_data).as_binary(), metrics),
+            timestamps,
+            diffs: realloc_array(do_filter(&self.diffs).as_primitive(), metrics),
+        }
+    }
+
+    /// Sort the columnar data, using the specified comparator for the time column.
+    pub fn sorted_by(
+        &self,
+        cmp_ts: impl Fn([u8; 8], [u8; 8]) -> Ordering,
+        metrics: &ColumnarMetrics,
+    ) -> ColumnarRecords {
+        // We can't use an arrow-native sort because timestamps don't sort the same in their
+        // encoded and decoded forms. Instead, sort an index array and do the `take`.
+        let len: u32 = self
+            .len
+            .try_into()
+            .expect("len longer than our max array size");
+        let mut indices: Vec<_> = (0..len).collect();
+        indices.sort_unstable_by(|i, j| {
+            let i = usize::cast_from(*i);
+            let j = usize::cast_from(*j);
+            match self.key_data.value(i).cmp(self.key_data.value(j)) {
+                Ordering::Equal => match self.val_data.value(i).cmp(self.val_data.value(j)) {
+                    Ordering::Equal => cmp_ts(
+                        self.timestamps.value(i).to_le_bytes(),
+                        self.timestamps.value(j).to_le_bytes(),
+                    ),
+                    other => other,
+                },
+                other => other,
+            }
+        });
+        let indices = UInt32Array::from(indices);
+        let do_index =
+            |array: &dyn Array| ::arrow::compute::take(array, &indices, None).expect("valid len");
+        ColumnarRecords {
+            len: self.len,
+            key_data: realloc_array(do_index(&self.key_data).as_binary(), metrics),
+            val_data: realloc_array(do_index(&self.val_data).as_binary(), metrics),
+            timestamps: realloc_array(do_index(&self.timestamps).as_primitive(), metrics),
+            diffs: realloc_array(do_index(&self.diffs).as_primitive(), metrics),
+        }
+    }
 }
 
 /// A reference to a [ColumnarRecords].
@@ -224,6 +389,9 @@ impl<'a> ColumnarRecordsRef<'a> {
             ));
         }
         validate_array("vals", &self.val_data)?;
+        // for val in self.val_data.iter() {
+        //     assert!(val.map_or(true, |v| v.is_empty()), "{val:?}");
+        // }
 
         if self.diffs.len() != self.len {
             return Err(format!(

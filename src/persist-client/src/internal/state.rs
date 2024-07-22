@@ -259,6 +259,13 @@ impl<T> BatchPart<T> {
             BatchPart::Inline { ts_rewrite, .. } => ts_rewrite.as_ref(),
         }
     }
+
+    pub fn format(&self) -> BatchColumnarFormat {
+        match self {
+            BatchPart::Hollow(x) => x.format.unwrap_or(BatchColumnarFormat::Row),
+            BatchPart::Inline { .. } => BatchColumnarFormat::Row,
+        }
+    }
 }
 
 impl<T: Ord> PartialOrd for BatchPart<T> {

@@ -15,13 +15,15 @@
 
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::Codec64;
+use mz_persist_types::columnar::{ColumnEncoder, Schema2};
+use mz_persist_types::{Codec, Codec64};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
@@ -56,7 +58,7 @@ impl BatchColumnarFormat {
     /// Returns a default value for [`BatchColumnarFormat`].
     pub const fn default() -> Self {
         // IMPORTANT: Default to only writing Row data and not our newer structured format.
-        BatchColumnarFormat::Row
+        BatchColumnarFormat::Both(2)
     }
 
     /// Returns a [`BatchColumnarFormat`] for a given `&str`, falling back to a default value if
@@ -109,7 +111,7 @@ impl Arbitrary for BatchColumnarFormat {
         proptest::strategy::Union::new(vec![
             Just(BatchColumnarFormat::Row).boxed(),
             Just(BatchColumnarFormat::Both(0)).boxed(),
-            Just(BatchColumnarFormat::Both(1)).boxed(),
+            Just(BatchColumnarFormat::Both(2)).boxed(),
         ])
         .boxed()
     }
@@ -195,6 +197,37 @@ pub enum BlobTraceUpdates {
 }
 
 impl BlobTraceUpdates {
+    pub fn upgrade<K: Codec, KS: Schema2<K>, V: Codec, VS: Schema2<K>>(
+        &mut self,
+        keys: KS,
+        vals: VS,
+    ) -> (&ColumnarRecords, &ColumnarRecordsStructuredExt) {
+        loop {
+            match self {
+                BlobTraceUpdates::Row(records) => {
+                    let mut keys = keys.encoder().expect("what else");
+                    let mut vals = vals.encoder().expect("probably ok");
+                    for ((k, v), _, _) in records.iter() {
+                        let k = Codec::decode(k).expect("fine");
+                        keys.append(&k);
+                        let v = Codec::decode(v).expect("good");
+                        vals.append(&v);
+                    }
+                    let (key_col, _) = keys.finish();
+                    let (val_col, _) = vals.finish();
+                    *self = BlobTraceUpdates::Both(
+                        records.clone(),
+                        ColumnarRecordsStructuredExt {
+                            key: Some(Arc::new(key_col)),
+                            val: Some(Arc::new(val_col)),
+                        },
+                    )
+                }
+                BlobTraceUpdates::Both(records, ext) => return (records, ext),
+            }
+        }
+    }
+
     /// Return the [`ColumnarRecords`] of the blob.
     pub fn records(&self) -> &ColumnarRecords {
         match self {

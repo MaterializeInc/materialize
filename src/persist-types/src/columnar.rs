@@ -47,6 +47,7 @@
 //! column structure. It also provides a [PartEncoder] and [PartDecoder] for
 //! amortizing any downcasting that does need to happen.
 
+use arrow::array::ArrayRef;
 use std::fmt::Debug;
 
 use crate::codec_impls::UnitSchema;
@@ -331,6 +332,12 @@ pub trait Schema2<T>: Debug + Send + Sync {
     type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn, FinishedStats = Self::Statistics>
         + Debug;
 
+    fn data_type(&self) -> arrow::datatypes::DataType {
+        use arrow::array::Array;
+        let (data, _stats) = self.encoder().expect("ok").finish();
+        data.data_type().clone()
+    }
+
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
     /// Returns a type that is able to decode instances of `T` from a type erased
@@ -349,13 +356,35 @@ pub trait Schema2<T>: Debug + Send + Sync {
         self.decoder(col)
     }
 
+    /// Collect statistics for a column that matches this schema.
+    fn stats(&self, column: ArrayRef) -> anyhow::Result<Self::Statistics>
+    where
+        T: Default,
+    {
+        // Horrible temporary default impl!
+        let len = arrow::array::Array::len(&column);
+        let decoder = self.decoder_any(&*column)?;
+        let mut encoder = self.encoder()?;
+        let mut t = T::default();
+        for i in 0..len {
+            if decoder.is_null(i) {
+                encoder.append_null();
+            } else {
+                decoder.decode(i, &mut t);
+                encoder.append(&t);
+            }
+        }
+        let (_, stats) = encoder.finish();
+        Ok(stats)
+    }
+
     /// Returns a type that can encode values of `T`.
     fn encoder(&self) -> Result<Self::Encoder, anyhow::Error>;
 }
 
 /// A helper for writing tests that validate that a piece of data roundtrips
 /// through the columnar format.
-pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
+pub fn validate_roundtrip<T: Codec + PartialEq + Debug>(
     schema: &T::Schema,
     value: &T,
 ) -> Result<(), String> {

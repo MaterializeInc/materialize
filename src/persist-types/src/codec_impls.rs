@@ -128,7 +128,7 @@ impl ColumnDecoder<()> for UnitColumnar {
 
     fn is_null(&self, idx: usize) -> bool {
         if idx < self.len {
-            true
+            false
         } else {
             panic!("index out of bounds, idx: {idx}, len: {}", self.len);
         }

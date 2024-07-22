@@ -42,7 +42,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
+use crate::iter::{CodecSort, Consolidator, SPLIT_OLD_RUNS};
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
@@ -149,8 +149,8 @@ where
 
 impl<K, V, T, D> Subscribe<K, V, T, D>
 where
-    K: Debug + Codec + Default,
-    V: Debug + Codec + Default,
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
@@ -370,8 +370,8 @@ where
 
 impl<K, V, T, D> Listen<K, V, T, D>
 where
-    K: Debug + Codec + Default,
-    V: Debug + Codec + Default,
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
@@ -923,6 +923,7 @@ where
             .next()
             .await
             .expect("fetching a leased part")?;
+
         let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
         Some(iter)
     }
@@ -999,6 +1000,7 @@ where
             },
             self.cfg.dynamic.compaction_memory_bound_bytes(),
             SPLIT_OLD_RUNS.get(&self.cfg.configs),
+            Arc::new(CodecSort),
         );
 
         let lease = self.lease_seqno();
@@ -1082,8 +1084,8 @@ where
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
-    K: Debug + Codec + Ord + Default,
-    V: Debug + Codec + Ord + Default,
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {

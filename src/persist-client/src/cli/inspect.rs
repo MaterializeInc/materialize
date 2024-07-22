@@ -680,13 +680,13 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
 /// return static Codec names, and rebind the names if/when we get a CodecMismatch, so we can convince
 /// the type system and our safety checks that we really can read the data.
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct K;
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct V;
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 struct T;
-#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Default, Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 struct D(i64);
 
 pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String, Option<CodecConcreteType>)> =
