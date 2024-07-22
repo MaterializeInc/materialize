@@ -17,7 +17,7 @@ use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::soft_panic_or_log;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
 use mz_persist_types::part::{Part2, PartBuilder, PartBuilder2};
-use mz_persist_types::stats::PartStats;
+use mz_persist_types::stats::{ColumnStatKinds, PartStats};
 use mz_persist_types::Codec;
 
 use crate::batch::UntrimmableColumns;
@@ -170,9 +170,12 @@ where
             val,
             ..
         } = builder.finish();
-        let key_stats = key_stats
-            .into_struct_stats()
-            .ok_or_else(|| "found non-StructStats when encoding updates, {key_stats:?}")?;
+        let key_stats = match key_stats.into_non_null_values() {
+            Some(ColumnStatKinds::Struct(stats)) => stats,
+            key_stats => Err(format!(
+                "found non-StructStats when encoding updates, {key_stats:?}"
+            ))?,
+        };
 
         Ok(((Some(key), Some(val)), PartStats { key: key_stats }))
     } else {
