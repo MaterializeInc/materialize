@@ -22,7 +22,7 @@ message ArrayData {
     DataType data_type = 1;
     uint64 length = 2;
     uint64 offset = 3;
-    
+
     repeated Buffer buffers = 4;
     repeated ArrayData children = 5;
 
