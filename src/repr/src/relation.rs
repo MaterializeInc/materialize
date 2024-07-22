@@ -597,6 +597,7 @@ pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Valu
             (1, Just(1024..4096)),
         ]);
     }
+    let name_length = Union::new_weighted(weights);
 
     let name_strat = name_length
         .prop_flat_map(|length| proptest::collection::vec(any::<char>(), length))
