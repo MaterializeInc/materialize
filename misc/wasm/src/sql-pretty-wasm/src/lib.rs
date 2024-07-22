@@ -23,32 +23,23 @@ use wasm_bindgen::prelude::*;
 static ALLOCATOR: LockedAllocator<FreeListAllocator> =
     LockedAllocator::new(FreeListAllocator::new());
 
-#[wasm_bindgen(typescript_custom_section)]
-const PRETTY_STR_TS_DEF: &str = r#"export function pretty_str(query: string): string;"#;
-
-#[wasm_bindgen(typescript_custom_section)]
-const PRETTY_STRS_TS_DEF: &str = r#"export function pretty_str(queries: string): string[];"#;
-
 /// Pretty prints one SQL query.
 ///
 /// Returns the pretty-printed query at the specified maximum target width. Returns an error if the
 /// SQL query is not parseable.
-#[wasm_bindgen(js_name = prettyStr, skip_typescript)]
-pub fn pretty_str(query: &str, width: usize) -> Result<JsValue, JsError> {
-    mz_sql_pretty::pretty_str(query, width)
-        .map_err(|e| JsError::new(&e.to_string()))
-        .map(|s| JsValue::from(s))
+#[wasm_bindgen(js_name = prettyStr)]
+pub fn pretty_str(query: &str, width: usize) -> Result<String, JsError> {
+    mz_sql_pretty::pretty_str(query, width).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Pretty prints many SQL queries.
 ///
 /// Returns the list of pretty-printed queries at the specified maximum target width. Returns an
 /// error if any SQL query is not parseable.
-#[wasm_bindgen(js_name = prettyStrs, skip_typescript)]
-pub fn pretty_strs(queries: &str, width: usize) -> Result<Vec<JsValue>, JsError> {
+#[wasm_bindgen(js_name = prettyStrs)]
+pub fn pretty_strs(queries: &str, width: usize) -> Result<Vec<String>, JsError> {
     Ok(mz_sql_pretty::pretty_strs(queries, width)
         .map_err(|e| JsError::new(&e.to_string()))?
         .into_iter()
-        .map(|s| JsValue::from(s))
         .collect())
 }
