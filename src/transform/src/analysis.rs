@@ -465,6 +465,16 @@ pub mod common {
                 let value = self.derive(exprs[upper - 1], upper - 1, depends);
                 Ok(lattice.meet_assign(&mut self.results[upper - 1], value))
             } else {
+                if exprs[upper - 1].is_recursive() {
+                    // We should not be here if `expr` is still recursive.
+                    // Should that happen, note an error and return an error,
+                    // diverting us to the pessimistic case.
+                    mz_ore::soft_assert_or_log!(
+                        !exprs[upper - 1].is_recursive(),
+                        "Analysis of non-let-normal expression"
+                    );
+                    return Err(());
+                }
                 // If not a `LetRec`, we still want to revisit results and update them with meet.
                 let mut changed = false;
                 for index in lower..upper {
