@@ -1636,10 +1636,11 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::ArrayData;
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
-    use mz_persist_types::arrow::ArrayProtobuf;
+    use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
@@ -1671,14 +1672,12 @@ mod tests {
         let col = realloc_array(&col, metrics);
         // Exercise our ProtoArray format.
         {
-            let field = Field::new("ok", col.data_type().clone(), col.is_nullable());
-            let field = Arc::new(field);
-            let proto = col.clone().into_proto(Arc::clone(&field));
+            let proto = col.to_data().into_proto();
             let bytes = proto.encode_to_vec();
-            let proto = mz_persist_types::arrow::ProtoArray::decode(&bytes[..]).unwrap();
-            let (field_rnd, col_rnd) = StructArray::from_proto(proto).unwrap();
+            let proto = mz_persist_types::arrow::ProtoArrayData::decode(&bytes[..]).unwrap();
+            let array_data: ArrayData = proto.into_rust().unwrap();
+            let col_rnd = StructArray::from(array_data);
 
-            assert_eq!(&*field, &field_rnd);
             assert_eq!(col, col_rnd);
         }
 
