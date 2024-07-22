@@ -16,9 +16,11 @@ body:
       value: |
         Thanks for your interest in helping us improve the Materialize documentation!
   - type: textarea
+    id: documentation-request
     attributes:
       label: Documentation request
   - type: textarea
+    id: affected-pages
     attributes:
       label: Affected Pages
       description: |
@@ -27,6 +29,7 @@ body:
     validations:
       required: false
   - type: textarea
+    id: related-work
     attributes:
       label: Related work
       description: |
