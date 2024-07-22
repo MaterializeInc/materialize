@@ -253,10 +253,6 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
             })
             .collect()
     }
-
-    fn get_reference_resolver(&self) -> super::SourceReferenceResolver {
-        super::SourceReferenceResolver::default()
-    }
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {

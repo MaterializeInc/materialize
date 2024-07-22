@@ -72,8 +72,8 @@ pub mod postgres;
 pub use crate::sources::envelope::SourceEnvelope;
 pub use crate::sources::kafka::KafkaSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
-pub use crate::sources::mysql::MySqlSourceConnection;
-pub use crate::sources::postgres::PostgresSourceConnection;
+pub use crate::sources::mysql::{MySqlSourceConnection, MySqlSourceExportDetails};
+pub use crate::sources::postgres::{PostgresSourceConnection, PostgresSourceExportDetails};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
@@ -109,10 +109,6 @@ impl From<UnresolvedItemName> for ExportReference {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description.
-    ///
-    /// # Warning
-    /// Any time this field changes, you _must_ recalculate the [`SourceExport`]
-    /// values in [`Self::source_exports`].
     pub desc: SourceDesc<C>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
@@ -125,8 +121,6 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///
     ///   Re-rendering/executing the source after making these modifications
     ///   adds and drops the subsource, respectively.
-    /// - Any time the [`Self::desc`] field changes, you must recalculate the
-    ///   [`SourceExport`] values.
     /// - This field includes the primary source's ID, which might need to be
     ///   filtered out to understand which exports are ingestion export
     ///   subsources.
@@ -182,35 +176,30 @@ impl<S> IngestionDescription<S> {
 
 impl<S: Clone> IngestionDescription<S> {
     pub fn source_exports_with_output_indices(&self) -> BTreeMap<GlobalId, SourceExport<usize, S>> {
-        let reference_resolver = self.desc.connection.get_reference_resolver();
-
         let mut source_exports = BTreeMap::new();
 
         for (
-            id,
-            SourceExport {
-                ingestion_output,
-                storage_metadata,
-            },
-        ) in self.source_exports.iter()
+            idx,
+            (
+                id,
+                SourceExport {
+                    ingestion_output: _,
+                    storage_metadata,
+                    details,
+                },
+            ),
+        ) in self.source_exports.iter().enumerate()
         {
-            let ingestion_output = match ingestion_output {
-                Some(ingestion_output) => {
-                    reference_resolver
-                        .resolve_idx(&ingestion_output.0)
-                        .expect("must have all subsource references")
-                        // output indices are the native details idx + 1 to
-                        // account for the `None` value representing 0.
-                        + 1
-                }
-                None => 0,
-            };
+            // output indices are idx + 1 to
+            // account for the primary source output at 0
+            let ingestion_output = idx + 1;
 
             source_exports.insert(
                 *id,
                 SourceExport {
                     ingestion_output,
                     storage_metadata: storage_metadata.clone(),
+                    details: details.clone(),
                 },
             );
         }
@@ -255,6 +244,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                                 SourceExport {
                                     ingestion_output: l_reference,
                                     storage_metadata: l_metadata,
+                                    details: l_details,
                                 },
                             ),
                             (
@@ -262,11 +252,13 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                                 SourceExport {
                                     ingestion_output: r_reference,
                                     storage_metadata: r_metadata,
+                                    details: r_details,
                                 },
                             ),
                         ) => {
                             l_reference == r_reference
                                 && l_metadata.alter_compatible(id, r_metadata).is_ok()
+                                && l_details.alter_compatible(id, r_details).is_ok()
                         }
                         _ => true,
                     }),
@@ -322,6 +314,8 @@ pub struct SourceExport<O: proptest::prelude::Arbitrary, S = ()> {
     pub ingestion_output: O,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
+    /// Details necessary for the source to export data to this export's collection.
+    pub details: SourceExportDetails,
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
@@ -390,6 +384,7 @@ impl ProtoMapEntry<GlobalId, SourceExport<Option<ExportReference>, CollectionMet
                 .map(|i| i.clone().into_string())
                 .collect(),
             storage_metadata: Some(source_export.storage_metadata.into_proto()),
+            details: Some(source_export.details.into_proto()),
         }
     }
 
@@ -418,6 +413,9 @@ impl ProtoMapEntry<GlobalId, SourceExport<Option<ExportReference>, CollectionMet
                 storage_metadata: self
                     .storage_metadata
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
+                details: self
+                    .details
+                    .into_rust_if_some("ProtoSourceExport::details")?,
             },
         ))
     }
@@ -738,10 +736,6 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// Returns metadata columns that this connection *instance* will produce once rendered. The
     /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
-
-    /// Returns a [`SourceReferenceResolver`] for this source connection's source exports, keyed
-    /// by their external reference.
-    fn get_reference_resolver(&self) -> SourceReferenceResolver;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1040,15 +1034,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::LoadGenerator(conn) => conn.metadata_columns(),
         }
     }
-
-    fn get_reference_resolver(&self) -> SourceReferenceResolver {
-        match self {
-            Self::Kafka(conn) => conn.get_reference_resolver(),
-            Self::Postgres(conn) => conn.get_reference_resolver(),
-            Self::MySql(conn) => conn.get_reference_resolver(),
-            Self::LoadGenerator(conn) => conn.get_reference_resolver(),
-        }
-    }
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
@@ -1105,6 +1090,148 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
             Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
             Kind::Mysql(mysql) => GenericSourceConnection::MySql(mysql.into_rust()?),
             Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
+        })
+    }
+}
+
+/// Details necessary for each source export to allow the source implementations
+/// to export data to the export's collection.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SourceExportDetails {
+    /// Used for the primary export of a source
+    None,
+    Kafka,
+    Postgres(PostgresSourceExportDetails),
+    MySql(MySqlSourceExportDetails),
+    LoadGenerator,
+}
+
+impl crate::AlterCompatible for SourceExportDetails {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+        let r = match (self, other) {
+            (Self::None, Self::None) => Ok(()),
+            (Self::Kafka, Self::Kafka) => Ok(()),
+            (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
+            (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::LoadGenerator, Self::LoadGenerator) => Ok(()),
+            _ => Err(AlterError { id }),
+        };
+
+        if r.is_err() {
+            tracing::warn!(
+                "SourceExportDetails incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+        }
+
+        r
+    }
+}
+
+impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
+    fn into_proto(&self) -> ProtoSourceExportDetails {
+        use proto_source_export_details::Kind;
+        ProtoSourceExportDetails {
+            kind: match self {
+                SourceExportDetails::None => None,
+                SourceExportDetails::Kafka => {
+                    Some(Kind::Kafka(kafka::ProtoKafkaSourceExportDetails {}))
+                }
+                SourceExportDetails::Postgres(details) => {
+                    Some(Kind::Postgres(details.into_proto()))
+                }
+                SourceExportDetails::MySql(details) => Some(Kind::Mysql(details.into_proto())),
+                SourceExportDetails::LoadGenerator => Some(Kind::Loadgen(
+                    load_generator::ProtoLoadGeneratorSourceExportDetails {},
+                )),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportDetails) -> Result<Self, TryFromProtoError> {
+        use proto_source_export_details::Kind;
+        Ok(match proto.kind {
+            None => SourceExportDetails::None,
+            Some(Kind::Kafka(_)) => SourceExportDetails::Kafka,
+            Some(Kind::Postgres(details)) => SourceExportDetails::Postgres(details.into_rust()?),
+            Some(Kind::Mysql(details)) => SourceExportDetails::MySql(details.into_rust()?),
+            Some(Kind::Loadgen(_)) => SourceExportDetails::LoadGenerator,
+        })
+    }
+}
+
+/// Details necessary to store in the `Details` option of a source export
+/// statement (currently only `CREATE SUBSOURCE` statements), to generate the
+/// appropriate `SourceExportDetails` struct during planning.
+/// NOTE that this is serialized as proto to the catalog, so any changes here
+/// must be backwards compatible or will require a migration.
+/// We only support `CREATE SUBSOURCE` statements for Postgres and MySQL
+/// for now, so we only need to support those here.
+pub enum SourceExportStatementDetails {
+    Postgres {
+        table: mz_postgres_util::desc::PostgresTableDesc,
+    },
+    MySql {
+        table: mz_mysql_util::MySqlTableDesc,
+        initial_gtid_set: String,
+    },
+}
+
+impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
+    fn into_proto(&self) -> ProtoSourceExportStatementDetails {
+        match self {
+            SourceExportStatementDetails::Postgres { table } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Postgres(
+                    postgres::ProtoPostgresSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::MySql {
+                table,
+                initial_gtid_set,
+            } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Mysql(
+                    mysql::ProtoMySqlSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                        initial_gtid_set: initial_gtid_set.clone(),
+                    },
+                )),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportStatementDetails) -> Result<Self, TryFromProtoError> {
+        use proto_source_export_statement_details::Kind;
+        Ok(match proto.kind {
+            Some(Kind::Postgres(details)) => SourceExportStatementDetails::Postgres {
+                table: mz_postgres_util::desc::PostgresTableDesc::from_proto(
+                    details.table.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "ProtoPostgresSourceExportStatementDetails::table",
+                        )
+                    })?,
+                )?,
+            },
+            Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
+                table: mz_mysql_util::MySqlTableDesc::from_proto(details.table.ok_or_else(
+                    || {
+                        TryFromProtoError::missing_field(
+                            "ProtoMySqlSourceExportStatementDetails::table",
+                        )
+                    },
+                )?)?,
+                initial_gtid_set: details.initial_gtid_set,
+            },
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoSourceExportStatementDetails::kind",
+                ))
+            }
         })
     }
 }

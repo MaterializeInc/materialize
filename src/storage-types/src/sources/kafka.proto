@@ -47,3 +47,5 @@ message ProtoKafkaHeader {
     string key = 1;
     bool use_bytes = 2;
 }
+
+message ProtoKafkaSourceExportDetails {}

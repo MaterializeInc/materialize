@@ -52,7 +52,8 @@ use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDetails,
+    Timeline,
 };
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
@@ -560,6 +561,7 @@ pub enum DataSourceDesc {
     IngestionExport {
         ingestion_id: GlobalId,
         external_reference: UnresolvedItemName,
+        details: SourceExportDetails,
     },
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
@@ -630,6 +632,7 @@ impl Source {
                 mz_sql::plan::DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
+                    details,
                 } => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -638,6 +641,7 @@ impl Source {
                     DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference,
+                        details,
                     }
                 }
                 mz_sql::plan::DataSourceDesc::Webhook {

@@ -72,7 +72,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
     ExportReference, GenericSourceConnection, IngestionDescription, SourceConnection, SourceData,
-    SourceDesc, SourceExport,
+    SourceDesc, SourceExport, SourceExportDetails,
 };
 use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -644,6 +644,7 @@ where
                     SourceExport {
                         ingestion_output: None,
                         storage_metadata: (),
+                        details: SourceExportDetails::None,
                     },
                 );
             }
@@ -713,6 +714,7 @@ where
                 DataSource::IngestionExport {
                     ingestion_id,
                     external_reference,
+                    details,
                 } => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "not registering {} with a controller persist worker", id);
                     // Adjust the source to contain this export.
@@ -730,6 +732,7 @@ where
                                         external_reference.clone(),
                                     )),
                                     storage_metadata: (),
+                                    details: details.clone(),
                                 },
                             );
 
@@ -886,45 +889,6 @@ where
                 cur_ingestion
                     .desc
                     .alter_compatible(ingestion_id, source_desc)?;
-
-                let reference_resolver = cur_ingestion.desc.connection.get_reference_resolver();
-
-                // Ensure updated `SourceDesc` contains reference to all
-                // current external references.
-                for export_id in cur_ingestion
-                    .source_exports
-                    .keys()
-                    .filter(|export| **export != ingestion_id)
-                {
-                    let collection = self
-                        .collections
-                        .get(export_id)
-                        .ok_or_else(|| AlterError { id: ingestion_id })?;
-
-                    let external_reference = match &collection.data_source {
-                        DataSource::IngestionExport {
-                            external_reference, ..
-                        } => external_reference,
-                        o => {
-                            tracing::warn!(
-                                "{export_id:?} not DataSource::IngestionExport but {o:#?}",
-                            );
-                            Err(AlterError { id: ingestion_id })?
-                        }
-                    };
-
-                    if reference_resolver
-                        .resolve_idx(&external_reference.0)
-                        .is_err()
-                    {
-                        tracing::warn!(
-                            "subsource {export_id} of {ingestion_id} refers to \
-                            {external_reference:?}, which is missing from \
-                            updated SourceDesc \n{source_desc:#?}"
-                        );
-                        Err(AlterError { id: ingestion_id })?
-                    }
-                }
             }
             o => {
                 tracing::info!(
@@ -3555,6 +3519,7 @@ where
             SourceExport {
                 ingestion_output,
                 storage_metadata: (),
+                details,
             },
         ) in ingestion_description.source_exports
         {
@@ -3564,6 +3529,7 @@ where
                 SourceExport {
                     ingestion_output,
                     storage_metadata: export_storage_metadata,
+                    details,
                 },
             );
         }

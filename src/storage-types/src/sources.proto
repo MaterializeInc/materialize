@@ -70,6 +70,22 @@ message ProtoCompression {
     }
 }
 
+message ProtoSourceExportDetails {
+    oneof kind {
+        mz_storage_types.sources.kafka.ProtoKafkaSourceExportDetails kafka = 1;
+        mz_storage_types.sources.postgres.ProtoPostgresSourceExportDetails postgres = 2;
+        mz_storage_types.sources.mysql.ProtoMySqlSourceExportDetails mysql = 3;
+        mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportDetails loadgen = 4;
+    }
+}
+
+message ProtoSourceExportStatementDetails {
+    oneof kind {
+        mz_storage_types.sources.postgres.ProtoPostgresSourceExportStatementDetails postgres = 1;
+        mz_storage_types.sources.mysql.ProtoMySqlSourceExportStatementDetails mysql = 2;
+    }
+}
+
 message ProtoIngestionDescription {
     message ProtoSourceImport {
         mz_repr.global_id.ProtoGlobalId id = 1;
@@ -83,6 +99,7 @@ message ProtoIngestionDescription {
         // uint64 output_index = 2;
         mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 3;
         repeated string ingestion_output = 4;
+        ProtoSourceExportDetails details = 5;
     }
 
     reserved 1;

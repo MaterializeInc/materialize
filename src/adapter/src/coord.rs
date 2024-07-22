@@ -2252,10 +2252,12 @@ impl Coordinator {
                 DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
+                    details,
                 } => (
                     DataSource::IngestionExport {
                         ingestion_id,
                         external_reference,
+                        details,
                     },
                     Some(source_status_collection_id),
                 ),

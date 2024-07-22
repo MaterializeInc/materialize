@@ -53,3 +53,5 @@ message ProtoKeyValueLoadGenerator {
     uint64 seed = 8;
     optional string include_offset = 9;
 }
+
+message ProtoLoadGeneratorSourceExportDetails {}

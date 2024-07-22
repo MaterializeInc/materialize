@@ -1096,18 +1096,24 @@ pub enum CreateSubsourceOptionName {
     Progress,
     // Tracks which item this subsource references in the primary source.
     ExternalReference,
+    /// Columns whose types you want to unconditionally format as text
+    TextColumns,
+    /// Columns you want to ignore when ingesting data
+    IgnoreColumns,
+    /// `DETAILS` for this subsource, hex-encoded protobuf type
+    /// [`mz_storage_types::sources::SourceExportStatementDetails`]
+    Details,
 }
 
 impl AstDisplay for CreateSubsourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            CreateSubsourceOptionName::Progress => {
-                f.write_str("PROGRESS");
-            }
-            CreateSubsourceOptionName::ExternalReference => {
-                f.write_str("EXTERNAL REFERENCE");
-            }
-        }
+        f.write_str(match self {
+            CreateSubsourceOptionName::Progress => "PROGRESS",
+            CreateSubsourceOptionName::ExternalReference => "EXTERNAL REFERENCE",
+            CreateSubsourceOptionName::TextColumns => "TEXT COLUMNS",
+            CreateSubsourceOptionName::IgnoreColumns => "IGNORE COLUMNS",
+            CreateSubsourceOptionName::Details => "DETAILS",
+        })
     }
 }
 
@@ -1119,9 +1125,11 @@ impl WithOptionName for CreateSubsourceOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::ExternalReference => {
-                false
-            }
+            CreateSubsourceOptionName::Progress
+            | CreateSubsourceOptionName::ExternalReference
+            | CreateSubsourceOptionName::Details
+            | CreateSubsourceOptionName::TextColumns
+            | CreateSubsourceOptionName::IgnoreColumns => false,
         }
     }
 }
