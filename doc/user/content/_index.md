@@ -32,7 +32,12 @@ data freshness**.
 {{< linkbox icon="bulb" title="Key Concepts" >}}
 
 -   [Materialize overview](/overview/what-is-materialize/)
--   [Key Concepts](/concepts/)
+-   [Clusters](/concepts/clusters/)
+-   [Sources](/concepts/sources/)
+-   [Views](/concepts/views/)
+-   [Indexes](/concepts/indexes/)
+-   [Sinks](/concepts/sinks/)
+
     {{</ linkbox >}}
     {{< linkbox icon="doc" title="Guides" >}}
 -   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
@@ -42,8 +47,8 @@ data freshness**.
 -   [Time-windowed computation](/sql/patterns/temporal-filters/)
     {{</ linkbox >}}
     {{< linkbox icon="book" title="Reference" >}}
--   [`CREATE SOURCE`](/sql/create-source/)
--   [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/)
+-   [`CREATE VIEW`](/sql/create-view/)
+-   [`CREATE INDEX`](/sql/create-index/)
 -   [`SQL data types`](/sql/types/)
 -   [`SQL functions`](/sql/functions/)
     {{</ linkbox >}}
