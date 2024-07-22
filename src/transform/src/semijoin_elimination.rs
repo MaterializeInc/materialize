@@ -157,7 +157,7 @@ impl SemijoinElimination {
                         // Rewrite the predicate to refer to the other input.
                         predicate.visit_pre_mut(|e| {
                             if let MirScalarExpr::Column(c) = e {
-                                *c = *c + prior_arity2;
+                                *c = equated[*c].unwrap() + prior_arity2;
                             }
                         });
                     }
