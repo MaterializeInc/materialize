@@ -65,59 +65,46 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # connection's role.
     connection_role = f"testdrive-{ctx.seed}-MaterializeConnection"
     connection_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{connection_role}"
-    ctx.iam.create_role(
-        RoleName=connection_role,
-        AssumeRolePolicyDocument=json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {
-                            "AWS": ctx.materialized_principal,
-                        },
-                        "Action": "sts:AssumeRole",
-                    }
-                ],
-            }
-        ),
-    )
+    _create_role(ctx, connection_role, ctx.materialized_principal)
 
-    # Start Materialize.
-    materialized = Materialized(
-        environment_extra=[
-            "AWS_DEFAULT_REGION=us-east-1",
-            "AWS_ACCESS_KEY_ID",
-            "AWS_PROFILE",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-        ],
-        volumes_extra=[
-            # Mounting the .aws directory in the container allows Materialize to
-            # use SSO credentials, which makes it easier to run this composition
-            # locally. CI doesn't need this.
-            "~/.aws:/home/materialize/.aws",
-        ],
-        options=[
-            f"--aws-connection-role-arn={connection_role_arn}",
-            f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
-        ],
-    )
-    with c.override(materialized):
-        # (Re)start Materialize and enable AWS connections.
-        c.down()
-        c.up("materialized")
-        c.sql(
-            port=6877,
-            user="mz_system",
-            sql="""
-            ALTER SYSTEM SET enable_connection_validation_syntax = true;
-            """,
+    try:
+        # Start Materialize.
+        materialized = Materialized(
+            environment_extra=[
+                "AWS_DEFAULT_REGION=us-east-1",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_PROFILE",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+            ],
+            volumes_extra=[
+                # Mounting the .aws directory in the container allows Materialize to
+                # use SSO credentials, which makes it easier to run this composition
+                # locally. CI doesn't need this.
+                "~/.aws:/home/materialize/.aws",
+            ],
+            options=[
+                f"--aws-connection-role-arn={connection_role_arn}",
+                f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
+            ],
         )
+        with c.override(materialized):
+            # (Re)start Materialize and enable AWS connections.
+            c.down()
+            c.up("materialized")
+            c.sql(
+                port=6877,
+                user="mz_system",
+                sql="""
+                ALTER SYSTEM SET enable_connection_validation_syntax = true;
+                """,
+            )
 
-        for fn in [test_credentials, test_assume_role]:
-            with c.test_case(fn.__name__):
-                fn(c, ctx)
+            for fn in [test_credentials, test_assume_role]:
+                with c.test_case(fn.__name__):
+                    fn(c, ctx)
+    finally:
+        _delete_role(ctx, connection_role)
 
 
 def test_credentials(c: Composition, ctx: TestContext):
