@@ -70,8 +70,8 @@ pub(crate) fn doc_create_source<T: AstInfo>(v: &CreateSourceStatement<T>) -> RcD
     if let Some(envelope) = &v.envelope {
         docs.push(nest_title("ENVELOPE", doc_display_pass(envelope)));
     }
-    if let Some(subsources) = &v.referenced_subsources {
-        docs.push(doc_referenced_subsources(subsources));
+    if let Some(references) = &v.external_references {
+        docs.push(doc_external_references(references));
     }
     if let Some(progress) = &v.progress_subsource {
         docs.push(nest_title("EXPOSE PROGRESS AS", doc_display_pass(progress)));
@@ -86,19 +86,19 @@ pub(crate) fn doc_create_source<T: AstInfo>(v: &CreateSourceStatement<T>) -> RcD
     RcDoc::intersperse(docs, Doc::line()).group()
 }
 
-fn doc_referenced_subsources(v: &ReferencedSubsources) -> RcDoc {
+fn doc_external_references(v: &ExternalReferences) -> RcDoc {
     match v {
-        ReferencedSubsources::SubsetTables(subsources) => bracket(
+        ExternalReferences::SubsetTables(subsources) => bracket(
             "FOR TABLES (",
             comma_separate(doc_display_pass, subsources),
             ")",
         ),
-        ReferencedSubsources::SubsetSchemas(schemas) => bracket(
+        ExternalReferences::SubsetSchemas(schemas) => bracket(
             "FOR SCHEMAS (",
             comma_separate(doc_display_pass, schemas),
             ")",
         ),
-        ReferencedSubsources::All => RcDoc::text("FOR ALL TABLES"),
+        ExternalReferences::All => RcDoc::text("FOR ALL TABLES"),
     }
 }
 
