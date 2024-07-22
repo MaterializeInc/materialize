@@ -566,23 +566,14 @@ impl RustType<proto::Buffer> for arrow::buffer::Buffer {
 impl RustType<proto::BooleanBuffer> for arrow::buffer::BooleanBuffer {
     fn into_proto(&self) -> proto::BooleanBuffer {
         proto::BooleanBuffer {
-            buffer: Some(self.inner().clone().into_proto()),
-            offset: u64::cast_from(self.offset()),
+            buffer: Some(self.sliced().into_proto()),
             length: u64::cast_from(self.len()),
         }
     }
 
     fn from_proto(proto: proto::BooleanBuffer) -> Result<Self, TryFromProtoError> {
-        let proto::BooleanBuffer {
-            buffer,
-            offset,
-            length,
-        } = proto;
-
+        let proto::BooleanBuffer { buffer, length } = proto;
         let buffer = buffer.into_rust_if_some("buffer")?;
-        let offset = usize::cast_from(offset);
-        let length = usize::cast_from(length);
-
-        Ok(BooleanBuffer::new(buffer, offset, length))
+        Ok(BooleanBuffer::new(buffer, 0, usize::cast_from(length)))
     }
 }

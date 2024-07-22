@@ -111,6 +111,5 @@ message Buffer {
 
 message BooleanBuffer {
     Buffer buffer = 1;
-    uint64 offset = 2;
-    uint64 length = 3;
+    uint64 length = 2;
 }
