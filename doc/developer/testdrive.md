@@ -107,6 +107,20 @@ In the second terminal, run testdrive:
 $ cargo run --bin testdrive --release -- test/testdrive/TESTFILE.td
 ```
 
+Note that mzcompose has a different default of system parameters in order to
+test more risky features of Materialize, see `DEFAULT_SYSTEM_PARAMETERS` in
+[https://github.com/MaterializeInc/materialize/blob/main/misc/python/materialize/mzcompose/__init__.py](mzcompose/__init__.py).
+On the command line specific system parameters can be set using the
+`MZSYSTEM_PARAMETER_DEFAULT` environment variable (`;`-separated).
+Alternatively `MZ_ALL_FEATURES=1` enables all available Materialize features.
+For example to run the `mz-arrangement-sharing.td` locally with a Debug build
+for fast turnaround times:
+
+```shell
+$ MZ_ALL_FEATURES=1 bin/environmentd
+$ cargo run --bin testdrive -- test/testdrive/mz-arrangement-sharing.td
+```
+
 Many testdrive tests require Zookeeper, Kafka, and
 the Confluent Schema Registry. See the [unit tests docs for starting them](guide-testing.md#unitintegration-tests).
 
