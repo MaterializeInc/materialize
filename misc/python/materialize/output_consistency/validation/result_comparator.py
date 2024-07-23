@@ -347,8 +347,8 @@ class ResultComparator:
             column_values2.append(result2.result_rows[row_index][col_index])
 
         if self.ignore_row_order(expression):
-            column_values1 = sorted(column_values1)
-            column_values2 = sorted(column_values2)
+            column_values1 = self._sort_column_values(column_values1)
+            column_values2 = self._sort_column_values(column_values2)
 
         for row_index in range(0, row_length):
             result_value1 = column_values1[row_index]
@@ -521,3 +521,10 @@ class ResultComparator:
             return query_execution.query_template.select_expressions[0]
 
         return None
+
+    def _sort_column_values(self, column_values: list[Any]) -> list[Any]:
+        # needed because, for example, None values have no order
+        def sort_key(value: Any) -> Any:
+            return str(value)
+
+        return sorted(column_values, key=sort_key)
