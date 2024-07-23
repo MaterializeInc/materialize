@@ -79,7 +79,7 @@ num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm"] }
-openssl = { version = "0.10.64", features = ["vendored"] }
+openssl = { version = "0.10.66", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
@@ -203,7 +203,7 @@ num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm"] }
-openssl = { version = "0.10.64", features = ["vendored"] }
+openssl = { version = "0.10.66", features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
@@ -266,7 +266,7 @@ zstd-sys = { version = "2.0.9", features = ["std"] }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
-openssl-sys = { version = "0.9.102", default-features = false, features = ["vendored"] }
+openssl-sys = { version = "0.9.103", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 
@@ -274,7 +274,7 @@ ring = { version = "0.17.7", features = ["std"] }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
-openssl-sys = { version = "0.9.102", default-features = false, features = ["vendored"] }
+openssl-sys = { version = "0.9.103", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 

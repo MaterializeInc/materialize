@@ -826,8 +826,16 @@ criteria = "safe-to-deploy"
 version = "0.15.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.openssl]]
+version = "0.10.66"
+criteria = "safe-to-deploy"
+
 [[exemptions.openssl-probe]]
 version = "0.1.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.openssl-sys]]
+version = "0.9.103"
 criteria = "safe-to-deploy"
 
 [[exemptions.option-ext]]
@@ -1379,7 +1387,7 @@ version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-openssl]]
-version = "0.6.3"
+version = "0.6.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-pipe]]
