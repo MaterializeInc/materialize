@@ -101,6 +101,7 @@ SERVICES = [
         external_cockroach=True,
         external_minio=True,
         sanity_restart=False,
+        restart="on-failure",
         volumes_extra=["secrets:/share/secrets"],
     ),
     Materialized(
@@ -108,6 +109,7 @@ SERVICES = [
         external_cockroach=True,
         external_minio=True,
         sanity_restart=False,
+        restart="on-failure",
         volumes_extra=["secrets:/share/secrets"],
     ),
     TestdriveService(
