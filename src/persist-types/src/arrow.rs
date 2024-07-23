@@ -34,11 +34,11 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/mz_persist_types.arrow.rs"));
 }
-pub use proto::ArrayData as ProtoArrayData;
+pub use proto::ProtoArrayData;
 
-impl RustType<proto::ArrayData> for arrow::array::ArrayData {
-    fn into_proto(&self) -> proto::ArrayData {
-        proto::ArrayData {
+impl RustType<ProtoArrayData> for arrow::array::ArrayData {
+    fn into_proto(&self) -> ProtoArrayData {
+        ProtoArrayData {
             data_type: Some(self.data_type().into_proto()),
             length: u64::cast_from(self.len()),
             offset: u64::cast_from(self.offset()),
@@ -48,8 +48,8 @@ impl RustType<proto::ArrayData> for arrow::array::ArrayData {
         }
     }
 
-    fn from_proto(proto: proto::ArrayData) -> Result<Self, TryFromProtoError> {
-        let proto::ArrayData {
+    fn from_proto(proto: ProtoArrayData) -> Result<Self, TryFromProtoError> {
+        let ProtoArrayData {
             data_type,
             length,
             offset,
