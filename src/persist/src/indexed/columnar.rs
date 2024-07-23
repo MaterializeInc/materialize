@@ -12,9 +12,8 @@
 
 use std::fmt;
 use std::mem::size_of;
-use std::sync::Arc;
 
-use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array};
+use ::arrow::array::{Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array};
 use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
 use bytes::Bytes;
@@ -466,20 +465,26 @@ impl ColumnarRecords {
 /// which we interface with via Arrow.
 ///
 /// [`Codec`]: mz_persist_types::Codec
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ColumnarRecordsStructuredExt {
     /// The structured `k` column.
     ///
     /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `key` column as None.
     ///
     /// [`StructArray`]: ::arrow::array::StructArray
-    pub key: Option<Arc<dyn Array>>,
+    pub key: ArrayRef,
     /// The structured `v` column.
     ///
     /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `val` column as None.
     ///
     /// [`StructArray`]: ::arrow::array::StructArray
-    pub val: Option<Arc<dyn Array>>,
+    pub val: ArrayRef,
+}
+
+impl PartialEq for ColumnarRecordsStructuredExt {
+    fn eq(&self, other: &Self) -> bool {
+        *self.key == *other.key && *self.val == *other.val
+    }
 }
 
 #[cfg(test)]

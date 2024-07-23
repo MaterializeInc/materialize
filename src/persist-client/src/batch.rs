@@ -28,9 +28,7 @@ use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_ore::{instrument, soft_panic_or_log};
-use mz_persist::indexed::columnar::{
-    ColumnarRecords, ColumnarRecordsBuilder, ColumnarRecordsStructuredExt,
-};
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
@@ -989,7 +987,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         });
 
                         // We can't collect stats if we failed to encode in a columnar format.
-                        let Ok(((key_col, val_col), stats)) = result else {
+                        let Ok((extended_cols, stats)) = result else {
                             tracing::error!(?result, "failed to encode in columnar format!");
                             break 'collect_stats None;
                         };
@@ -997,14 +995,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         // Write a structured batch if the dyncfg is enabled and we're the stats
                         // override is not set.
                         if let BlobTraceUpdates::Row(record) = &updates.updates {
-                            if cfg.batch_columnar_format.is_structured()
-                                && !cfg.batch_columnar_stats_only_override
-                            {
-                                let record_ext = ColumnarRecordsStructuredExt {
-                                    key: key_col,
-                                    val: val_col,
-                                };
-                                updates.updates = BlobTraceUpdates::Both(record.clone(), record_ext)
+                            if let Some(record_ext) = extended_cols {
+                                if !cfg.batch_columnar_stats_only_override {
+                                    updates.updates =
+                                        BlobTraceUpdates::Both(record.clone(), record_ext);
+                                }
                             }
                         }
 

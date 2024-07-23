@@ -69,14 +69,16 @@ pub fn encode_arrow_batch_kvtd_ks_vs(
     let mut fields: Vec<_> = (*SCHEMA_ARROW_RS_KVTD).fields().iter().cloned().collect();
     let mut arrays = encode_arrow_batch_kvtd(records);
 
-    if let Some(key_array) = &structured.key {
+    {
+        let key_array = &structured.key;
         let key_field = Field::new("k_s", key_array.data_type().clone(), false);
 
         fields.push(Arc::new(key_field));
         arrays.push(Arc::clone(key_array));
     }
 
-    if let Some(val_array) = &structured.val {
+    {
+        let val_array = &structured.val;
         let val_field = Field::new("v_s", val_array.data_type().clone(), false);
 
         fields.push(Arc::new(val_field));
@@ -223,15 +225,15 @@ pub fn decode_arrow_batch_kvtd(
 /// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
 pub fn decode_arrow_batch_kvtd_ks_vs(
     cols: &[Arc<dyn Array>],
-    maybe_key_col: Option<Arc<dyn Array>>,
-    maybe_val_col: Option<Arc<dyn Array>>,
+    key_col: Arc<dyn Array>,
+    val_col: Arc<dyn Array>,
     metrics: &ColumnarMetrics,
 ) -> Result<(ColumnarRecords, ColumnarRecordsStructuredExt), String> {
     let same_length = cols
         .iter()
         .map(|col| col.as_ref())
-        .chain(maybe_key_col.as_deref().into_iter())
-        .chain(maybe_val_col.as_deref().into_iter())
+        .chain([&*key_col])
+        .chain([&*val_col])
         .map(|col| col.len())
         .all_equal();
     if !same_length {
@@ -241,8 +243,8 @@ pub fn decode_arrow_batch_kvtd_ks_vs(
     // We always have (K, V, T, D) columns.
     let primary_records = decode_arrow_batch_kvtd(cols, metrics)?;
     let structured_ext = ColumnarRecordsStructuredExt {
-        key: maybe_key_col,
-        val: maybe_val_col,
+        key: key_col,
+        val: val_col,
     };
 
     Ok((primary_records, structured_ext))
