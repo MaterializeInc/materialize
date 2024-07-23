@@ -873,7 +873,7 @@ def store_known_issues_in_test_analytics(
     test_analytics: TestAnalyticsDb, known_issues: list[KnownGitHubIssue]
 ) -> None:
     for issue in known_issues:
-        test_analytics.known_issues.add_issue(issue)
+        test_analytics.known_issues.add_or_update_issue(issue)
 
 
 def store_annotation_in_test_analytics(

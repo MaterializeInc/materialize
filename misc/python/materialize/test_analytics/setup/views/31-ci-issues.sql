@@ -21,7 +21,7 @@ IN CLUSTER test_analytics AS
         GROUP BY issue
     )
     AS a
-    JOIN issues AS i ON a.issue = i.issue
+    JOIN issue AS i ON a.issue = i.issue_id
 ;
 
 GRANT SELECT ON mv_ci_issues TO "ci-failures";

@@ -8,10 +8,13 @@
 -- by the Apache License, Version 2.0.
 
 CREATE OR REPLACE MATERIALIZED VIEW mv_ci_failures AS
+IN CLUSTER test_analytics AS
     SELECT
-        pipeline || '#' || build_number AS build,
+        pipeline || '#' || build_number AS build_identifier,
         test_suite,
-        CASE WHEN error_type = 'KNOWN_ISSUE' THEN issue ELSE error_type END AS issue,
+        CASE WHEN error_type = 'KNOWN_ISSUE' THEN issue || ' (KNOWN ISSUE)' ELSE
+          CASE WHEN error_type = 'POTENTIAL_REGRESSION' THEN issue || ' (POTENTIAL REGRESSION)' ELSE
+          REPLACE(error_type, '_', ' ') END END AS issue,
         string_agg(content, '\n') AS content,
         branch,
         build_date,

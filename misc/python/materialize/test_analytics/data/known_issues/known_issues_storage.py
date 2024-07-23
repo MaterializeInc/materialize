@@ -13,7 +13,7 @@ from materialize.test_analytics.util import mz_sql_util
 
 
 class KnownIssuesStorage(BaseDataStorage):
-    def add_issue(
+    def add_or_update_issue(
         self,
         issue: KnownGitHubIssue,
     ) -> None:
@@ -22,21 +22,21 @@ class KnownIssuesStorage(BaseDataStorage):
         )
         sql_statements = [
             f"""
-            UPDATE issues
+            UPDATE issue
             SET title = {mz_sql_util.as_sanitized_literal(issue.info["title"])},
                 ci_regexp = {mz_sql_util.as_sanitized_literal(issue.regex.pattern.decode("utf-8"))},
                 state = {mz_sql_util.as_sanitized_literal(issue.info["state"])}
-            WHERE issue = {mz_sql_util.as_sanitized_literal(issue_str)}
+            WHERE issue_id = {mz_sql_util.as_sanitized_literal(issue_str)}
             ;
             """,
             f"""
-            INSERT INTO issues (issue, title, ci_regexp, state)
+            INSERT INTO issue (issue_id, title, ci_regexp, state)
                 SELECT {mz_sql_util.as_sanitized_literal(issue_str)},
                        {mz_sql_util.as_sanitized_literal(issue.info["title"])},
-                       {mz_sql_util.as_sanitized_literal(issue.regex.pattern)},
+                       {mz_sql_util.as_sanitized_literal(issue.regex.pattern.decode("utf-8"))},
                        {mz_sql_util.as_sanitized_literal(issue.info["state"])}
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM issues WHERE issue = {mz_sql_util.as_sanitized_literal(issue_str)}
+                    SELECT 1 FROM issue WHERE issue_id = {mz_sql_util.as_sanitized_literal(issue_str)}
                 )
             ;
             """,
