@@ -333,6 +333,16 @@ pub struct StorageCollectionsImpl<
     /// Storage configuration parameters.
     config: Arc<Mutex<StorageConfiguration>>,
 
+    /// The upper of the txn shard as it was when we booted. We forward the
+    /// upper of created/registered tables to make sure that their uppers are at
+    /// least not less than the initially known txn upper.
+    ///
+    /// NOTE: This works around a quirk in how the adapter choses the as_of of
+    /// existing indexes when bootstrapping, where tables that have an upper
+    /// that is less then the initially known txn upper can lead to indexes that
+    /// cannot hydrate in read-only mode.
+    initial_txn_upper: Antichain<T>,
+
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
 
@@ -412,7 +422,7 @@ where
 
         // For handing to the background task, for listening to upper updates.
         let (txns_key_schema, txns_val_schema) = TxnsCodecRow::schemas();
-        let txns_write = txns_client
+        let mut txns_write = txns_client
             .open_writer(
                 txns_id,
                 Arc::new(txns_key_schema),
@@ -434,6 +444,8 @@ where
             connection_context,
             mz_dyncfgs::all_dyncfgs(),
         )));
+
+        let initial_txn_upper = txns_write.fetch_recent_upper().await.to_owned();
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (holds_tx, holds_rx) = mpsc::unbounded_channel();
@@ -476,6 +488,7 @@ where
             envd_epoch,
             read_only,
             config,
+            initial_txn_upper,
             persist_location,
             persist: persist_clients,
             cmd_tx,
@@ -1601,17 +1614,20 @@ where
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Other(DataSourceOther::TableWrites) => {
-                    let register_ts = register_ts
-                        .as_ref()
-                        .expect("caller should have provided a register_ts when creating a table");
-                    // This register call advances the logical upper of the
-                    // table. The register call eventually circles that info
-                    // back to us, but some tests fail if we don't synchronously
-                    // update it in create_collections, so just do that now.
-                    let advance_to = mz_persist_types::StepForward::step_forward(register_ts);
-
-                    if collection_state.write_frontier.less_than(&advance_to) {
-                        collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
+                    // See comment on self.initial_txn_upper on why we're doing
+                    // this.
+                    if PartialOrder::less_than(
+                        &collection_state.write_frontier,
+                        &self.initial_txn_upper,
+                    ) {
+                        // We could try and be cute and use the join of the txn
+                        // upper and the table upper. But that has more
+                        // complicated reasoning for why it is or isn't correct,
+                        // and we're only dealing with totally ordered times
+                        // here.
+                        collection_state
+                            .write_frontier
+                            .clone_from(&self.initial_txn_upper);
                     }
                     self_collections.insert(id, collection_state);
                 }
