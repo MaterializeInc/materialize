@@ -10,10 +10,11 @@
 //! Logic related to executing catalog transactions.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::ENABLE_0DT_DEPLOYMENT;
+use mz_adapter_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT, WITH_0DT_DEPLOYMENT_MAX_WAIT};
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
     ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent,
@@ -44,6 +45,7 @@ use mz_sql::names::{
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::OwnedVarInput;
+use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
@@ -1957,6 +1959,11 @@ impl Catalog {
                     let enable_0dt_deployment =
                         strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
                     tx.set_enable_0dt_deployment(enable_0dt_deployment)?;
+                } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                    let with_0dt_deployment_max_wait =
+                        Duration::parse(VarInput::Flat(&parsed_value))
+                            .expect("parsing succeeded above");
+                    tx.set_0dt_deployment_max_wait(with_0dt_deployment_max_wait)?;
                 }
 
                 CatalogState::add_to_audit_log(
@@ -1980,6 +1987,8 @@ impl Catalog {
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
                 if name == ENABLE_0DT_DEPLOYMENT.name() {
                     tx.reset_enable_0dt_deployment()?;
+                } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                    tx.reset_0dt_deployment_max_wait()?;
                 }
 
                 CatalogState::add_to_audit_log(
@@ -1996,6 +2005,7 @@ impl Catalog {
             Op::ResetAllSystemConfiguration => {
                 tx.clear_system_configs();
                 tx.reset_enable_0dt_deployment()?;
+                tx.reset_0dt_deployment_max_wait()?;
 
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,

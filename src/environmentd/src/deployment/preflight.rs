@@ -14,10 +14,10 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
+use mz_ore::channel::trigger;
 use mz_ore::halt;
 use mz_persist_client::PersistClient;
 use mz_sql::catalog::EnvironmentId;
-use tokio::time;
 use tracing::info;
 
 use crate::deployment::state::DeploymentState;
@@ -34,6 +34,14 @@ pub struct PreflightInput {
     pub deployment_state: DeploymentState,
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub catalog_metrics: Arc<Metrics>,
+    pub hydration_max_wait: Duration,
+}
+
+/// Output of preflight checks.
+pub struct PreflightOutput {
+    pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
+    pub read_only: bool,
+    pub clusters_hydrated_trigger: Option<trigger::Trigger>,
 }
 
 /// Perform a legacy (non-0dt) preflight check.
@@ -48,6 +56,7 @@ pub async fn preflight_legacy(
         deployment_state,
         mut openable_adapter_storage,
         catalog_metrics,
+        hydration_max_wait: _,
     }: PreflightInput,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, anyhow::Error> {
     tracing::info!("Requested deploy generation {deploy_generation}");
@@ -131,14 +140,19 @@ pub async fn preflight_0dt(
         deployment_state,
         mut openable_adapter_storage,
         catalog_metrics,
+        hydration_max_wait,
     }: PreflightInput,
-) -> Result<(Box<dyn OpenableDurableCatalogState>, bool), anyhow::Error> {
-    info!(%deploy_generation, "performing 0dt preflight checks");
+) -> Result<PreflightOutput, anyhow::Error> {
+    info!(%deploy_generation, ?hydration_max_wait, "performing 0dt preflight checks");
 
     if !openable_adapter_storage.is_initialized().await? {
         info!("catalog not initialized; booting as leader with writes allowed");
         deployment_state.set_is_leader();
-        return Ok((openable_adapter_storage, false));
+        return Ok(PreflightOutput {
+            openable_adapter_storage,
+            read_only: false,
+            clusters_hydrated_trigger: None,
+        });
     }
 
     let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
@@ -146,13 +160,25 @@ pub async fn preflight_0dt(
     if catalog_generation < deploy_generation {
         info!("this deployment is a new generation; booting in read only mode");
 
+        let (clusters_hydrated_trigger, clusters_hydrated_receiver) = trigger::channel();
+
         // Spawn a background task to handle promotion to leader.
         mz_ore::task::spawn(|| "preflight_0dt", async move {
-            // Simulate waiting for readiness to promote by waiting for a
-            // fixed 30s.
-            // TODO(benesch): actually wait for clusters to hydrate.
-            info!("waiting to be ready to promote");
-            time::sleep(Duration::from_secs(30)).await;
+            info!("waiting for clusters to be hydrated");
+
+            let hydration_max_wait_fut = async {
+                tokio::time::sleep(hydration_max_wait).await;
+                ()
+            };
+
+            tokio::select! {
+                () = clusters_hydrated_receiver => {
+                    info!("all clusters hydrated");
+                }
+                () = hydration_max_wait_fut => {
+                    info!("not all clusters hydrated within {:?}, proceeding now", hydration_max_wait);
+                }
+            }
 
             // Announce that we're ready to promote.
             let promoted = deployment_state.set_ready_to_promote();
@@ -186,11 +212,19 @@ pub async fn preflight_0dt(
             halt!("fenced out old deployment; rebooting as leader")
         });
 
-        Ok((openable_adapter_storage, true))
+        Ok(PreflightOutput {
+            openable_adapter_storage,
+            read_only: true,
+            clusters_hydrated_trigger: Some(clusters_hydrated_trigger),
+        })
     } else if catalog_generation == deploy_generation {
         info!("this deployment is the current generation; booting with writes allowed");
         deployment_state.set_is_leader();
-        Ok((openable_adapter_storage, false))
+        Ok(PreflightOutput {
+            openable_adapter_storage,
+            read_only: false,
+            clusters_hydrated_trigger: None,
+        })
     } else {
         halt!("this deployment has been fenced out");
     }

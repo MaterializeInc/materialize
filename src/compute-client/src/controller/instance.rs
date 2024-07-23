@@ -537,6 +537,38 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         );
     }
 
+    /// Returns `true` iff all collections are hydrated on at least one replica.
+    ///
+    /// This also returns `true` in case this cluster does not have any
+    /// replicas.
+    pub fn any_replica_hydrated(&self) -> bool {
+        if self.replicas.is_empty() {
+            return true;
+        }
+
+        let mut any_hydrated = false;
+        for (replica_id, replica_state) in self.replicas.iter() {
+            let mut replica_hydrated = true;
+
+            for collection in replica_state.collections.values() {
+                if !collection.hydrated() {
+                    replica_hydrated = false;
+
+                    tracing::info!("replica {replica_id} is not hydrated");
+                    break;
+                }
+            }
+
+            if replica_hydrated {
+                any_hydrated = true;
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-hydrated replicas.
+            }
+        }
+
+        any_hydrated
+    }
+
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:

@@ -68,6 +68,8 @@
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL;
+use mz_ore::channel::trigger;
 use mz_sql::names::ResolvedIds;
 use mz_sql::session::user::User;
 use std::borrow::Cow;
@@ -968,6 +970,10 @@ pub struct Config {
     pub read_only_controllers: bool,
     /// Whether to enable zero-downtime deployments.
     pub enable_0dt_deployment: bool,
+
+    /// A trigger that signals that all clusters have been hydrated. Only used
+    /// during 0dt deployment, while in read-only mode.
+    pub clusters_hydrated_trigger: Option<trigger::Trigger>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1679,6 +1685,14 @@ pub struct Coordinator {
     /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
     /// periodically cleaned up from this Map.)
     cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
+
+    /// When doing 0dt upgrades/in read-only mode, periodically ask all known
+    /// clusters whether they are hydrated.
+    check_clusters_hydrated_interval: tokio::time::Interval,
+
+    /// A trigger that signals that all clusters have been hydrated. Only used
+    /// during 0dt deployment, while in read-only mode.
+    clusters_hydrated_trigger: Option<trigger::Trigger>,
 
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
@@ -2896,6 +2910,22 @@ impl Coordinator {
                         Message::CheckSchedulingPolicies
                     },
 
+                    // `tick()` on `Interval` is cancel-safe:
+                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    _ = self.check_clusters_hydrated_interval.tick() => {
+                        if self.clusters_hydrated_trigger.is_some() {
+                            let compute_hydrated = self.controller.compute.clusters_hydrated();
+                            tracing::info!(%compute_hydrated, "checked hydration status of clusters");
+
+                            if compute_hydrated {
+                                let trigger = self.clusters_hydrated_trigger.take().expect("known to exist");
+                                trigger.fire();
+                            }
+                        }
+
+                        continue;
+                    },
+
                     // Process the idle metric at the lowest priority to sample queue non-idle time.
                     // `recv()` on `Receiver` is cancellation safe:
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
@@ -3297,6 +3327,7 @@ pub fn serve(
         tracing_handle,
         read_only_controllers,
         enable_0dt_deployment,
+        clusters_hydrated_trigger,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -3454,6 +3485,26 @@ pub fn serve(
         );
         check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+        let check_clusters_hydrated_interval = if read_only_controllers {
+            let dyncfgs = catalog.system_config().dyncfgs();
+            let interval = WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL.get(dyncfgs);
+
+            let mut interval = tokio::time::interval(interval);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            interval
+        } else {
+            // When not in read-only mode, we don't do hydration checks. But we
+            // still have to provide _some_ interval. This is large enough that
+            // it doesn't matter.
+            //
+            // TODO(aljoscha): We cannot use Duration::MAX right now because of
+            // https://github.com/tokio-rs/tokio/issues/6634. Use that once it's
+            // fixed for good.
+            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            interval
+        };
+
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
             // of them are locked in right when an oracle is first opened!
@@ -3525,10 +3576,12 @@ pub fn serve(
                     pg_timestamp_oracle_config,
                     check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
                     cluster_scheduling_decisions: BTreeMap::new(),
+                    check_clusters_hydrated_interval,
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
+                    clusters_hydrated_trigger,
                     buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {

@@ -69,6 +69,16 @@ pub struct Trigger {
     _tx: oneshot::Sender<()>,
 }
 
+impl Trigger {
+    /// Fire this [Trigger].
+    ///
+    /// NOTE: Dropping the trigger also fires it, but this method allows
+    /// call-sites to be more explicit.
+    pub fn fire(self) {
+        // Dropping the Trigger is what fires the oneshot.
+    }
+}
+
 /// The receiving half of a trigger channel.
 ///
 /// Awaiting the receiver will block until the trigger is dropped.

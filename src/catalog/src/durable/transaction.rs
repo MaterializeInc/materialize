@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use derivative::Derivative;
@@ -36,7 +37,9 @@ use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY};
+use crate::durable::initialize::{
+    ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -1610,6 +1613,23 @@ impl<'a> Transaction<'a> {
         self.set_config(ENABLE_0DT_DEPLOYMENT.into(), Some(u64::from(value)))
     }
 
+    /// Updates the catalog `with_0dt_deployment_max_wait` "config" value to
+    /// match the `with_0dt_deployment_max_wait` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_0dt_deployment_max_wait(&mut self, value: Duration) -> Result<(), CatalogError> {
+        self.set_config(
+            WITH_0DT_DEPLOYMENT_MAX_WAIT.into(),
+            Some(
+                value
+                    .as_millis()
+                    .try_into()
+                    .expect("max wait fits into u64"),
+            ),
+        )
+    }
+
     /// Removes the catalog `enable_0dt_deployment` "config" value to
     /// match the `enable_0dt_deployment` "system var" value.
     ///
@@ -1617,6 +1637,15 @@ impl<'a> Transaction<'a> {
     /// but use it in boot before LaunchDarkly is available.
     pub fn reset_enable_0dt_deployment(&mut self) -> Result<(), CatalogError> {
         self.set_config(ENABLE_0DT_DEPLOYMENT.into(), None)
+    }
+
+    /// Removes the catalog `with_0dt_deployment_max_wait` "config" value to
+    /// match the `with_0dt_deployment_max_wait` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with LaunchDarkly,
+    /// but use it in boot before LaunchDarkly is available.
+    pub fn reset_0dt_deployment_max_wait(&mut self) -> Result<(), CatalogError> {
+        self.set_config(WITH_0DT_DEPLOYMENT_MAX_WAIT.into(), None)
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.

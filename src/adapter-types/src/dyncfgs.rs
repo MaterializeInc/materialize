@@ -25,6 +25,19 @@ pub const ENABLE_0DT_DEPLOYMENT: Config<bool> = Config::new(
     "Whether to enable zero-downtime deployments (experimental).",
 );
 
+// Slightly awkward with the WITH prefix, but we can't start with a 0.
+pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
+    "with_0dt_deployment_max_wait",
+    Duration::from_secs(5 * 60),
+    "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
+);
+
+pub const WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL: Config<Duration> = Config::new(
+    "0dt_deployment_hydration_check_interval",
+    Duration::from_secs(10),
+    "Interval at which to check cluster hydration status, when doing zero-downtime deployment.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -56,6 +69,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
         .add(&ENABLE_0DT_DEPLOYMENT)
+        .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
+        .add(&WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)

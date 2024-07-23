@@ -26,7 +26,7 @@ use derivative::Derivative;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter_types::dyncfgs::ENABLE_0DT_DEPLOYMENT;
+use mz_adapter_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT, WITH_0DT_DEPLOYMENT_MAX_WAIT};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -44,12 +44,12 @@ use mz_repr::strconv;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
+use mz_sql::session::vars::{ConnectionCounter, Value, VarInput};
 use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 use tracing::{info, info_span, Instrument};
 
-use crate::deployment::preflight::PreflightInput;
+use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
@@ -371,21 +371,71 @@ impl Listeners {
                 strconv::parse_bool(x).map_err(|x| x.to_string())
             })?;
             let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
-            let computed = catalog.or(ld).or(default).unwrap_or(false);
+            let computed = ld.or(catalog).or(default).unwrap_or(false);
             info!(
                 %computed,
-                ?default,
                 ?ld,
                 ?catalog,
+                ?default,
                 "determined value for enable_0dt_deployment system parameter",
             );
             computed
         };
+        // Determine the maximum wait time when doing a 0dt deployment.
+        let with_0dt_deployment_max_wait = {
+            let default = config
+                .system_parameter_defaults
+                .get(WITH_0DT_DEPLOYMENT_MAX_WAIT.name())
+                .map(|x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {:?}",
+                            WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let ld = get_ld_value(
+                WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
+                &remote_system_parameters,
+                |x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        format!(
+                            "failed to parse LD value {} for {}: {:?}",
+                            x,
+                            WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
+                            err
+                        )
+                    })
+                },
+            )?;
+            let catalog = openable_adapter_storage
+                .get_0dt_deployment_max_wait()
+                .await?;
+            let computed = ld
+                .or(catalog)
+                .or(default)
+                .unwrap_or(WITH_0DT_DEPLOYMENT_MAX_WAIT.default().clone());
+            info!(
+                ?computed,
+                ?ld,
+                ?catalog,
+                ?default,
+                "determined value for {} system parameter",
+                WITH_0DT_DEPLOYMENT_MAX_WAIT.name()
+            );
+            computed
+        };
+
+        // TODO(aljoscha): We have to do the same dance for
+        // `0dt_deployment_max_wait`, and pass it to the preflight check.
 
         // Perform preflight checks.
         //
         // Preflight checks determine whether to boot in read-only mode or not.
         let mut read_only = false;
+        let mut clusters_hydrated_trigger = None;
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
@@ -398,10 +448,14 @@ impl Listeners {
             deployment_state,
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
+            hydration_max_wait: with_0dt_deployment_max_wait,
         };
         if enable_0dt_deployment {
-            (openable_adapter_storage, read_only) =
-                deployment::preflight::preflight_0dt(preflight_config).await?;
+            PreflightOutput {
+                openable_adapter_storage,
+                read_only,
+                clusters_hydrated_trigger,
+            } = deployment::preflight::preflight_0dt(preflight_config).await?;
         } else {
             openable_adapter_storage =
                 deployment::preflight::preflight_legacy(preflight_config).await?;
@@ -495,6 +549,7 @@ impl Listeners {
             tracing_handle: config.tracing_handle,
             read_only_controllers: read_only,
             enable_0dt_deployment,
+            clusters_hydrated_trigger,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

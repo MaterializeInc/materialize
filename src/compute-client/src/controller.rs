@@ -292,6 +292,28 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         self.arrangement_exert_proportionality = value;
     }
 
+    /// Returns `true` iff all collections on all clusters have been hydrated.
+    ///
+    /// For this check, zero-replica clusters are always considered hydrated.
+    /// Their collections would never normally be considered hydrated but it's
+    /// clearly intentional that they have no replicas.
+    pub fn clusters_hydrated(&self) -> bool {
+        let mut result = true;
+        for (instance_id, i) in &self.instances {
+            let instance_hydrated = i.any_replica_hydrated();
+
+            if !instance_hydrated {
+                result = false;
+
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-hydrated clusters.
+                tracing::info!("cluster {instance_id} is not hydrated");
+            }
+        }
+
+        result
+    }
+
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
