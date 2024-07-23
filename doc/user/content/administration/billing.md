@@ -41,10 +41,14 @@ Various factors can affect your costs, including (but not limited to):
 
   {{< /note >}}
 
+- Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
+
+- Executing [`SELECT`] and [`SUBSCRIBE`] statements.
+
 Some considerations for lowering costs:
 
 - Create a view and an index rather than a materialized view.  See
   [Views](/concepts/views/).
 
 - Avoid creating random indexes. That is, create indexes appropriate
-  for your use cases.  See [Optimization](/transform-data/optimization/).
+  for your use cases. See [Optimization](/transform-data/optimization/).
