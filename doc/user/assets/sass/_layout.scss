@@ -412,13 +412,6 @@ table.inline-headings {
         font-size: var(--sm);
     }
 
-    .buttons-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: var(--milli);
-    }
-
     button {
         border-bottom: 1px solid transparent;
     }
