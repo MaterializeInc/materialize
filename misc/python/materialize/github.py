@@ -79,30 +79,45 @@ def get_known_issues_from_github() -> (
     for issue in issues_json["items"]:
         matches = CI_RE.findall(issue["body"])
         matches_apply_to = CI_APPLY_TO.findall(issue["body"])
-        for match in matches:
-            try:
-                regex_pattern = re.compile(match.strip().encode("utf-8"))
-            except:
-                issues_with_invalid_regex.append(
-                    GitHubIssueWithInvalidRegexp(
-                        internal_error_type="GITHUB_INVALID_REGEXP",
-                        issue_url=issue["html_url"],
-                        issue_title=issue["title"],
-                        issue_number=issue["number"],
-                        regex_pattern=match.strip(),
+
+        if len(matches) > 1:
+            issues_with_invalid_regex.append(
+                GitHubIssueWithInvalidRegexp(
+                    internal_error_type="GITHUB_INVALID_REGEXP",
+                    issue_url=issue["html_url"],
+                    issue_title=issue["title"],
+                    issue_number=issue["number"],
+                    regex_pattern=f"Multiple regexes, but only one supported: {[match.strip() for match in matches]}",
+                )
+            )
+            continue
+
+        if len(matches) == 0:
+            continue
+
+        try:
+            regex_pattern = re.compile(matches[0].strip().encode("utf-8"))
+        except:
+            issues_with_invalid_regex.append(
+                GitHubIssueWithInvalidRegexp(
+                    internal_error_type="GITHUB_INVALID_REGEXP",
+                    issue_url=issue["html_url"],
+                    issue_title=issue["title"],
+                    issue_number=issue["number"],
+                    regex_pattern=matches[0].strip(),
+                )
+            )
+            continue
+
+        if matches_apply_to:
+            for match_apply_to in matches_apply_to:
+                known_issues.append(
+                    KnownGitHubIssue(
+                        regex_pattern, match_apply_to.strip().lower(), issue
                     )
                 )
-                continue
-
-            if matches_apply_to:
-                for match_apply_to in matches_apply_to:
-                    known_issues.append(
-                        KnownGitHubIssue(
-                            regex_pattern, match_apply_to.strip().lower(), issue
-                        )
-                    )
-            else:
-                known_issues.append(KnownGitHubIssue(regex_pattern, None, issue))
+        else:
+            known_issues.append(KnownGitHubIssue(regex_pattern, None, issue))
 
     return (known_issues, issues_with_invalid_regex)
 

@@ -61,7 +61,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     seed = args.seed or random.randint(0, 2**31)
 
-    print("~~~ Run in progress")
+    print("--- Run in progress")
     result = c.run(
         "sqlancer",
         "--random-seed",

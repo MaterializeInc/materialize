@@ -68,4 +68,9 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     SELECT 'config', 'config', NULL, 'more than one config entry exists'
     FROM config
     HAVING count(*) > 1
+    UNION
+    SELECT 'issue', issue_id, NULL, 'more than one issue entry exists'
+    FROM issue
+    GROUP BY issue_id
+    HAVING count(*) > 1
 ;

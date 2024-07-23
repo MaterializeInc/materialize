@@ -7,9 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-def sanitize_text_value(value: str) -> str:
-    return value.replace("'", "\\'")
+from pg8000.native import literal
 
 
 def as_sanitized_literal(value: str | None, sanitize_value: bool = True) -> str:
@@ -17,6 +15,6 @@ def as_sanitized_literal(value: str | None, sanitize_value: bool = True) -> str:
         return "NULL"
 
     if sanitize_value:
-        value = sanitize_text_value(value)
+        return literal(value)
 
-    return f"E'{value}'"
+    return f"'{value}'"

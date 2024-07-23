@@ -22,6 +22,9 @@ from materialize.test_analytics.data.build_annotation.build_annotation_storage i
 from materialize.test_analytics.data.feature_benchmark.feature_benchmark_result_storage import (
     FeatureBenchmarkResultStorage,
 )
+from materialize.test_analytics.data.known_issues.known_issues_storage import (
+    KnownIssuesStorage,
+)
 from materialize.test_analytics.data.output_consistency.output_consistency_stats_storage import (
     OutputConsistencyStatsStorage,
 )
@@ -51,6 +54,7 @@ class TestAnalyticsDb:
         self.build_annotations = BuildAnnotationStorage(self.database_connector)
         self.build_history = BuildHistoryAnalysis(self.database_connector)
         self.output_consistency = OutputConsistencyStatsStorage(self.database_connector)
+        self.known_issues = KnownIssuesStorage(self.database_connector)
 
     def submit_updates(self) -> None:
         """
