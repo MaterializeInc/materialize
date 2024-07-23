@@ -186,7 +186,7 @@ impl RustType<proto::Buffer> for arrow::buffer::Buffer {
     fn into_proto(&self) -> proto::Buffer {
         // TODO(parkmycar): There is probably something better we can do here.
         proto::Buffer {
-            data: bytes::Bytes::from(self.as_slice().to_vec()),
+            data: bytes::Bytes::copy_from_slice(self.as_slice()),
         }
     }
 
