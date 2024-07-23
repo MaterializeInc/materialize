@@ -131,12 +131,16 @@ so it is executed.""",
                 if agent == "linux-aarch64-small":
                     agent = "linux-aarch64"
                 elif agent == "linux-aarch64":
+                    agent = "linux-aarch64-medium"
+                elif agent == "linux-aarch64-medium":
                     agent = "linux-aarch64-large"
                 elif agent == "linux-aarch64-large":
                     agent = "builder-linux-aarch64"
                 elif agent == "linux-x86_64-small":
                     agent = "linux-x86_64"
                 elif agent == "linux-x86_64":
+                    agent = "linux-x86_64-medium"
+                elif agent == "linux-x86_64-medium":
                     agent = "linux-x86_64-large"
                 elif agent == "linux-x86_64-large":
                     agent = "builder-linux-x86_64"
