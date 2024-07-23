@@ -16,6 +16,9 @@ from materialize.output_consistency.expression.expression import (
     Expression,
     LeafExpression,
 )
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
@@ -174,6 +177,25 @@ def is_known_to_involve_exact_data_types(
 def is_operation_tagged(expression: Expression, tag: str) -> bool:
     if isinstance(expression, ExpressionWithArgs):
         return expression.operation.is_tagged(tag)
+
+    return False
+
+
+def argument_has_any_characteristic(
+    expression: Expression,
+    arg_index: int,
+    characteristics: set[ExpressionCharacteristics],
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        assert arg_index < len(
+            expression.operation.params
+        ), f"Invalid argument index for {expression.operation_to_pattern()}"
+        param = expression.operation.params[arg_index]
+        if param.optional and len(expression.args) <= arg_index:
+            return False
+
+        argument = expression.args[arg_index]
+        return argument.has_any_characteristic(characteristics)
 
     return False
 

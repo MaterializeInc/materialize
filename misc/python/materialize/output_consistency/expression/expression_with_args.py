@@ -171,6 +171,9 @@ class ExpressionWithArgs(Expression):
 
         return False
 
+    def operation_to_pattern(self) -> str:
+        return self.operation.to_pattern(self.count_args())
+
 
 def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
     mutual_storage_layout: ValueStorageLayout | None = None
