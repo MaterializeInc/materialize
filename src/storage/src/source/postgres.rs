@@ -94,7 +94,7 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
-    MzOffset, PostgresSourceConnection, SourceExport, SourceTimestamp,
+    MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
@@ -152,7 +152,9 @@ impl SourceRender for PostgresSourceConnection {
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
         for SourceExport {
-            ingestion_output, ..
+            ingestion_output,
+            details,
+            storage_metadata: _,
         } in config.source_exports.values()
         {
             // Output index 0 is the primary source which is not a table.
@@ -160,15 +162,20 @@ impl SourceRender for PostgresSourceConnection {
                 continue;
             }
 
-            // The output index is 1 greater than the publication details' index
-            // to account for the primary output being at index 0.
-            let table_idx = *ingestion_output - 1;
-            let desc = self.publication_details.tables[table_idx].clone();
+            let details = match details {
+                SourceExportDetails::Postgres(details) => details,
+                _ => panic!("unexpected source export details"),
+            };
 
-            // Tables are indexed by their native index, but table casts are
-            // indexed by the output index.
-            let casts = self.table_casts[ingestion_output].clone();
-            table_info.insert(desc.oid, (*ingestion_output, desc.clone(), casts.clone()));
+            let desc = details.table.clone();
+
+            let casts = details.table_cast.clone();
+            let exists =
+                table_info.insert(desc.oid, (*ingestion_output, desc.clone(), casts.clone()));
+
+            // TODO(roshan): Remove this when we allow multiple source_exports to ingest the same
+            // table in https://github.com/MaterializeInc/materialize/issues/28435
+            assert!(exists.is_none(), "duplicate table oid in source exports");
         }
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);

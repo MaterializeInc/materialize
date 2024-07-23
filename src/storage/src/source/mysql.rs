@@ -55,6 +55,7 @@ use std::fmt;
 use std::io;
 use std::rc::Rc;
 
+use mz_ore::collections::HashSet;
 use mz_repr::Diff;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
@@ -74,7 +75,7 @@ use mz_mysql_util::{
 use mz_ore::error::ErrorExt;
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
-use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
+use mz_storage_types::sources::{MySqlSourceConnection, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
@@ -109,10 +110,13 @@ impl SourceRender for MySqlSourceConnection {
     ) {
         // Collect the subsources that we will be exporting.
         let mut subsources = Vec::new();
+        let mut upstream_tables = HashSet::new();
         for (
             id,
             SourceExport {
-                ingestion_output, ..
+                ingestion_output,
+                details,
+                storage_metadata: _,
             },
         ) in &config.source_exports
         {
@@ -121,9 +125,13 @@ impl SourceRender for MySqlSourceConnection {
                 continue;
             }
 
-            let table_index = ingestion_output - 1;
-            let desc = self.details.tables[table_index].clone();
-            let initial_gtid_set = self.details.table_initial_gtid_set(table_index).to_string();
+            let details = match details {
+                SourceExportDetails::MySql(details) => details,
+                _ => panic!("unexpected source export details"),
+            };
+
+            let desc = details.table.clone();
+            let initial_gtid_set = details.initial_gtid_set.to_string();
             let resume_upper = Antichain::from_iter(
                 config
                     .source_resume_uppers
@@ -132,13 +140,22 @@ impl SourceRender for MySqlSourceConnection {
                     .iter()
                     .map(GtidPartition::decode_row),
             );
+            let name = MySqlTableName::new(&desc.schema_name, &desc.name);
             subsources.push(SubsourceInfo {
-                name: MySqlTableName::new(&desc.schema_name, &desc.name),
+                name: name.clone(),
                 output_index: *ingestion_output,
                 desc,
+                text_columns: details.text_columns.clone(),
+                ignore_columns: details.ignore_columns.clone(),
                 initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
             });
+            // TODO(roshan): Remove this when we allow multiple source_exports to ingest the same
+            // table in https://github.com/MaterializeInc/materialize/issues/28435
+            assert!(
+                upstream_tables.insert(name),
+                "duplicate table reference in source exports"
+            );
         }
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
@@ -215,6 +232,8 @@ struct SubsourceInfo {
     output_index: usize,
     name: MySqlTableName,
     desc: MySqlTableDesc,
+    text_columns: Vec<String>,
+    ignore_columns: Vec<String>,
     initial_gtid_set: Antichain<GtidPartition>,
     resume_upper: Antichain<GtidPartition>,
 }

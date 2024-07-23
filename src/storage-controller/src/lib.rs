@@ -71,8 +71,8 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    ExportReference, GenericSourceConnection, IngestionDescription, SourceConnection, SourceData,
-    SourceDesc, SourceExport, SourceExportDetails,
+    ExportReference, GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
+    SourceExport, SourceExportDetails,
 };
 use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
