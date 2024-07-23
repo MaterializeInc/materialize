@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
 from datetime import datetime
 from typing import Any
 
@@ -210,3 +209,14 @@ def _step_outcomes_to_job_outcome(
         web_url_to_build=web_url_without_job_id,
         count_items=count_shards,
     )
+
+
+def extract_build_job_ids(
+    build_data: Any,
+) -> list[str]:
+    build_job_ids = []
+
+    for job in build_data["jobs"]:
+        build_job_ids.append(job["id"])
+
+    return build_job_ids
