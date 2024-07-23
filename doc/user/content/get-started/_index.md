@@ -68,6 +68,31 @@ leverage exciting new SQL patterns enabled by streaming like
 [**Change Data Capture (CDC)**](/integrations/#databases),
 [**temporal filters**](/sql/patterns/temporal-filters/), and [**subscriptions**](/sql/subscribe/).
 
+### Connectors to external systems
+
+Materialize provides **native connectors** that allow ingesting data from the various external systems:
+
+{{< multilinkbox >}}
+{{< linkbox title="Message Brokers" >}}
+- [Kafka](/sql/create-source/kafka)
+- [Redpanda](/sql/create-source/kafka)
+- [Other message brokers](/integrations/#message-brokers)
+{{</ linkbox >}}
+{{< linkbox title="Databases (CDC)" >}}
+- [PostgreSQL](/sql/create-source/postgres)
+- [MySQL](/sql/create-source/mysql)
+- [Other databases](/integrations/#other-databases)
+{{</ linkbox >}}
+{{< linkbox title="Webhooks" >}}
+- [Amazon EventBridge](/ingest-data/amazon-eventbridge/)
+- [Segment](/ingest-data/segment/)
+- [Other webhooks](/sql/create-source/webhook)
+{{</ linkbox >}}
+{{</ multilinkbox >}}
+
+For more information, see [Ingest Data](/ingest-data/) and
+[Integrations](/integrations/).
+
 ### PostgreSQL wire-compatibility
 
 Every database needs a protocol to standardize communication with the outside
