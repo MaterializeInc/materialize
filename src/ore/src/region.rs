@@ -399,6 +399,11 @@ mod vec {
     use std::fmt::{Debug, Formatter};
     use std::mem::{ManuallyDrop, MaybeUninit};
     use std::ops::Deref;
+    use std::sync::atomic::AtomicUsize;
+
+    /// Configuration variable to dynamically configure the cut over point from heap to lgalloc.
+    /// TODO: Wire up a configuration mechanism to set this value.
+    static LGALLOC_VEC_HEAP_LIMIT_BYTES: AtomicUsize = AtomicUsize::new(64 << 10);
 
     /// A fixed-length region in memory, which is either allocated from heap or lgalloc.
     pub struct LgAllocVec<T> {
@@ -413,49 +418,70 @@ mod vec {
     impl<T> LgAllocVec<T> {
         /// Create a new [`LgAllocVec`] with the specified capacity. The actual capacity of the returned
         /// array is at least as big as the requested capacity.
+        #[inline]
         pub fn with_capacity(capacity: usize) -> Self {
             // Allocate memory, fall-back to regular heap allocations if we cannot acquire memory through
             // lgalloc.
-            let (handle, boxed) = if let Ok((ptr, actual_capacity, handle)) =
-                lgalloc::allocate::<MaybeUninit<T>>(capacity)
-            {
-                // We allocated sucessfully through lgalloc.
-                let handle = Some(handle);
-                // SAFETY: `ptr` is valid for constructing a slice:
-                // 1. Valid for reading and writing, and enough capacity.
-                // 2. Properly initialized (left for writing).
-                // 3. Not aliased.
-                // 4. Total size not longer than isize::MAX because lgalloc has a capacity limit.
-                let slice =
-                    unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), actual_capacity) };
-                // SAFETY: slice is valid, and we deallocate it usinge lgalloc.
-                (handle, unsafe { Box::from_raw(slice) })
+            let bytes = capacity * std::mem::size_of::<T>();
+            if bytes <= LGALLOC_VEC_HEAP_LIMIT_BYTES.load(std::sync::atomic::Ordering::Relaxed) {
+                Self::new_heap(capacity)
             } else {
-                // We failed to allocate through lgalloc, fall back to heap.
-                let mut vec = Vec::with_capacity(capacity);
-                // SAFETY: We treat all elements as uninitialized and track initialized elements
-                // through `self.length`.
-                unsafe {
-                    vec.set_len(vec.capacity());
+                match Self::try_new_lgalloc(capacity) {
+                    Ok(vec) => vec,
+                    Err(_) => Self::new_heap(capacity),
                 }
-                (None, vec.into_boxed_slice())
-            };
+            }
+        }
 
-            let elements = ManuallyDrop::new(boxed);
+        /// Construct a new instance allocated on the heap.
+        #[inline]
+        fn new_heap(capacity: usize) -> Self {
+            let mut vec = Vec::with_capacity(capacity);
+            // SAFETY: We treat all elements as uninitialized and track initialized elements
+            // through `self.length`.
+            unsafe {
+                vec.set_len(vec.capacity());
+            }
+
             Self {
-                handle,
-                elements,
+                handle: None,
+                elements: ManuallyDrop::new(vec.into_boxed_slice()),
                 length: 0,
             }
         }
 
+        /// Construct a new instance allocated through lgalloc, or an error should it fail.
+        #[inline]
+        fn try_new_lgalloc(capacity: usize) -> Result<Self, lgalloc::AllocError> {
+            let (ptr, actual_capacity, handle) = lgalloc::allocate::<MaybeUninit<T>>(capacity)?;
+            // We allocated sucessfully through lgalloc.
+            let handle = Some(handle);
+            // SAFETY: `ptr` is valid for constructing a slice:
+            // 1. Valid for reading and writing, and enough capacity.
+            // 2. Properly initialized (left for writing).
+            // 3. Not aliased.
+            // 4. Total size not longer than isize::MAX because lgalloc has a capacity limit.
+            let slice = unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), actual_capacity) };
+            // SAFETY: slice is valid, and we deallocate it usinge lgalloc.
+            let boxed = unsafe { Box::from_raw(slice) };
+            let elements = ManuallyDrop::new(boxed);
+
+            Ok(Self {
+                handle,
+                elements,
+                length: 0,
+            })
+        }
+
         /// Visit contained allocations to determine their size and capacity.
+        #[inline]
         pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
             let size_of_t = std::mem::size_of::<T>();
             callback(self.len() * size_of_t, self.capacity() * size_of_t)
         }
 
         /// Move an element on the array. Panics if there is no more capacity.
+        #[inline]
         pub fn push(&mut self, item: T) {
             if self.len() == self.capacity() {
                 self.reserve(1);
@@ -465,6 +491,7 @@ mod vec {
         }
 
         /// Extend the array from a slice. Increases the capacity if required.
+        #[inline]
         pub fn extend_from_slice(&mut self, slice: &[T])
         where
             T: Clone,
@@ -488,6 +515,7 @@ mod vec {
         }
 
         /// Extend the array from a slice of copyable elements. Increases the capacity if required.
+        #[inline]
         pub fn extend_from_copy_slice(&mut self, slice: &[T])
         where
             T: Copy,
@@ -507,6 +535,7 @@ mod vec {
         }
 
         /// Move elements from a vector to the array. Increases the capacity if required.
+        #[inline]
         pub fn append(&mut self, data: &mut Vec<T>) {
             let count = data.len();
             self.reserve(count);
@@ -532,21 +561,25 @@ mod vec {
         }
 
         /// The number of elements in the array.
+        #[inline]
         pub fn len(&self) -> usize {
             self.length
         }
 
         /// Returns `true` if the array contains no elements.
+        #[inline]
         pub fn is_empty(&self) -> bool {
             self.len() == 0
         }
 
         /// The number of elements this array can absorb.
+        #[inline]
         pub fn capacity(&self) -> usize {
             self.elements.len()
         }
 
         /// Remove all elements. Drops the contents, but leaves the allocation untouched.
+        #[inline]
         pub fn clear(&mut self) {
             let elems = &mut self.elements[..self.length];
             // We are about to run the type's destructor, which may panic. Therefore we set the length
@@ -561,6 +594,7 @@ mod vec {
             }
         }
 
+        /// The minimum capacity for a non-zero array.
         const MIN_NON_ZERO_CAP: usize = if std::mem::size_of::<T>() == 1 {
             8
         } else if std::mem::size_of::<T>() <= 1024 {
@@ -570,18 +604,22 @@ mod vec {
         };
 
         /// Grow the array to at least `new_len` elements. Reallocates the underlying storage.
+        #[cold]
         fn grow(&mut self, new_len: usize) {
             let new_capacity = std::cmp::max(self.capacity() * 2, new_len);
             let new_capacity = std::cmp::max(new_capacity, Self::MIN_NON_ZERO_CAP);
-            let mut new_vec = LgAllocVec::with_capacity(new_capacity);
+            let mut new_vec = Self::with_capacity(new_capacity);
 
             let src_ptr = self.elements.as_ptr();
             let dst_ptr = new_vec.elements.as_mut_ptr();
             let len = self.len();
 
             unsafe {
+                // SAFETY: We forget the current contents momentarily.
                 self.set_len(0);
+                // SAFETY: `src_ptr` and `dst_ptr` are valid pointers to `len` elements.
                 std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, len);
+                // SAFETY: Surface exactly as many elements as we just copied..
                 new_vec.set_len(len);
             }
 
@@ -589,6 +627,7 @@ mod vec {
         }
 
         /// Reserve space for at least `additional` elements. The capacity is increased if necessary.
+        #[inline]
         pub fn reserve(&mut self, additional: usize) {
             let new_len = self.len() + additional;
             if new_len > self.capacity() {
@@ -597,6 +636,7 @@ mod vec {
         }
 
         /// Iterate over the elements.
+        #[inline]
         pub fn iter(&self) -> std::slice::Iter<'_, T> {
             self.deref().iter()
         }
@@ -617,14 +657,20 @@ mod vec {
     }
 
     impl<T> Default for LgAllocVec<T> {
+        #[inline]
         fn default() -> Self {
-            Self::with_capacity(0)
+            Self {
+                handle: None,
+                elements: ManuallyDrop::new(Vec::new().into_boxed_slice()),
+                length: 0,
+            }
         }
     }
 
     impl<T> Deref for LgAllocVec<T> {
         type Target = [T];
 
+        #[inline]
         fn deref(&self) -> &Self::Target {
             // TODO: Use `slice_assume_init_ref` once stable.
             // Context: https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.slice_assume_init_ref
@@ -641,13 +687,16 @@ mod vec {
     }
 
     impl<T> Drop for LgAllocVec<T> {
+        #[inline]
         fn drop(&mut self) {
+            // Clear the contents, but don't drop the allocation.
             self.clear();
+
             if let Some(handle) = self.handle.take() {
-                // Memory allocated through lgalloc
+                // Memory allocated through lgalloc, deallocate accordingly.
                 lgalloc::deallocate(handle);
             } else {
-                // Regular allocation
+                // Regular heap allocation
                 // SAFETY: `elements` is a sliced box allocated from the global allocator, drop it.
                 unsafe {
                     ManuallyDrop::drop(&mut self.elements);

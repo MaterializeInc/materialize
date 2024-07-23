@@ -142,7 +142,7 @@ mod copy {
 
 impl MzRegionPreference for String {
     type Owned = String;
-    type Region = ItemRegion<ConsecutiveIndexPairs<StringRegion>>;
+    type Region = ConsecutiveIndexPairs<StringRegion>;
 }
 
 mod vec {
@@ -157,7 +157,7 @@ mod vec {
 
 impl<T: MzRegionPreference> MzRegionPreference for Option<T> {
     type Owned = <OptionRegion<T::Region> as Region>::Owned;
-    type Region = ItemRegion<OptionRegion<T::Region>>;
+    type Region = OptionRegion<T::Region>;
 }
 
 mod lgalloc {
@@ -424,7 +424,7 @@ mod item {
     use crate::flatcontainer::MzIndex;
     use crate::region::LgAllocVec;
 
-    /// TODO
+    /// A region that stores indexes in lgalloc.
     pub struct ItemRegion<R: Region> {
         inner: R,
         storage: LgAllocVec<R::Index>,
@@ -518,6 +518,7 @@ mod item {
     }
 
     impl<R: Region + Push<T>, T> Push<T> for ItemRegion<R> {
+        #[inline]
         fn push(&mut self, item: T) -> Self::Index {
             let index = self.inner.push(item);
             self.storage.push(index);
@@ -526,6 +527,7 @@ mod item {
     }
 
     impl<R: Region + ReserveItems<T>, T> ReserveItems<T> for ItemRegion<R> {
+        #[inline]
         fn reserve_items<I>(&mut self, items: I)
         where
             I: Iterator<Item = T> + Clone,
