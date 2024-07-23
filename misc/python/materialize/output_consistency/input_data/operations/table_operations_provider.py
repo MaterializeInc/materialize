@@ -110,6 +110,8 @@ TABLE_OPERATION_TYPES.append(
         DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
         is_table_function=True,
         relevance=OperationRelevance.LOW,
+        # this is likely to take down mz with aggressive values
+        is_enabled=False,
     ),
 )
 
