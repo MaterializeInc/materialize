@@ -359,7 +359,7 @@ def run(
         if scenario == Scenario.Rename:
             # TODO(def-): Switch to failing exit code when #28182 is fixed
             os._exit(0)
-        if complexity == Complexity.DDLOnly:
+        if complexity in (Complexity.DDLOnly, Complexity.DDL):
             # TODO(def-): Switch to failing exit code when #28400 is fixed
             os._exit(0)
         if num_threads >= 50:
