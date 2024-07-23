@@ -289,21 +289,8 @@ impl EquivalencePropagation {
                 // Certain equivalences are ensured by each of the inputs.
                 // Other equivalences are imposed by parents of the expression.
                 // We must not weaken the properties provided by the expression to its parents,
-                // meaning we can optimize `equivalences` with respect to input guararentees,
+                // meaning we can optimize `equivalences` with respect to input guarantees,
                 // but not with respect to `outer_equivalences`.
-
-                let mut join_equivalences = EquivalenceClasses::default();
-                join_equivalences
-                    .classes
-                    .extend(equivalences.iter().cloned());
-
-                // // Optionally, introduce `outer_equivalences` into `equivalences`.
-                // // This is not required, but it could be very helpful. To be seen.
-                // join_equivalences
-                //     .classes
-                //     .extend(outer_equivalences.classes.clone());
-
-                join_equivalences.minimize(expr_type);
 
                 // Each child can be presented with the integration of `join_equivalences`, `outer_equivalences`,
                 // and each input equivalence *other than* their own, projected onto the input's columns.
@@ -327,10 +314,38 @@ impl EquivalencePropagation {
                     if let Some(mut equivalences) = equivalences {
                         let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
                         equivalences.permute(&permutation);
+                        equivalences.minimize(expr_type);
                         input_equivalences.push(equivalences);
                     }
                     columns += child_arity;
                 }
+
+                // Form the equivalences we will use to replace `equivalences`.
+                let mut join_equivalences = EquivalenceClasses::default();
+                join_equivalences
+                    .classes
+                    .extend(equivalences.iter().cloned());
+                // // Optionally, introduce `outer_equivalences` into `equivalences`.
+                // // This is not required, but it could be very helpful. To be seen.
+                // join_equivalences
+                //     .classes
+                //     .extend(outer_equivalences.classes.clone());
+
+                // Reduce join equivalences by the input equivalences.
+                for input_equivs in input_equivalences.iter() {
+                    for class in join_equivalences.classes.iter_mut() {
+                        for expr in class.iter_mut() {
+                            // Semijoin elimination currently fails if you do more advanced simplification than
+                            // literal substitution.
+                            let old = expr.clone();
+                            input_equivs.reduce_expr(expr);
+                            if !expr.is_literal() {
+                                expr.clone_from(&old);
+                            }
+                        }
+                    }
+                }
+                join_equivalences.minimize(expr_type);
 
                 // Revisit each child, determining the information to present to it, and recurring.
                 let mut columns = 0;
