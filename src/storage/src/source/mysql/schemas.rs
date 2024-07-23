@@ -25,7 +25,7 @@ pub(super) async fn verify_schemas<'a, Q>(
 where
     Q: Queryable,
 {
-    let (text_column_map, ignore_column_map) = map_columns(&expected);
+    let (text_column_map, ignore_column_map) = map_columns(expected);
 
     // Get the current schema for each requested table from mysql
     let cur_schemas: BTreeMap<_, _> = schema_info(
