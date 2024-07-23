@@ -29,4 +29,5 @@ def create_local_dev_config_for_sandbox() -> MzDbConfig:
         app_password=app_password,
         database=database,
         search_path=search_path,
+        enabled=True,
     )

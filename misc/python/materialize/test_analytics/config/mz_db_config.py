@@ -19,3 +19,5 @@ class MzDbConfig:
     search_path: str
 
     port: int = 6875
+
+    enabled: bool = True

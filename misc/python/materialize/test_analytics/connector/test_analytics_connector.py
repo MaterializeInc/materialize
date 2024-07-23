@@ -97,7 +97,7 @@ class DatabaseConnector:
     def set_read_only(self) -> None:
         self._read_only = True
 
-    def query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
+    def _query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
         cursor.execute(
             """
             SELECT
@@ -120,6 +120,10 @@ class DatabaseConnector:
         self.update_statements.extend(sql_statements)
 
     def submit_update_statements(self) -> None:
+        if not self.config.enabled:
+            print("Disabled: Not writing any data to the test analytics database!")
+            return
+
         if len(self.update_statements) == 0:
             return
 
@@ -191,7 +195,7 @@ class DatabaseConnector:
         cursor: Cursor,
     ) -> None:
         print("Fetching test_analytics settings")
-        test_analytics_settings = self.query_settings(cursor)
+        test_analytics_settings = self._query_settings(cursor)
 
         if not test_analytics_settings.uploads_enabled:
             print("Uploading test_analytics data is disabled!")

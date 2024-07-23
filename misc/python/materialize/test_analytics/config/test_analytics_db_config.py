@@ -9,6 +9,7 @@
 
 import os
 
+from materialize import buildkite
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
@@ -35,10 +36,14 @@ def create_test_analytics_config_with_credentials(
     database = "raw"
     search_path = "test_analytics"
 
+    # disable test_analytics access when running locally
+    enabled = buildkite.is_in_buildkite()
+
     return MzDbConfig(
         hostname=hostname,
         username=username,
         app_password=app_password,
         database=database,
         search_path=search_path,
+        enabled=enabled,
     )
