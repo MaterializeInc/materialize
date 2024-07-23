@@ -21,7 +21,9 @@ Various factors can affect your costs, including (but not limited to):
 - Creating a [materialized view](/concepts/views/#materialized-views) as
   materialized view creation executes the underlying query and stores the
   results to durable storage, and materialized views incrementally updates
-  results as inputs change.
+  results as inputs change. To see the views in a cluster, in the console's
+  `Clusters` view, select the cluster to inspect, and click on the `Materialized
+  Views` tab.
 
   {{< note >}}
 
@@ -43,9 +45,20 @@ Various factors can affect your costs, including (but not limited to):
 
   {{< /note >}}
 
-- Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
+  To see the indexes in a cluster, in the console's `Clusters` view, select the
+  cluster to inspect, and click on the `Indexes` tab.
 
-- Executing [`SELECT`] and [`SUBSCRIBE`] statements.
+- Maintaining [sources](/concepts/sources/). To see the sources for a cluster,
+  in the console's `Clusters` view, select the cluster to inspect, and click on
+  the `Sources` tab.
+
+- Maintaining [sinks](/concepts/sinks/). To see the sinks for a cluster, in the
+  console's `Clusters` view, select the cluster to inspect, and click on the
+  `Sinks` tab.
+
+- Executing [`SELECT`](/sql/select/) and [`SUBSCRIBE`](/sql/subscribe/)
+  statements.  To see your query history, in the console, under `Monitoring`,
+  select `Query History`.
 
 ## Cost Reductions
 
