@@ -11,6 +11,8 @@ From the [console](https://console.materialize.com/) (`Admin` > `Usage &
 Billing`), administrators can access their invoice. The invoice provides
 Compute and Storage usage and cost information.
 
+## Cost Factors
+
 Various factors can affect your costs, including (but not limited to):
 
 - Each [replica for a cluster](/sql/create-cluster/#credit-usage). To see the
@@ -44,6 +46,8 @@ Various factors can affect your costs, including (but not limited to):
 - Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
 
 - Executing [`SELECT`] and [`SUBSCRIBE`] statements.
+
+## Cost Reductions
 
 Some considerations for lowering costs:
 
