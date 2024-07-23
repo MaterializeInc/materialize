@@ -253,6 +253,15 @@ parent = "integrations"
 weight = 15
 
 #
+# Administration
+#
+
+[[menu.main]]
+identifier = "administration"
+name = "Administration"
+weight= 50
+
+#
 # About
 #
 
