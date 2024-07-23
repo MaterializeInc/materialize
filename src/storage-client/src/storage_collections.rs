@@ -1461,7 +1461,7 @@ where
                     | DataSource::Other(DataSourceOther::Compute) => {},
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
-                        if since_handle.since().elements() == &[T::minimum()] {
+                        if !self.read_only && since_handle.since().elements() == &[T::minimum()] {
                             debug!("advancing {} to initial since of {:?}", id, register_ts);
                             let token = since_handle.opaque();
                             let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
