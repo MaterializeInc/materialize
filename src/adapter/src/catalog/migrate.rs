@@ -514,8 +514,8 @@ fn mysql_subsources_remove_unnecessary_db_name(
     let items = conn_catalog.get_items();
     let mysql_subsources_to_update: Vec<_> = items
         .into_iter()
-        .filter_map(|item| match item.subsource_details() {
-            Some((ingestion_id, external_reference)) => {
+        .filter_map(|item| match item.source_export_details() {
+            Some((ingestion_id, external_reference, _details)) => {
                 match conn_catalog
                     .state()
                     .get_entry(&ingestion_id)
