@@ -88,3 +88,6 @@ artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}"
+
+# File should not be empty, see #25369
+test -s kubectl-get-logs-previous.log
