@@ -784,9 +784,9 @@ steps:
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -795,9 +795,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -806,9 +806,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -817,9 +817,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
