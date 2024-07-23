@@ -21,9 +21,9 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ExternalReferenceExport, ExternalReferences, ObjectType, ShowCreateClusterStatement,
-    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
-    SystemObjectType, UnresolvedItemName, WithOptionValue,
+    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
+    ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
+    ShowObjectType, SystemObjectType, UnresolvedItemName, WithOptionValue,
 };
 use query::QueryContext;
 
@@ -953,20 +953,22 @@ fn humanize_sql_for_show_create(
         Statement::CreateSource(stmt) => {
             // Collect all current subsource references.
             //
-            // TODO(#24843): this structure will need to change because we will
-            // have multiple references to the same upstream table.
+            // TODO(roshan): this structure might need to change if we support
+            // multiple subsources to refer to the same upstream table in
+            // https://github.com/MaterializeInc/materialize/issues/28435.
             let mut curr_references: BTreeMap<_, _> = catalog
                 .get_item(&id)
                 .used_by()
                 .into_iter()
                 .filter_map(|subsource| {
                     let item = catalog.get_item(subsource);
-                    item.subsource_details().map(|(_id, reference)| {
-                        let name = item.name();
-                        let subsource_name = catalog.resolve_full_name(name);
-                        let subsource_name = UnresolvedItemName::from(subsource_name);
-                        (reference.clone(), subsource_name)
-                    })
+                    item.source_export_details()
+                        .map(|(_id, reference, _details)| {
+                            let name = item.name();
+                            let subsource_name = catalog.resolve_full_name(name);
+                            let subsource_name = UnresolvedItemName::from(subsource_name);
+                            (reference.clone(), subsource_name)
+                        })
                 })
                 .collect();
 
@@ -1060,6 +1062,19 @@ fn humanize_sql_for_show_create(
                 stmt.external_references = Some(ExternalReferences::SubsetTables(subsources));
             }
         }
+        Statement::CreateSubsource(stmt) => {
+            stmt.with_options.retain_mut(|o| {
+                match o.name {
+                    CreateSubsourceOptionName::TextColumns => true,
+                    CreateSubsourceOptionName::IgnoreColumns => true,
+                    // Drop details, which does not rountrip.
+                    CreateSubsourceOptionName::Details => false,
+                    CreateSubsourceOptionName::ExternalReference => true,
+                    CreateSubsourceOptionName::Progress => true,
+                }
+            });
+        }
+
         _ => (),
     }
 

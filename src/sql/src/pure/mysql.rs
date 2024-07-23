@@ -13,13 +13,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::DerefMut;
 
 use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
+use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
     ExternalReferences, Ident, IdentError, MySqlConfigOptionName, WithOptionValue,
 };
-use mz_storage_types::sources::SourceReferenceResolver;
+use mz_sql_parser::ast::{UnresolvedItemName, Value};
+use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
+use prost::Message;
 
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
@@ -62,9 +64,14 @@ pub fn generate_create_subsource_statements(
     let mut subsources = Vec::with_capacity(requested_subsources.len());
 
     for (subsource_name, purified_export) in requested_subsources {
-        let table = match &purified_export.details {
-            PurifiedExportDetails::MySql { table } => table,
-            _ => unreachable!("purified export details must be mysql"),
+        let PurifiedExportDetails::MySql {
+            table,
+            text_columns,
+            ignore_columns,
+            initial_gtid_set,
+        } = purified_export.details
+        else {
+            unreachable!("purified export details must be mysql")
         };
 
         // Figure out the schema of the subsource
@@ -117,6 +124,50 @@ pub fn generate_create_subsource_statements(
             }
         }
 
+        let details = SourceExportStatementDetails::MySql {
+            table,
+            initial_gtid_set,
+        };
+
+        let mut with_options = vec![
+            CreateSubsourceOption {
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(
+                    purified_export.external_reference,
+                )),
+            },
+            CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            },
+        ];
+
+        if let Some(text_columns) = text_columns {
+            with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::TextColumns,
+                value: Some(WithOptionValue::Sequence(
+                    text_columns
+                        .iter()
+                        .map(|s| WithOptionValue::Value::<Aug>(Value::String(s.to_string())))
+                        .collect::<Vec<_>>(),
+                )),
+            });
+        }
+
+        if let Some(ignore_columns) = ignore_columns {
+            with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::IgnoreColumns,
+                value: Some(WithOptionValue::Sequence(
+                    ignore_columns
+                        .iter()
+                        .map(|s| WithOptionValue::Value::<Aug>(Value::String(s.to_string())))
+                        .collect::<Vec<_>>(),
+                )),
+            });
+        }
+
         // Create the subsource statement
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
@@ -124,12 +175,7 @@ pub fn generate_create_subsource_statements(
             of_source: Some(source_name.clone()),
             constraints,
             if_not_exists: false,
-            with_options: vec![CreateSubsourceOption {
-                name: CreateSubsourceOptionName::ExternalReference,
-                value: Some(WithOptionValue::UnresolvedItemName(
-                    purified_export.external_reference,
-                )),
-            }],
+            with_options,
         };
         subsources.push(subsource);
     }
@@ -239,7 +285,13 @@ pub(super) async fn validate_requested_references_privileges(
 pub(super) struct PurifiedSourceExports {
     /// map of source export names to the details of the export
     pub(super) source_exports: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
-    pub(super) tables: Vec<MySqlTableDesc>,
+    // NOTE(roshan): These are returned to allow round-tripping a
+    // `CREATE SOURCE` statement while we still allow creating implicit
+    // subsources from `CREATE SOURCE`, but will be removed once
+    // fully deprecating that feature and forcing users to use explicit
+    // `CREATE TABLE .. FROM SOURCE` statements.
+    // The text columns and ignore columns are already part of their appropriate
+    // `source_exports` above.
     pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
     pub(super) normalized_ignore_columns: Vec<WithOptionValue<Aug>>,
 }
@@ -393,15 +445,31 @@ pub(super) async fn purify_source_exports(
 
     validate_requested_references_privileges(&validated_source_exports, conn).await?;
 
+    // Retrieve the current @gtid_executed value of the server to mark as the effective
+    // initial snapshot point such that we can ensure consistency if the initial source
+    // snapshot is broken up over multiple points in time.
+    let initial_gtid_set = mz_mysql_util::query_sys_var(conn, "global.gtid_executed").await?;
+
     let source_exports = validated_source_exports
         .into_iter()
         .map(|r| {
+            let table_ref = mz_mysql_util::QualifiedTableRef {
+                schema_name: r.table.schema_name.as_str(),
+                table_name: r.table.name.as_str(),
+            };
             (
                 r.name,
                 PurifiedSourceExport {
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::MySql {
                         table: r.table.clone(),
+                        text_columns: text_cols_map
+                            .get(&table_ref)
+                            .map(|cols| cols.iter().map(|c| c.to_string()).collect()),
+                        ignore_columns: ignore_cols_map
+                            .get(&table_ref)
+                            .map(|cols| cols.iter().map(|c| c.to_string()).collect()),
+                        initial_gtid_set: initial_gtid_set.clone(),
                     },
                 },
             )
@@ -417,6 +485,5 @@ pub(super) async fn purify_source_exports(
             &reference_resolver,
             &tables,
         )?,
-        tables,
     })
 }
