@@ -67,6 +67,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derivative"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "either"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -156,9 +167,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ctor",
+ "derivative",
  "either",
- "mz-ore-instrument-macro",
- "mz-test-macro",
+ "mz-ore-proc",
  "num",
  "once_cell",
  "paste",
@@ -169,8 +180,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-ore-instrument-macro"
-version = "0.0.0"
+name = "mz-ore-proc"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
 
 [[package]]
 name = "mz-sql-lexer"
@@ -206,6 +222,7 @@ dependencies = [
  "mz-walkabout",
  "phf",
  "serde",
+ "smallvec",
  "thiserror",
  "tracing",
  "uncased",
@@ -227,15 +244,6 @@ dependencies = [
  "lol_alloc",
  "mz-sql-pretty",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "mz-test-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -556,6 +564,12 @@ name = "siphasher"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38b58827f4464d87d377d175e90bf58eb00fd8716ff0a62f80356b5e61555d0d"
+
+[[package]]
+name = "smallvec"
+version = "1.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
 
 [[package]]
 name = "spin"
