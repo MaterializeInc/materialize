@@ -12,6 +12,14 @@ from typing import Any
 from materialize.buildkite_insights.buildkite_api import generic_api
 
 
+def get_single_build(pipeline_slug: str, build_number: int) -> list[Any]:
+    request_path = (
+        f"organizations/materialize/pipelines/{pipeline_slug}/builds/{build_number}"
+    )
+
+    return generic_api.get(request_path, dict())
+
+
 def get_builds(
     pipeline_slug: str,
     max_fetches: int | None,
