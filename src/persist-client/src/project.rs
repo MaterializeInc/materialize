@@ -158,6 +158,7 @@ impl ProjectionPushdown {
         Some(BatchPart::Inline {
             updates: faked_data,
             ts_rewrite: None,
+            schema_id: None,
         })
     }
 }

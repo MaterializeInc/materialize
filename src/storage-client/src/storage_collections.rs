@@ -2495,15 +2495,23 @@ async fn finalize_shards_task<T>(
                 } else {
                     debug!(%shard_id, "finalizing shard");
                         let finalize = || async move {
+                        // TODO: thread the global ID into the shard finalization WAL
+                        let diagnostics = Diagnostics::from_purpose("finalizing shards");
+
+                        let schemas = persist_client.latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics.clone()).await.expect("codecs have not changed");
+                        let (key_schema, val_schema) = match schemas {
+                            Some((_, key_schema, val_schema)) => (key_schema, val_schema),
+                            None => (RelationDesc::empty(), UnitSchema),
+                        };
+
                         let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
                         let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
                             persist_client
                                 .open_writer(
                                     shard_id,
-                                    Arc::new(RelationDesc::empty()),
-                                    Arc::new(UnitSchema),
-                                    // TODO: thread the global ID into the shard finalization WAL
-                                    Diagnostics::from_purpose("finalizing shards"),
+                                    Arc::new(key_schema),
+                                    Arc::new(val_schema),
+                                    diagnostics,
                                 )
                                 .await
                                 .expect("invalid persist usage");

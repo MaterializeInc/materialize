@@ -717,6 +717,7 @@ impl Service for TransactorService {
 
 mod codec_impls {
     use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
+    use bytes::Bytes;
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
         SimpleEncoder, SimpleSchema,
@@ -749,6 +750,15 @@ mod codec_impls {
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
         }
+
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            MaelstromKeySchema
+        }
     }
 
     impl SimpleColumnarData for MaelstromKey {
@@ -767,7 +777,7 @@ mod codec_impls {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub struct MaelstromKeySchema;
 
     impl Schema<MaelstromKey> for MaelstromKeySchema {
@@ -824,6 +834,15 @@ mod codec_impls {
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
         }
+
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            MaelstromValSchema
+        }
     }
 
     impl SimpleColumnarData for MaelstromVal {
@@ -842,7 +861,7 @@ mod codec_impls {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub struct MaelstromValSchema;
 
     impl Schema<MaelstromVal> for MaelstromValSchema {

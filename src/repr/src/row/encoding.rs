@@ -44,7 +44,9 @@ use crate::row::{
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
 use crate::stats::{jsonb_stats_nulls, proto_datum_min_max_nulls};
-use crate::{ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
+use crate::{
+    ColumnType, Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp,
+};
 
 impl Codec for Row {
     type Storage = ProtoRow;
@@ -97,6 +99,15 @@ impl Codec for Row {
         let ret = self.decode_from_proto(&proto);
         storage.replace(proto);
         ret
+    }
+
+    fn encode_schema(schema: &Self::Schema) -> Bytes {
+        schema.into_proto().encode_to_vec().into()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        let proto = ProtoRelationDesc::decode(buf.as_ref()).expect("valid schema");
+        proto.into_rust().expect("valid schema")
     }
 }
 

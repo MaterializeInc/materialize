@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -715,6 +715,15 @@ impl Codec for K {
     fn decode(_buf: &[u8]) -> Result<Self, String> {
         Ok(Self)
     }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        TodoSchema::default()
+    }
 }
 
 impl Codec for V {
@@ -734,6 +743,15 @@ impl Codec for V {
     fn decode(_buf: &[u8]) -> Result<Self, String> {
         Ok(Self)
     }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        TodoSchema::default()
+    }
 }
 
 impl Codec for T {
@@ -752,6 +770,15 @@ impl Codec for T {
 
     fn decode(_buf: &[u8]) -> Result<Self, String> {
         Ok(Self)
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        TodoSchema::default()
     }
 }
 

@@ -27,12 +27,13 @@ use tracing::debug;
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, HollowBlobRef, HollowRollup, LeasedReaderState,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
-    WriterState,
+    CriticalReaderState, EncodedSchemas, HollowBatch, HollowBlobRef, HollowRollup,
+    LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State,
+    StateCollections, WriterState,
 };
 use crate::internal::trace::{FueledMergeRes, SpineId, ThinMerge, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
+use crate::schema::SchemaId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -78,6 +79,7 @@ pub struct StateDiff<T> {
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
     pub(crate) critical_readers: Vec<StateFieldDiff<CriticalReaderId, CriticalReaderState<T>>>,
     pub(crate) writers: Vec<StateFieldDiff<WriterId, WriterState<T>>>,
+    pub(crate) schemas: Vec<StateFieldDiff<SchemaId, EncodedSchemas>>,
     pub(crate) since: Vec<StateFieldDiff<(), Antichain<T>>>,
     pub(crate) legacy_batches: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     pub(crate) hollow_batches: Vec<StateFieldDiff<SpineId, Arc<HollowBatch<T>>>>,
@@ -105,6 +107,7 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             leased_readers: Vec::default(),
             critical_readers: Vec::default(),
             writers: Vec::default(),
+            schemas: Vec::default(),
             since: Vec::default(),
             legacy_batches: Vec::default(),
             hollow_batches: Vec::default(),
@@ -148,6 +151,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     leased_readers: from_leased_readers,
                     critical_readers: from_critical_readers,
                     writers: from_writers,
+                    schemas: from_schemas,
                     trace: from_trace,
                 },
         } = from;
@@ -164,6 +168,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     leased_readers: to_leased_readers,
                     critical_readers: to_critical_readers,
                     writers: to_writers,
+                    schemas: to_schemas,
                     trace: to_trace,
                 },
         } = to;
@@ -191,6 +196,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             &mut diffs.critical_readers,
         );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
+        diff_field_sorted_iter(from_schemas.iter(), to_schemas, &mut diffs.schemas);
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
 
         let from_flat = from_trace.flatten();
@@ -377,6 +383,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             leased_readers: diff_leased_readers,
             critical_readers: diff_critical_readers,
             writers: diff_writers,
+            schemas: diff_schemas,
             since: diff_since,
             legacy_batches: diff_legacy_batches,
             hollow_batches: diff_hollow_batches,
@@ -412,6 +419,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             leased_readers,
             critical_readers,
             writers,
+            schemas,
             trace,
         } = &mut self.collections;
 
@@ -420,6 +428,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         apply_diffs_map("leased_readers", diff_leased_readers, leased_readers)?;
         apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
         apply_diffs_map("writers", diff_writers, writers)?;
+        apply_diffs_map("schemas", diff_schemas, schemas)?;
 
         let structure_unchanged = diff_hollow_batches.is_empty()
             && diff_spine_batches.is_empty()
