@@ -71,6 +71,7 @@ def start_mz_read_only(
             "-f",
             "localhost:6878/api/leader/status",
         ],
+        restart="on-failure",
     )
 
 

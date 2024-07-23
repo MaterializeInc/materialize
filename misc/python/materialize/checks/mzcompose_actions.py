@@ -43,6 +43,7 @@ class StartMz(MzcomposeAction):
         platform: str | None = None,
         healthcheck: list[str] | None = None,
         deploy_generation: int | None = None,
+        restart: str | None = None,
     ) -> None:
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
@@ -54,6 +55,7 @@ class StartMz(MzcomposeAction):
         self.mz_service = mz_service
         self.platform = platform
         self.deploy_generation = deploy_generation
+        self.restart = restart
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -73,6 +75,7 @@ class StartMz(MzcomposeAction):
             platform=self.platform,
             healthcheck=self.healthcheck,
             deploy_generation=self.deploy_generation,
+            restart=self.restart,
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs
