@@ -29,6 +29,7 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_any_date_time_expression,
     is_known_to_involve_exact_data_types,
     is_operation_tagged,
+    is_table_function,
     matches_any_expression_arg,
     matches_fun_by_any_name,
     matches_fun_by_name,
@@ -1032,6 +1033,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             in all_involved_characteristics
         ):
             return YesIgnore("#28300: ALL and ANY with NULL or empty array")
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            is_table_function,
+            True,
+        ) and (query_template.offset is not None or query_template.limit is not None):
+            # When table functions are used, a row-order insensitive comparison will be conducted in the result
+            # comparator. However, this is not sufficient when a LIMIT or OFFSET clause is present.
+            return YesIgnore("Different sort order")
 
         return NoIgnore()
 
