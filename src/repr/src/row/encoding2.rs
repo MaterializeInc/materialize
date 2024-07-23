@@ -1274,7 +1274,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
         assert_eq!(
             num_datums,
             self.encoders.len(),
-            "try to encode {val:?}, but have {:?}",
+            "tried to encode {val:?}, but only have {:?}",
             self.encoders
         );
 
