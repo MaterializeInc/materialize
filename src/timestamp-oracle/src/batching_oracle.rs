@@ -153,8 +153,13 @@ mod tests {
 
         crate::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
             // We use the postgres oracle as the backing oracle.
-            let pg_oracle =
-                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
+            let pg_oracle = PostgresTimestampOracle::open(
+                config.clone(),
+                timeline,
+                initial_ts,
+                now_fn,
+                false, /* read-only */
+            );
 
             async {
                 let arced_pg_oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =

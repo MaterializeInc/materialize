@@ -2302,7 +2302,13 @@ impl Coordinator {
             })
             .collect();
 
-        let register_ts = self.get_local_write_ts().await.timestamp;
+        let register_ts = if self.controller.read_only() {
+            self.get_local_read_ts().await
+        } else {
+            // Getting a write timestamp bumps the write timestamp in the
+            // oracle, which we're not allowed in read-only mode.
+            self.get_local_write_ts().await.timestamp
+        };
 
         let storage_metadata = self.catalog.state().storage_metadata();
 
@@ -2312,7 +2318,9 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
-        self.apply_local_write(register_ts).await;
+        if !self.controller.read_only() {
+            self.apply_local_write(register_ts).await;
+        }
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
@@ -3344,6 +3352,7 @@ pub fn serve(
                 now.clone(),
                 pg_timestamp_oracle_config.clone(),
                 &mut timestamp_oracles,
+                read_only_controllers,
             )
             .await;
         }
@@ -3356,7 +3365,14 @@ pub fn serve(
             .get(&Timeline::EpochMilliseconds)
             .expect("inserted above")
             .oracle;
-        let boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
+
+        let boot_ts = if read_only_controllers {
+            epoch_millis_oracle.read_ts().await
+        } else {
+            // Getting a write timestamp bumps the write timestamp in the
+            // oracle, which we're not allowed in read-only mode.
+            epoch_millis_oracle.write_ts().await.timestamp
+        };
 
         info!("coordinator init: opening catalog");
         let builtin_item_migration_config = if enable_0dt_deployment {
@@ -3411,7 +3427,11 @@ pub fn serve(
             boot_ts,
         )
         .await?;
-        epoch_millis_oracle.apply_write(boot_ts).await;
+
+        if !read_only_controllers {
+            epoch_millis_oracle.apply_write(boot_ts).await;
+        }
+
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
 

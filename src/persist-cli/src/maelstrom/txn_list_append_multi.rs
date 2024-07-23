@@ -467,6 +467,7 @@ impl Service for TransactorService {
                         "maelstrom".to_owned(),
                         mz_repr::Timestamp::minimum(),
                         NOW_ZERO.clone(),
+                        false, /* read-only */
                     )
                     .await,
                 )

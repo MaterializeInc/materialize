@@ -298,7 +298,13 @@ impl Coordinator {
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
-        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+        let collection_timestamp = if self.controller.read_only() {
+            self.peek_local_write_ts().await.into()
+        } else {
+            // Getting a write timestamp bumps the write timestamp in the
+            // oracle, which we're not allowed in read-only mode.
+            self.get_local_write_ts().await.timestamp.into()
+        };
 
         let mut ops = vec![];
         for (shard_id, shard_usage) in shards_usage.by_shard {
