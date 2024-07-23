@@ -222,7 +222,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
 
 use crate::proto::ProtoIdBatch;
-use crate::txns::DataWriteHandle;
+use crate::txns::{CompareAndAppendEmpty, DataWriteHandle};
 
 pub mod metrics;
 pub mod operator;
@@ -386,7 +386,7 @@ where
 /// This method is idempotent.
 pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     name: F,
-    txns_or_data_write: &mut DataWriteHandle<K, V, T, D>,
+    txns_or_data_write: &mut CompareAndAppendEmpty<'_, K, V, T, D>,
     init_ts: T,
 ) where
     S: AsRef<str>,
@@ -398,7 +398,11 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 {
     let name = name();
     let name = name.as_ref();
-    let Some(mut upper) = txns_or_data_write.shared_upper().into_option() else {
+    let shared_upper = match txns_or_data_write {
+        CompareAndAppendEmpty::Mut(x) => x.shared_upper(),
+        CompareAndAppendEmpty::Owned(x) => x.shared_upper(),
+    };
+    let Some(mut upper) = shared_upper.into_option() else {
         // Shard is closed, which means the upper must be past init_ts.
         return;
     };
@@ -407,19 +411,9 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
             return;
         }
         let new_upper = init_ts.step_forward();
-        fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
-            xs.into_iter().fold(String::new(), |mut output, x| {
-                let _ = write!(output, "{}{:?}", sep, x);
-                output
-            })
-        }
-        debug!("CaA {} [{:?},{:?}) empty", name, upper, new_upper,);
+        debug!("CaA {} [{:?},{:?}) empty", name, upper, new_upper);
         let res = txns_or_data_write
-            .compare_and_append_schemaless(
-                &mut [],
-                Antichain::from_elem(upper.clone()),
-                Antichain::from_elem(new_upper.clone()),
-            )
+            .compare_and_append_empty(upper.clone(), new_upper.clone())
             .await
             .expect("usage was valid");
         match res {
@@ -498,15 +492,19 @@ async fn apply_caa<K, V, T, D>(
             commit_ts.step_forward(),
         );
         let mut batches = batches.iter_mut().collect::<Vec<_>>();
-        let res = data_write
-            .compare_and_append_batch(
-                batches.as_mut_slice(),
-                Antichain::from_elem(upper.clone()),
-                Antichain::from_elem(commit_ts.step_forward()),
-            )
-            .await
-            .expect("usage was valid");
-        match res {
+        let expected_upper = Antichain::from_elem(upper.clone());
+        let new_upper = Antichain::from_elem(commit_ts.step_forward());
+        let res = match data_write {
+            DataWriteHandle::Schema(x) => {
+                x.compare_and_append_batch(batches.as_mut_slice(), expected_upper, new_upper)
+                    .await
+            }
+            DataWriteHandle::Schemaless(x) => {
+                x.compare_and_append_schemaless(batches.as_mut_slice(), expected_upper, new_upper)
+                    .await
+            }
+        };
+        match res.expect("usage was valid") {
             Ok(()) => {
                 debug!(
                     "CaA data {:.9} apply t={:?} [{:?},{:?}) success",

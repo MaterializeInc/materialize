@@ -43,7 +43,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
-use crate::write::{WriteHandle, WriterId};
+use crate::write::{SchemalessWriteHandle, WriteHandle, WriterId};
 
 pub mod async_runtime;
 pub mod batch;
@@ -548,6 +548,34 @@ impl PersistClient {
             writer_id,
             &diagnostics.handle_purpose,
             schemas,
+        );
+        Ok(writer)
+    }
+
+    /// [Self::open_writer], but returning a [SchemalessWriteHandle].
+    #[instrument(level = "debug", fields(shard = %shard_id))]
+    pub async fn open_writer_schemaless<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<SchemalessWriteHandle<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+        let writer_id = WriterId::new();
+        let writer = SchemalessWriteHandle::new(
+            self.cfg.clone(),
+            Arc::clone(&self.metrics),
+            machine,
+            gc,
+            Arc::clone(&self.blob),
+            writer_id,
+            &diagnostics.handle_purpose,
         );
         Ok(writer)
     }

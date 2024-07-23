@@ -2326,8 +2326,6 @@ where
             txns_client.clone(),
             Arc::clone(&txns_metrics),
             txns_id,
-            Arc::new(RelationDesc::empty()),
-            Arc::new(UnitSchema),
         )
         .await;
         let persist_table_worker = persist_handles::PersistTableWriteWorker::new_txns(txns);

@@ -169,7 +169,7 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let mut data_write = handle.datas.take_write(&data_id).await;
+                    let mut data_write = handle.datas.take_write(&data_id).await.expect("WIP");
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches = updates

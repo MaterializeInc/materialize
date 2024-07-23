@@ -35,6 +35,7 @@ use tracing::debug;
 
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataRemapEntry, DataSnapshot, DataSubscribe};
+use crate::txns::CompareAndAppendEmpty;
 use crate::TxnsCodecDefault;
 
 /// A cache of the txn shard contents, optimized for various in-memory
@@ -794,6 +795,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
         txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
+        let txns_write = &mut CompareAndAppendEmpty::Mut(txns_write);
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         let mut ret = Self::from_read(txns_read, None).await;
         let _ = ret.update_gt(&init_ts).await;

@@ -480,7 +480,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     type Target = SchemalessWriteHandle<K, V, T, D>;
 
@@ -494,7 +494,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.wrapped

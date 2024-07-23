@@ -9,6 +9,7 @@
 
 //! An interface for atomic multi-shard writes.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
@@ -566,7 +567,7 @@ where
                                             data_id.to_string()
                                         )
                                     },
-                                    &mut data_write,
+                                    &mut CompareAndAppendEmpty::Owned(&mut data_write),
                                     unapplied_ts.clone(),
                                 )
                                 .await;
@@ -707,16 +708,12 @@ where
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     async fn open_data_write(&self, data_id: ShardId) -> DataWriteHandle<K, V, T, D> {
-        todo!("WIP")
-        // self.client
-        //     .open_writer(
-        //         data_id,
-        //         Arc::clone(&self.key_schema),
-        //         Arc::clone(&self.val_schema),
-        //         Diagnostics::from_purpose("txn data"),
-        //     )
-        //     .await
-        //     .expect("schema shouldn't change")
+        let write = self
+            .client
+            .open_writer_schemaless(data_id, Diagnostics::from_purpose("txn data"))
+            .await
+            .expect("schema shouldn't change");
+        DataWriteHandle::Schemaless(write)
     }
 
     pub(crate) async fn take_data_write(
@@ -729,13 +726,27 @@ where
         self.open_data_write(*data_id).await
     }
 
-    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
-        todo!("WIP")
+    pub(crate) async fn take_write(
+        &mut self,
+        data_id: &ShardId,
+    ) -> Option<WriteHandle<K, V, T, D>> {
+        tracing::info!("WIP take_write {}", data_id);
+        match self.data_write.remove(data_id)? {
+            DataWriteHandle::Schema(x) => Some(x),
+            DataWriteHandle::Schemaless(_) => None,
+        }
     }
 
     pub(crate) fn put_write(&mut self, data_write: DataWriteHandle<K, V, T, D>) {
-        // WIP don't override a Schemaless with a Schema
-        self.data_write.insert(data_write.shard_id(), data_write);
+        match (self.data_write.entry(data_write.shard_id()), &data_write) {
+            (Entry::Vacant(x), _) => {
+                x.insert(data_write);
+            }
+            (Entry::Occupied(mut x), DataWriteHandle::Schema(_)) => {
+                x.insert(data_write);
+            }
+            (Entry::Occupied(_), DataWriteHandle::Schemaless(_)) => {}
+        }
     }
 }
 
@@ -761,24 +772,53 @@ where
     type Target = SchemalessWriteHandle<K, V, T, D>;
 
     fn deref(&self) -> &Self::Target {
-        todo!()
+        match self {
+            DataWriteHandle::Schema(x) => &*x,
+            DataWriteHandle::Schemaless(x) => x,
+        }
     }
 }
 
-#[async_trait::async_trait]
-trait CompareAndAppendBatch<K, V, T, D>
+pub(crate) enum CompareAndAppendEmpty<'a, K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
-    async fn compare_and_append_batch(
+    Owned(&'a mut DataWriteHandle<K, V, T, D>),
+    Mut(&'a mut WriteHandle<K, V, T, D>),
+}
+
+impl<'a, K, V, T, D> CompareAndAppendEmpty<'a, K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    pub(crate) async fn compare_and_append_empty(
         &mut self,
-        batches: &mut [&mut Batch<K, V, T, D>],
-        expected_upper: Antichain<T>,
-        new_upper: Antichain<T>,
-    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>;
+        expected_upper: T,
+        new_upper: T,
+    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>> {
+        let expected_upper = Antichain::from_elem(expected_upper);
+        let new_upper = Antichain::from_elem(new_upper);
+        match self {
+            CompareAndAppendEmpty::Mut(x) => {
+                x.compare_and_append_batch(&mut [], expected_upper, new_upper)
+                    .await
+            }
+            CompareAndAppendEmpty::Owned(DataWriteHandle::Schema(x)) => {
+                x.compare_and_append_batch(&mut [], expected_upper, new_upper)
+                    .await
+            }
+            CompareAndAppendEmpty::Owned(DataWriteHandle::Schemaless(x)) => {
+                x.compare_and_append_schemaless(&mut [], expected_upper, new_upper)
+                    .await
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -793,7 +833,6 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
     use mz_persist_client::PersistLocation;
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use rand::rngs::SmallRng;
     use rand::{RngCore, SeedableRng};
     use timely::progress::Antichain;
@@ -1225,6 +1264,14 @@ mod tests {
                 data_id.to_string(),
                 self.ts
             );
+            // WIP explain
+            let data_write = match self.txns.datas.take_write(&data_id).await {
+                Some(x) => x,
+                None => writer(&self.txns.datas.client, data_id).await,
+            };
+            self.txns
+                .datas
+                .put_write(DataWriteHandle::Schema(data_write));
             let mut txn = self.txns.begin_test();
             txn.tidy(std::mem::take(&mut self.tidy));
             txn.write(&data_id, self.key(), (), 1).await;
