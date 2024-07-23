@@ -24,8 +24,12 @@ from xml.etree.ElementTree import ParseError
 
 from junitparser.junitparser import Error, Failure, JUnitXml
 
-from materialize import buildkite, ci_util, ui
-from materialize.buildkite import BuildkiteEnvVar, add_annotation_raw, get_artifact_url
+from materialize import ci_util, ui
+from materialize.buildkite import (
+    add_annotation_raw,
+    add_failure_for_qa_team,
+    get_artifact_url,
+)
 from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
@@ -350,18 +354,14 @@ and finds associated open GitHub issues in Materialize repository.""",
 
         return_code = annotate_logged_errors(args.log_files, test_analytics)
     except Exception as e:
-        step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
-        add_annotation_raw(
-            style="error",
-            markdown=f"ci_annotate_errors failed in step {step_key}, report this to #team-testing:\n```\n{e}\n```",
-        )
+        add_failure_for_qa_team(f"ci_annotate_errors failed! {e}")
         raise
 
     try:
         test_analytics.submit_updates()
     except Exception as e:
         # An error during an upload must never cause the build to fail
-        print(f"Uploading results failed! {e}")
+        add_failure_for_qa_team(f"Uploading results failed! {e}")
 
     return return_code
 
@@ -757,7 +757,9 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         else:
             return build_history
     except Exception as e:
-        print(f"Loading build history from test analytics failed: {e}")
+        add_failure_for_qa_team(
+            f"Loading build history from test analytics failed: {e}"
+        )
 
     print("Loading build history from buildkite instead")
     return _get_failures_on_main_from_buildkite(

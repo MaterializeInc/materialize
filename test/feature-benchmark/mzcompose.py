@@ -729,4 +729,4 @@ def upload_results_to_test_analytics(
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail
-        print(f"Uploading results failed! {e}")
+        buildkite.add_failure_for_qa_team(f"Uploading results failed! {e}")
