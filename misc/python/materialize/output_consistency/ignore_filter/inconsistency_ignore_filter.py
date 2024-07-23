@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -197,6 +198,7 @@ class PostExecutionInconsistencyIgnoreFilterBase:
                 error,
                 query_template,
                 contains_aggregation,
+                error.query_execution.query_output_mode,
             )
 
         if error.error_type == ValidationErrorType.ROW_COUNT_MISMATCH:
@@ -272,6 +274,7 @@ class PostExecutionInconsistencyIgnoreFilterBase:
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        query_output_mode: QueryOutputMode,
     ) -> IgnoreVerdict:
         return NoIgnore()
 

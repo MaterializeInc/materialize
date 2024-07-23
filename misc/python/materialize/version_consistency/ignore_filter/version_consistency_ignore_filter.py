@@ -9,6 +9,7 @@
 from functools import partial
 
 from materialize.mz_version import MzVersion
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.expression.expression import (
     Expression,
 )
@@ -214,6 +215,7 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
         error: ValidationError,
         query_template: QueryTemplate,
         contains_aggregation: bool,
+        query_output_mode: QueryOutputMode,
     ) -> IgnoreVerdict:
         if (
             self.lower_version < MZ_VERSION_0_109_0 <= self.higher_version
@@ -224,7 +226,7 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Evaluation order changed with PR 28144")
 
         return super()._shall_ignore_explain_plan_mismatch(
-            error, query_template, contains_aggregation
+            error, query_template, contains_aggregation, query_output_mode
         )
 
     def _aggregration_shortcut_changed(

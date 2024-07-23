@@ -11,6 +11,9 @@ import sys
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
+from materialize.output_consistency.execution.query_output_mode import (
+    QueryOutputMode,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -29,12 +32,12 @@ class OutputPrinter(BaseOutputPrinter):
     def __init__(
         self,
         input_data: ConsistencyTestInputData,
-        test_explain: bool,
+        query_output_mode: QueryOutputMode,
         print_mode: OutputPrinterMode = OutputPrinterMode.PRINT,
     ):
         super().__init__(print_mode=print_mode)
         self.reproduction_code_printer = ReproductionCodePrinter(
-            input_data, test_explain
+            input_data, query_output_mode
         )
 
     def print_sql(self, sql: str) -> None:

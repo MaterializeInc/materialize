@@ -10,6 +10,7 @@ import math
 from decimal import Decimal
 from typing import Any, cast
 
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
@@ -74,7 +75,7 @@ class ResultComparator:
 
         if validation_outcome.query_execution_succeeded_in_all_strategies:
             self.validate_outcomes_data(query_execution, validation_outcome)
-            if query_execution.test_explain:
+            if query_execution.query_output_mode:
                 validation_outcome.success_reason = "explain plan matches"
             else:
                 validation_outcome.success_reason = "result data matches"
@@ -281,7 +282,10 @@ class ResultComparator:
         for index in range(1, len(outcomes)):
             other_result = cast(QueryResult, outcomes[index])
 
-            if query_execution.test_explain:
+            if query_execution.query_output_mode in {
+                QueryOutputMode.EXPLAIN,
+                QueryOutputMode.EXPLAIN_PHYSICAL,
+            }:
                 self.validate_explain_plan(
                     query_execution, result1, other_result, validation_outcome
                 )

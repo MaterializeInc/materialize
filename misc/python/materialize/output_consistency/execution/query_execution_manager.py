@@ -140,7 +140,7 @@ class QueryExecutionManager:
         query_no = query_index + 1
         query_id = f"{query_id_prefix}{query_no}"
         query_execution = QueryExecution(
-            query_template, query_id, self.config.test_explain
+            query_template, query_id, self.config.query_output_mode
         )
 
         if self.config.verbose_output:
@@ -152,7 +152,7 @@ class QueryExecutionManager:
                 strategy,
                 QueryOutputFormat.SINGLE_LINE,
                 ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
-                self.config.test_explain,
+                self.config.query_output_mode,
             )
 
             start_time = datetime.now()

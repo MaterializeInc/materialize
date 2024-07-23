@@ -18,6 +18,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     DataFlowRenderingEvaluation,
     EvaluationStrategy,
 )
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
@@ -137,7 +138,9 @@ def main() -> int:
     except InterfaceError:
         return 1
 
-    result = test.run_output_consistency_tests(mz_connection, args, test_explain=False)
+    result = test.run_output_consistency_tests(
+        mz_connection, args, query_output_mode=QueryOutputMode.SELECT
+    )
     return 0 if result.all_passed() else 1
 
 

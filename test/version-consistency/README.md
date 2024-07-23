@@ -17,8 +17,8 @@ bin/version-consistency-test --max-runtime-in-sec 60
 
 ## Test explain plans
 
-Use `--test-explain` to test explain plans. You might want to set `--avoid-expressions-expecting-db-error` and reduce
-the number of columns per query with `--max-cols-per-query`.
+Use `--output-query-mode=EXPLAIN` or `--output-query-mode=EXPLAIN_PHYSICAL` to test explain plans. You might want to set
+`--avoid-expressions-expecting-db-error` and reduce the number of columns per query with `--max-cols-per-query`.
 
 ## Query generation
 

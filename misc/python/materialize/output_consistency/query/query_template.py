@@ -11,6 +11,10 @@ from collections.abc import Callable
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.execution.query_output_mode import (
+    QueryOutputMode,
+    query_output_mode_to_sql,
+)
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
@@ -69,7 +73,7 @@ class QueryTemplate:
         strategy: EvaluationStrategy,
         output_format: QueryOutputFormat,
         query_column_selection: QueryColumnByIndexSelection,
-        explain: bool,
+        query_output_mode: QueryOutputMode,
         override_db_object_name: str | None = None,
     ) -> str:
         db_object_name = self.get_db_object_name(strategy, override_db_object_name)
@@ -83,8 +87,10 @@ class QueryTemplate:
         limit_clause = self._create_limit_clause()
         offset_clause = self._create_offset_clause()
 
+        explain_mode = query_output_mode_to_sql(query_output_mode)
+
         sql = f"""
-{'EXPLAIN ' if explain else ''}SELECT{space_separator}{column_sql}
+{explain_mode} SELECT{space_separator}{column_sql}
 FROM{space_separator}{db_object_name}
 {where_clause}
 {order_by_clause}

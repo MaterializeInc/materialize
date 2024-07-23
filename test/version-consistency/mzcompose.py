@@ -14,6 +14,10 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
+from materialize.output_consistency.execution.query_output_mode import (
+    QUERY_OUTPUT_MODE_CHOICES,
+    QueryOutputMode,
+)
 from materialize.output_consistency.output_consistency_test import (
     upload_output_consistency_results_to_test_analytics,
 )
@@ -67,10 +71,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--test-explain",
-        default=False,
-        type=bool,
-        action=argparse.BooleanOptionalAction,
+        "--query-output-mode",
+        type=lambda mode: QueryOutputMode[mode.upper()],
+        choices=QUERY_OUTPUT_MODE_CHOICES,
+        default=QueryOutputMode.SELECT,
     )
 
     args = test.parse_output_consistency_input_args(parser)
@@ -103,7 +107,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test.evaluation_strategy_name = args.evaluation_strategy
 
         test_summary = test.run_output_consistency_tests(
-            connection, args, test_explain=args.test_explain
+            connection, args, query_output_mode=args.query_output_mode
         )
 
     upload_output_consistency_results_to_test_analytics(c, test_summary)

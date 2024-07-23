@@ -11,4 +11,4 @@
 #
 # version-consistency-explain-test - Test the explain plan consistency on different versions of mz.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.version_consistency.version_consistency_test --test-explain --max-cols-per-query=4 --avoid-expressions-expecting-db-error "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.version_consistency.version_consistency_test --query-output-mode EXPLAIN --max-cols-per-query=4 --avoid-expressions-expecting-db-error "$@"
