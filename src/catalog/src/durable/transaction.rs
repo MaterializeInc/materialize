@@ -169,6 +169,13 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    pub fn get_item(&self, id: &GlobalId) -> Option<Item> {
+        let key = ItemKey { gid: *id };
+        self.items
+            .get(&key)
+            .map(|v| DurableType::from_key_value(key, v.clone()))
+    }
+
     pub fn get_items(&self) -> impl Iterator<Item = Item> {
         self.items
             .items()

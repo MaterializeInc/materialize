@@ -100,7 +100,7 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, _stmt| {
+    rewrite_ast_items(tx, |tx, _id, stmt| {
         let _catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
@@ -111,6 +111,7 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+            ast_rewrite_create_subsource_options(tx, stmt)?;
             Ok(())
         })
     })
@@ -423,6 +424,324 @@ fn add_to_audit_log(
     let event =
         mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
     tx.insert_audit_log_event(event);
+    Ok(())
+}
+
+fn ast_rewrite_create_subsource_options(
+    tx: &mut Transaction,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{
+        CreateSourceConnection, CreateSubsourceOption, CreateSubsourceOptionName,
+        CreateSubsourceStatement, MySqlConfigOptionName, PgConfigOptionName, RawItemName, Value,
+        WithOptionValue,
+    };
+    use mz_storage_types::sources::mysql::{
+        ProtoMySqlSourceDetails, ProtoMySqlSourceExportStatementDetails,
+    };
+    use mz_storage_types::sources::postgres::{
+        ProtoPostgresSourceExportStatementDetails, ProtoPostgresSourcePublicationDetails,
+    };
+    use mz_storage_types::sources::proto_source_export_statement_details;
+    use mz_storage_types::sources::ProtoSourceExportStatementDetails;
+    use prost::Message;
+
+    struct Rewriter<'a, 'b> {
+        tx: &'a Transaction<'b>,
+    }
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter<'_, '_> {
+        fn visit_create_subsource_statement_mut(
+            &mut self,
+            node: &'ast mut CreateSubsourceStatement<Raw>,
+        ) {
+            match &node.of_source {
+                // Not a source export
+                None => return,
+                Some(source) => {
+                    let details = node
+                        .with_options
+                        .iter()
+                        .find(|o| o.name == CreateSubsourceOptionName::Details);
+                    if details.is_some() {
+                        // this subsource has already had its details written, so it's either new or was already
+                        // migrated
+                        return;
+                    }
+
+                    let external_reference = node
+                        .with_options
+                        .iter()
+                        .find(|o| o.name == CreateSubsourceOptionName::ExternalReference)
+                        .expect("subsources must have external reference");
+                    let (external_schema, external_table) = match &external_reference.value {
+                        Some(WithOptionValue::UnresolvedItemName(name)) => {
+                            let name_len = name.0.len();
+                            (
+                                name.0[name_len - 2].clone().into_string(),
+                                name.0[name_len - 1].clone().into_string(),
+                            )
+                        }
+                        _ => unreachable!("external reference must be an unresolved item name"),
+                    };
+
+                    let source = match &source {
+                        RawItemName::Name(_) => {
+                            panic!("named item reference in durable catalog")
+                        }
+                        RawItemName::Id(id, _) => {
+                            let gid = id
+                                .parse()
+                                .expect("RawItenName::Id must be uncorrupted GlobalId");
+                            self.tx.get_item(&gid).expect("source must exist")
+                        }
+                    };
+                    let source_statement =
+                        mz_sql_parser::parser::parse_statements(&source.create_sql)
+                            .expect("parsing persisted create_sql must succeed")
+                            .into_element()
+                            .ast;
+                    match source_statement {
+                        Statement::CreateSource(stmt) => match &stmt.connection {
+                            CreateSourceConnection::Postgres {
+                                connection: _,
+                                options,
+                            } => {
+                                // Copy the PostgresTableDesc from the top-level source publication details proto
+                                // into the subsource details proto.
+                                let details = options
+                                    .iter()
+                                    .find(|o| o.name == PgConfigOptionName::Details)
+                                    .expect("Sources must have details");
+                                let details_val = match &details.value {
+                                    Some(WithOptionValue::Value(Value::String(details))) => details,
+                                    _ => unreachable!("Source details' value must be a string"),
+                                };
+                                let details = hex::decode(details_val)
+                                    .expect("Source details must be a hex-encoded string");
+                                let details =
+                                    ProtoPostgresSourcePublicationDetails::decode(&*details)
+                                        .expect("Source details must be a hex-encoded protobuf");
+                                let table = details
+                                    .deprecated_tables
+                                    .iter()
+                                    .find(|t| {
+                                        t.namespace == external_schema && t.name == external_table
+                                    })
+                                    .expect("subsource table must be in source details");
+                                let subsource_details = ProtoSourceExportStatementDetails {
+                                    kind: Some(
+                                        proto_source_export_statement_details::Kind::Postgres(
+                                            ProtoPostgresSourceExportStatementDetails {
+                                                table: Some(table.clone()),
+                                            },
+                                        ),
+                                    ),
+                                };
+                                node.with_options.push(CreateSubsourceOption {
+                                    name: CreateSubsourceOptionName::Details,
+                                    value: Some(WithOptionValue::Value(Value::String(
+                                        hex::encode(subsource_details.encode_to_vec()),
+                                    ))),
+                                });
+
+                                // Copy the relevant Text Columns from the top-level source option into the subsource option
+                                let text_columns = options
+                                    .iter()
+                                    .find(|o| o.name == PgConfigOptionName::TextColumns);
+                                if let Some(text_columns) = text_columns {
+                                    let all_text_columns = match &text_columns.value {
+                                        Some(WithOptionValue::Sequence(columns)) => columns
+                                            .into_iter()
+                                            .map(|column| match column {
+                                                WithOptionValue::UnresolvedItemName(name) => name,
+                                                _ => unreachable!(
+                                                    "text columns must be UnresolvedItemName"
+                                                ),
+                                            })
+                                            .collect::<Vec<_>>(),
+                                        _ => {
+                                            unreachable!("Source columns value must be a sequence")
+                                        }
+                                    };
+
+                                    let table_text_columns = all_text_columns
+                                        .into_iter()
+                                        .filter_map(|name| {
+                                            // source text columns are an UnresolvedItemName with (schema, table, column) tuples
+                                            // and we only need to copy the column name for the subsource option
+                                            if name.0[0].clone().into_string() == external_schema
+                                                && name.0[1].clone().into_string() == external_table
+                                            {
+                                                Some(WithOptionValue::Value(Value::String(
+                                                    name.0[2].clone().into_string(),
+                                                )))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+
+                                    node.with_options.push(CreateSubsourceOption {
+                                        name: CreateSubsourceOptionName::TextColumns,
+                                        value: Some(WithOptionValue::Sequence(table_text_columns)),
+                                    });
+                                }
+                            }
+                            CreateSourceConnection::MySql {
+                                connection: _,
+                                options,
+                            } => {
+                                let details = options
+                                    .iter()
+                                    .find(|o| o.name == MySqlConfigOptionName::Details)
+                                    .expect("Sources must have details");
+
+                                let details_val = match &details.value {
+                                    Some(WithOptionValue::Value(Value::String(details))) => details,
+                                    _ => unreachable!("Source details' value must be a string"),
+                                };
+
+                                let details = hex::decode(details_val)
+                                    .expect("Source details must be a hex-encoded string");
+                                let details = ProtoMySqlSourceDetails::decode(&*details)
+                                    .expect("Source details must be a hex-encoded protobuf");
+
+                                let (table_idx, table) = details
+                                    .deprecated_tables
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, t)| {
+                                        t.schema_name == external_schema && t.name == external_table
+                                    })
+                                    .expect("subsource table must be in source details");
+                                // Handle the 2 versions of the initial_gtid_set fields in the top-level source details
+                                let initial_gtid_set = if details.deprecated_initial_gtid_set.len()
+                                    == 1
+                                {
+                                    details.deprecated_initial_gtid_set[0].clone()
+                                } else if details.deprecated_initial_gtid_set.len()
+                                    == details.deprecated_tables.len()
+                                {
+                                    details.deprecated_initial_gtid_set[table_idx].clone()
+                                } else if details.deprecated_legacy_initial_gtid_set.len() > 0 {
+                                    details.deprecated_legacy_initial_gtid_set.clone()
+                                } else {
+                                    unreachable!("invalid initial GTID set(s) in source details")
+                                };
+
+                                let subsource_details = ProtoSourceExportStatementDetails {
+                                    kind: Some(proto_source_export_statement_details::Kind::Mysql(
+                                        ProtoMySqlSourceExportStatementDetails {
+                                            table: Some(table.clone()),
+                                            initial_gtid_set,
+                                        },
+                                    )),
+                                };
+                                node.with_options.push(CreateSubsourceOption {
+                                    name: CreateSubsourceOptionName::Details,
+                                    value: Some(WithOptionValue::Value(Value::String(
+                                        hex::encode(subsource_details.encode_to_vec()),
+                                    ))),
+                                });
+
+                                // Copy the relevant Text Columns from the top-level source option into the subsource option
+                                let text_columns = options
+                                    .iter()
+                                    .find(|o| o.name == MySqlConfigOptionName::TextColumns);
+                                if let Some(text_columns) = text_columns {
+                                    let all_text_columns = match &text_columns.value {
+                                        Some(WithOptionValue::Sequence(columns)) => columns
+                                            .into_iter()
+                                            .map(|column| match column {
+                                                WithOptionValue::UnresolvedItemName(name) => name,
+                                                _ => unreachable!(
+                                                    "text columns must be UnresolvedItemName"
+                                                ),
+                                            })
+                                            .collect::<Vec<_>>(),
+                                        _ => {
+                                            unreachable!("Source columns value must be a sequence")
+                                        }
+                                    };
+
+                                    let table_text_columns = all_text_columns
+                                        .into_iter()
+                                        .filter_map(|name| {
+                                            // source text columns are an UnresolvedItemName with (schema, table, column) tuples
+                                            // and we only need to copy the column name for the subsource option
+                                            if name.0[0].clone().into_string() == external_schema
+                                                && name.0[1].clone().into_string() == external_table
+                                            {
+                                                Some(WithOptionValue::Value(Value::String(
+                                                    name.0[2].clone().into_string(),
+                                                )))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+
+                                    node.with_options.push(CreateSubsourceOption {
+                                        name: CreateSubsourceOptionName::TextColumns,
+                                        value: Some(WithOptionValue::Sequence(table_text_columns)),
+                                    });
+                                }
+                                // Copy the relevant Ignore Columns from the top-level source option into the subsource option
+                                let ignore_columns = options
+                                    .iter()
+                                    .find(|o| o.name == MySqlConfigOptionName::IgnoreColumns);
+                                if let Some(ignore_columns) = ignore_columns {
+                                    let all_ignore_columns = match &ignore_columns.value {
+                                        Some(WithOptionValue::Sequence(columns)) => columns
+                                            .into_iter()
+                                            .map(|column| match column {
+                                                WithOptionValue::UnresolvedItemName(name) => name,
+                                                _ => unreachable!(
+                                                    "ignore columns must be UnresolvedItemName"
+                                                ),
+                                            })
+                                            .collect::<Vec<_>>(),
+                                        _ => {
+                                            unreachable!("Source columns value must be a sequence")
+                                        }
+                                    };
+
+                                    let table_ignore_columns = all_ignore_columns
+                                        .into_iter()
+                                        .filter_map(|name| {
+                                            // source ignore columns are an UnresolvedItemName with (schema, table, column) tuples
+                                            // and we only need to copy the column name for the subsource option
+                                            if name.0[0].clone().into_string() == external_schema
+                                                && name.0[1].clone().into_string() == external_table
+                                            {
+                                                Some(WithOptionValue::Value(Value::String(
+                                                    name.0[2].clone().into_string(),
+                                                )))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+
+                                    node.with_options.push(CreateSubsourceOption {
+                                        name: CreateSubsourceOptionName::IgnoreColumns,
+                                        value: Some(WithOptionValue::Sequence(
+                                            table_ignore_columns,
+                                        )),
+                                    });
+                                }
+                            }
+                            _ => unreachable!("unexpected source type for existing subsource"),
+                        },
+                        _ => unreachable!("source must be a source"),
+                    };
+                }
+            }
+        }
+    }
+    Rewriter { tx }.visit_statement_mut(stmt);
+
     Ok(())
 }
 
