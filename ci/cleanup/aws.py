@@ -9,6 +9,7 @@
 
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 import boto3
@@ -95,10 +96,7 @@ def clean_up_ec2() -> None:
 
 def clean_up_iam() -> None:
     client = boto3.client("iam")
-    response = client.list_roles()
-    roles = response.get("Roles", [])
-
-    roles = [r for r in roles if r["RoleName"].startswith("testdrive")]
+    roles = get_testdrive_roles(client)
 
     if not roles:
         print("No testdrive IAM roles found")
@@ -123,6 +121,18 @@ def clean_up_iam() -> None:
             print(f"Deleted role {role_name}")
         else:
             print(f"Skipping role {role_name}")
+
+
+def get_testdrive_roles(client: Any) -> list[Any]:
+    roles = []
+
+    paginator = client.get_paginator("list_roles")
+    page_iterator = paginator.paginate()
+
+    for page in page_iterator:
+        roles.extend(page.get("Roles", []))
+
+    return [r for r in roles if r["RoleName"].startswith("testdrive")]
 
 
 def main() -> None:
