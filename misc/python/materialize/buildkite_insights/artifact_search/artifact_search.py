@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+from typing import Any
 
 from materialize.buildkite_insights.artifact_search.artifact_search_presentation import (
     print_artifact_match,
@@ -18,11 +19,12 @@ from materialize.buildkite_insights.artifact_search.artifact_search_presentation
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
-from materialize.buildkite_insights.cache import artifacts_cache
+from materialize.buildkite_insights.cache import artifacts_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
 )
+from materialize.buildkite_insights.util.build_step_utils import extract_build_job_ids
 from materialize.buildkite_insights.util.search_utility import (
     _search_value_to_pattern,
     determine_line_number,
@@ -35,7 +37,7 @@ ACCEPTED_FILE_ENDINGS = {"log", "txt", "xml", "zst"}
 def main(
     pipeline_slug: str,
     build_number: int,
-    job_id: str,
+    specified_job_id: str | None,
     pattern: str,
     fetch: FetchMode,
     max_results: int,
@@ -44,53 +46,77 @@ def main(
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
 
-    job_artifact_list = artifacts_cache.get_or_query_job_artifact_list(
-        pipeline_slug, fetch, build_number=build_number, job_id=job_id
-    )
+    artifact_list_by_job_id: dict[str, list[Any]] = dict()
+
+    if specified_job_id is not None:
+        job_ids = [specified_job_id]
+    else:
+        build = builds_cache.get_or_query_single_build(
+            pipeline_slug, fetch, build_number=build_number
+        )
+        job_ids = extract_build_job_ids(build)
+
+    for job_id in job_ids:
+        artifact_list_by_job_id[job_id] = (
+            artifacts_cache.get_or_query_job_artifact_list(
+                pipeline_slug, fetch, build_number=build_number, job_id=job_id
+            )
+        )
 
     print_before_search_results()
 
     count_matches = 0
+    count_all_artifacts = 0
     ignored_file_names = set()
     max_search_results_hit = False
 
-    for artifact in job_artifact_list:
-        max_entries_to_print = max(0, max_results - count_matches)
-        if max_entries_to_print == 0:
-            max_search_results_hit = True
-            break
+    for job_id, artifact_list in artifact_list_by_job_id.items():
+        count_artifacts_of_job = len(artifact_list)
 
-        artifact_id = artifact["id"]
-        artifact_file_name = artifact["filename"]
-
-        if not _can_search_artifact(artifact_file_name, include_zst_files):
-            print(f"Skipping artifact {artifact_file_name} due to file ending!")
-            ignored_file_names.add(artifact_file_name)
+        if count_artifacts_of_job == 0:
+            print(f"Skipping job {job_id} without artifacts.")
             continue
 
-        try:
-            matches_in_artifact, max_search_results_hit = _search_artifact(
-                pipeline_slug,
-                artifact_file_name=artifact_file_name,
-                build_number=build_number,
-                job_id=job_id,
-                artifact_id=artifact_id,
-                pattern=pattern,
-                use_regex=use_regex,
-                fetch=fetch,
-                max_entries_to_print=max_entries_to_print,
-            )
-        except RateLimitExceeded:
-            print("Aborting due to exceeded rate limit!")
-            return
+        print(f"Searching {count_artifacts_of_job} artifacts of job {job_id}.")
+        count_all_artifacts = count_all_artifacts + count_artifacts_of_job
 
-        count_matches = count_matches + matches_in_artifact
+        for artifact in artifact_list:
+            max_entries_to_print = max(0, max_results - count_matches)
+            if max_entries_to_print == 0:
+                max_search_results_hit = True
+                break
+
+            artifact_id = artifact["id"]
+            artifact_file_name = artifact["filename"]
+
+            if not _can_search_artifact(artifact_file_name, include_zst_files):
+                print(f"Skipping artifact {artifact_file_name} due to file ending!")
+                ignored_file_names.add(artifact_file_name)
+                continue
+
+            try:
+                matches_in_artifact, max_search_results_hit = _search_artifact(
+                    pipeline_slug,
+                    artifact_file_name=artifact_file_name,
+                    build_number=build_number,
+                    job_id=job_id,
+                    artifact_id=artifact_id,
+                    pattern=pattern,
+                    use_regex=use_regex,
+                    fetch=fetch,
+                    max_entries_to_print=max_entries_to_print,
+                )
+            except RateLimitExceeded:
+                print("Aborting due to exceeded rate limit!")
+                return
+
+            count_matches = count_matches + matches_in_artifact
 
     print_summary(
         pipeline_slug=pipeline_slug,
         build_number=build_number,
-        job_id=job_id,
-        count_artifacts=len(job_artifact_list),
+        job_id=specified_job_id,
+        count_artifacts=count_all_artifacts,
         count_matches=count_matches,
         ignored_file_names=ignored_file_names,
         max_search_results_hit=max_search_results_hit,
@@ -189,10 +215,9 @@ if __name__ == "__main__":
         type=int,
     )
 
-    # no hyphen because positionals with hyphen cause issues
-    parser.add_argument("jobid", type=str)
-
     parser.add_argument("pattern", type=str)
+
+    parser.add_argument("--jobid", type=str)
 
     parser.add_argument("--max-results", default=50, type=int)
     parser.add_argument(

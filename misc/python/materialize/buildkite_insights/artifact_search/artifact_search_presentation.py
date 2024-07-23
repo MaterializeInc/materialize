@@ -59,16 +59,20 @@ def print_artifact_match(
 def print_summary(
     pipeline_slug: str,
     build_number: int,
-    job_id: str,
+    job_id: str | None,
     count_artifacts: int,
     count_matches: int,
     ignored_file_names: set[str],
     max_search_results_hit: bool,
 ) -> None:
+    job_execution_info = (
+        f"job execution {job_id}" if job_id is not None else "all job executions"
+    )
     url_to_build = get_url_to_build(
         pipeline_slug=pipeline_slug, build_number=build_number, job_id=job_id
     )
-    search_scope = f"job execution {job_id} in build #{build_number} of pipeline {pipeline_slug} ({url_to_build})"
+    search_scope = f"{job_execution_info} in build #{build_number} of pipeline {pipeline_slug} ({url_to_build})"
+
     if count_artifacts == 0:
         print(f"Found no artifacts for {search_scope}!")
     else:
