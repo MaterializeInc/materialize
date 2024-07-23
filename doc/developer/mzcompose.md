@@ -19,6 +19,8 @@ Python-based workflows are contained in a file named `mzcompose.py`. The file se
 
 # Running
 
+Docker Compose is required to run mzcompose-based workflows. See the [developer guide](./guide.md#docker) for how to install it.
+
 Python-based workflows are executed like so:
 
 ```sh

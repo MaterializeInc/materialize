@@ -49,6 +49,21 @@ package manager is likely too old to build Materialize.
 
 For details on how we upgrade Rust see [here](/doc/developer/upgrade-rust.md).
 
+### Docker
+
+Materialize's tests mostly require Docker and Docker Compose to be installed. On macOS it is part of Docker Desktop:
+
+```shell
+brew install docker
+```
+
+On Debian-based Linux both Docker and the Docker Compose plugin have to be installed:
+
+```shell
+sudo apt update
+sudo apt install docker docker-compose-plugin
+```
+
 ### CockroachDB
 
 Running Materialize locally requires a running CockroachDB server.
