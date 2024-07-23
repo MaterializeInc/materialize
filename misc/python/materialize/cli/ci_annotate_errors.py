@@ -139,25 +139,17 @@ IGNORE_RE = re.compile(
     | larger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
-    # Fencing warnings are OK in fencing tests
-    | txn-wal-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
-    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
-    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ epoch
-    | platform-checks-mz_txn_tables.* \| .*unexpected\ fence\ epoch
-    | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ upper
-    | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ epoch
-    # For platform-checks upgrade tests
-    | platform-checks-clusterd.* \| .* received\ persist\ state\ from\ the\ future
-    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
+    # Fencing warnings are OK in fencing/0dt tests
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-).* \| .*unexpected\ fence\ epoch
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-).* \| .*fenced\ by\ new\ catalog
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
+    # For platform-checks upgrade tests
+    | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     # For tests we purposely trigger this error
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ at\ a\ time
     # For 0dt upgrades
-    | halting\ process:\ unable\ to\ confirm\ leadership
-    | halting\ process:\ fenced\ out\ old\ deployment;\ rebooting\ as\ leader
-    | parallel-workload-.*\ halting\ process:\ this\ deployment\ has\ been\ fenced\ out
-    | parallel-workload-.*\ fenced\ by\ new\ catalog\ upper
-    | parallel-workload-.*\ fenced\ by\ new\ catalog\ epoch
+    | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
     )
     """,
     re.VERBOSE | re.MULTILINE,
