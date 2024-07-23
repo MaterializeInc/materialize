@@ -17,6 +17,22 @@ your machine might fail when run with Bazel because it has a different version o
 can't find some necessary file. This is a key feature though because it makes builds hermetic and
 allows Bazel to aggressively cache artifacts, which reduces build times.
 
+# Installing `bazelisk`
+
+To use `bazel` you first need to install [`bazelisk`](https://github.com/bazelbuild/bazelisk), which
+is a launcher that automatically makes sure you have the correct version of Bazel installed.
+
+> Note: We have a `.bazelversion` file in our repository that ensures everyone is using the same version.
+
+On macOS you can do this with Homebrew:
+
+```shell
+brew install bazelisk
+```
+
+For Linux distributions you'll need to grab a binary from their [releases](https://github.com/bazelbuild/bazelisk/releases)
+page.
+
 # `WORKSPACE`, `BUILD.bazel`, `*.bzl` files
 
 There are three kinds of files in our Bazel setup:
@@ -28,6 +44,133 @@ There are three kinds of files in our Bazel setup:
 * `*.bzl`: Used to define new functions or macros that can be used in `BUILD.bazel` files, written
   in [Starlark](https://bazel.build/rules/language). As a general developer you should rarely if
   ever need to interact with these files.
+
+## Generating `BUILD.bazel` files.
+
+> **tl;dr** run `bin/bazel gen` from the root of the repository.
+
+Just like `Cargo.toml`, associated with every crate is a `BUILD.bazel` file that provides targets that
+Bazel can build. We auto-generate these files with a [`cargo-gazelle`](../bazel/cargo-gazelle/) which
+developers can easily run via `bin/bazel gen`.
+
+There are times though when `Cargo.toml` doesn't provide all of the information required to build a
+crate, for example the [`std::include_str!`](https://doc.rust-lang.org/std/macro.include_str.html)
+macro adds an implicit dependency on the file being included. Bazel operates in a sandbox and thus
+will fail unless you tell it about the file! For these cases you can add the dependency via a
+`[package.metadata.cargo-gazelle.<target>]` section in the `Cargo.toml`. For example:
+
+```toml
+[package.metadata.cargo-gazelle.lib]
+compile_data = ["path/to/my/file.txt"]
+```
+
+This will add `"path/to/my/file.txt"` to the `compile_data` attribute on the
+resulting [`rust_library`](http://bazelbuild.github.io/rules_rust/defs.html#rust_library) Bazel target.
+
+### Supported Configurations
+
+```toml
+# Configuration for the crate as a whole.
+[package.metadata.cargo-gazelle]
+# Will skip generating a BUILD.bazel entirely.
+skip_generating = [True | False]
+# Concatenate the specified string at the end of the generated BUILD.bazel file.
+#
+# This is largely an escape hatch and should be avoided if possible.
+additive_content = "String"
+
+
+# Configuration for the library target of the crate.
+[package.metadata.cargo-gazelle.lib]
+# Skip generating the library target.
+skip = [True | False]
+# Extra data that will be provided to the Bazel target at compile time.
+compile_data = ["String"]
+# Extra data that will be provided to the Bazel target at compile and run time.
+data = ["String"]
+# Extra flags for rustc.
+rustc_flags = ["String"]
+# Environment variables to set for rustc.
+[[package.metadata.cargo-gazelle.lib.rustc_env]]
+var1 = "my_value"
+
+# By default Bazel enables all features of a crate, if provided we will
+# _override_ that set with this list.
+features_override = ["String"]
+# Extra dependencies to include for the target.
+extra_deps = ["String"]
+# Extra proc-macro dependencies to include for the target.
+extra_proc_macro_deps = ["String"]
+
+
+# Configuration for the crate's build script.
+[package.metadata.cargo-gazelle.build]
+# Skip generating the library target.
+skip = [True | False]
+# Extra data that will be provided to the Bazel target at compile time.
+compile_data = ["String"]
+# Extra data that will be provided to the Bazel target at compile and run time.
+data = ["String"]
+# Extra flags for rustc.
+rustc_flags = ["String"]
+# Environment variables to set for rustc.
+[[package.metadata.cargo-gazelle.build.rustc_env]]
+var1 = "my_value"
+
+# Environment variables to set for the build script.
+build_script_env = ["String"]
+# Skip the automatic search for protobuf dependencies.
+skip_proto_search = [True | False]
+
+
+# Configuration for test targets in the crate.
+#
+# * Library tests are named "lib"
+# * Doc tests are named "doc"
+#
+[package.metadata.cargo-gazelle.test.<name>]
+# Skip generating the library target.
+skip = [True | False]
+# Extra data that will be provided to the Bazel target at compile time.
+compile_data = ["String"]
+# Extra data that will be provided to the Bazel target at compile and run time.
+data = ["String"]
+# Extra flags for rustc.
+rustc_flags = ["String"]
+# Environment variables to set for rustc.
+[[package.metadata.cargo-gazelle.test.<name>.rustc_env]]
+var1 = "my_value"
+
+# Bazel test size.
+#
+# See <https://bazel.build/reference/be/common-definitions#common-attributes-tests>.
+size = "String"
+# Environment variables to set for test execution.
+[[package.metadata.cargo-gazelle.test.<name>.env]]
+var1 = "my_value"
+
+
+# Configuration for binary targets of the crate.
+[package.metadata.cargo-gazelle.binary.<name>]
+# Skip generating the library target.
+skip = [True | False]
+# Extra data that will be provided to the Bazel target at compile time.
+compile_data = ["String"]
+# Extra data that will be provided to the Bazel target at compile and run time.
+data = ["String"]
+# Extra flags for rustc.
+rustc_flags = ["String"]
+# Environment variables to set for rustc.
+[[package.metadata.cargo-gazelle.binary.<name>.rustc_env]]
+var1 = "my_value"
+
+# Environment variables to set for test execution.
+[[package.metadata.cargo-gazelle.binary.<name>.env]]
+var1 = "my_value"
+```
+
+If all else fails, the code that handles this configuration lives in [`misc/bazel/cargo-gazelle`](../bazel/cargo-gazelle/src/config.rs)!
+
 
 # Platforms
 
@@ -43,7 +186,7 @@ serve:
    this is always the same as the "Host platform" since we don't utilize distributed builds.
 3. Target: the platform we are building for.
 
-The platforms that we build for are defined in [/platforms/BUILD.bazel](/bazel/platforms/BUILD.bazel).
+The platforms that we build for are defined in [/platforms/BUILD.bazel](../bazel/platforms/BUILD.bazel).
 
 A common way to configure a build based on platform is to use the
 [`select`](https://bazel.build/reference/be/functions#select) function. This allows you to return
@@ -64,7 +207,7 @@ Toolchains are defined and registered in the [`WORKSPACE`](/WORKSPACE) file.
 For building Rust code we use `rules_rust`. It's primary component is the
 [`crates_repository`](http://bazelbuild.github.io/rules_rust/crate_universe.html#crates_repository) rule.
 
-## [`crates_repository`]
+## `crates_repository`
 
 Normally when building a Rust library you define external dependencies in a `Cargo.toml`, and
 `cargo` handles fetching the relevant crates, generally from `crates.io`. The [`crates_repository`]

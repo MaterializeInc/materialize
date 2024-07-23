@@ -67,16 +67,8 @@ sudo apt install docker docker-compose-plugin
 ### Bazel
 
 Materialize can also optionally be built with [Bazel](https://bazel.build/). To
-do so first install [`bazelisk`](https://github.com/bazelbuild/bazelisk).
-
-On macOS you can do this with homebrew:
-
-```shell
-brew install bazelisk
-```
-
-For Linux distributions you'll need to grab a binary from their [releases](https://github.com/bazelbuild/bazelisk/releases)
-page.
+learn more about Bazel and how it's setup at Materialize, checkout our
+[Bazel documentation](../../misc/bazel/README.md).
 
 ### CockroachDB
 

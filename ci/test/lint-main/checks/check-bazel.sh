@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-cargo.sh — check for Bazel issues (e.g., ensure all of our generated files are up to date).
+# check-bazel.sh — check for Bazel issues (e.g., ensure all of our generated files are up to date).
 
 set -euo pipefail
 
@@ -21,5 +21,9 @@ try bin/bazel gen
 
 # Make sure we didn't generate any changes.
 try git diff --compact-summary --exit-code
+if try_last_failed; then
+    echo "lint: $(red error:) discrepancies found in generated 'BUILD.bazel' files"
+    echo "lint: $(green hint:) run $(white bin/bazel gen)" >&2
+fi
 
 try_status_report
