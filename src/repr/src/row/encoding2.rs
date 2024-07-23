@@ -1266,10 +1266,18 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
     type FinishedStats = OptionStats<StructStats>;
 
     fn append(&mut self, val: &Row) {
-        // `zip_eq` will panic if the number of Datums != number of encoders.
-        for (datum, encoder) in val.iter().zip_eq(self.encoders.iter_mut()) {
+        let mut num_datums = 0;
+        for (datum, encoder) in val.iter().zip(self.encoders.iter_mut()) {
             encoder.push(datum).expect("failed to push datum");
+            num_datums += 1;
         }
+        assert_eq!(
+            num_datums,
+            self.encoders.len(),
+            "try to encode {val:?}, but have {:?}",
+            self.encoders
+        );
+
         self.nullability.append(true);
     }
 
