@@ -133,4 +133,5 @@ known_errors = [
     "timestamp cannot be NaN",
     "exceeded recursion limit of 2048",
     "key cannot be null",  # expected, see #25941
+    "regexp_extract must specify at least one capture group",
 ]
