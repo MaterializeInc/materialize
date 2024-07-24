@@ -8,7 +8,9 @@ common --enable_platform_specific_config
 # environment, which differs between systems and thus breaks remote caching.
 build --incompatible_strict_action_env
 # Prevent actions in the sandbox from accessing the network.
-build --sandbox_default_allow_network=false
+#
+# TODO(parkmycar): `prof-http`s build script downloads resources from npm.
+#build --sandbox_default_allow_network=false
 
 # Bazel provides the macOS 14.5 SDK as the sysroot, we also set the minimum
 # version to prevent breaking the remote cache across developer machines.

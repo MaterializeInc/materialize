@@ -65,8 +65,8 @@ def c_repositories():
         ],
     )
 
-    OPENSSL_VERSION = "1.1.1w"
-    OPENSSL_INTEGRITY = "sha256-zzCYlQy02FOtlcCEHx+cbT3BAtzPys1SHZOSUgi3asg="
+    OPENSSL_VERSION = "3.3.1"
+    OPENSSL_INTEGRITY = "sha256-d3zVlihMiDN1oqehG/XSeG/FQTJV76sgxQ1v/m0CC34="
     maybe(
         http_archive,
         name = "openssl",
