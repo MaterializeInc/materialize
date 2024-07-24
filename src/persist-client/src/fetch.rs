@@ -523,7 +523,11 @@ where
     ///
     /// NB: Until we implement full projection pushdown, this doesn't guarantee
     /// any projection.
-    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, project: &ProjectionPushdown) {
+    pub fn maybe_optimize<K: Codec, V: Codec>(
+        &mut self,
+        cfg: &ConfigSet,
+        project: &ProjectionPushdown<K, V>,
+    ) {
         let as_of = match &self.filter {
             FetchBatchFilter::Snapshot { as_of } => as_of,
             FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,

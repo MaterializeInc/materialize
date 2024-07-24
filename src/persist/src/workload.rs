@@ -15,6 +15,7 @@ use std::io::Write;
 use std::mem::size_of;
 
 use mz_ore::cast::CastFrom;
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::Codec64;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
@@ -160,15 +161,26 @@ impl DataGenerator {
             return None;
         }
         let items = batch_end - batch_start;
-        let mut batch = ColumnarRecordsBuilder::with_capacity(
+        let mut batch = ColumnarRecordsBuilder::<Vec<u8>, Vec<u8>>::with_capacity(
             items,
             (self.record_size_bytes - TS_DIFF_GOODPUT_SIZE) * items,
+            &VecU8Schema,
             0,
+            &VecU8Schema,
         );
+        let mut k_buf = Vec::new();
+        let mut v_buf = Vec::new();
         for record_idx in batch_start..batch_end {
-            let (kv, t, d) = self.gen_record(record_idx);
+            let ((k, v), t, d) = self.gen_record(record_idx);
+
+            // This copy is unfortunate but required because the schema is typed as Vec<u8>.
+            k_buf.clear();
+            k_buf.copy_from_slice(k);
+            v_buf.clear();
+            v_buf.copy_from_slice(v);
+
             assert!(
-                batch.push((kv, Codec64::encode(&t), Codec64::encode(&d))),
+                batch.push(((&k_buf, &v_buf), Codec64::encode(&t), Codec64::encode(&d))),
                 "generator exceeded batch size; smaller batches needed"
             );
         }

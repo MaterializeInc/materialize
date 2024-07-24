@@ -80,7 +80,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
-    project: ProjectionPushdown,
+    project: ProjectionPushdown<K, V>,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
@@ -224,7 +224,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
-    project: ProjectionPushdown,
+    project: ProjectionPushdown<K, V>,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
     K: Debug + Codec,

@@ -1303,8 +1303,7 @@ pub mod datadriven {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
-        validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BLOB_TARGET_SIZE,
+        validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BLOB_TARGET_SIZE,
     };
     use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -1642,7 +1641,7 @@ pub mod datadriven {
         if consolidate {
             consolidate_updates(&mut updates);
         }
-        let builder = BatchBuilderInternal::new(
+        let mut builder = BatchBuilder::new(
             cfg.clone(),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
@@ -1651,18 +1650,12 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.isolated_runtime),
             datadriven.shard_id.clone(),
+            schemas.clone(),
             datadriven.client.cfg.build_version.clone(),
             since,
             Some(upper.clone()),
             consolidate,
         );
-        let mut builder = BatchBuilder {
-            stats_schemas: schemas.clone(),
-            builder,
-            metrics: Arc::clone(&datadriven.client.metrics),
-            key_buf: vec![],
-            val_buf: vec![],
-        };
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }

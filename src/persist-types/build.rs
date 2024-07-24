@@ -14,6 +14,13 @@ fn main() {
     prost_build::Config::new()
         .type_attribute(".", "#[derive(serde::Serialize)]")
         .btree_map(["."])
-        .compile_protos(&["persist-types/src/stats.proto"], &[".."])
+        .bytes([".mz_persist_types.arrow.Buffer"])
+        .compile_protos(
+            &[
+                "persist-types/src/arrow.proto",
+                "persist-types/src/stats.proto",
+            ],
+            &[".."],
+        )
         .unwrap_or_else(|e| panic!("{e}"))
 }

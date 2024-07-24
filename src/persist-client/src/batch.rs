@@ -464,86 +464,6 @@ where
     V: Codec,
     T: Timestamp + Lattice + Codec64,
 {
-    // TODO: Merge BatchBuilderInternal back into BatchBuilder once we no longer
-    // need this separate schemas nonsense for compaction.
-    //
-    // In the meantime:
-    // - Compaction uses `BatchBuilderInternal` directly, providing the real
-    //   schema for stats, but with the builder's schema set to a fake Vec<u8>
-    //   one.
-    // - User writes use `BatchBuilder` with both this `stats_schemas` and
-    //   `builder._schemas` the same.
-    //
-    // Instead of this BatchBuilder{,Internal} split, I initially tried to just
-    // split the `add` and `finish` methods into versions that could override
-    // the stats schema, but there are ownership issues with that approach that
-    // I think are unresolvable.
-
-    // Reusable buffers for encoding data. Should be cleared after use!
-    pub(crate) metrics: Arc<Metrics>,
-    pub(crate) key_buf: Vec<u8>,
-    pub(crate) val_buf: Vec<u8>,
-
-    pub(crate) stats_schemas: Schemas<K, V>,
-    pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
-}
-
-impl<K, V, T, D> BatchBuilder<K, V, T, D>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
-{
-    /// Finish writing this batch and return a handle to the written batch.
-    ///
-    /// This fails if any of the updates in this batch are beyond the given
-    /// `upper`.
-    pub async fn finish(
-        self,
-        registered_upper: Antichain<T>,
-    ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
-        self.builder
-            .finish(&self.stats_schemas, registered_upper)
-            .await
-    }
-
-    /// Adds the given update to the batch.
-    ///
-    /// The update timestamp must be greater or equal to `lower` that was given
-    /// when creating this [BatchBuilder].
-    pub async fn add(
-        &mut self,
-        key: &K,
-        val: &V,
-        ts: &T,
-        diff: &D,
-    ) -> Result<Added, InvalidUsage<T>> {
-        self.metrics
-            .codecs
-            .key
-            .encode(|| K::encode(key, &mut self.key_buf));
-        self.metrics
-            .codecs
-            .val
-            .encode(|| V::encode(val, &mut self.val_buf));
-        let result = self
-            .builder
-            .add(&self.stats_schemas, &self.key_buf, &self.val_buf, ts, diff)
-            .await;
-        self.key_buf.clear();
-        self.val_buf.clear();
-        result
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct BatchBuilderInternal<K, V, T, D>
-where
-    K: Codec,
-    V: Codec,
-    T: Timestamp + Lattice + Codec64,
-{
     lower: Antichain<T>,
     inclusive_upper: Antichain<Reverse<T>>,
 
@@ -553,7 +473,8 @@ where
     metrics: Arc<Metrics>,
     expect_consolidated: bool,
 
-    buffer: BatchBuffer,
+    buffer: BatchBuffer<K, V>,
+    schema: Schemas<K, V>,
 
     max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, T)>,
     runs: Vec<usize>,
@@ -570,7 +491,7 @@ where
     _phantom: PhantomData<fn(K, V, T, D)>,
 }
 
-impl<K, V, T, D> BatchBuilderInternal<K, V, T, D>
+impl<K, V, T, D> BatchBuilder<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -586,6 +507,7 @@ where
         blob: Arc<dyn Blob>,
         isolated_runtime: Arc<IsolatedRuntime>,
         shard_id: ShardId,
+        schema: Schemas<K, V>,
         version: Version,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
@@ -605,7 +527,8 @@ where
             lower,
             inclusive_upper: Antichain::new(),
             blob,
-            buffer: BatchBuffer::new(Arc::clone(&metrics), cfg.blob_target_size),
+            buffer: BatchBuffer::new(Arc::clone(&metrics), cfg.blob_target_size, &schema),
+            schema,
             metrics,
             expect_consolidated,
             max_kvt_in_run: None,
@@ -634,7 +557,6 @@ where
     #[instrument(level = "debug", name = "batch::finish", fields(shard = %self.shard_id))]
     pub async fn finish(
         mut self,
-        stats_schemas: &Schemas<K, V>,
         registered_upper: Antichain<T>,
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if PartialOrder::less_than(&registered_upper, &self.lower) {
@@ -659,7 +581,7 @@ where
         }
 
         let remainder = self.buffer.drain();
-        self.flush_part(stats_schemas, remainder).await;
+        self.flush_part(remainder).await;
 
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
@@ -682,11 +604,10 @@ where
     ///
     /// The update timestamp must be greater or equal to `lower` that was given
     /// when creating this [BatchBuilder].
-    pub async fn add<StatsK: Codec, StatsV: Codec>(
+    pub async fn add(
         &mut self,
-        stats_schemas: &Schemas<StatsK, StatsV>,
-        key: &[u8],
-        val: &[u8],
+        key: &K,
+        val: &V,
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
@@ -701,7 +622,7 @@ where
 
         match self.buffer.push(key, val, ts.clone(), diff.clone()) {
             Some(part_to_flush) => {
-                self.flush_part(stats_schemas, part_to_flush).await;
+                self.flush_part(part_to_flush).await;
                 Ok(Added::RecordAndParts)
             }
             None => Ok(Added::Record),
@@ -713,11 +634,7 @@ where
     /// chunk `current_part` to be no greater than
     /// [BatchBuilderConfig::blob_target_size], and must absolutely be less than
     /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
-    async fn flush_part<StatsK: Codec, StatsV: Codec>(
-        &mut self,
-        stats_schemas: &Schemas<StatsK, StatsV>,
-        columnar: ColumnarRecords,
-    ) {
+    async fn flush_part(&mut self, columnar: ColumnarRecords) {
         let key_lower = {
             let keys = columnar.keys();
             if keys.is_empty() {
@@ -778,7 +695,7 @@ where
         let start = Instant::now();
         self.parts
             .write(
-                stats_schemas,
+                &self.schema,
                 key_lower,
                 columnar,
                 self.inline_upper.clone(),
@@ -798,25 +715,28 @@ where
 }
 
 #[derive(Debug)]
-struct BatchBuffer {
+struct BatchBuffer<K: Codec, V: Codec> {
     metrics: Arc<Metrics>,
     blob_target_size: usize,
-    records_builder: ColumnarRecordsBuilder,
+    records_builder: ColumnarRecordsBuilder<K, V>,
+    // TODO(parkmycar): We shouldn't need to put these here.
+    schemas: Schemas<K, V>,
 }
 
-impl BatchBuffer {
-    fn new(metrics: Arc<Metrics>, blob_target_size: usize) -> Self {
+impl<K: Codec, V: Codec> BatchBuffer<K, V> {
+    fn new(metrics: Arc<Metrics>, blob_target_size: usize, schemas: &Schemas<K, V>) -> Self {
         BatchBuffer {
             metrics,
             blob_target_size,
-            records_builder: ColumnarRecordsBuilder::default(),
+            records_builder: ColumnarRecordsBuilder::new(&*schemas.key, &*schemas.val),
+            schemas: schemas.clone(),
         }
     }
 
     fn push<T: Codec64, D: Codec64>(
         &mut self,
-        key: &[u8],
-        val: &[u8],
+        key: &K,
+        val: &V,
         ts: T,
         diff: D,
     ) -> Option<ColumnarRecords> {
@@ -836,7 +756,10 @@ impl BatchBuffer {
 
     fn drain(&mut self) -> ColumnarRecords {
         // TODO: we're in a position to do a very good estimate here, instead of using the default.
-        let builder = mem::take(&mut self.records_builder);
+        let builder = mem::replace(
+            &mut self.records_builder,
+            ColumnarRecordsBuilder::new(&*self.schemas.key, &*self.schemas.val),
+        );
         let records = builder.finish(&self.metrics.columnar);
         assert_eq!(self.records_builder.len(), 0);
         records
@@ -1238,52 +1161,35 @@ mod tests {
             .await;
 
         // A new builder has no writing or finished parts.
-        let builder = write.builder(Antichain::from_elem(0));
-        let schemas = builder.stats_schemas;
-        let mut builder = builder.builder;
+        let mut builder = write.builder(Antichain::from_elem(0));
         assert_eq!(builder.parts.writing_parts.len(), 0);
         assert_eq!(builder.parts.finished_parts.len(), 0);
 
         // We set blob_target_size to 0, so the first update gets forced out
         // into a batch.
         let ((k, v), t, d) = &data[0];
-        let key = k.encode_to_vec();
-        let val = v.encode_to_vec();
-        builder
-            .add(&schemas, &key, &val, t, d)
-            .await
-            .expect("invalid usage");
+        builder.add(&k, &v, t, d).await.expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 1);
         assert_eq!(builder.parts.finished_parts.len(), 0);
 
         // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
         let ((k, v), t, d) = &data[1];
-        let key = k.encode_to_vec();
-        let val = v.encode_to_vec();
-        builder
-            .add(&schemas, &key, &val, t, d)
-            .await
-            .expect("invalid usage");
+        builder.add(&k, &v, t, d).await.expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
         assert_eq!(builder.parts.finished_parts.len(), 0);
 
         // But now that we have 3 parts, the add call back-pressures until the
         // first one finishes.
         let ((k, v), t, d) = &data[2];
-        let key = k.encode_to_vec();
-        let val = v.encode_to_vec();
-        builder
-            .add(&schemas, &key, &val, t, d)
-            .await
-            .expect("invalid usage");
+        builder.add(&k, &v, t, d).await.expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
         assert_eq!(builder.parts.finished_parts.len(), 1);
 
         // Finish off the batch and verify that the keys and such get plumbed
         // correctly by reading the data back.
         let batch = builder
-            .finish(&schemas, Antichain::from_elem(4))
+            .finish(Antichain::from_elem(4))
             .await
             .expect("invalid usage");
         assert_eq!(batch.batch.part_count(), 3);
