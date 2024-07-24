@@ -11,24 +11,31 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
 use mz_proto::RustType;
+use mz_repr::{ColumnType, RelationType, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
-    Value, WithOptionValue,
+    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
+    ExternalReferences, Ident, UnresolvedItemName, Value, WithOptionValue,
 };
-use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
 use mz_storage_types::connections::PostgresConnection;
-use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
+use mz_storage_types::sources::postgres::CastType;
+use mz_storage_types::sources::SourceExportStatementDetails;
+use mz_storage_types::sources::SourceReferenceResolver;
 use prost::Message;
 use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
 
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::{PlanError, StatementContext};
+use crate::plan::expr::ColumnRef;
+use crate::plan::typeconv::{plan_cast, CastContext};
+use crate::plan::{
+    ExprContext, HirScalarExpr, PlanError, QueryContext, QueryLifetime, Scope, StatementContext,
+};
 
 use super::error::PgSourcePurificationError;
 use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport};
@@ -286,7 +293,12 @@ pub fn generate_create_subsource_statements(
 
 pub(super) struct PurifiedSourceExports {
     pub(super) source_exports: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
-    pub(super) referenced_tables: Vec<PostgresTableDesc>,
+    // NOTE(roshan): The text columns are already part of their
+    // appropriate `source_exports` above, but these are returned to allow
+    // round-tripping a `CREATE SOURCE` statement while we still allow creating
+    // implicit subsources from `CREATE SOURCE`. Remove once
+    // fully deprecating that feature and forcing users to use explicit
+    // `CREATE TABLE .. FROM SOURCE` statements.
     pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
 }
 
@@ -302,7 +314,7 @@ pub(super) async fn purify_source_exports(
     mut text_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
 ) -> Result<PurifiedSourceExports, PlanError> {
-    let mut publication_tables = mz_postgres_util::publication_info(client, publication).await?;
+    let publication_tables = mz_postgres_util::publication_info(client, publication).await?;
 
     if publication_tables.is_empty() {
         Err(PgSourcePurificationError::EmptyPublication(
@@ -458,14 +470,150 @@ pub(super) async fn purify_source_exports(
         })?;
     }
 
-    // Trim any un-referred-to tables
-    publication_tables.retain(|t| table_oids.contains(&t.oid));
-
     Ok(PurifiedSourceExports {
         source_exports: requested_subsources,
-        referenced_tables: publication_tables,
         normalized_text_columns,
     })
+}
+
+pub(crate) fn generate_table_cast(
+    scx: &StatementContext,
+    table: &PostgresTableDesc,
+    text_columns: &Vec<Ident>,
+) -> Result<Vec<(CastType, MirScalarExpr)>, PlanError> {
+    // Generate the cast expressions required to convert the text encoded columns into
+    // the appropriate target types, creating a Vec<MirScalarExpr>
+    // The postgres source reader will then eval each of those on the incoming rows
+    // First, construct an expression context where the expression is evaluated on an
+    // imaginary row which has the same number of columns as the upstream table but all
+    // of the types are text
+    let mut cast_scx = scx.clone();
+    cast_scx.param_types = Default::default();
+    let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
+    let mut column_types = vec![];
+    for column in table.columns.iter() {
+        column_types.push(ColumnType {
+            nullable: column.nullable,
+            scalar_type: ScalarType::String,
+        });
+    }
+
+    let cast_ecx = ExprContext {
+        qcx: &cast_qcx,
+        name: "plan_postgres_source_cast",
+        scope: &Scope::empty(),
+        relation_type: &RelationType {
+            column_types,
+            keys: vec![],
+        },
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+
+    let text_columns = BTreeSet::from_iter(text_columns.iter().map(Ident::as_str));
+
+    // Then, for each column we will generate a MirRelationExpr that extracts the nth
+    // column and casts it to the appropriate target type
+    let mut table_cast = vec![];
+    for (i, column) in table.columns.iter().enumerate() {
+        let (cast_type, ty) = if text_columns.contains(column.name.as_str()) {
+            // Treat the column as text if it was referenced in
+            // `TEXT COLUMNS`. This is the only place we need to
+            // perform this logic; even if the type is unsupported,
+            // we'll be able to ingest its values as text in
+            // storage.
+            (CastType::Text, mz_pgrepr::Type::Text)
+        } else {
+            match mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod) {
+                Ok(t) => (CastType::Natural, t),
+                // If this reference survived purification, we
+                // do not expect it to be from a table that the
+                // user will consume., i.e. expect this table to
+                // be filtered out of table casts.
+                Err(_) => {
+                    table_cast.push((
+                        CastType::Natural,
+                        HirScalarExpr::CallVariadic {
+                            func: mz_expr::VariadicFunc::ErrorIfNull,
+                            exprs: vec![
+                                HirScalarExpr::literal_null(ScalarType::String),
+                                HirScalarExpr::literal(
+                                    mz_repr::Datum::from(
+                                        format!("Unsupported type with OID {}", column.type_oid)
+                                            .as_str(),
+                                    ),
+                                    ScalarType::String,
+                                ),
+                            ],
+                        }
+                        .lower_uncorrelated()
+                        .expect("no correlation"),
+                    ));
+                    continue;
+                }
+            }
+        };
+
+        let data_type = scx.resolve_type(ty)?;
+        let scalar_type = crate::plan::query::scalar_type_from_sql(scx, &data_type)?;
+
+        let col_expr = HirScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: i,
+        });
+
+        let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
+
+        let cast = if column.nullable {
+            cast_expr
+        } else {
+            // We must enforce nullability constraint on cast
+            // because PG replication stream does not propagate
+            // constraint changes and we want to error subsource if
+            // e.g. the constraint is dropped and we don't notice
+            // it.
+            HirScalarExpr::CallVariadic {
+                            func: mz_expr::VariadicFunc::ErrorIfNull,
+                            exprs: vec![
+                                cast_expr,
+                                HirScalarExpr::literal(
+                                    mz_repr::Datum::from(
+                                        format!(
+                                            "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
+                                            table.namespace.clone(),
+                                            table.name.clone(),
+                                            column.name.clone())
+                                            .as_str(),
+                                    ),
+                                    ScalarType::String,
+                                ),
+                            ],
+                        }
+        };
+
+        // We expect only reg* types to encounter this issue. Users
+        // can ingest the data as text if they need to ingest it.
+        // This is acceptable because we don't expect the OIDs from
+        // an external PG source to be unilaterally usable in
+        // resolving item names in MZ.
+        let mir_cast = cast.lower_uncorrelated().map_err(|_e| {
+            tracing::info!(
+                "cannot ingest {:?} data from PG source because cast is correlated",
+                scalar_type
+            );
+
+            PlanError::TableContainsUningestableTypes {
+                name: table.name.to_string(),
+                type_: scx.humanize_scalar_type(&scalar_type),
+                column: column.name.to_string(),
+            }
+        })?;
+
+        table_cast.push((cast_type, mir_cast));
+    }
+    Ok(table_cast)
 }
 
 mod privileges {

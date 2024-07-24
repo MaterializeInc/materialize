@@ -520,6 +520,7 @@ impl CatalogState {
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
                             external_reference: UnresolvedItemName(external_reference),
+                            details: _,
                         } => {
                             let ingestion_entry = self
                                 .get_entry(ingestion_id)
