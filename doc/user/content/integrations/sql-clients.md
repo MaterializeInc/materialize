@@ -132,7 +132,7 @@ To show system objects in the database explorer:
 1. Click on **Edit Connection**.
 1. In the **Connection settings** tab, select **General**.
 1. Next to the **Navigator view**, click **Customize**.
-1. In the **Navigator settings** dialog, check **Show system objects**.
+1. In the **Navigator settings** dialog, check the **Show system objects** checkbox.
 1. Click **OK**.
 
 ### TablePlus
