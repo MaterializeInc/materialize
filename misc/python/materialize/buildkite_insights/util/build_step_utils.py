@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
 from datetime import datetime
 from typing import Any
 
@@ -210,3 +209,30 @@ def _step_outcomes_to_job_outcome(
         web_url_to_build=web_url_without_job_id,
         count_items=count_shards,
     )
+
+
+def extract_build_step_names_by_job_id(
+    build_data: Any,
+) -> dict[str, str]:
+    return _extract_build_step_infos_by_job_id(build_data, "name")
+
+
+def extract_build_steps_by_job_id(
+    build_data: Any,
+) -> dict[str, str]:
+    return _extract_build_step_infos_by_job_id(build_data, "step_key")
+
+
+def _extract_build_step_infos_by_job_id(
+    build_data: Any, field_name: str
+) -> dict[str, str]:
+    build_job_info_by_job_id: dict[str, str] = dict()
+
+    for job in build_data["jobs"]:
+        build_job_id = job["id"]
+        build_job_info = job.get(field_name, None)
+
+        if build_job_info is not None:
+            build_job_info_by_job_id[build_job_id] = build_job_info
+
+    return build_job_info_by_job_id

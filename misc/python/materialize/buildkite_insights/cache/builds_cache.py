@@ -16,6 +16,23 @@ from materialize.buildkite_insights.cache.generic_cache import CacheFilePath
 from materialize.util import sha256_of_utf8_string
 
 
+def get_or_query_single_build(
+    pipeline_slug: str,
+    fetch_mode: FetchMode,
+    build_number: int,
+) -> list[Any]:
+    cache_file_path = _get_file_path_for_single_build(
+        pipeline_slug=pipeline_slug,
+        build_number=build_number,
+    )
+
+    fetch_action = lambda: builds_api.get_single_build(
+        pipeline_slug=pipeline_slug, build_number=build_number
+    )
+
+    return generic_cache.get_or_query_data(cache_file_path, fetch_action, fetch_mode)
+
+
 def get_or_query_builds(
     pipeline_slug: str,
     fetch_mode: FetchMode,
@@ -84,4 +101,15 @@ def _get_file_path_for_builds(
     hash_value = sha256_of_utf8_string(meta_data)[:8]
     return CacheFilePath(
         cache_item_type="builds", pipeline_slug=pipeline_slug, params_hash=hash_value
+    )
+
+
+def _get_file_path_for_single_build(
+    pipeline_slug: str,
+    build_number: int,
+) -> CacheFilePath:
+    meta_data = f"{build_number}"
+    hash_value = sha256_of_utf8_string(meta_data)[:8]
+    return CacheFilePath(
+        cache_item_type="build", pipeline_slug=pipeline_slug, params_hash=hash_value
     )

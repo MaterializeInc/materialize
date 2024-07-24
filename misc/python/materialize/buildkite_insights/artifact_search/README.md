@@ -8,11 +8,11 @@ zst-compressed files are included by default.
 usage: buildkite-artifact-search [-h]
                                  [--fetch {auto,always,avoid,never}]
                                  [--include-zst-files | --no-include-zst-files]
+                                 [--jobid JOBID]
                                  [--max-results MAX_RESULTS]
                                  [--use-regex]
                                  {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
                                  buildnumber
-                                 jobid
                                  pattern
 ```
 
