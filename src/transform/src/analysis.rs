@@ -427,62 +427,24 @@ pub mod common {
             depends: &Derived,
             lattice: &dyn crate::analysis::Lattice<A::Value>,
         ) -> Result<bool, ()> {
-            if let MirRelationExpr::LetRec { .. } = &exprs[upper - 1] {
-                let sizes = depends
-                    .results::<SubtreeSize>()
-                    .expect("SubtreeSize required");
-                let mut values = depends
-                    .children_of_rev(upper - 1, exprs[upper - 1].children().count())
-                    .skip(1)
-                    .collect::<Vec<_>>();
-                values.reverse();
+            // Repeatedly re-evaluate the whole tree bottom up, until no changes of fuel spent.
+            let mut changed = true;
+            while changed {
+                changed = false;
 
-                // Visit each child, and track whether any new information emerges.
-                // Repeat, as long as new information continues to emerge.
-                let mut new_information = true;
-                while new_information {
-                    // Bail out if we have done too many `LetRec` passes in this analysis.
-                    self.fuel -= 1;
-                    if self.fuel == 0 {
-                        return Err(());
-                    }
-
-                    new_information = false;
-                    // Visit non-body children (values).
-                    for child in values.iter() {
-                        new_information = self.analyse_optimistic(
-                            exprs,
-                            *child + 1 - sizes[*child],
-                            *child + 1,
-                            depends,
-                            lattice,
-                        )? || new_information;
-                    }
-                }
-                // Visit `body` and then the `LetRec` and return whether it evolved.
-                let body = upper - 2;
-                self.analyse_optimistic(exprs, body + 1 - sizes[body], body + 1, depends, lattice)?;
-                let value = self.derive(exprs[upper - 1], upper - 1, depends);
-                Ok(lattice.meet_assign(&mut self.results[upper - 1], value))
-            } else {
-                if exprs[upper - 1].is_recursive() {
-                    // We should not be here if `expr` is still recursive.
-                    // Should that happen, note an error and return an error,
-                    // diverting us to the pessimistic case.
-                    mz_ore::soft_assert_or_log!(
-                        !exprs[upper - 1].is_recursive(),
-                        "Analysis of non-let-normal expression"
-                    );
+                // Bail out if we have done too many `LetRec` passes in this analysis.
+                self.fuel -= 1;
+                if self.fuel == 0 {
                     return Err(());
                 }
-                // If not a `LetRec`, we still want to revisit results and update them with meet.
-                let mut changed = false;
+
+                // Update each derived value and track if any have changed.
                 for index in lower..upper {
                     let value = self.derive(exprs[index], index, depends);
-                    changed = lattice.meet_assign(&mut self.results[index], value);
+                    changed = lattice.meet_assign(&mut self.results[index], value) || changed;
                 }
-                Ok(changed)
             }
+            Ok(true)
         }
 
         /// Analysis that starts conservatively and can be stopped at any point.
