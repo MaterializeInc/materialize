@@ -122,17 +122,6 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
-
-    fn get_reference_resolver(&self) -> super::SourceReferenceResolver {
-        let views: Vec<_> = self
-            .load_generator
-            .views()
-            .into_iter()
-            .map(|(name, _)| (self.load_generator.schema_name(), name))
-            .collect();
-        super::SourceReferenceResolver::new(LOAD_GENERATOR_DATABASE_NAME, &views)
-            .expect("already validated that SourceReferenceResolver elements are valid")
-    }
 }
 
 impl crate::AlterCompatible for LoadGeneratorSourceConnection {}

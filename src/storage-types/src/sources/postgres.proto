@@ -17,36 +17,39 @@ import "expr/src/scalar.proto";
 
 package mz_storage_types.sources.postgres;
 
+message ProtoCastType {
+    oneof kind {
+        google.protobuf.Empty natural = 1;
+        google.protobuf.Empty text = 2;
+    }
+}
+
+message ProtoPostgresTableCast {
+    repeated mz_expr.scalar.ProtoMirScalarExpr column_casts = 1;
+    repeated ProtoCastType column_cast_types = 2;
+}
+
 message ProtoPostgresSourceConnection {
-    message ProtoCastType {
-        oneof kind {
-            google.protobuf.Empty natural = 1;
-            google.protobuf.Empty text = 2;
-        }
-    }
-
-    message ProtoPostgresTableCast {
-        repeated mz_expr.scalar.ProtoMirScalarExpr column_casts = 1;
-        repeated ProtoCastType column_cast_types = 2;
-    }
-
+    reserved 5, 7;
     mz_repr.global_id.ProtoGlobalId connection_id = 6;
     mz_storage_types.connections.ProtoPostgresConnection connection = 1;
     string publication = 2;
     ProtoPostgresSourcePublicationDetails details = 4;
-    repeated ProtoPostgresTableCast table_casts = 5;
-    // Describes the position in the source's publication that the table cast
-    // correlates to; meant to be iterated over in tandem with table_casts
-    repeated uint64 table_cast_pos = 7;
 }
 
 message ProtoPostgresSourcePublicationDetails {
-    // NOTE(roshan): This field is planned for deprecation, since relevant table descriptions
-    // are now stored on source export statements directly.
+    // This field is deprecated, but kept around to migrate old sources since this
+    // field is serialized as proto in the catalog.
     repeated mz_postgres_util.desc.ProtoPostgresTableDesc deprecated_tables = 1;
+
     string slot = 2;
     optional uint64 timeline_id = 3;
     string database = 4;
+}
+
+message ProtoPostgresSourceExportDetails {
+    mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
+    ProtoPostgresTableCast table_cast = 2;
 }
 
 // NOTE: this message is encoded and stored as part of a source export

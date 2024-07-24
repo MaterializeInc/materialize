@@ -48,7 +48,7 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
     ExportReference, GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
-    SourceExport,
+    SourceExport, SourceExportDetails,
 };
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
@@ -1541,6 +1541,7 @@ where
                     SourceExport {
                         ingestion_output: None,
                         storage_metadata: (),
+                        details: SourceExportDetails::None,
                     },
                 );
             }
@@ -1632,6 +1633,7 @@ where
                 DataSource::IngestionExport {
                     ingestion_id,
                     external_reference,
+                    details,
                 } => {
                     // Adjust the source to contain this export.
                     let source_collection = self_collections
@@ -1648,6 +1650,7 @@ where
                                     external_reference.clone(),
                                 )),
                                 storage_metadata: (),
+                                details: details.clone(),
                             },
                         ),
                         _ => unreachable!(
