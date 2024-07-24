@@ -29,7 +29,7 @@ class TestAnalyticsUploadError(Exception):
         self.sql = sql
 
     def __str__(self) -> str:
-        return f"{self.message}. Last executed SQL:\n```\n{self.sql}\n```"
+        return f"{self.message}. Last executed SQL:\n```\n{self.sql.strip()}\n```"
 
 
 @dataclass
@@ -161,6 +161,10 @@ class DatabaseConnector:
                     self._execute_sql(cursor, "ROLLBACK;")
             except:
                 pass
+
+            # TODO(def-): Remove when #28472 is fixed
+            if str(e) == "network error":
+                return
 
             error_msg = f"Failed to write to test analytics database! Cause: {e}"
             raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
