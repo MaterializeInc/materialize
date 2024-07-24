@@ -29,7 +29,7 @@ class TestAnalyticsUploadError(Exception):
         self.sql = sql
 
     def __str__(self) -> str:
-        return f"{self.message} (last executed sql: {self.sql})"
+        return f"{self.message}. Last executed SQL:\n```\n{self.sql}\n```"
 
 
 @dataclass
