@@ -26,6 +26,8 @@ store first-hand:
 
 * **Consistency**: results are always correct; never even transiently wrong.
 
+![Quickstart](/images/quickstart-console.png)
+
 ## Prerequisite
 
 A Materialize account. If you do not have an account, you can [sign up for a
