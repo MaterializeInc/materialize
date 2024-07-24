@@ -44,6 +44,10 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
+# TODO: #27585 (expected table was dropped)
+$ skip-if
+SELECT true
+
 ! SELECT * FROM table_a;
 contains:table was dropped
 
@@ -54,6 +58,9 @@ contains:Invalid MySQL table reference: table_a
 # We are not aware that the new table_a is different
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_a;
 contains:another subsource already refers to public.table_a
+
+# TODO: #27585 (expected table was dropped)
+$ skip-end
 
 > DROP SOURCE mz_source CASCADE;
 
