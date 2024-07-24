@@ -178,6 +178,11 @@ impl Analysis for Equivalences {
                             .classes
                             .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
                     }
+
+                    // Having added classes to `equivalences`, we should minimize the classes to fold the
+                    // information in before applying the `project`, to set it up for success.
+                    equivalences.minimize(&None);
+
                     // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
                     // They also pass through equivalences of them and other constant columns (e.g. key columns).
                     // However, it is not correct to simply project onto these columns, as relationships amongst
