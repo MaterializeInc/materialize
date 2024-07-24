@@ -48,6 +48,11 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM build_annotation
     GROUP BY build_job_id
     HAVING count(*) > 1
+    UNION
+    SELECT 'issue', issue_id, NULL, 'duplicate issue_id for issue'
+    FROM issue
+    GROUP BY issue_id
+    HAVING count(*) > 1
     -- other
     UNION
     SELECT 'build_job', build_job_id, NULL, 'build job id is not unique'
@@ -71,10 +76,5 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     UNION
     SELECT 'config', 'config', NULL, 'more than one config entry exists'
     FROM config
-    HAVING count(*) > 1
-    UNION
-    SELECT 'issue', issue_id, NULL, 'more than one issue entry exists'
-    FROM issue
-    GROUP BY issue_id
     HAVING count(*) > 1
 ;

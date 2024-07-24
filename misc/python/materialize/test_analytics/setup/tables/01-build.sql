@@ -20,4 +20,5 @@ CREATE TABLE build (
    build_url TEXT, -- nullable, will eventually be removed
    data_version UINT4 NOT NULL,
    remarks TEXT
+   -- , PRIMARY KEY (build_id)
 );

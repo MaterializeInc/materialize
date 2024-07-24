@@ -18,4 +18,5 @@ CREATE TABLE scalability_framework_result (
    concurrency INT NOT NULL,
    count INT,
    tps DOUBLE
+   -- , PRIMARY KEY (build_job_id, workload_name)
 );

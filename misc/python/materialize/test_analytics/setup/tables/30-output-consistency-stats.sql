@@ -20,4 +20,5 @@ CREATE TABLE output_consistency_stats (
    count_available_data_types UINT4 NOT NULL,
    count_available_ops UINT4 NOT NULL,
    count_used_ops UINT4 NOT NULL
+   -- , PRIMARY KEY (build_job_id)
 );

@@ -21,4 +21,5 @@ CREATE TABLE build_job (
     success BOOL NOT NULL,
     aws_instance_type TEXT NOT NULL,
     remarks TEXT
+    -- , PRIMARY KEY (build_job_id)
 );

@@ -14,6 +14,7 @@ CREATE TABLE build_annotation (
    test_retry_count UINT4 NOT NULL,
    is_failure BOOL NOT NULL,
    insert_date TIMESTAMPTZ NOT NULL
+   -- , PRIMARY KEY (build_job_id)
 );
 
 CREATE TABLE build_annotation_error (

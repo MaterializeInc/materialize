@@ -21,6 +21,7 @@ CREATE TABLE feature_benchmark_result (
    messages INT,
    memory_mz DOUBLE,
    memory_clusterd DOUBLE
+   -- , PRIMARY KEY (build_job_id, scenario_name)
 );
 
 -- This table holds results of runs that were discarded.
@@ -32,4 +33,5 @@ CREATE TABLE feature_benchmark_discarded_result (
    messages INT,
    memory_mz DOUBLE,
    memory_clusterd DOUBLE
+   -- , PRIMARY KEY (build_job_id, scenario_name)
 );
