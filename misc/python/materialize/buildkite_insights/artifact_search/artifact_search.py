@@ -19,7 +19,11 @@ from materialize.buildkite_insights.artifact_search.artifact_search_presentation
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
-from materialize.buildkite_insights.cache import artifacts_cache, builds_cache
+from materialize.buildkite_insights.cache import (
+    artifacts_cache,
+    builds_cache,
+    logs_cache,
+)
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
@@ -45,6 +49,7 @@ def main(
     max_results: int,
     use_regex: bool,
     include_zst_files: bool,
+    search_logs_instead_of_artifacts: bool,
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
 
@@ -63,16 +68,29 @@ def main(
             count_all_artifacts,
             ignored_file_names,
             max_search_results_hit,
-        ) = _search_artifacts(
-            pipeline_slug=pipeline_slug,
-            build_number=build_number,
-            pattern=pattern,
-            fetch=fetch,
-            max_results=max_results,
-            use_regex=use_regex,
-            include_zst_files=include_zst_files,
-            build_step_name_by_job_id=build_step_name_by_job_id,
+        ) = (
+            _search_logs(
+                pipeline_slug=pipeline_slug,
+                build_number=build_number,
+                pattern=pattern,
+                fetch=fetch,
+                max_results=max_results,
+                use_regex=use_regex,
+                build_step_name_by_job_id=build_step_name_by_job_id,
+            )
+            if search_logs_instead_of_artifacts
+            else _search_artifacts(
+                pipeline_slug=pipeline_slug,
+                build_number=build_number,
+                pattern=pattern,
+                fetch=fetch,
+                max_results=max_results,
+                use_regex=use_regex,
+                include_zst_files=include_zst_files,
+                build_step_name_by_job_id=build_step_name_by_job_id,
+            )
         )
+
     except RateLimitExceeded:
         print("Aborting due to exceeded rate limit!")
         return
@@ -161,6 +179,60 @@ def _search_artifacts(
             )
 
             count_matches = count_matches + matches_in_artifact
+
+    return (
+        count_matches,
+        count_all_artifacts,
+        ignored_file_names,
+        max_search_results_hit,
+    )
+
+
+def _search_logs(
+    pipeline_slug: str,
+    build_number: int,
+    pattern: str,
+    fetch: FetchMode,
+    max_results: int,
+    use_regex: bool,
+    build_step_name_by_job_id: dict[str, str],
+) -> tuple[int, int, set[str], bool]:
+    """
+    :return: count_matches, count_all_artifacts, ignored_file_names, max_search_results_hit
+    """
+
+    print_before_search_results()
+
+    count_matches = 0
+    count_all_artifacts = 0
+    ignored_file_names = set()
+    max_search_results_hit = False
+
+    for job_id, build_step_name in build_step_name_by_job_id.items():
+        print(f"Searching log of job '{build_step_name}' ({job_id}).")
+        count_all_artifacts = count_all_artifacts + 1
+
+        max_entries_to_print = max(0, max_results - count_matches)
+        if max_entries_to_print == 0:
+            max_search_results_hit = True
+            break
+
+        log_content = logs_cache.get_or_download_log(
+            pipeline_slug,
+            fetch,
+            build_number=build_number,
+            job_id=job_id,
+        )
+
+        matches_in_log, max_search_results_hit = _search_artifact_content(
+            artifact_file_name="log",
+            artifact_content=log_content,
+            pattern=pattern,
+            use_regex=use_regex,
+            max_entries_to_print=max_entries_to_print,
+        )
+
+        count_matches = count_matches + matches_in_log
 
     return (
         count_matches,
@@ -262,6 +334,11 @@ if __name__ == "__main__":
         "--include-zst-files", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
+        "--search-logs-instead-of-artifacts",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--fetch",
         type=lambda mode: FetchMode[mode.upper()],
         choices=FETCH_MODE_CHOICES,
@@ -280,4 +357,5 @@ if __name__ == "__main__":
         args.max_results,
         args.use_regex,
         args.include_zst_files,
+        args.search_logs_instead_of_artifacts,
     )
