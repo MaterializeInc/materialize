@@ -491,6 +491,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     scenarios_with_regressions = []
     latest_report_by_scenario_name: dict[str, Report] = dict()
+    discarded_reports_by_scenario_name: dict[str, list[Report]] = dict()
 
     scenarios_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
     for cycle in range(0, args.max_retries):
@@ -502,6 +503,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         scenarios_with_regressions = []
         for scenario in scenarios_to_run:
+            scenario_name = scenario.__name__
             comparators = run_one_scenario(c, scenario, args)
 
             if len(comparators) == 0:
@@ -513,7 +515,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if _shall_retry_scenario(scenario, comparators, cycle):
                 scenarios_with_regressions.append(scenario)
 
-            latest_report_by_scenario_name[scenario.__name__] = report
+            if cycle > 0:
+                discarded_reports_of_scenario = discarded_reports_by_scenario_name.get(
+                    scenario_name, []
+                )
+                discarded_reports_of_scenario.append(
+                    latest_report_by_scenario_name[scenario_name]
+                )
+                discarded_reports_by_scenario_name[scenario_name] = (
+                    discarded_reports_of_scenario
+                )
+
+            latest_report_by_scenario_name[scenario_name] = report
 
             print(f"+++ Benchmark Report for cycle {cycle + 1}:")
             print(report)
