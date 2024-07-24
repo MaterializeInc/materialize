@@ -96,6 +96,16 @@ def workflow_read_only(c: Composition) -> None:
             f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+
+        > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
+        > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+        > CREATE SINK kafka_sink
+          IN CLUSTER cluster
+          FROM t
+          INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+          ENVELOPE DEBEZIUM;
+
         > INSERT INTO t VALUES (1, 2);
         > CREATE INDEX t_idx ON t (a, b);
         > CREATE MATERIALIZED VIEW mv AS SELECT sum(a) FROM t;
@@ -108,8 +118,6 @@ def workflow_read_only(c: Composition) -> None:
         $ kafka-create-topic topic=kafka
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
         key1A,key1B:value1A,value1B
-        > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
-        > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
         > CREATE SOURCE kafka_source (key1, key2, value1, value2)
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${{testdrive.seed}}')
@@ -136,6 +144,7 @@ def workflow_read_only(c: Composition) -> None:
           USER postgres1,
           PASSWORD SECRET pgpass;
         > CREATE SOURCE postgres_source
+          IN CLUSTER cluster
           FROM POSTGRES CONNECTION pg
           (PUBLICATION 'postgres_source')
           FOR TABLES (postgres_source_table);
@@ -158,11 +167,21 @@ def workflow_read_only(c: Composition) -> None:
           HOST 'mysql',
           USER mysql1,
           PASSWORD SECRET mysqlpass);
-        > CREATE SOURCE mysql_source1
+        > CREATE SOURCE mysql_source
+          IN CLUSTER cluster
           FROM MYSQL CONNECTION mysql
           FOR TABLES (public.mysql_source_table AS mysql_source_table);
         > SELECT * FROM mysql_source_table;
         A 0
+
+        > CREATE SOURCE kafka_sink_source1
+          IN CLUSTER cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+          ENVELOPE NONE
+
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+        <null> <null> 1 2
         """
         )
     )
@@ -224,6 +243,8 @@ def workflow_read_only(c: Composition) -> None:
             A 0
             > SELECT * FROM mysql_source_table;
             A 0
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+            <null> <null> 1 2
             """
             )
         )
@@ -298,6 +319,9 @@ def workflow_read_only(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+            <null> <null> 1 2
+            <null> <null> 7 8
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
             key3A,key3B:value3A,value3B
@@ -354,6 +378,16 @@ def workflow_basic(c: Composition) -> None:
             f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+
+        > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
+        > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+        > CREATE SINK kafka_sink
+          IN CLUSTER cluster
+          FROM t
+          INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+          ENVELOPE DEBEZIUM;
+
         > INSERT INTO t VALUES (1, 2);
         > CREATE INDEX t_idx ON t (a, b);
         > CREATE MATERIALIZED VIEW mv AS SELECT sum(a) FROM t;
@@ -366,8 +400,6 @@ def workflow_basic(c: Composition) -> None:
         $ kafka-create-topic topic=kafka
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
         key1A,key1B:value1A,value1B
-        > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
-        > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
         > CREATE SOURCE kafka_source (key1, key2, value1, value2)
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${{testdrive.seed}}')
@@ -394,6 +426,7 @@ def workflow_basic(c: Composition) -> None:
           USER postgres1,
           PASSWORD SECRET pgpass;
         > CREATE SOURCE postgres_source
+          IN CLUSTER cluster
           FROM POSTGRES CONNECTION pg
           (PUBLICATION 'postgres_source')
           FOR TABLES (postgres_source_table);
@@ -417,10 +450,20 @@ def workflow_basic(c: Composition) -> None:
           USER mysql1,
           PASSWORD SECRET mysqlpass);
         > CREATE SOURCE mysql_source1
+          IN CLUSTER cluster
           FROM MYSQL CONNECTION mysql
           FOR TABLES (public.mysql_source_table AS mysql_source_table);
         > SELECT * FROM mysql_source_table;
         A 0
+
+        > CREATE SOURCE kafka_sink_source2
+          IN CLUSTER cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+          ENVELOPE NONE
+
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+        <null> <null> 1 2
         """
         )
     )
@@ -495,6 +538,8 @@ def workflow_basic(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            <null> <null> 1 2
             """
             )
         )
@@ -550,6 +595,10 @@ def workflow_basic(c: Composition) -> None:
         A 0
         B 1
         C 2
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+        <null> <null> 1 2
+        <null> <null> 3 4
+        <null> <null> 5 6
         """
         )
     )
@@ -593,6 +642,10 @@ def workflow_basic(c: Composition) -> None:
             A 0
             B 1
             C 2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            <null> <null> 1 2
+            <null> <null> 3 4
+            <null> <null> 5 6
             """
             )
         )
@@ -716,6 +769,11 @@ def workflow_basic(c: Composition) -> None:
             B 1
             C 2
             D 3
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            <null> <null> 1 2
+            <null> <null> 3 4
+            <null> <null> 5 6
+            <null> <null> 7 8
             """
             )
         )
