@@ -241,10 +241,7 @@ pub struct NumericStatsBuilder {
     upper: OrderedDecimal<Numeric>,
 }
 
-impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
-    type ArrowColumn = BinaryArray;
-    type FinishedStats = BytesStats;
-
+impl NumericStatsBuilder {
     fn new() -> Self
     where
         Self: Sized,
@@ -254,6 +251,16 @@ impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
             upper: OrderedDecimal(-Numeric::infinity()),
         }
     }
+
+    fn include(&mut self, val: OrderedDecimal<Numeric>) {
+        self.lower = val.min(self.lower);
+        self.upper = val.max(self.upper);
+    }
+}
+
+impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
+    type ArrowColumn = BinaryArray;
+    type FinishedStats = BytesStats;
 
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
@@ -273,11 +280,6 @@ impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
             builder.include(OrderedDecimal(val));
         }
         builder
-    }
-
-    fn include(&mut self, val: OrderedDecimal<Numeric>) {
-        self.lower = val.min(self.lower);
-        self.upper = val.max(self.upper);
     }
 
     fn finish(self) -> Self::FinishedStats
@@ -302,16 +304,6 @@ pub struct NaiveTimeStatsBuilder {
 impl ColumnarStatsBuilder<NaiveTime> for NaiveTimeStatsBuilder {
     type ArrowColumn = FixedSizeBinaryArray;
     type FinishedStats = BytesStats;
-
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        NaiveTimeStatsBuilder {
-            lower: NaiveTime::default(),
-            upper: NaiveTime::default(),
-        }
-    }
 
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
@@ -344,11 +336,6 @@ impl ColumnarStatsBuilder<NaiveTime> for NaiveTimeStatsBuilder {
         NaiveTimeStatsBuilder { lower, upper }
     }
 
-    fn include(&mut self, val: NaiveTime) {
-        self.lower = val.min(self.lower);
-        self.upper = val.max(self.upper);
-    }
-
     fn finish(self) -> Self::FinishedStats
     where
         Self::FinishedStats: Sized,
@@ -371,16 +358,6 @@ pub struct NaiveDateTimeStatsBuilder {
 impl ColumnarStatsBuilder<NaiveDateTime> for NaiveDateTimeStatsBuilder {
     type ArrowColumn = FixedSizeBinaryArray;
     type FinishedStats = BytesStats;
-
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        NaiveDateTimeStatsBuilder {
-            lower: NaiveDateTime::default(),
-            upper: NaiveDateTime::default(),
-        }
-    }
 
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
@@ -413,11 +390,6 @@ impl ColumnarStatsBuilder<NaiveDateTime> for NaiveDateTimeStatsBuilder {
         NaiveDateTimeStatsBuilder { lower, upper }
     }
 
-    fn include(&mut self, val: NaiveDateTime) {
-        self.lower = val.min(self.lower);
-        self.upper = val.max(self.upper);
-    }
-
     fn finish(self) -> Self::FinishedStats
     where
         Self::FinishedStats: Sized,
@@ -444,16 +416,6 @@ pub struct IntervalStatsBuilder {
 impl ColumnarStatsBuilder<Interval> for IntervalStatsBuilder {
     type ArrowColumn = FixedSizeBinaryArray;
     type FinishedStats = BytesStats;
-
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        IntervalStatsBuilder {
-            lower: Interval::default(),
-            upper: Interval::default(),
-        }
-    }
 
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
@@ -486,11 +448,6 @@ impl ColumnarStatsBuilder<Interval> for IntervalStatsBuilder {
         IntervalStatsBuilder { lower, upper }
     }
 
-    fn include(&mut self, val: Interval) {
-        self.lower = val.min(self.lower);
-        self.upper = val.max(self.upper);
-    }
-
     fn finish(self) -> Self::FinishedStats
     where
         Self::FinishedStats: Sized,
@@ -514,16 +471,6 @@ impl ColumnarStatsBuilder<Uuid> for UuidStatsBuilder {
     type ArrowColumn = FixedSizeBinaryArray;
     type FinishedStats = BytesStats;
 
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        UuidStatsBuilder {
-            lower: Uuid::default(),
-            upper: Uuid::default(),
-        }
-    }
-
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
@@ -545,11 +492,6 @@ impl ColumnarStatsBuilder<Uuid> for UuidStatsBuilder {
             .unwrap_or_default();
 
         UuidStatsBuilder { lower, upper }
-    }
-
-    fn include(&mut self, val: Uuid) {
-        self.lower = val.min(self.lower);
-        self.upper = val.max(self.upper);
     }
 
     fn finish(self) -> Self::FinishedStats

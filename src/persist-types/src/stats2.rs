@@ -30,11 +30,6 @@ pub trait ColumnarStatsBuilder<T>: Debug {
     /// The type of statistics the collector finalizes into.
     type FinishedStats: DynStats;
 
-    /// Create a new instance of `Self` that can be used to collect statistics.
-    fn new() -> Self
-    where
-        Self: Sized;
-
     /// Derive statistics from a column of data.
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
@@ -50,9 +45,6 @@ pub trait ColumnarStatsBuilder<T>: Debug {
         let col = col.as_any().downcast_ref::<Self::ArrowColumn>()?;
         Some(Self::from_column(col))
     }
-
-    /// Include the provided value in the current statistics.
-    fn include(&mut self, val: T);
 
     /// Finish this collector returning the final aggregated statistics.
     fn finish(self) -> Self::FinishedStats
@@ -71,16 +63,6 @@ macro_rules! primitive_stats {
             type FinishedStats = Self;
             type ArrowColumn = $arrow_col;
 
-            fn new() -> Self
-            where
-                Self: Sized,
-            {
-                PrimitiveStats {
-                    lower: <$native>::default(),
-                    upper: <$native>::default(),
-                }
-            }
-
             fn from_column(col: &Self::ArrowColumn) -> Self
             where
                 Self: Sized,
@@ -89,11 +71,6 @@ macro_rules! primitive_stats {
                 let upper = $max_fn(col).unwrap_or_default();
 
                 PrimitiveStats { lower, upper }
-            }
-
-            fn include(&mut self, val: $native) {
-                self.lower = val.min(self.lower);
-                self.upper = val.max(self.upper);
             }
 
             fn finish(self) -> Self::FinishedStats {
@@ -124,16 +101,6 @@ impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
     type ArrowColumn = StringArray;
     type FinishedStats = Self;
 
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        PrimitiveStats {
-            lower: String::default(),
-            upper: String::default(),
-        }
-    }
-
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
@@ -151,23 +118,6 @@ impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
         PrimitiveStats { lower, upper }
     }
 
-    fn include(&mut self, val: &str) {
-        let lower_candidate = truncate_string(val, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        if lower_candidate < self.lower {
-            self.lower = lower_candidate
-        }
-
-        let upper_candidate = truncate_string(val, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| val.to_owned());
-        if upper_candidate < self.upper {
-            self.upper = upper_candidate
-        }
-    }
-
     fn finish(self) -> Self::FinishedStats
     where
         Self::FinishedStats: Sized,
@@ -179,16 +129,6 @@ impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
 impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
     type ArrowColumn = BinaryArray;
     type FinishedStats = Self;
-
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        PrimitiveStats {
-            lower: Vec::default(),
-            upper: Vec::default(),
-        }
-    }
 
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
@@ -207,23 +147,6 @@ impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
         PrimitiveStats { lower, upper }
     }
 
-    fn include(&mut self, val: &[u8]) {
-        let lower_candidate = truncate_bytes(val, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        if lower_candidate < self.lower {
-            self.lower = lower_candidate
-        }
-
-        let upper_candidate = truncate_bytes(val, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| val.to_owned());
-        if upper_candidate < self.upper {
-            self.upper = upper_candidate
-        }
-    }
-
     fn finish(self) -> Self::FinishedStats
     where
         Self::FinishedStats: Sized,
@@ -240,16 +163,6 @@ where
     type ArrowColumn = T::ArrowColumn;
     type FinishedStats = ColumnarStats;
 
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        OptionStats {
-            none: 0,
-            some: T::new(),
-        }
-    }
-
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
@@ -257,13 +170,6 @@ where
         OptionStats {
             none: col.null_count(),
             some: T::from_column(col),
-        }
-    }
-
-    fn include(&mut self, val: Option<I>) {
-        match val {
-            None => self.none += 1,
-            Some(val) => self.some.include(val),
         }
     }
 
@@ -286,21 +192,12 @@ impl<T, A: arrow::array::Array + 'static> ColumnarStatsBuilder<T> for NoneStatsB
     type ArrowColumn = A;
     type FinishedStats = NoneStats;
 
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        NoneStatsBuilder(std::marker::PhantomData)
-    }
-
     fn from_column(_col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
     {
         NoneStatsBuilder(std::marker::PhantomData)
     }
-
-    fn include(&mut self, _val: T) {}
 
     fn finish(self) -> Self::FinishedStats
     where
