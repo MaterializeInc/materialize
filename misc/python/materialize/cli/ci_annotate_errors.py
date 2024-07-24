@@ -15,6 +15,7 @@ import mmap
 import os
 import re
 import sys
+import traceback
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from itertools import chain
@@ -51,6 +52,9 @@ from materialize.github import (
 from materialize.observed_error import ObservedBaseError, WithIssue
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
+)
+from materialize.test_analytics.connector.test_analytics_connector import (
+    TestAnalyticsUploadError,
 )
 from materialize.test_analytics.data.build_annotation import build_annotation_storage
 from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
@@ -360,6 +364,9 @@ and finds associated open GitHub issues in Materialize repository.""",
     try:
         test_analytics.submit_updates()
     except Exception as e:
+        if not isinstance(e, TestAnalyticsUploadError):
+            print(traceback.format_exc())
+
         # An error during an upload must never cause the build to fail
         add_failure_for_qa_team(f"Uploading results failed! {e}")
 
