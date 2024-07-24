@@ -15,7 +15,6 @@ from materialize.checks.mzcompose_actions import (
     MzcomposeAction,
     PromoteMz,
     StartMz,
-    Stop,
     WaitReadyMz,
 )
 from materialize.checks.scenarios import Scenario
@@ -28,10 +27,8 @@ from materialize.checks.scenarios_upgrade import (
 from materialize.mz_version import MzVersion
 
 
-def wait_ready_and_promote(mz_service: str, stop_service: str) -> list[MzcomposeAction]:
-    # TODO(def-, aljoscha): This should work without stopping the old service,
-    # why is it required?
-    return [WaitReadyMz(mz_service), PromoteMz(mz_service), Stop(stop_service)]
+def wait_ready_and_promote(mz_service: str) -> list[MzcomposeAction]:
+    return [WaitReadyMz(mz_service), PromoteMz(mz_service)]
 
 
 class ZeroDowntimeRestartEntireMz(Scenario):
@@ -41,13 +38,13 @@ class ZeroDowntimeRestartEntireMz(Scenario):
             Initialize(self, mz_service="mz_1"),
             start_mz_read_only(self, deploy_generation=1, mz_service="mz_2"),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2", stop_service="mz_1"),
+            *wait_ready_and_promote("mz_2"),
             start_mz_read_only(self, deploy_generation=2, mz_service="mz_3"),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3", stop_service="mz_2"),
+            *wait_ready_and_promote("mz_3"),
             start_mz_read_only(self, deploy_generation=3, mz_service="mz_4"),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4", stop_service="mz_3"),
+            *wait_ready_and_promote("mz_4"),
             Validate(self, mz_service="mz_4"),
         ]
 
@@ -65,11 +62,11 @@ class ZeroDowntimeUpgradeEntireMz(Scenario):
             Initialize(self, mz_service="mz_1"),
             start_mz_read_only(self, tag=None, deploy_generation=1, mz_service="mz_2"),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2", stop_service="mz_1"),
+            *wait_ready_and_promote("mz_2"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             start_mz_read_only(self, tag=None, deploy_generation=2, mz_service="mz_3"),
             Validate(self, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3", stop_service="mz_2"),
+            *wait_ready_and_promote("mz_3"),
             Validate(self, mz_service="mz_3"),
         ]
 
@@ -92,14 +89,14 @@ class ZeroDowntimeUpgradeEntireMzTwoVersions(Scenario):
                 self, tag=get_last_version(), deploy_generation=1, mz_service="mz_2"
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2", stop_service="mz_1"),
+            *wait_ready_and_promote("mz_2"),
             # Upgrade to current source
             start_mz_read_only(self, tag=None, deploy_generation=2, mz_service="mz_3"),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3", stop_service="mz_2"),
+            *wait_ready_and_promote("mz_3"),
             start_mz_read_only(self, tag=None, deploy_generation=3, mz_service="mz_4"),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4", stop_service="mz_3"),
+            *wait_ready_and_promote("mz_4"),
             Validate(self, mz_service="mz_4"),
         ]
 
@@ -128,14 +125,14 @@ class ZeroDowntimeUpgradeEntireMzThreeVersions(Scenario):
                 self, tag=get_previous_version(), deploy_generation=1, mz_service="mz_2"
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *wait_ready_and_promote("mz_2", stop_service="mz_1"),
+            *wait_ready_and_promote("mz_2"),
             start_mz_read_only(
                 self, tag=get_last_version(), deploy_generation=2, mz_service="mz_3"
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            *wait_ready_and_promote("mz_3", stop_service="mz_2"),
+            *wait_ready_and_promote("mz_3"),
             start_mz_read_only(self, tag=None, deploy_generation=3, mz_service="mz_4"),
             Validate(self, mz_service="mz_3"),
-            *wait_ready_and_promote("mz_4", stop_service="mz_3"),
+            *wait_ready_and_promote("mz_4"),
             Validate(self, mz_service="mz_4"),
         ]

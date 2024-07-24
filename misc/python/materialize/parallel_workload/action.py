@@ -1570,14 +1570,13 @@ class ZeroDowntimeDeployAction(Action):
         ):
             self.composition.up(mz_service, detach=True)
 
-            # TODO: Allow read-only queries on mz_service
-
             # Wait until ready to promote
             while True:
                 result = json.loads(
                     self.composition.exec(
                         mz_service,
                         "curl",
+                        "-s",
                         "localhost:6878/api/leader/status",
                         capture=True,
                     ).stdout
@@ -1593,6 +1592,7 @@ class ZeroDowntimeDeployAction(Action):
                 self.composition.exec(
                     mz_service,
                     "curl",
+                    "-s",
                     "-X",
                     "POST",
                     "http://127.0.0.1:6878/api/leader/promote",
@@ -1601,7 +1601,7 @@ class ZeroDowntimeDeployAction(Action):
             )
             assert result["result"] == "Success", f"Unexpected result {result}"
 
-        time.sleep(self.rng.uniform(10, 30))
+        time.sleep(self.rng.uniform(60, 120))
         return True
 
 

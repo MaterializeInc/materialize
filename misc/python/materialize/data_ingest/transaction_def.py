@@ -142,6 +142,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                         self.composition.exec(
                             self.workload.mz_service,
                             "curl",
+                            "-s",
                             "localhost:6878/api/leader/status",
                             capture=True,
                         ).stdout
@@ -159,6 +160,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     self.composition.exec(
                         self.workload.mz_service,
                         "curl",
+                        "-s",
                         "-X",
                         "POST",
                         "http://127.0.0.1:6878/api/leader/promote",
@@ -167,7 +169,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                 )
                 assert result["result"] == "Success", f"Unexpected result {result}"
 
-                time.sleep(20)
+                time.sleep(5)
 
                 # Wait until new Materialize is ready to handle queries
                 for i in range(300):
@@ -176,13 +178,23 @@ class ZeroDowntimeDeploy(TransactionDef):
                             self.composition.exec(
                                 self.workload.mz_service,
                                 "curl",
-                                "http://127.0.0.1:6878/api/leader/status",
+                                "-s",
+                                "localhost:6878/api/leader/status",
                                 capture=True,
                             ).stdout
                         )
-                        assert (
-                            result["status"] == "IsLeader"
-                        ), f"Unexpected result {result}"
+                        assert result["status"] == "IsLeader"
+                        result = self.composition.exec(
+                            self.workload.mz_service,
+                            "curl",
+                            "-s",
+                            "http://127.0.0.1:6878/api/readyz",
+                            capture=True,
+                        ).stdout
+                        assert result == "ready", f"Unexpected result {result}"
+                        assert self.composition.sql_query(
+                            "SELECT 1", service=self.workload.mz_service
+                        ) == ([1],)
                     except:
                         time.sleep(1)
                         continue
