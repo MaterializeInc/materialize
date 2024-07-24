@@ -127,7 +127,9 @@ class DatabaseConnector:
         if len(self.update_statements) == 0:
             return
 
-        cursor = self.create_cursor(autocommit=not self._use_transaction)
+        cursor = self.create_cursor(
+            autocommit=not self._use_transaction, statement_timeout="30s"
+        )
 
         self._disable_if_uploads_not_allowed(cursor)
 
