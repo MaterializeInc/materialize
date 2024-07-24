@@ -28,6 +28,10 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     SELECT 'build_annotation_error', build_job_id, build_job_id, 'build annotation error references missing build annotation'
     FROM build_annotation_error
     WHERE build_job_id NOT IN (SELECT build_job_id FROM build_annotation)
+    UNION
+    SELECT 'feature_benchmark_discarded_result', build_job_id, scenario_name, 'discarded benchmark result without actual result'
+    FROM feature_benchmark_discarded_result
+    WHERE (build_job_id, scenario_name) NOT IN (SELECT build_job_id, scenario_name FROM feature_benchmark_result)
     -- duplicate entries
     UNION
     SELECT 'build', build_id, NULL, 'duplicate build'
