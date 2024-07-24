@@ -24,11 +24,13 @@ stdenv.mkDerivation {
 
     postgresql
     git
+    openssh
 
     # For lint checks
     shellcheck
     buf
     nodejs_22
+    jq
   ] ++ lib.optionals stdenv.isDarwin [
     libiconv
     darwin.apple_sdk.frameworks.DiskArbitration
