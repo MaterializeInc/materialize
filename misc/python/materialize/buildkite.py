@@ -205,12 +205,14 @@ def _upload_shard_info_metadata(items: list[str]) -> None:
 
 def add_failure_for_qa_team(failure: str) -> None:
     step_key = get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
+    message = f"{step_key}: {failure}"
+    print(message)
     pipeline = {
         "notify": [
             {
                 "slack": {
                     "channels": ["#team-testing-bots"],
-                    "message": f"{step_key}: {failure}",
+                    "message": message,
                 }
             }
         ]
