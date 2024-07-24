@@ -318,6 +318,11 @@ case "$cmd" in
                 --env SCCACHE_BUCKET
             )
         fi
+        # For git-worktrees add the original repository at its original path
+        if [[ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]]; then
+            GIT_ROOT_DIR="$(git rev-parse --git-dir | sed -e "s#/.git/worktrees/.*#/#")"
+            args+=(--volume "$GIT_ROOT_DIR:$GIT_ROOT_DIR")
+        fi
         rm -f "$cid_file"
         docker run "${args[@]}" "materialize/ci-builder:$tag" "${docker_command[@]}"
         ;;
