@@ -113,7 +113,9 @@ class QueryExecutionManager:
         if commit_previous_tx:
             self.commit_tx(strategy)
 
+        self.executors.get_executor(strategy).before_new_tx()
         self.executors.get_executor(strategy).begin_tx("SERIALIZABLE")
+        self.executors.get_executor(strategy).after_new_tx()
 
     def commit_tx(
         self,
@@ -158,8 +160,14 @@ class QueryExecutionManager:
             start_time = datetime.now()
 
             try:
+                self.executors.get_executor(strategy).before_query_execution()
+
+                start_time = datetime.now()
                 data = self.executors.get_executor(strategy).query(sql_query_string)
                 duration = self._get_duration_in_ms(start_time)
+
+                self.executors.get_executor(strategy).after_query_execution()
+
                 result = QueryResult(
                     strategy, sql_query_string, query_template.column_count(), data
                 )

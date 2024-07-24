@@ -58,6 +58,18 @@ class SqlExecutor:
     def query_version(self) -> str:
         raise NotImplementedError
 
+    def before_query_execution(self) -> None:
+        pass
+
+    def after_query_execution(self) -> None:
+        pass
+
+    def before_new_tx(self):
+        pass
+
+    def after_new_tx(self):
+        pass
+
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
     def __init__(
