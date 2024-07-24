@@ -84,7 +84,7 @@ def gen(path):
 
     # Note: We build cargo-gazelle with optimizations because the speedup is
     # worth it and Bazel should cache the resulting binary.
-    
+
     # TODO(parkmycar): Use Bazel to run this lint.
     cmd_args = [
         "cargo",
