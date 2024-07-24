@@ -70,7 +70,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
             FetchData::Unfetched { part, .. } => {
-                part.writer_key().map_or(false, |k| k >= min_version)
+                part.writer_key().map_or(false, |k| k < min_version)
             }
             FetchData::AlreadyFetched => false,
         }
