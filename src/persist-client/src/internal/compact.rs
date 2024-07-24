@@ -824,7 +824,7 @@ impl Timings {
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use mz_persist_types::codec_impls::StringSchema;
     use timely::order::Product;
     use timely::progress::Antichain;
 
@@ -875,9 +875,9 @@ mod tests {
         };
         let schemas = Schemas {
             key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
+            val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, (), u64, i64>::compact(
+        let res = Compactor::<String, String, u64, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
@@ -953,9 +953,9 @@ mod tests {
         };
         let schemas = Schemas {
             key: Arc::new(StringSchema),
-            val: Arc::new(UnitSchema),
+            val: Arc::new(StringSchema),
         };
-        let res = Compactor::<String, (), Product<u32, u32>, i64>::compact(
+        let res = Compactor::<String, String, Product<u32, u32>, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
