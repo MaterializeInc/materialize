@@ -319,6 +319,12 @@ where
             self.run_ingestion(id)
                 .expect("cannot fail to run ingestions now");
         }
+
+        let exports_to_run = self.exports.keys().copied().collect_vec();
+        for export_id in exports_to_run {
+            self.run_export(export_id)
+                .expect("must be able to start export");
+        }
     }
 
     fn update_parameters(&mut self, config_params: StorageParameters) {
@@ -1071,8 +1077,6 @@ where
             );
             let read_policy = ReadPolicy::step_back();
 
-            let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
-
             info!(
                 sink_id = id.to_string(),
                 from_id = from_id.to_string(),
@@ -1085,40 +1089,6 @@ where
                 ExportState::new(description.clone(), read_hold, read_policy),
             );
 
-            let status_id = if let Some(status_collection_id) = description.sink.status_id {
-                Some(
-                    self.storage_collections
-                        .collection_metadata(status_collection_id)?
-                        .data_shard,
-                )
-            } else {
-                None
-            };
-
-            let cmd = RunSinkCommand {
-                id,
-                description: StorageSinkDesc {
-                    from: from_id,
-                    from_desc: description.sink.from_desc,
-                    connection: description.sink.connection,
-                    envelope: description.sink.envelope,
-                    as_of: description.sink.as_of,
-                    version: description.sink.version,
-                    status_id,
-                    from_storage_metadata,
-                    with_snapshot: description.sink.with_snapshot,
-                },
-            };
-
-            // Fetch the client for this exports's cluster.
-            let client = self
-                .clients
-                .get_mut(&description.instance_id)
-                .ok_or_else(|| StorageError::ExportInstanceMissing {
-                    storage_instance_id: description.instance_id,
-                    export_id: id,
-                })?;
-
             // Just like with `new_source_statistic_entries`, we can probably
             // `insert` here, but in the interest of safety, never override
             // existing values.
@@ -1128,7 +1098,9 @@ where
                 .entry(id)
                 .or_insert(StatsState::new(SinkStatisticsUpdate::new(id)));
 
-            client.send(StorageCommand::RunSinks(vec![cmd]));
+            if !self.read_only {
+                self.run_export(id)?;
+            }
         }
         Ok(())
     }
@@ -3590,6 +3562,63 @@ where
 
         let augmented_ingestion = RunIngestionCommand { id, description };
         client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
+
+        Ok(())
+    }
+
+    /// Runs the identified export using the current definition of the export
+    /// that we have in memory.
+    fn run_export(&mut self, id: GlobalId) -> Result<(), StorageError<T>> {
+        let export = self.export(id)?;
+        let description = &export.description;
+
+        info!(
+            sink_id = %id,
+            from_id = %description.sink.from,
+            as_of = ?description.sink.as_of,
+            "run_export"
+        );
+
+        let from_storage_metadata = self
+            .storage_collections
+            .collection_metadata(description.sink.from)?;
+
+        let status_id = if let Some(status_collection_id) = description.sink.status_id {
+            Some(
+                self.storage_collections
+                    .collection_metadata(status_collection_id)?
+                    .data_shard,
+            )
+        } else {
+            None
+        };
+
+        let cmd = RunSinkCommand {
+            id,
+            description: StorageSinkDesc {
+                from: description.sink.from,
+                from_desc: description.sink.from_desc.clone(),
+                connection: description.sink.connection.clone(),
+                envelope: description.sink.envelope,
+                as_of: description.sink.as_of.clone(),
+                version: description.sink.version,
+                status_id,
+                from_storage_metadata,
+                with_snapshot: description.sink.with_snapshot,
+            },
+        };
+
+        let storage_instance_id = description.instance_id.clone();
+
+        // Fetch the client for this exports's cluster.
+        let client = self.clients.get_mut(&storage_instance_id).ok_or_else(|| {
+            StorageError::ExportInstanceMissing {
+                storage_instance_id,
+                export_id: id,
+            }
+        })?;
+
+        client.send(StorageCommand::RunSinks(vec![cmd]));
 
         Ok(())
     }
