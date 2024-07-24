@@ -223,7 +223,7 @@ if __name__ == "__main__":
 
     parser.add_argument("pattern", type=str)
 
-    parser.add_argument("--jobid", type=str)
+    parser.add_argument("--job-id", type=str)
 
     parser.add_argument("--max-results", default=50, type=int)
     parser.add_argument(
@@ -246,7 +246,7 @@ if __name__ == "__main__":
     main(
         args.pipeline,
         args.buildnumber,
-        args.jobid,
+        args.job_id,
         args.pattern,
         args.fetch,
         args.max_results,
