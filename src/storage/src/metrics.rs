@@ -34,7 +34,7 @@ use mz_ore::channel::{
     instrumented_unbounded_channel, InstrumentedUnboundedReceiver, InstrumentedUnboundedSender,
 };
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, GaugeVecExt};
+use mz_ore::metrics::{DeleteOnDropCounter, MetricVecExt};
 use mz_repr::GlobalId;
 use prometheus::core::AtomicU64;
 
@@ -93,17 +93,17 @@ impl StorageMetrics {
             emitted_bytes: Arc::new(
                 self.upsert_backpressure_defs
                     .emitted_bytes
-                    .get_delete_on_drop_counter(vec![id.to_string(), index.to_string()]),
+                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
             ),
             last_backpressured_bytes: Arc::new(
                 self.upsert_backpressure_defs
                     .last_backpressured_bytes
-                    .get_delete_on_drop_gauge(vec![id.to_string(), index.to_string()]),
+                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
             ),
             retired_bytes: Arc::new(
                 self.upsert_backpressure_defs
                     .retired_bytes
-                    .get_delete_on_drop_counter(vec![id.to_string(), index.to_string()]),
+                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
             ),
         }
     }
@@ -206,7 +206,7 @@ impl StorageMetrics {
             .source_defs
             .channel_metric_defs
             .sends
-            .get_delete_on_drop_counter(vec![
+            .get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 worker_count.to_string(),
@@ -216,7 +216,7 @@ impl StorageMetrics {
             .source_defs
             .channel_metric_defs
             .recvs
-            .get_delete_on_drop_counter(vec![
+            .get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 worker_count.to_string(),

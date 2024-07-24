@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec,
-    GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec, HistogramVec,
+    IntCounterVec, MetricsRegistry, UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -292,10 +292,10 @@ impl UpsertMetricDefs {
             mz_rocksdb::RocksDBSharedMetrics {
                 multi_get_latency: self
                     .rocksdb_multi_get_latency
-                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id.clone()]),
                 multi_put_latency: self
                     .rocksdb_multi_put_latency
-                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id.clone()]),
             }
         };
 
@@ -322,13 +322,13 @@ impl UpsertSharedMetrics {
         UpsertSharedMetrics {
             merge_snapshot_latency: metrics
                 .merge_snapshot_latency
-                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id.clone()]),
             multi_get_latency: metrics
                 .multi_get_latency
-                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id.clone()]),
             multi_put_latency: metrics
                 .multi_put_latency
-                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id.clone()]),
         }
     }
 }
@@ -410,73 +410,73 @@ impl UpsertMetrics {
         Self {
             rehydration_latency: defs
                 .rehydration_latency
-                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             rehydration_total: defs
                 .rehydration_total
-                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             rehydration_updates: defs
                 .rehydration_updates
-                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             rocksdb_autospill_in_use: Arc::new(
                 defs.rocksdb_autospill_in_use
-                    .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             ),
             merge_snapshot_updates: defs
                 .merge_snapshot_updates
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             merge_snapshot_inserts: defs
                 .merge_snapshot_inserts
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             merge_snapshot_deletes: defs
                 .merge_snapshot_deletes
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             upsert_inserts: defs
                 .upsert_inserts
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             upsert_updates: defs
                 .upsert_updates
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             upsert_deletes: defs
                 .upsert_deletes
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_size: defs
                 .multi_get_size
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_result_count: defs
                 .multi_get_result_count
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_result_bytes: defs
                 .multi_get_result_bytes
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_put_size: defs
                 .multi_put_size
-                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             legacy_value_errors: defs
                 .legacy_value_errors
-                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),
             rocksdb_shared: defs.rocksdb_shared(&source_id),
             rocksdb_instance_metrics: Arc::new(RocksDBInstanceMetrics {
                 multi_get_size: defs
                     .rocksdb_multi_get_size
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_get_result_count: defs
                     .rocksdb_multi_get_result_count
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_get_result_bytes: defs
                     .rocksdb_multi_get_result_bytes
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_get_count: defs
                     .rocksdb_multi_get_count
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_put_count: defs
                     .rocksdb_multi_put_count
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
                 multi_put_size: defs
                     .rocksdb_multi_put_size
-                    .get_delete_on_drop_counter(vec![source_id_s, worker_id]),
+                    .get_delete_on_drop_metric(vec![source_id_s, worker_id]),
             }),
             _backpressure_metrics: backpressure_metrics,
         }

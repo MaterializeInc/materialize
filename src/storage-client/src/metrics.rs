@@ -14,8 +14,7 @@ use std::sync::Arc;
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropHistogram, HistogramVecExt, IntCounterVec,
-    MetricsRegistry,
+    DeleteOnDropCounter, DeleteOnDropHistogram, IntCounterVec, MetricVecExt, MetricsRegistry,
 };
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
@@ -66,7 +65,7 @@ impl StorageControllerMetrics {
         id: mz_repr::GlobalId,
     ) -> DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>> {
         self.regressed_offset_known
-            .get_delete_on_drop_counter(vec![id.to_string()])
+            .get_delete_on_drop_metric(vec![id.to_string()])
     }
 
     pub fn for_instance(&self, id: StorageInstanceId) -> RehydratingStorageClientMetrics {
@@ -75,10 +74,10 @@ impl StorageControllerMetrics {
             inner: Arc::new(RehydratingStorageClientMetricsInner {
                 messages_sent_bytes: self
                     .messages_sent_bytes
-                    .get_delete_on_drop_histogram(labels.clone()),
+                    .get_delete_on_drop_metric(labels.clone()),
                 messages_received_bytes: self
                     .messages_received_bytes
-                    .get_delete_on_drop_histogram(labels),
+                    .get_delete_on_drop_metric(labels),
             }),
         }
     }

@@ -14,8 +14,7 @@ use std::sync::Mutex;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, GaugeVecExt, IntCounterVec,
-    MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicF64, AtomicU64};
@@ -93,17 +92,17 @@ impl MySqlSourceMetrics {
     pub(crate) fn new(defs: &MySqlSourceMetricDefs, source_id: GlobalId) -> Self {
         let labels = &[source_id.to_string()];
         Self {
-            inserts: defs.insert_rows.get_delete_on_drop_counter(labels.to_vec()),
-            updates: defs.update_rows.get_delete_on_drop_counter(labels.to_vec()),
-            deletes: defs.delete_rows.get_delete_on_drop_counter(labels.to_vec()),
+            inserts: defs.insert_rows.get_delete_on_drop_metric(labels.to_vec()),
+            updates: defs.update_rows.get_delete_on_drop_metric(labels.to_vec()),
+            deletes: defs.delete_rows.get_delete_on_drop_metric(labels.to_vec()),
             ignored: defs
                 .ignored_messages
-                .get_delete_on_drop_counter(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             total: defs
                 .total_messages
-                .get_delete_on_drop_counter(labels.to_vec()),
-            tables: defs.tables.get_delete_on_drop_gauge(labels.to_vec()),
-            gtid_txids: defs.gtid_txids.get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
+            tables: defs.tables.get_delete_on_drop_metric(labels.to_vec()),
+            gtid_txids: defs.gtid_txids.get_delete_on_drop_metric(labels.to_vec()),
             snapshot_metrics: MySqlSnapshotMetrics {
                 source_id,
                 gauges: Default::default(),
@@ -147,11 +146,10 @@ impl MySqlSnapshotMetrics {
         schema: String,
         latency: f64,
     ) {
-        let latency_gauge = self.defs.table_count_latency.get_delete_on_drop_gauge(vec![
-            self.source_id.to_string(),
-            table_name,
-            schema,
-        ]);
+        let latency_gauge = self
+            .defs
+            .table_count_latency
+            .get_delete_on_drop_metric(vec![self.source_id.to_string(), table_name, schema]);
         latency_gauge.set(latency);
         self.gauges.lock().expect("poisoned").push(latency_gauge)
     }
