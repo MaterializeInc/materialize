@@ -226,6 +226,15 @@ class KillMz(MzcomposeAction):
                 c.capture_logs(self.mz_service)
 
 
+class Stop(MzcomposeAction):
+    def __init__(self, service: str = "materialized") -> None:
+        self.service = service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        c.stop(self.service, wait=True)
+
+
 class Down(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()

@@ -112,6 +112,22 @@ SERVICES = [
         restart="unless-stopped",
         volumes_extra=["secrets:/share/secrets"],
     ),
+    Materialized(
+        name="mz_3",
+        external_cockroach=True,
+        external_minio=True,
+        sanity_restart=False,
+        restart="unless-stopped",
+        volumes_extra=["secrets:/share/secrets"],
+    ),
+    Materialized(
+        name="mz_4",
+        external_cockroach=True,
+        external_minio=True,
+        sanity_restart=False,
+        restart="unless-stopped",
+        volumes_extra=["secrets:/share/secrets"],
+    ),
     TestdriveService(
         default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
         materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
