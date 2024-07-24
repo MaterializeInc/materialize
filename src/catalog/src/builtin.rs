@@ -6561,15 +6561,20 @@ sources AS (
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
+-- We don't yet report sink hydration status (#28459), so we do a best effort attempt here and
+-- define a sink as hydrated when it's both "running" and has a frontier greater than the minimum.
+-- There is likely still a possibility of FPs.
 sinks AS (
     SELECT
         s.id AS object_id,
         r.id AS replica_id,
-        ss.status = 'running' AS hydrated
+        ss.status = 'running' AND COALESCE(f.write_frontier, 0) > 0 AS hydrated
     FROM mz_catalog.mz_sinks s
     LEFT JOIN mz_internal.mz_sink_statuses ss USING (id)
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
+    LEFT JOIN mz_internal.mz_cluster_replica_frontiers f
+        ON (f.object_id = s.id AND f.replica_id = r.id)
 )
 SELECT * FROM indexes
 UNION ALL
