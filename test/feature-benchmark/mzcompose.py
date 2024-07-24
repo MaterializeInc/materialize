@@ -747,7 +747,9 @@ def upload_results_to_test_analytics(
             )
         )
 
-        for discarded_report in discarded_reports_by_scenario_name[scenario_name]:
+        for discarded_report in discarded_reports_by_scenario_name.get(
+            scenario_name, []
+        ):
             discarded_measurements = discarded_report.measurements_of_this(
                 scenario_name
             )
