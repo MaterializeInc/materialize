@@ -361,6 +361,7 @@ message ClusterConfig {
     Empty unmanaged = 1;
     ManagedCluster managed = 2;
   }
+  optional string workload_class = 3;
 }
 
 message ReplicaConfig {

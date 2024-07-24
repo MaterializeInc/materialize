@@ -102,19 +102,16 @@ impl Coordinator {
         }: AlterClusterPlan,
     ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
         use mz_catalog::memory::objects::ClusterVariant::*;
+        use AlterOptionParameter::*;
 
         let config = self.catalog.get_cluster(cluster_id).config.clone();
         let mut new_config = config.clone();
 
         match (&new_config.variant, &options.managed) {
-            (Managed(_), AlterOptionParameter::Reset)
-            | (Managed(_), AlterOptionParameter::Unchanged)
-            | (Managed(_), AlterOptionParameter::Set(true)) => {}
-            (Managed(_), AlterOptionParameter::Set(false)) => new_config.variant = Unmanaged,
-            (Unmanaged, AlterOptionParameter::Unchanged)
-            | (Unmanaged, AlterOptionParameter::Set(false)) => {}
-            (Unmanaged, AlterOptionParameter::Reset)
-            | (Unmanaged, AlterOptionParameter::Set(true)) => {
+            (Managed(_), Reset) | (Managed(_), Unchanged) | (Managed(_), Set(true)) => {}
+            (Managed(_), Set(false)) => new_config.variant = Unmanaged,
+            (Unmanaged, Unchanged) | (Unmanaged, Set(false)) => {}
+            (Unmanaged, Reset) | (Unmanaged, Set(true)) => {
                 // Generate a minimal correct configuration
 
                 // Size and disk adjusted later when sequencing the actual configuration change.
@@ -146,7 +143,6 @@ impl Coordinator {
                 optimizer_feature_overrides: _,
                 schedule,
             }) => {
-                use AlterOptionParameter::*;
                 match &options.size {
                     Set(s) => size.clone_from(s),
                     Reset => coord_bail!("SIZE has no default value"),
@@ -189,7 +185,6 @@ impl Coordinator {
                 }
             }
             Unmanaged => {
-                use AlterOptionParameter::*;
                 if !matches!(options.size, Unchanged) {
                     coord_bail!("Cannot change SIZE of unmanaged clusters");
                 }
@@ -208,37 +203,43 @@ impl Coordinator {
             }
         }
 
+        match &options.workload_class {
+            Set(wc) => new_config.workload_class.clone_from(wc),
+            Reset => new_config.workload_class = None,
+            Unchanged => {}
+        }
+
         if new_config == config {
             return Ok(StageResult::Response(ExecuteResponse::AlteredObject(
                 ObjectType::Cluster,
             )));
         }
 
-        match (&config.variant, new_config.variant) {
-            (Managed(config), Managed(new_config)) => {
+        match (&config.variant, &new_config.variant) {
+            (Managed(_), Managed(_)) => {
                 self.sequence_alter_cluster_managed_to_managed(
                     Some(session),
                     cluster_id,
-                    config,
                     new_config,
                     ReplicaCreateDropReason::Manual,
                 )
                 .await?;
             }
-            (Unmanaged, Managed(new_config)) => {
+            (Unmanaged, Managed(_)) => {
                 self.sequence_alter_cluster_unmanaged_to_managed(
                     session, cluster_id, new_config, options,
                 )
                 .await?;
             }
             (Managed(_), Unmanaged) => {
-                self.sequence_alter_cluster_managed_to_unmanaged(session, cluster_id)
+                self.sequence_alter_cluster_managed_to_unmanaged(session, cluster_id, new_config)
                     .await?;
             }
             (Unmanaged, Unmanaged) => {
                 self.sequence_alter_cluster_unmanaged_to_unmanaged(
                     session,
                     cluster_id,
+                    new_config,
                     options.replicas,
                 )?;
             }

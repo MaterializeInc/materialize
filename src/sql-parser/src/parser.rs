@@ -3846,6 +3846,7 @@ impl<'a> Parser<'a> {
             REPLICATION,
             SIZE,
             SCHEDULE,
+            WORKLOAD,
         ])?;
         let name = match option {
             AVAILABILITY => {
@@ -3866,6 +3867,10 @@ impl<'a> Parser<'a> {
             }
             SIZE => ClusterOptionName::Size,
             SCHEDULE => ClusterOptionName::Schedule,
+            WORKLOAD => {
+                self.expect_keyword(CLASS)?;
+                ClusterOptionName::WorkloadClass
+            }
             _ => unreachable!(),
         };
         Ok(name)

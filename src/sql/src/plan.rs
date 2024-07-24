@@ -525,6 +525,7 @@ pub struct CreateRolePlan {
 pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
+    pub workload_class: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1622,6 +1623,7 @@ pub struct PlanClusterOption {
     pub size: AlterOptionParameter,
     pub disk: AlterOptionParameter<bool>,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
+    pub workload_class: AlterOptionParameter<Option<String>>,
 }
 
 impl Default for PlanClusterOption {
@@ -1636,6 +1638,7 @@ impl Default for PlanClusterOption {
             size: AlterOptionParameter::Unchanged,
             disk: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
+            workload_class: AlterOptionParameter::Unchanged,
         }
     }
 }

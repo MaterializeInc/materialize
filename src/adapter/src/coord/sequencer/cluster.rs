@@ -41,7 +41,11 @@ impl Coordinator {
     pub(super) async fn sequence_create_cluster(
         &mut self,
         session: &Session,
-        CreateClusterPlan { name, variant }: CreateClusterPlan,
+        CreateClusterPlan {
+            name,
+            variant,
+            workload_class,
+        }: CreateClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
 
@@ -75,6 +79,7 @@ impl Coordinator {
         };
         let config = ClusterConfig {
             variant: cluster_variant,
+            workload_class,
         };
         let ops = vec![catalog::Op::CreateCluster {
             id,
@@ -543,12 +548,16 @@ impl Coordinator {
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
     /// contain information on why is a cluster being turned On/Off. It will be forwarded to the
     /// `details` field of the audit log event that records creating or dropping replicas.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the identified cluster is not a managed cluster.
+    /// Panics if `new_config` is not a configuration for a managed cluster.
     pub async fn sequence_alter_cluster_managed_to_managed(
         &mut self,
         session: Option<&Session>,
         cluster_id: ClusterId,
-        config: &ClusterVariantManaged,
-        new_config: ClusterVariantManaged,
+        new_config: ClusterConfig,
         reason: ReplicaCreateDropReason,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
@@ -556,26 +565,30 @@ impl Coordinator {
         let owner_id = cluster.owner_id();
         let mut ops = vec![];
 
-        let (
-            ClusterVariantManaged {
-                size,
-                replication_factor,
-                availability_zones,
-                logging,
-                disk,
-                optimizer_feature_overrides: _,
-                schedule: _,
-            },
-            ClusterVariantManaged {
-                size: new_size,
-                replication_factor: new_replication_factor,
-                availability_zones: new_availability_zones,
-                logging: new_logging,
-                disk: new_disk,
-                optimizer_feature_overrides: _,
-                schedule: _,
-            },
-        ) = (&config, &new_config);
+        let ClusterVariant::Managed(ClusterVariantManaged {
+            size,
+            availability_zones,
+            logging,
+            replication_factor,
+            disk,
+            optimizer_feature_overrides: _,
+            schedule: _,
+        }) = &cluster.config.variant
+        else {
+            panic!("expected existing managed cluster config");
+        };
+        let ClusterVariant::Managed(ClusterVariantManaged {
+            size: new_size,
+            replication_factor: new_replication_factor,
+            availability_zones: new_availability_zones,
+            logging: new_logging,
+            disk: new_disk,
+            optimizer_feature_overrides: _,
+            schedule: _,
+        }) = &new_config.variant
+        else {
+            panic!("expected new managed cluster config");
+        };
 
         let role_id = session.map(|s| s.role_metadata().current_role);
         self.catalog.ensure_valid_replica_size(
@@ -683,11 +696,10 @@ impl Coordinator {
             }
         }
 
-        let variant = ClusterVariant::Managed(new_config);
         ops.push(catalog::Op::UpdateClusterConfig {
             id: cluster_id,
             name,
-            config: ClusterConfig { variant },
+            config: new_config,
         });
 
         self.catalog_transact(session, ops).await?;
@@ -697,17 +709,20 @@ impl Coordinator {
         Ok(())
     }
 
+    /// # Panics
+    ///
+    /// Panics if `new_config` is not a configuration for a managed cluster.
     pub(crate) async fn sequence_alter_cluster_unmanaged_to_managed(
         &mut self,
         session: &Session,
         cluster_id: ClusterId,
-        mut new_config: ClusterVariantManaged,
+        mut new_config: ClusterConfig,
         options: PlanClusterOption,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let cluster_name = cluster.name().to_string();
 
-        let ClusterVariantManaged {
+        let ClusterVariant::Managed(ClusterVariantManaged {
             size: new_size,
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
@@ -715,7 +730,10 @@ impl Coordinator {
             disk: new_disk,
             optimizer_feature_overrides: _,
             schedule: _,
-        } = &mut new_config;
+        }) = &mut new_config.variant
+        else {
+            panic!("expected new managed cluster config");
+        };
 
         // Validate replication factor parameter
         let user_replica_count = cluster
@@ -828,14 +846,11 @@ impl Coordinator {
             );
         }
 
-        let mut ops = vec![];
-
-        let variant = ClusterVariant::Managed(new_config);
-        ops.push(catalog::Op::UpdateClusterConfig {
+        let ops = vec![catalog::Op::UpdateClusterConfig {
             id: cluster_id,
             name: cluster_name,
-            config: ClusterConfig { variant },
-        });
+            config: new_config,
+        }];
 
         self.catalog_transact(Some(session), ops).await?;
         Ok(())
@@ -845,16 +860,15 @@ impl Coordinator {
         &mut self,
         session: &Session,
         cluster_id: ClusterId,
+        new_config: ClusterConfig,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog().get_cluster(cluster_id);
-        let mut ops = vec![];
 
-        let variant = ClusterVariant::Unmanaged;
-        ops.push(catalog::Op::UpdateClusterConfig {
+        let ops = vec![catalog::Op::UpdateClusterConfig {
             id: cluster_id,
             name: cluster.name().to_string(),
-            config: ClusterConfig { variant },
-        });
+            config: new_config,
+        }];
 
         self.catalog_transact(Some(session), ops).await?;
         Ok(())
@@ -864,6 +878,7 @@ impl Coordinator {
         &self,
         _session: &Session,
         _cluster_id: ClusterId,
+        _new_config: ClusterConfig,
         _replicas: AlterOptionParameter<Vec<(String, mz_sql::plan::ReplicaConfig)>>,
     ) -> Result<(), AdapterError> {
         coord_bail!("Cannot alter unmanaged cluster");

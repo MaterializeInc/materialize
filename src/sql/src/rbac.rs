@@ -442,6 +442,7 @@ fn generate_rbac_requirements(
         Plan::CreateCluster(plan::CreateClusterPlan {
             name: _,
             variant: _,
+            workload_class: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
             item_usage: &CREATE_ITEM_USAGE,

@@ -2502,6 +2502,28 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+
+pub static MZ_CLUSTER_WORKLOAD_CLASSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_workload_classes",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_WORKLOAD_CLASSES_OID,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("workload_class", ScalarType::String.nullable(true))
+        .with_key(vec![0]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub const MZ_CLUSTER_WORKLOAD_CLASSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_workload_classes_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_WORKLOAD_CLASSES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_cluster_workload_classes (id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_CLUSTER_SCHEDULES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_schedules",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7366,6 +7388,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
+        Builtin::Table(&MZ_CLUSTER_WORKLOAD_CLASSES),
         Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),

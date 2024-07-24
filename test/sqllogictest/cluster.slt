@@ -19,7 +19,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE, found EOF
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found EOF
 CREATE CLUSTER foo
 
 statement ok
@@ -907,3 +907,123 @@ DROP CLUSTER c1
 mode cockroach
 
 reset-server
+
+# Test setting and altering WORKLOAD CLASS.
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+u1  NULL
+
+statement error WORKLOAD CLASS not supported for non-system users
+CREATE CLUSTER c1 SIZE '1', WORKLOAD CLASS 'production'
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER c1 SIZE '1', WORKLOAD CLASS 'production'
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+u1  NULL
+u2  production
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER c1
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+u1  NULL
+
+statement ok
+CREATE CLUSTER c1 SIZE '1'
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+u1  NULL
+u3  NULL
+
+statement error WORKLOAD CLASS not supported for non-system users
+ALTER CLUSTER c1 RESET (WORKLOAD CLASS)
+
+statement error WORKLOAD CLASS not supported for non-system users
+ALTER CLUSTER c1 SET (WORKLOAD CLASS 'qa')
+
+statement error WORKLOAD CLASS not supported for non-system users
+ALTER CLUSTER c1 SET (WORKLOAD CLASS NULL)
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c1 RESET (WORKLOAD CLASS)
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+u1  NULL
+u3  NULL
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c1 SET (WORKLOAD CLASS 'qa')
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+u1  NULL
+u3  qa
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c1 SET (WORKLOAD CLASS NULL)
+----
+COMPLETE 0
+
+query TT colnames
+SELECT * FROM mz_internal.mz_cluster_workload_classes
+----
+id  workload_class
+s1  NULL
+s2  NULL
+s3  NULL
+s4  NULL
+u1  NULL
+u3  NULL
+
+statement ok
+DROP CLUSTER c1

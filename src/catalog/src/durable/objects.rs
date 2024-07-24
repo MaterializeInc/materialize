@@ -248,6 +248,7 @@ impl DurableType for Cluster {
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterConfig {
     pub variant: ClusterVariant,
+    pub workload_class: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]

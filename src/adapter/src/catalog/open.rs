@@ -1029,6 +1029,7 @@ fn add_new_builtin_clusters_migration(
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
                     }),
+                    workload_class: None,
                 },
                 &HashSet::new(),
             )?;

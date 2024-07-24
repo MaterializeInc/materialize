@@ -72,6 +72,7 @@ Char
 Character
 Characteristics
 Check
+Class
 Client
 Close
 Cluster
@@ -477,6 +478,7 @@ Within
 Without
 Work
 Workers
+Workload
 Write
 Year
 Years
