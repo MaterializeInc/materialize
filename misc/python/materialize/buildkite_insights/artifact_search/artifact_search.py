@@ -24,7 +24,9 @@ from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
 )
-from materialize.buildkite_insights.util.build_step_utils import extract_build_job_ids
+from materialize.buildkite_insights.util.build_step_utils import (
+    extract_build_step_names_by_job_id,
+)
 from materialize.buildkite_insights.util.search_utility import (
     _search_value_to_pattern,
     determine_line_number,
@@ -49,14 +51,15 @@ def main(
     artifact_list_by_job_id: dict[str, list[Any]] = dict()
 
     if specified_job_id is not None:
-        job_ids = [specified_job_id]
+        build_step_name_by_job_id = dict()
+        build_step_name_by_job_id[specified_job_id] = "(unknown)"
     else:
         build = builds_cache.get_or_query_single_build(
             pipeline_slug, fetch, build_number=build_number
         )
-        job_ids = extract_build_job_ids(build)
+        build_step_name_by_job_id = extract_build_step_names_by_job_id(build)
 
-    for job_id in job_ids:
+    for job_id in build_step_name_by_job_id.keys():
         artifact_list_by_job_id[job_id] = (
             artifacts_cache.get_or_query_job_artifact_list(
                 pipeline_slug, fetch, build_number=build_number, job_id=job_id
@@ -72,12 +75,15 @@ def main(
 
     for job_id, artifact_list in artifact_list_by_job_id.items():
         count_artifacts_of_job = len(artifact_list)
+        build_step_name = build_step_name_by_job_id[job_id]
 
         if count_artifacts_of_job == 0:
-            print(f"Skipping job {job_id} without artifacts.")
+            print(f"Skipping job '{build_step_name}' ({job_id}) without artifacts.")
             continue
 
-        print(f"Searching {count_artifacts_of_job} artifacts of job {job_id}.")
+        print(
+            f"Searching {count_artifacts_of_job} artifacts of job '{build_step_name}' ({job_id})."
+        )
         count_all_artifacts = count_all_artifacts + count_artifacts_of_job
 
         for artifact in artifact_list:
