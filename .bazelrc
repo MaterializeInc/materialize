@@ -42,3 +42,5 @@ common --experimental_remote_cache_compression_threshold=2097152
 common --experimental_remote_merkle_tree_cache
 # Number of merkle trees to memoize (default 1000).
 common --experimental_remote_merkle_tree_cache_size=5000
+
+action_env=XZ_OPT=-T0
