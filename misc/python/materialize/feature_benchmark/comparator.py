@@ -59,6 +59,9 @@ class Comparator(Generic[T]):
     def is_regression(self, threshold: float | None = None) -> bool:
         assert False
 
+    def is_strong_regression(self) -> bool:
+        return self.is_regression(threshold=self.threshold * 2)
+
     def ratio(self) -> float | None:
         assert False
 
