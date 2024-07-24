@@ -211,6 +211,8 @@ def add_failure_for_qa_team(failure: str) -> None:
                 "slack": {
                     "channels": ["#team-testing-bots"],
                     "message": f"{step_key}: {failure}",
+                    # Work around duplicate Slack messages on "failing"
+                    "if": 'build.state == "passed" || build.state == "failed" || build.state == "canceled"',
                 }
             }
         ]
