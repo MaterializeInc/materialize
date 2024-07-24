@@ -1881,8 +1881,11 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::ArrayData;
     use bytes::Bytes;
     use mz_ore::assert_err;
+    use mz_persist::indexed::columnar::arrow::realloc_array;
+    use mz_persist::metrics::ColumnarMetrics;
     use mz_repr::{arb_datum_for_scalar, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -1954,11 +1957,26 @@ mod tests {
 
     #[track_caller]
     fn roundtrip_source_data(desc: RelationDesc, datas: Vec<SourceData>) {
+        let metrics = ColumnarMetrics::disconnected();
         let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
         for data in &datas {
             encoder.append(data);
         }
         let (col, _stats) = encoder.finish();
+
+        // Reallocate our arrays with lgalloc.
+        let col = realloc_array(&col, &metrics);
+
+        // Roundtrip through ProtoArray format.
+        {
+            let proto = col.to_data().into_proto();
+            let bytes = proto.encode_to_vec();
+            let proto = mz_persist_types::arrow::ProtoArrayData::decode(&bytes[..]).unwrap();
+            let array_data: ArrayData = proto.into_rust().unwrap();
+            let col_rnd = StructArray::from(array_data);
+
+            assert_eq!(col, col_rnd);
+        }
 
         // Encode to Parquet.
         let mut buf = Vec::new();
@@ -1998,25 +2016,25 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn all_source_data_roundtrips() {
-        let num_rows = Union::new_weighted(vec![
-            (500, Just(0..8)),
-            (50, Just(8..32)),
-            (10, Just(32..128)),
-            (5, Just(128..256)),
-            (1, Just(256..1050)),
-        ]);
+        let mut weights = vec![(500, Just(0..8)), (50, Just(8..32))];
+        if std::env::var("PROPTEST_LARGE_DATA").is_ok() {
+            weights.extend([
+                (10, Just(32..128)),
+                (5, Just(128..512)),
+                (3, Just(512..2048)),
+                (1, Just(2048..8192)),
+            ]);
+        }
+        let num_rows = Union::new_weighted(weights);
 
         let strat = (any::<RelationDesc>(), num_rows).prop_flat_map(|(desc, num_rows)| {
             proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
                 .prop_map(move |datas| (desc.clone(), datas))
         });
 
-        proptest!(
-            ProptestConfig::with_cases(80),
-            |((desc, source_datas) in strat)| {
-                roundtrip_source_data(desc, source_datas);
-            }
-        );
+        proptest!(|((desc, source_datas) in strat)| {
+            roundtrip_source_data(desc, source_datas);
+        });
     }
 
     #[mz_ore::test]

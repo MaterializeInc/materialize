@@ -569,15 +569,16 @@ impl Arbitrary for RelationDesc {
     type Strategy = BoxedStrategy<RelationDesc>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        let num_columns = Union::new_weighted(vec![
-            (100, Just(0..4)),
-            (50, Just(4..8)),
-            (25, Just(8..16)),
-            (12, Just(16..32)),
-            (6, Just(32..64)),
-            (3, Just(64..128)),
-            (1, Just(128..256)),
-        ]);
+        let mut weights = vec![(100, Just(0..4)), (50, Just(4..8)), (25, Just(8..16))];
+        if std::env::var("PROPTEST_LARGE_DATA").is_ok() {
+            weights.extend([
+                (12, Just(16..32)),
+                (6, Just(32..64)),
+                (3, Just(64..128)),
+                (1, Just(128..256)),
+            ]);
+        }
+        let num_columns = Union::new_weighted(weights);
 
         num_columns.prop_flat_map(arb_relation_desc).boxed()
     }
@@ -588,13 +589,15 @@ impl Arbitrary for RelationDesc {
 pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Value = RelationDesc> {
     // Long column names are generally uninteresting, and can greatly
     // increase the runtime for a test case, so bound the max length.
-    let name_length = Union::new_weighted(vec![
-        (50, Just(0..8)),
-        (20, Just(8..16)),
-        (5, Just(16..128)),
-        (1, Just(128..1024)),
-        (1, Just(1024..4096)),
-    ]);
+    let mut weights = vec![(50, Just(0..8)), (20, Just(8..16))];
+    if std::env::var("PROPTEST_LARGE_DATA").is_ok() {
+        weights.extend([
+            (5, Just(16..128)),
+            (1, Just(128..1024)),
+            (1, Just(1024..4096)),
+        ]);
+    }
+    let name_length = Union::new_weighted(weights);
 
     let name_strat = name_length
         .prop_flat_map(|length| proptest::collection::vec(any::<char>(), length))

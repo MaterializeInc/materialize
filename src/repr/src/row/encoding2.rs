@@ -1646,9 +1646,11 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::ArrayData;
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
+    use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
@@ -1675,7 +1677,20 @@ mod tests {
             encoder.append(row);
         }
         let (col, stats) = encoder.finish();
+
+        // Exercise reallocating columns with lgalloc.
         let col = realloc_array(&col, metrics);
+        // Exercise our ProtoArray format.
+        {
+            let proto = col.to_data().into_proto();
+            let bytes = proto.encode_to_vec();
+            let proto = mz_persist_types::arrow::ProtoArrayData::decode(&bytes[..]).unwrap();
+            let array_data: ArrayData = proto.into_rust().unwrap();
+            let col_rnd = StructArray::from(array_data);
+
+            assert_eq!(col, col_rnd);
+        }
+
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
         // Collect all of our lower and upper bounds.
