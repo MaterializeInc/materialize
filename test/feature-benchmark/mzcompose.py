@@ -499,7 +499,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"Cycle {cycle + 1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
         )
 
-        report = Report()
+        report = Report(cycle=cycle + 1)
 
         scenarios_with_regressions = []
         for scenario in scenarios_to_run:
@@ -738,6 +738,7 @@ def upload_results_to_test_analytics(
                 scenario_name=scenario_name,
                 scenario_group=scenario_group,
                 scenario_version=str(scenario_version),
+                cycle=report.cycle,
                 scale=scale or "default",
                 wallclock=report_measurements[MeasurementType.WALLCLOCK],
                 messages=report_measurements[MeasurementType.MESSAGES],
@@ -746,18 +747,16 @@ def upload_results_to_test_analytics(
             )
         )
 
-        for cycle_index, discarded_report in enumerate(
-            discarded_reports_by_scenario_name[scenario_name]
-        ):
+        for discarded_report in discarded_reports_by_scenario_name[scenario_name]:
             discarded_measurements = discarded_report.measurements_of_this(
                 scenario_name
             )
-
             discarded_entries.append(
-                feature_benchmark_result_storage.FeatureBenchmarkDiscardedResultEntry(
+                feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
                     scenario_name=scenario_name,
                     scenario_group=scenario_group,
                     scenario_version=str(scenario_version),
+                    cycle=discarded_report.cycle,
                     scale=scale or "default",
                     wallclock=discarded_measurements[MeasurementType.WALLCLOCK],
                     messages=discarded_measurements[MeasurementType.MESSAGES],
@@ -765,7 +764,6 @@ def upload_results_to_test_analytics(
                     memory_clusterd=discarded_measurements[
                         MeasurementType.MEMORY_CLUSTERD
                     ],
-                    cycle=cycle_index + 1,
                 )
             )
 
