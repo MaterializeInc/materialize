@@ -68,7 +68,7 @@ leverage exciting new SQL patterns enabled by streaming like
 [**Change Data Capture (CDC)**](/integrations/#databases),
 [**temporal filters**](/sql/patterns/temporal-filters/), and [**subscriptions**](/sql/subscribe/).
 
-### Connectors to external systems
+### Real-time data ingestion
 
 Materialize provides **native connectors** that allow ingesting data from the various external systems:
 
