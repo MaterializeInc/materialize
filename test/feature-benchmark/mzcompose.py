@@ -492,7 +492,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenarios_with_regressions = []
     latest_report_by_scenario_name: dict[str, Report] = dict()
 
-    scenarios_to_run = scenarios_scheduled_to_run.copy()
+    scenarios_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
     for cycle in range(0, args.max_retries):
         print(
             f"Cycle {cycle + 1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
@@ -510,7 +510,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
-            if any([c.is_regression() for c in comparators]):
+            if _shall_retry_scenario(scenario, comparators, cycle):
                 scenarios_with_regressions.append(scenario)
 
             latest_report_by_scenario_name[scenario.__name__] = report
@@ -582,6 +582,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 scale=args.scale,
             ),
         )
+
+
+def _shall_retry_scenario(
+    scenario: type[Scenario], comparators: list[Comparator], cycle: int
+) -> bool:
+    return any(
+        [
+            c.is_regression() and not (c.is_strong_regression() and cycle >= 2)
+            for c in comparators
+        ]
+    )
 
 
 def _check_regressions_justified(

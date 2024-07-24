@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
@@ -56,19 +56,17 @@ class Comparator(Generic[T]):
         assert self.version is not None
         return self.version
 
-    def is_regression(self) -> bool:
+    def is_regression(self, threshold: float | None = None) -> bool:
         assert False
+
+    def is_strong_regression(self) -> bool:
+        return self.is_regression(threshold=self.threshold * 2)
 
     def ratio(self) -> float | None:
         assert False
 
     def human_readable(self, use_colors: bool) -> str:
         return str(self)
-
-
-class SuccessComparator(Comparator[float]):
-    def is_regression(self) -> bool:
-        return False
 
 
 class RelativeThresholdComparator(Comparator[float | None]):
@@ -78,13 +76,16 @@ class RelativeThresholdComparator(Comparator[float | None]):
         else:
             return self._points[0] / self._points[1]
 
-    def is_regression(self) -> bool:
+    def is_regression(self, threshold: float | None = None) -> bool:
+        if threshold is None:
+            threshold = self.threshold
+
         ratio = self.ratio()
 
         if ratio is None:
             return False
         if ratio > 1:
-            return ratio - 1 > self.threshold
+            return ratio - 1 > threshold
         else:
             return False
 
@@ -114,15 +115,3 @@ class RelativeThresholdComparator(Comparator[float | None]):
             return with_conditional_formatting(
                 f"{(1/ratio):3.1f} times less/faster", COLOR_GOOD, condition=use_colors
             )
-
-
-class Overlappable(Protocol):
-    def overlap(self, other: "Overlappable") -> float: ...
-
-
-class OverlapComparator(Comparator[Overlappable]):
-    def ratio(self) -> float:
-        return self._points[0].overlap(other=self._points[1])
-
-    def is_regression(self) -> bool:
-        return self.ratio() < 1 - self.threshold
