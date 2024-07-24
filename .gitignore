@@ -51,11 +51,7 @@ flake.lock
 /misc/python/materialize/*.egg-info/
 /misc/python/materialize/dist/
 
-/bazel-bin
-/bazel-materialize
-/bazel-out
-/bazel-testlogs
-/bazel-explain.log
+/bazel-*
 
 /src/testdrive/ci/protobuf-bin
 /src/testdrive/ci/protobuf-include
