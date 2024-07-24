@@ -55,6 +55,7 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
+        skip: "openssl-1.1.1w not found"
 
       - id: build-aarch64-bazel
         label: ":bazel: Build aarch64"
@@ -63,6 +64,7 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-aarch64
+        skip: "openssl-1.1.1w not found"
 
       - id: build-wasm
         label: Build WASM
