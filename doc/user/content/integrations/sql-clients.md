@@ -123,8 +123,9 @@ ROLE...SET`](/sql/alter-role) command.
 
 #### Show system objects
 
-By default, DBeaver hides system objects in the database explorer. This
-includes tables, views, and other objects that start with `pg_` or `mz_`.
+By default, DBeaver hides system catalog objects in the database explorer. This
+includes tables, views, and other objects in the `mz_catalog` and `mz_internal`
+schemas.
 
 To show system objects in the database explorer:
 
