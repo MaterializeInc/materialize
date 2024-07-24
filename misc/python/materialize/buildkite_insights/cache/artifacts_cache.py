@@ -94,7 +94,11 @@ def get_or_download_artifact(
                 return file.read()
 
     return generic_cache.get_or_query_data(
-        cache_file_path, action, fetch_mode, quiet_mode=True
+        cache_file_path,
+        action,
+        fetch_mode,
+        max_allowed_cache_age_in_hours=96,
+        quiet_mode=True,
     )
 
 
