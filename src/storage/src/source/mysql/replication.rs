@@ -198,8 +198,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             // we should start replication from.
             let min_frontier = Antichain::from_elem(GtidPartition::minimum());
             for subsource in subsources.into_iter() {
-                table_info.insert(subsource.name, (subsource.output_index, subsource.desc));
-
                 // If a subsource is resuming at the minimum frontier then its snapshot
                 // has not yet been committed.
                 // We need to resume from a frontier before the subsource's snapshot frontier
@@ -212,10 +210,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // We've chosen the frontier beyond the GTID Set recorded
                 // during purification as this resume point.
                 if &subsource.resume_upper == &min_frontier {
-                    subsource_uppers.push(subsource.initial_gtid_set);
+                    subsource_uppers.push(subsource.initial_gtid_set.clone());
                 } else {
-                    subsource_uppers.push(subsource.resume_upper);
+                    subsource_uppers.push(subsource.resume_upper.clone());
                 }
+
+                // TODO(roshan): Refactor this when we allow multiple source_exports to ingest
+                // the same table in https://github.com/MaterializeInc/materialize/issues/28435
+                table_info.insert(subsource.name.clone(), subsource);
             }
             let resume_upper = match subsource_uppers.len() {
                 0 => {
@@ -316,8 +318,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 stream.as_mut(),
                 &table_info,
                 &metrics,
-                &connection.text_columns,
-                &connection.ignore_columns,
                 &mut data_output,
                 data_cap_set,
                 upper_cap_set,
