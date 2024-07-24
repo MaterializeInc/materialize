@@ -204,15 +204,17 @@ def _upload_shard_info_metadata(items: list[str]) -> None:
 
 
 def add_failure_for_qa_team(failure: str) -> None:
-    pipeline = {"notify": [{"email": "dennis.felsing@materialize.com"}]}
     step_key = get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
-
-    add_annotation_raw(
-        style="error",
-        markdown=f"Relevant for #team-testing: {step_key}\n```\n{failure}\n```",
-    )
-    # TODO(def-) once we have integration switch to Slack: https://materializeinc.slack.com/archives/C01KV5PEZ9R/p1721756599344869
-    # pipeline = {"notify": [{"slack": {"channels": ["#team-testing-bots"], "message": f"{step_key}: {failure}"}}]}
+    pipeline = {
+        "notify": [
+            {
+                "slack": {
+                    "channels": ["#team-testing-bots"],
+                    "message": f"{step_key}: {failure}",
+                }
+            }
+        ]
+    }
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
     )
