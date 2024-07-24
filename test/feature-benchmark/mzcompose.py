@@ -581,6 +581,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenarios_scheduled_to_run,
         args.scale,
         latest_report_by_scenario_name,
+        discarded_reports_by_scenario_name,
         successful_run,
     )
 
@@ -709,6 +710,7 @@ def upload_results_to_test_analytics(
     scenario_classes: list[type[Scenario]],
     scale: str | None,
     latest_report_by_scenario_name: dict[str, Report],
+    discarded_reports_by_scenario_name: dict[str, list[Report]],
     was_successful: bool,
 ) -> None:
     if not buildkite.is_in_buildkite():
@@ -722,6 +724,7 @@ def upload_results_to_test_analytics(
     test_analytics.builds.add_build_job(was_successful=was_successful)
 
     result_entries = []
+    discarded_entries = []
 
     for scenario_cls in scenario_classes:
         scenario_name = scenario_cls.__name__
@@ -743,10 +746,34 @@ def upload_results_to_test_analytics(
             )
         )
 
+        for cycle_index, discarded_report in enumerate(
+            discarded_reports_by_scenario_name[scenario_name]
+        ):
+            discarded_measurements = discarded_report.measurements_of_this(
+                scenario_name
+            )
+
+            discarded_entries.append(
+                feature_benchmark_result_storage.FeatureBenchmarkDiscardedResultEntry(
+                    scenario_name=scenario_name,
+                    scenario_group=scenario_group,
+                    scenario_version=str(scenario_version),
+                    scale=scale or "default",
+                    wallclock=discarded_measurements[MeasurementType.WALLCLOCK],
+                    messages=discarded_measurements[MeasurementType.MESSAGES],
+                    memory_mz=discarded_measurements[MeasurementType.MEMORY_MZ],
+                    memory_clusterd=discarded_measurements[
+                        MeasurementType.MEMORY_CLUSTERD
+                    ],
+                    cycle=cycle_index + 1,
+                )
+            )
+
     test_analytics.benchmark_results.add_result(
         framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
         results=result_entries,
     )
+    test_analytics.benchmark_results.add_discarded_entries(discarded_entries)
 
     try:
         test_analytics.submit_updates()
