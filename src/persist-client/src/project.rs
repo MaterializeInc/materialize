@@ -14,12 +14,12 @@ use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::ColumnarRecordsBuilder;
 use mz_persist_types::stats::PartStats;
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
-use crate::internal::encoding::LazyInlineBatchPart;
+use crate::internal::encoding::{LazyInlineBatchPart, Schemas};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, ProtoInlineBatchPart};
 
@@ -42,7 +42,7 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_DECODE: Config<bool> = Config::new(
 /// non-`Err` data. See [ProjectionPushdown::try_optimize_ignored_data_fetch].
 #[derive(Debug, Clone)]
 #[allow(rustdoc::private_intra_doc_links)]
-pub enum ProjectionPushdown {
+pub enum ProjectionPushdown<K: Codec, V: Codec> {
     /// Fetch all columns.
     FetchAll,
     /// For data with a top-level error column in the structured representation,
@@ -58,19 +58,21 @@ pub enum ProjectionPushdown {
         /// The name of the top-level error column.
         err_col_name: &'static str,
         /// The `Codec` encoded key corresponding to ignored data.
-        key_bytes: Vec<u8>,
+        key: K,
         /// The `Codec` encoded val corresponding to ignored data.
-        val_bytes: Vec<u8>,
+        val: V,
+        /// Schemas for the provided values.
+        schemas: Schemas<K, V>,
     },
 }
 
-impl Default for ProjectionPushdown {
+impl<K: Codec, V: Codec> Default for ProjectionPushdown<K, V> {
     fn default() -> Self {
         ProjectionPushdown::FetchAll
     }
 }
 
-impl ProjectionPushdown {
+impl<K: Codec, V: Codec> ProjectionPushdown<K, V> {
     /// If relevant, applies the [Self::IgnoreAllNonErr] projection to a part
     /// about to be fetched.
     ///
@@ -99,13 +101,14 @@ impl ProjectionPushdown {
         if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
             return None;
         }
-        let (err_col_name, key_bytes, val_bytes) = match self {
+        let (err_col_name, key, val, schemas) = match self {
             ProjectionPushdown::FetchAll => return None,
             ProjectionPushdown::IgnoreAllNonErr {
                 err_col_name,
-                key_bytes,
-                val_bytes,
-            } => (*err_col_name, key_bytes.as_slice(), val_bytes.as_slice()),
+                key,
+                val,
+                schemas,
+            } => (*err_col_name, key, val, schemas),
         };
         let (diffs_sum, stats) = match &part {
             BatchPart::Hollow(x) => (x.diffs_sum, x.stats.as_ref()),
@@ -147,8 +150,8 @@ impl ProjectionPushdown {
             .parts_faked_bytes
             .inc_by(u64::cast_from(part.encoded_size_bytes()));
 
-        let mut faked_data = ColumnarRecordsBuilder::default();
-        assert!(faked_data.push(((key_bytes, val_bytes), T::encode(as_of), diffs_sum)));
+        let mut faked_data = ColumnarRecordsBuilder::<K, V>::new(&schemas.key, &schemas.val);
+        assert!(faked_data.push(((key, val), T::encode(as_of), diffs_sum)));
         let updates = faked_data.finish(&metrics.columnar).into_proto();
         let faked_data = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
             desc: Some(desc.into_proto()),

@@ -13,7 +13,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -30,7 +30,7 @@ use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tracing::{debug, debug_span, error, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, PartDeletes};
+use crate::batch::{BatchBuilder, BatchBuilderConfig, PartDeletes};
 use crate::cfg::MiB;
 use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
@@ -679,7 +679,7 @@ where
 
         let mut timings = Timings::default();
 
-        let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
+        let mut batch = BatchBuilder::<K, V, T, D>::new(
             cfg.batch.clone(),
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),
@@ -688,6 +688,7 @@ where
             Arc::clone(&blob),
             Arc::clone(&isolated_runtime),
             shard_id.clone(),
+            real_schemas.clone(),
             cfg.version.clone(),
             desc.since().clone(),
             Some(desc.upper().clone()),
@@ -723,8 +724,11 @@ where
         }
 
         // Reuse the allocations for individual keys and values
-        let mut key_vec = vec![];
-        let mut val_vec = vec![];
+        let mut key_reuse = K::default();
+        let mut key_storage = Some(K::Storage::default());
+        let mut val_reuse = V::default();
+        let mut val_storage = Some(V::Storage::default());
+
         loop {
             let fetch_start = Instant::now();
             let Some(updates) = consolidator.next().await? else {
@@ -732,15 +736,17 @@ where
             };
             timings.part_fetching += fetch_start.elapsed();
             for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
-                key_vec.clear();
-                key_vec.extend_from_slice(k);
-                val_vec.clear();
-                val_vec.extend_from_slice(v);
-                batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+                K::decode_from(&mut key_reuse, k, &mut key_storage)
+                    .map_err(|e| anyhow!("{e}"))
+                    .context("key")?;
+                V::decode_from(&mut val_reuse, v, &mut val_storage)
+                    .map_err(|e| anyhow!("{e}"))
+                    .context("val")?;
+                batch.add(&key_reuse, &val_reuse, &t, &d).await?;
             }
             tokio::task::yield_now().await;
         }
-        let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        let mut batch = batch.finish(desc.upper().clone()).await?;
 
         // We use compaction as a method of getting inline writes out of state,
         // to make room for more inline writes. This happens in

@@ -18,6 +18,8 @@ use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array};
 use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
 use bytes::Bytes;
+use mz_persist_types::columnar::{ColumnEncoder, Schema2};
+use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::gen::persist::ProtoColumnarRecords;
@@ -296,38 +298,65 @@ impl<'a> ExactSizeIterator for ColumnarRecordsIter<'a> {}
 /// An abstraction to incrementally add ((Key, Value), Time, i64) records
 /// in a columnar representation, and eventually get back a [ColumnarRecords].
 #[derive(Debug)]
-pub struct ColumnarRecordsBuilder {
+pub struct ColumnarRecordsBuilder<K: Codec, V: Codec> {
     len: usize,
+
+    /// [`Codec`] key data.
     key_data: BinaryBuilder,
+    /// Structured key data.
+    key_encoder: <K::Schema as Schema2<K>>::Encoder,
+    /// [`Codec`] val data.
     val_data: BinaryBuilder,
+    /// Structured val data.
+    val_encoder: <V::Schema as Schema2<V>>::Encoder,
+
     timestamps: Vec<i64>,
     diffs: Vec<i64>,
 }
 
-impl Default for ColumnarRecordsBuilder {
-    fn default() -> Self {
-        ColumnarRecordsBuilder {
+impl<K: Codec, V: Codec> ColumnarRecordsBuilder<K, V> {
+    /// Create a new [`ColumnarRecordsBuilder`].
+    ///
+    /// Note: If you know how many records you need to store, prefer [`ColumnarRecordsBuilder::with_capacity`].
+    pub fn new(key_schema: &K::Schema, val_schema: &V::Schema) -> Self {
+        let key_data = BinaryBuilder::new();
+        let key_encoder = key_schema.encoder().expect("TODO");
+        let val_data = BinaryBuilder::new();
+        let val_encoder = val_schema.encoder().expect("TODO");
+
+        Self {
             len: 0,
-            key_data: BinaryBuilder::new(),
-            val_data: BinaryBuilder::new(),
+            key_data,
+            key_encoder,
+            val_data,
+            val_encoder,
             timestamps: Vec::new(),
             diffs: Vec::new(),
         }
     }
-}
 
-impl ColumnarRecordsBuilder {
     /// Reserve space for the given number of items with the given sizes in bytes.
     /// If they end up being too small, the underlying buffers will be resized as usual.
-    pub fn with_capacity(items: usize, key_bytes: usize, val_bytes: usize) -> Self {
+    pub fn with_capacity(
+        items: usize,
+        key_bytes: usize,
+        key_schema: &K::Schema,
+        val_bytes: usize,
+        val_schema: &V::Schema,
+    ) -> Self {
         let key_data = BinaryBuilder::with_capacity(items, key_bytes);
+        let key_encoder = key_schema.encoder().expect("TODO");
         let val_data = BinaryBuilder::with_capacity(items, val_bytes);
+        let val_encoder = val_schema.encoder().expect("TODO");
         let timestamps = Vec::with_capacity(items);
         let diffs = Vec::with_capacity(items);
+
         Self {
             len: 0,
             key_data,
+            key_encoder,
             val_data,
+            val_encoder,
             timestamps,
             diffs,
         }
@@ -371,17 +400,26 @@ impl ColumnarRecordsBuilder {
     /// added if it exceeds the size limitations of ColumnarBatch. This method
     /// is atomic, if it fails, no partial data will have been added.
     #[must_use]
-    pub fn push(&mut self, record: ((&[u8], &[u8]), [u8; 8], [u8; 8])) -> bool {
+    pub fn push(&mut self, record: ((&K, &V), [u8; 8], [u8; 8])) -> bool {
         let ((key, val), ts, diff) = record;
+
+        let mut k_encoded = vec![];
+        K::encode(key, &mut k_encoded);
+
+        let mut v_encoded = vec![];
+        V::encode(val, &mut v_encoded);
 
         // Check size invariants ahead of time so we stay atomic when we can't
         // add the record.
-        if !self.can_fit(key, val, KEY_VAL_DATA_MAX_LEN) {
+        if !self.can_fit(&k_encoded, &v_encoded, KEY_VAL_DATA_MAX_LEN) {
             return false;
         }
 
-        self.key_data.append_value(key);
-        self.val_data.append_value(val);
+        self.key_data.append_value(k_encoded);
+        self.key_encoder.append(key);
+        self.val_data.append_value(v_encoded);
+        self.val_encoder.append(val);
+
         self.timestamps.push(i64::from_le_bytes(ts));
         self.diffs.push(i64::from_le_bytes(diff));
         self.len += 1;
@@ -484,6 +522,7 @@ pub struct ColumnarRecordsStructuredExt {
 
 #[cfg(test)]
 mod tests {
+    use mz_persist_types::codec_impls::VecU8Schema;
     use mz_persist_types::Codec64;
 
     use super::*;
@@ -494,7 +533,7 @@ mod tests {
     #[mz_ore::test]
     fn columnar_records() {
         let metrics = ColumnarMetrics::disconnected();
-        let builder = ColumnarRecordsBuilder::default();
+        let builder = ColumnarRecordsBuilder::<Vec<u8>, Vec<u8>>::new(&VecU8Schema, &VecU8Schema);
 
         // Empty builder.
         let records = builder.finish(&metrics);
@@ -506,7 +545,7 @@ mod tests {
             (("".into(), "".into()), 0, 0),
             (("".into(), "".into()), 1, 1),
         ];
-        let mut builder = ColumnarRecordsBuilder::default();
+        let mut builder = ColumnarRecordsBuilder::new(&VecU8Schema, &VecU8Schema);
         for ((key, val), time, diff) in updates.iter() {
             assert!(builder.push(((key, val), u64::encode(time), i64::encode(diff))));
         }

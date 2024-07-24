@@ -33,8 +33,8 @@ use tracing::{debug_span, info, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{
-    validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-    ProtoBatch, BATCH_DELETE_ENABLED,
+    validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, ProtoBatch,
+    BATCH_DELETE_ENABLED,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
@@ -604,7 +604,7 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        let builder = BatchBuilderInternal::new(
+        BatchBuilder::new(
             BatchBuilderConfig::new(&self.cfg, &self.writer_id),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
@@ -613,18 +613,12 @@ where
             Arc::clone(&self.blob),
             Arc::clone(&self.isolated_runtime),
             self.machine.shard_id().clone(),
+            self.schemas.clone(),
             self.cfg.build_version.clone(),
             Antichain::from_elem(T::minimum()),
             None,
             false,
-        );
-        BatchBuilder {
-            builder,
-            stats_schemas: self.schemas.clone(),
-            metrics: Arc::clone(&self.metrics),
-            key_buf: vec![],
-            val_buf: vec![],
-        }
+        )
     }
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns

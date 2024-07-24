@@ -38,7 +38,7 @@ pub mod txn;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
-pub trait Codec: Sized + PartialEq + 'static {
+pub trait Codec: Sized + Default + PartialEq + Send + Sync + 'static {
     /// The type of the associated schema for [Self].
     ///
     /// This is a separate type because Row is not self-describing. For Row, you
@@ -86,7 +86,7 @@ pub trait Codec: Sized + PartialEq + 'static {
 
     /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
     /// if unnecessary.
-    type Storage: Default;
+    type Storage: Default + Send + Sync;
     /// An alternate form of [Self::decode] which enables amortizing allocs.
     ///
     /// First, instead of returning `Self`, it takes `&mut Self` as a parameter,

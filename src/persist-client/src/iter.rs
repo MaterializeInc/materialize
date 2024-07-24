@@ -879,6 +879,7 @@ mod tests {
     use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
     use mz_persist::location::Blob;
     use mz_persist::mem::{MemBlob, MemBlobConfig};
+    use mz_persist_types::codec_impls::VecU8Schema;
     use proptest::collection::vec;
     use proptest::prelude::*;
     use timely::progress::Antichain;
@@ -932,7 +933,8 @@ mod tests {
                             [part, part_2]
                                 .into_iter()
                                 .map(|part| {
-                                    let mut records = ColumnarRecordsBuilder::default();
+                                    let mut records =
+                                        ColumnarRecordsBuilder::new(&VecU8Schema, &VecU8Schema);
                                     for ((k, v), t, d) in &part {
                                         assert!(records.push((
                                             (k, v),
