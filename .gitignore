@@ -51,11 +51,8 @@ flake.lock
 /misc/python/materialize/*.egg-info/
 /misc/python/materialize/dist/
 
-/bazel-bin
-/bazel-materialize
-/bazel-out
-/bazel-testlogs
-/bazel-explain.log
+# Ignore top level directories all perfixed with 'bazel-'
+/bazel-*
 
 /src/testdrive/ci/protobuf-bin
 /src/testdrive/ci/protobuf-include
