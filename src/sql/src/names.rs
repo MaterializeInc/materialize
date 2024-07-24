@@ -1813,6 +1813,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 Item(item_name)
             }
             UnresolvedItemName(name) => UnresolvedItemName(self.fold_unresolved_item_name(name)),
+            Ident(name) => Ident(self.fold_ident(name)),
             ClusterReplicas(replicas) => ClusterReplicas(
                 replicas
                     .into_iter()

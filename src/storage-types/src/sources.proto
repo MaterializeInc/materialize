@@ -70,6 +70,17 @@ message ProtoCompression {
     }
 }
 
+// NOTE: this message is encoded and stored as part of a source export
+// statement option (currently only `CREATE SUBSOURCE` statements)
+// Be extra careful about changes, ensuring that all changes are backwards compatible
+message ProtoSourceExportStatementDetails {
+    oneof kind {
+        mz_storage_types.sources.postgres.ProtoPostgresSourceExportStatementDetails postgres = 1;
+        mz_storage_types.sources.mysql.ProtoMySqlSourceExportStatementDetails mysql = 2;
+        mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportStatementDetails loadgen = 3;
+    }
+}
+
 message ProtoIngestionDescription {
     message ProtoSourceImport {
         mz_repr.global_id.ProtoGlobalId id = 1;

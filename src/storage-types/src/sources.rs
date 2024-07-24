@@ -1109,6 +1109,85 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
     }
 }
 
+/// Details necessary to store in the `Details` option of a source export
+/// statement (currently only `CREATE SUBSOURCE` statements), to generate the
+/// appropriate `SourceExportDetails` struct during planning.
+/// NOTE that this is serialized as proto to the catalog, so any changes here
+/// must be backwards compatible or will require a migration.
+/// We only support `CREATE SUBSOURCE` statements for Postgres and MySQL
+/// for now, so we only need to support those here.
+pub enum SourceExportStatementDetails {
+    Postgres {
+        table: mz_postgres_util::desc::PostgresTableDesc,
+    },
+    MySql {
+        table: mz_mysql_util::MySqlTableDesc,
+        initial_gtid_set: String,
+    },
+    LoadGenerator {},
+}
+
+impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
+    fn into_proto(&self) -> ProtoSourceExportStatementDetails {
+        match self {
+            SourceExportStatementDetails::Postgres { table } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Postgres(
+                    postgres::ProtoPostgresSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::MySql {
+                table,
+                initial_gtid_set,
+            } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Mysql(
+                    mysql::ProtoMySqlSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                        initial_gtid_set: initial_gtid_set.clone(),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::LoadGenerator {} => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Loadgen(
+                    load_generator::ProtoLoadGeneratorSourceExportStatementDetails {},
+                )),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportStatementDetails) -> Result<Self, TryFromProtoError> {
+        use proto_source_export_statement_details::Kind;
+        Ok(match proto.kind {
+            Some(Kind::Postgres(details)) => SourceExportStatementDetails::Postgres {
+                table: mz_postgres_util::desc::PostgresTableDesc::from_proto(
+                    details.table.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "ProtoPostgresSourceExportStatementDetails::table",
+                        )
+                    })?,
+                )?,
+            },
+            Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
+                table: mz_mysql_util::MySqlTableDesc::from_proto(details.table.ok_or_else(
+                    || {
+                        TryFromProtoError::missing_field(
+                            "ProtoMySqlSourceExportStatementDetails::table",
+                        )
+                    },
+                )?)?,
+                initial_gtid_set: details.initial_gtid_set,
+            },
+            Some(Kind::Loadgen(_details)) => SourceExportStatementDetails::LoadGenerator {},
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoSourceExportStatementDetails::kind",
+                ))
+            }
+        })
+    }
+}
+
 #[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);

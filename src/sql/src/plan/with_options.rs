@@ -131,14 +131,13 @@ impl TryFromValue<WithOptionValue<Aug>> for Ident {
             {
                 inner.remove(0)
             }
-            _ => sql_bail!("must provide an unqalified identifier"),
+            WithOptionValue::Ident(inner) => inner,
+            _ => sql_bail!("must provide an unqualified identifier"),
         })
     }
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
-        Some(WithOptionValue::UnresolvedItemName(UnresolvedItemName(
-            vec![self],
-        )))
+        Some(WithOptionValue::Ident(self))
     }
 
     fn name() -> String {
@@ -156,6 +155,7 @@ impl TryFromValue<WithOptionValue<Aug>> for UnresolvedItemName {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
             WithOptionValue::UnresolvedItemName(name) => name,
+            WithOptionValue::Ident(inner) => UnresolvedItemName(vec![inner]),
             _ => sql_bail!("must provide an object name"),
         })
     }
@@ -594,6 +594,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             {
                 V::try_from_value(Value::String(inner.remove(0).into_string()))
             }
+            WithOptionValue::Ident(v) => V::try_from_value(Value::String(v.into_string())),
             WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
             WithOptionValue::Sequence(_)
             | WithOptionValue::Map(_)
@@ -617,6 +618,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::Map(_) => "maps",
                     WithOptionValue::Item(_) => "object references",
                     WithOptionValue::UnresolvedItemName(_) => "object names",
+                    WithOptionValue::Ident(_) => "identifiers",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",

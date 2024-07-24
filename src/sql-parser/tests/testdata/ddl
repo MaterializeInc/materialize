@@ -562,6 +562,13 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
+CREATE SUBSOURCE mz_subsource (c int) OF SOURCE public.foo.mz_source WITH (EXTERNAL REFERENCE = public.foo.bar, IGNORE COLUMNS (bar), TEXT COLUMNS (baz, foobar), DETAILS = 'details');
+----
+CREATE SUBSOURCE mz_subsource (c int4) OF SOURCE public.foo.mz_source WITH (EXTERNAL REFERENCE = public.foo.bar, IGNORE COLUMNS = (bar), TEXT COLUMNS = (baz, foobar), DETAILS = 'details')
+=>
+CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("mz_subsource")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], of_source: Some(Name(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("mz_source")]))), constraints: [], if_not_exists: false, with_options: [CreateSubsourceOption { name: ExternalReference, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))) }, CreateSubsourceOption { name: IgnoreColumns, value: Some(Sequence([Ident(Ident("bar"))])) }, CreateSubsourceOption { name: TextColumns, value: Some(Sequence([Ident(Ident("baz")), Ident(Ident("foobar"))])) }, CreateSubsourceOption { name: Details, value: Some(Value(String("details"))) }] })
+
+parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic', PROGRESS GROUP ID PREFIX 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic', PROGRESS GROUP ID PREFIX = 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
