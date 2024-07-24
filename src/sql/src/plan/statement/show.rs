@@ -420,7 +420,7 @@ fn show_subsources<'a>(
         query_filter.push(format!("subsources.schema_id = '{schema_spec}'"));
     }
 
-    // TODO(#20208): this looks in both directions for subsources as long as
+    // TODO(#28430): this looks in both directions for subsources as long as
     // progress collections still exist
     let query = format!(
         "SELECT DISTINCT
@@ -953,7 +953,7 @@ fn humanize_sql_for_show_create(
         Statement::CreateSource(stmt) => {
             // Collect all current subsource references.
             //
-            // TODO(#24843): this structure will need to change because we will
+            // TODO(#28430): this structure will need to change because we will
             // have multiple references to the same upstream table.
             let mut curr_references: BTreeMap<_, _> = catalog
                 .get_item(&id)
