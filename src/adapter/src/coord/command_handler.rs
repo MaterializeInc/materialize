@@ -718,7 +718,9 @@ impl Coordinator {
         // DDLs must be planned and sequenced serially. We do not rely on PlanValidity checking
         // variaous IDs because we have incorrectly done that in the past. Attempt to acquire the
         // ddl lock. The lock is stashed in the ConnMeta which is dropped at transaction end. If
-        // acquired, proceed with sequencing. If not, enque and return.
+        // acquired, proceed with sequencing. If not, enque and return. This logic assumes that
+        // Coordinator::clear_transaction is correctly called when session transactions are ended
+        // because that function will release the held lock from active_conns.
         if Self::must_serialize_ddl(&stmt) {
             if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
                 let prev = self
@@ -732,6 +734,29 @@ impl Coordinator {
                     "connections should have at most one lock guard"
                 );
             } else {
+                if self
+                    .active_conns
+                    .get(ctx.session().conn_id())
+                    .expect("connection must exist")
+                    .deferred_lock
+                    .is_some()
+                {
+                    // This session *already* has the lock, and incorrectly tried to execute another
+                    // DDL while still holding the lock, violating the assumption documented above.
+                    // This is an internal error, probably in some AdapterClient user (pgwire or
+                    // http). Because the session is now in some unexpected state, return an error
+                    // which should cause the AdapterClient user to fail the transaction.
+                    // (Terminating the connection is maybe what we would prefer to do, but is not
+                    // currently a thing we can do from the coordinator: calling handle_terminate
+                    // cleans up Coordinator state for the session but doesn't inform the
+                    // AdapterClient that the session should terminate.) Once the bug here
+                    // (https://github.com/MaterializeInc/materialize/issues/28400) is fixed, this
+                    // could be changed to an assert.
+                    ctx.retire(Err(AdapterError::Internal(format!(
+                        "session attempted to get ddl lock while already owning it"
+                    ))));
+                    return;
+                }
                 self.serialized_ddl.push_back(DeferredPlanStatement {
                     ctx,
                     ps: PlanStatement::Statement { stmt, params },
