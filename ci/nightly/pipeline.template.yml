@@ -1585,22 +1585,3 @@ steps:
               composition: ruby
         agents:
           queue: linux-aarch64-small
-
-  - group: ":bazel: Bazel"
-    key: bazel
-    steps:
-      - id: bazel-test-x86_64
-        label: ":bazel: Build (x86_64)"
-        command: bin/ci-builder run stable bin/bazel-temp
-        depends_on: []
-        timeout_in_minutes: 60
-        agents:
-          queue: builder-linux-x86_64
-
-      - id: bazel-test-aarch64
-        label: ":bazel: Build (aarch64)"
-        command: bin/ci-builder run stable bin/bazel-temp
-        depends_on: []
-        timeout_in_minutes: 60
-        agents:
-          queue: builder-linux-aarch64

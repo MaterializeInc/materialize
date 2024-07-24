@@ -202,6 +202,20 @@ red() {
     echo -ne "\e[31m$*\e[0m"
 }
 
+# green [ARGS...]
+#
+# Prints the provided text in green.
+green() {
+    echo -ne "\e[32m$*\e[0m"
+}
+
+# white [ARGS...]
+#
+# Prints the provided text in white.
+white() {
+    echo -ne "\e[97m$*\e[0m"
+}
+
 # in_ci
 #
 # Returns 0 if in CI and 1 otherwise

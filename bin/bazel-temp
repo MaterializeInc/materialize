@@ -20,8 +20,5 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-# 1. Regenerate Bazel files.
-bin/bazel gen
-
-# 3. Build `environmentd`, `clusterd`, and `balancerd` with optimizations.
+# Build `environmentd`, `clusterd`, and `balancerd` with optimizations.
 bin/bazel build //src/environmentd:environmentd //src/clusterd:clusterd //src/balancerd:mz_balancerd_bin -c opt --remote_cache=https://bazel-remote.dev.materialize.com
