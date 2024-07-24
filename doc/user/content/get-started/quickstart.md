@@ -13,7 +13,9 @@ aliases:
 ---
 
 Materialize is the Operational Data Warehouse that delivers the speed of
-streaming with the ease of a data warehouse. This quickstart will get you up and
+streaming with the ease of a data warehouse.
+
+This quickstart will get you up and
 running in a few minutes and with no dependencies, so you can experience the
 superpowers of an operational data warehouse first-hand:
 
@@ -22,6 +24,8 @@ superpowers of an operational data warehouse first-hand:
 * **Freshness**: watch results change immediately in response to *your* input changes.
 
 * **Consistency**: results are always correct; never even transiently wrong.
+
+![Quickstart](/images/quickstart-console.png)
 
 ## Prerequisite
 
