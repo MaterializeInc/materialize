@@ -32,6 +32,12 @@ def get_ancestor_overrides_for_performance_regressions(
     min_ancestor_mz_version_per_commit = dict()
 
     if scenario_class_name == "ManyKafkaSourcesOnSameCluster":
+        # PR#28359 (Reapply "storage: wire up new reclock implementation") increased wallclock
+        min_ancestor_mz_version_per_commit[
+            "1937ca8b444a919e3077843980c97d61fc072252"
+        ] = MzVersion.parse_mz("v0.110.0")
+
+    if scenario_class_name == "ManyKafkaSourcesOnSameCluster":
         # PR#28228 (storage/kafka: round-robin partition/worker assignment) increased wallclock
         min_ancestor_mz_version_per_commit[
             "256e1f839ba5243293e738bcd78d0f36c1be8f3e"
