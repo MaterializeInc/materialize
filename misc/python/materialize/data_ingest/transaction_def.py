@@ -167,22 +167,18 @@ class ZeroDowntimeDeploy(TransactionDef):
                 )
                 assert result["result"] == "Success", f"Unexpected result {result}"
 
-                time.sleep(20)
+                time.sleep(5)
 
                 # Wait until new Materialize is ready to handle queries
                 for i in range(300):
                     try:
-                        result = json.loads(
-                            self.composition.exec(
-                                self.workload.mz_service,
-                                "curl",
-                                "http://127.0.0.1:6878/api/leader/status",
-                                capture=True,
-                            ).stdout
-                        )
-                        assert (
-                            result["status"] == "IsLeader"
-                        ), f"Unexpected result {result}"
+                        result = self.composition.exec(
+                            self.workload.mz_service,
+                            "curl",
+                            "http://127.0.0.1:6878/api/readyz",
+                            capture=True,
+                        ).stdout
+                        assert result == "ready", f"Unexpected result {result}"
                     except:
                         time.sleep(1)
                         continue

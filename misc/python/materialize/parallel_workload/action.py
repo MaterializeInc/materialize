@@ -1570,8 +1570,6 @@ class ZeroDowntimeDeployAction(Action):
         ):
             self.composition.up(mz_service, detach=True)
 
-            # TODO: Allow read-only queries on mz_service
-
             # Wait until ready to promote
             while True:
                 result = json.loads(
@@ -1601,7 +1599,7 @@ class ZeroDowntimeDeployAction(Action):
             )
             assert result["result"] == "Success", f"Unexpected result {result}"
 
-        time.sleep(self.rng.uniform(10, 30))
+        time.sleep(self.rng.uniform(60, 120))
         return True
 
 
