@@ -21,3 +21,14 @@ CREATE TABLE feature_benchmark_result (
    memory_mz DOUBLE,
    memory_clusterd DOUBLE
 );
+
+-- This table holds results of runs that were discarded.
+CREATE TABLE feature_benchmark_discarded_result (
+   build_job_id TEXT NOT NULL,
+   scenario_name TEXT NOT NULL,
+   cycle INT NOT NULL,
+   wallclock DOUBLE,
+   messages INT,
+   memory_mz DOUBLE,
+   memory_clusterd DOUBLE
+);

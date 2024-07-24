@@ -491,6 +491,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     scenarios_with_regressions = []
     latest_report_by_scenario_name: dict[str, Report] = dict()
+    discarded_reports_by_scenario_name: dict[str, list[Report]] = dict()
 
     scenarios_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
     for cycle in range(0, args.max_retries):
@@ -502,6 +503,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         scenarios_with_regressions = []
         for scenario in scenarios_to_run:
+            scenario_name = scenario.__name__
             comparators = run_one_scenario(c, scenario, args)
 
             if len(comparators) == 0:
@@ -513,7 +515,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if _shall_retry_scenario(scenario, comparators, cycle):
                 scenarios_with_regressions.append(scenario)
 
-            latest_report_by_scenario_name[scenario.__name__] = report
+            if cycle > 0:
+                discarded_reports_of_scenario = discarded_reports_by_scenario_name.get(
+                    scenario_name, []
+                )
+                discarded_reports_of_scenario.append(
+                    latest_report_by_scenario_name[scenario_name]
+                )
+                discarded_reports_by_scenario_name[scenario_name] = (
+                    discarded_reports_of_scenario
+                )
+
+            latest_report_by_scenario_name[scenario_name] = report
 
             print(f"+++ Benchmark Report for cycle {cycle + 1}:")
             print(report)
@@ -568,6 +581,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenarios_scheduled_to_run,
         args.scale,
         latest_report_by_scenario_name,
+        discarded_reports_by_scenario_name,
         successful_run,
     )
 
@@ -696,6 +710,7 @@ def upload_results_to_test_analytics(
     scenario_classes: list[type[Scenario]],
     scale: str | None,
     latest_report_by_scenario_name: dict[str, Report],
+    discarded_reports_by_scenario_name: dict[str, list[Report]],
     was_successful: bool,
 ) -> None:
     if not buildkite.is_in_buildkite():
@@ -709,6 +724,7 @@ def upload_results_to_test_analytics(
     test_analytics.builds.add_build_job(was_successful=was_successful)
 
     result_entries = []
+    discarded_entries = []
 
     for scenario_cls in scenario_classes:
         scenario_name = scenario_cls.__name__
@@ -730,10 +746,34 @@ def upload_results_to_test_analytics(
             )
         )
 
+        for cycle_index, discarded_report in enumerate(
+            discarded_reports_by_scenario_name[scenario_name]
+        ):
+            discarded_measurements = discarded_report.measurements_of_this(
+                scenario_name
+            )
+
+            discarded_entries.append(
+                feature_benchmark_result_storage.FeatureBenchmarkDiscardedResultEntry(
+                    scenario_name=scenario_name,
+                    scenario_group=scenario_group,
+                    scenario_version=str(scenario_version),
+                    scale=scale or "default",
+                    wallclock=discarded_measurements[MeasurementType.WALLCLOCK],
+                    messages=discarded_measurements[MeasurementType.MESSAGES],
+                    memory_mz=discarded_measurements[MeasurementType.MEMORY_MZ],
+                    memory_clusterd=discarded_measurements[
+                        MeasurementType.MEMORY_CLUSTERD
+                    ],
+                    cycle=cycle_index + 1,
+                )
+            )
+
     test_analytics.benchmark_results.add_result(
         framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
         results=result_entries,
     )
+    test_analytics.benchmark_results.add_discarded_entries(discarded_entries)
 
     try:
         test_analytics.submit_updates()

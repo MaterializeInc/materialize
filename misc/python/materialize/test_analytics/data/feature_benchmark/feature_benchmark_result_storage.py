@@ -25,6 +25,11 @@ class FeatureBenchmarkResultEntry:
     memory_clusterd: float | None
 
 
+@dataclass
+class FeatureBenchmarkDiscardedResultEntry(FeatureBenchmarkResultEntry):
+    cycle: int
+
+
 class FeatureBenchmarkResultStorage(BaseDataStorage):
 
     def add_result(
@@ -64,6 +69,45 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {result_entry.messages or 'NULL::INT'},
                     {result_entry.memory_mz or 'NULL::DOUBLE'},
                     {result_entry.memory_clusterd or 'NULL::DOUBLE'}
+                ;
+                """
+            )
+
+        self.database_connector.add_update_statements(sql_statements)
+
+    def add_discarded_entries(
+        self,
+        discarded_entries: list[FeatureBenchmarkDiscardedResultEntry],
+    ) -> None:
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
+
+        sql_statements = []
+
+        for discarded_entry in discarded_entries:
+            # TODO: remove NULL castings when #27429 is resolved
+
+            # Do not store framework version, scenario version, and scale. If needed, they can be retrieved from the
+            # result entries.
+            sql_statements.append(
+                f"""
+                INSERT INTO feature_benchmark_discarded_result
+                (
+                    build_job_id,
+                    scenario_name,
+                    cycle,
+                    wallclock,
+                    messages,
+                    memory_mz,
+                    memory_clusterd
+                )
+                SELECT
+                    '{job_id}',
+                    '{discarded_entry.scenario_name}',
+                    {discarded_entry.cycle},
+                    {discarded_entry.wallclock or 'NULL::DOUBLE'},
+                    {discarded_entry.messages or 'NULL::INT'},
+                    {discarded_entry.memory_mz or 'NULL::DOUBLE'},
+                    {discarded_entry.memory_clusterd or 'NULL::DOUBLE'}
                 ;
                 """
             )
