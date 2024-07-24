@@ -25,6 +25,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: canary-load
-          args: ["--runtime=82800"] # 23 hours
+          args: ["--runtime=79200"] # 22 hours
     agents:
       queue: linux-aarch64-small
