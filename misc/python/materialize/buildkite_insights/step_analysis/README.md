@@ -6,16 +6,17 @@ This tool allows searching recent Buildkite builds to
 
 ## Usage
 ```
-usage: buildkite-step-durations [-h]
-                                [--branch BRANCH]
-                                [--build-state {running,scheduled,passed,failing,failed,blocked,canceled,canceling,skipped,not_run,finished}]
-                                [--build-step-key BUILD_STEP_KEY]
-                                [--build-step-state {assigned,broken,canceled,failed,passed,running,scheduled,skipped,timed_out,unblocked,waiting,waiting_failed}]
-                                [--fetch {auto,always,avoid,never}]
-                                [--include-commit-hash]
-                                [--max-fetches MAX_FETCHES]
-                                [--output-type {txt,txt-short,csv}]
-                                {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
+usage: buildkite-step-insights [-h]
+                               [--branch BRANCH]
+                               [--build-state {running,scheduled,passed,failing,failed,blocked,canceled,canceling,skipped,not_run,finished}]
+                               [--build-step-key BUILD_STEP_KEY]
+                               [--build-step-parallel-index BUILD_STEP_PARALLEL_INDEX]
+                               [--build-step-state {assigned,broken,canceled,failed,passed,running,scheduled,skipped,timed_out,unblocked,waiting,waiting_failed}]
+                               [--fetch {auto,always,avoid,never}]
+                               [--include-commit-hash]
+                               [--max-fetches MAX_FETCHES]
+                               [--output-type {txt,txt-short,csv}]
+                               {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,qa-canary,release-qualification,security,slt,test,www}
 ```
 
 ### Authentication

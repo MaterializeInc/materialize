@@ -169,7 +169,7 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="buildkite-step-durations",
+        prog="buildkite-step-insights",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
