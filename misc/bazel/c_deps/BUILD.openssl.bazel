@@ -76,9 +76,18 @@ configure_make(
     name = "openssl",
     configure_command = "config",
     configure_in_place = True,
-    configure_options = CONFIGURE_OPTIONS,
+    configure_options = CONFIGURE_OPTIONS + select({
+        "@platforms//os:macos": ["ARFLAGS=r"],
+        "//conditions:default": [],
+    }),
+    # darwin/macOS defaults to using libtool but openSSL3 fails linking with
+    # the generated archive, so we switch to `llvm-ar`.
+    build_data = select({
+        "@platforms//os:macos": ["@llvm_toolchain_llvm//:ar"],
+        "//conditions:default": {},
+    }),
     env = select({
-        "@platforms//os:macos": {"ARFLAGS": "-o"},
+        "@platforms//os:macos": {"AR": "$(execpath @llvm_toolchain_llvm//:ar)"},
         "//conditions:default": {},
     }),
     # TODO(parkmycar): Figure out how to dynamically provide a number of jobs to foreign_cc rules.
