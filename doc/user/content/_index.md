@@ -49,6 +49,7 @@ data freshness**.
     {{< linkbox icon="book" title="Reference" >}}
 -   [`CREATE VIEW`](/sql/create-view/)
 -   [`CREATE INDEX`](/sql/create-index/)
+-   [`CREATE SOURCE`](/sql/create-source/)
 -   [`SQL data types`](/sql/types/)
 -   [`SQL functions`](/sql/functions/)
     {{</ linkbox >}}
