@@ -56,7 +56,7 @@ class Comparator(Generic[T]):
         assert self.version is not None
         return self.version
 
-    def is_regression(self) -> bool:
+    def is_regression(self, threshold: float | None = None) -> bool:
         assert False
 
     def ratio(self) -> float | None:
@@ -73,13 +73,16 @@ class RelativeThresholdComparator(Comparator[float | None]):
         else:
             return self._points[0] / self._points[1]
 
-    def is_regression(self) -> bool:
+    def is_regression(self, threshold: float | None = None) -> bool:
+        if threshold is None:
+            threshold = self.threshold
+
         ratio = self.ratio()
 
         if ratio is None:
             return False
         if ratio > 1:
-            return ratio - 1 > self.threshold
+            return ratio - 1 > threshold
         else:
             return False
 
