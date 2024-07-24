@@ -66,12 +66,19 @@ pub(crate) enum FetchData<T> {
 }
 
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
-    fn maybe_unconsolidated(&self) -> bool {
+    /// Returns true iff we were using a different ordering for data or timestamps
+    /// when the part was created. This means parts or runs may not be ordered according to
+    /// our modern definition, even if the metadata indicates they've been compacted before.
+    fn wrong_sort(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
-            FetchData::Unfetched { part, .. } => {
-                part.writer_key().map_or(false, |k| k >= min_version)
-            }
+            FetchData::Unfetched { part, .. } => match part.writer_key() {
+                // Old hollow parts may have used a different sort
+                Some(key) => key < min_version,
+                // Inline parts are all recent enough to have been sorted using the latest ordering,
+                // if they're sorted at all.
+                None => false,
+            },
             FetchData::AlreadyFetched => false,
         }
     }
@@ -121,7 +128,7 @@ pub(crate) enum ConsolidationPart<T, D> {
     },
     Prefetched {
         handle: JoinHandle<anyhow::Result<EncodedPart<T>>>,
-        maybe_unconsolidated: bool,
+        wrong_sort: bool,
         key_lower: Vec<u8>,
     },
     Encoded {
@@ -142,10 +149,10 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
     pub(crate) fn from_encoded(
         part: EncodedPart<T>,
         filter: &'a FetchBatchFilter<T>,
-        maybe_unconsolidated: bool,
+        force_reconsolidation: bool,
     ) -> Self {
         let mut cursor = Cursor::default();
-        if part.maybe_unconsolidated() || maybe_unconsolidated {
+        if part.maybe_unconsolidated() || force_reconsolidation {
             let mut cursors = vec![];
 
             // For every valid entry in the encoded part, keep a cursor and the decoded T/D.
@@ -325,16 +332,19 @@ where
         // Normally unconsolidated parts are in their own run, but we can end up with unconsolidated
         // runs if we change our sort order or have bugs, for example. Defend against this by
         // splitting up a run if it contains possibly-unconsolidated parts.
-        let maybe_unconsolidated = run.iter().any(|(p, _)| match p {
-            ConsolidationPart::Queued { data } => data.maybe_unconsolidated(),
-            ConsolidationPart::Prefetched {
-                maybe_unconsolidated,
-                ..
-            } => *maybe_unconsolidated,
-            ConsolidationPart::Encoded { part, .. } => part.maybe_unconsolidated(),
+        let wrong_sort = run.iter().any(|(p, _)| match p {
+            ConsolidationPart::Queued { data } => data.wrong_sort(),
+            ConsolidationPart::Prefetched { wrong_sort, .. } => *wrong_sort,
+            // ConsolidationPart::from_encoded will only keep the original part if the sort is correct.
+            ConsolidationPart::Encoded { .. } => false,
             ConsolidationPart::Sorted { .. } => false,
         });
-        if run.len() > 1 && maybe_unconsolidated && self.split_old_runs {
+
+        if wrong_sort {
+            self.metrics.consolidation.wrong_sort.inc();
+        }
+
+        if run.len() > 1 && wrong_sort && self.split_old_runs {
             for part in run {
                 self.runs.push(VecDeque::from([part]));
             }
@@ -433,7 +443,7 @@ where
                     ConsolidationPart::Queued { data } => {
                         self.metrics.compaction.parts_waited.inc();
                         self.metrics.consolidation.parts_fetched.inc();
-                        let maybe_unconsolidated = data.maybe_unconsolidated();
+                        let wrong_sort = data.wrong_sort();
                         *part = ConsolidationPart::from_encoded(
                             data.take()
                                 .fetch(
@@ -445,13 +455,11 @@ where
                                 )
                                 .await?,
                             &self.filter,
-                            maybe_unconsolidated,
+                            wrong_sort,
                         );
                     }
                     ConsolidationPart::Prefetched {
-                        handle,
-                        maybe_unconsolidated,
-                        ..
+                        handle, wrong_sort, ..
                     } => {
                         if handle.is_finished() {
                             self.metrics.compaction.parts_prefetched.inc();
@@ -462,7 +470,7 @@ where
                         *part = ConsolidationPart::from_encoded(
                             handle.await??,
                             &self.filter,
-                            *maybe_unconsolidated,
+                            *wrong_sort,
                         );
                     }
                     ConsolidationPart::Encoded { .. } | ConsolidationPart::Sorted { .. } => {}
@@ -549,7 +557,7 @@ where
                         _ => continue,
                     };
                     let key_lower = data.key_lower().to_vec();
-                    let maybe_unconsolidated = data.maybe_unconsolidated();
+                    let wrong_sort = data.wrong_sort();
                     let span = debug_span!("compaction::prefetch");
                     let handle = mz_ore::task::spawn(|| "persist::compaction::prefetch", {
                         let shard_id = self.shard_id;
@@ -565,7 +573,7 @@ where
                     });
                     *c_part = ConsolidationPart::Prefetched {
                         handle,
-                        maybe_unconsolidated,
+                        wrong_sort,
                         key_lower,
                     };
                 }

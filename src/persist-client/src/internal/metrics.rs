@@ -2286,6 +2286,7 @@ pub struct ConsolidationMetrics {
     pub(crate) parts_fetched: IntCounter,
     pub(crate) parts_skipped: IntCounter,
     pub(crate) parts_wasted: IntCounter,
+    pub(crate) wrong_sort: IntCounter,
 }
 
 impl ConsolidationMetrics {
@@ -2302,6 +2303,10 @@ impl ConsolidationMetrics {
             parts_wasted: registry.register(metric!(
                 name: "mz_persist_consolidation_parts_wasted_count",
                 help: "count of parts that were fetched but not needed during consolidation",
+            )),
+            wrong_sort: registry.register(metric!(
+                name: "mz_persist_consolidation_wrong_sort_count",
+                help: "count of runs that were sorted using the wrong ordering for the current consolidation",
             )),
         }
     }
