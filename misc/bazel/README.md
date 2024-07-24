@@ -31,7 +31,11 @@ brew install bazelisk
 ```
 
 For Linux distributions you'll need to grab a binary from their [releases](https://github.com/bazelbuild/bazelisk/releases)
-page.
+page and put them into your PATH as `bazel`:
+```shell
+chmod +x bazelisk-linux-amd64
+sudo mv bazelisk-linux-amd64 /usr/local/bin/bazel
+```
 
 # `WORKSPACE`, `BUILD.bazel`, `*.bzl` files
 
