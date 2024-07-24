@@ -70,7 +70,7 @@ leverage exciting new SQL patterns enabled by streaming like
 
 ### Real-time data ingestion
 
-Materialize provides **native connectors** that allow ingesting data from the various external systems:
+Materialize provides **native connectors** that allow ingesting data from various external systems:
 
 {{< multilinkbox >}}
 {{< linkbox title="Message Brokers" >}}
