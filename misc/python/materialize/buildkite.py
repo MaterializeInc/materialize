@@ -16,6 +16,8 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, TypeVar
 
+import yaml
+
 from materialize import git, spawn, ui
 
 T = TypeVar("T")
@@ -198,6 +200,23 @@ def _upload_shard_info_metadata(items: list[str]) -> None:
     )
     spawn.runv(
         ["buildkite-agent", "meta-data", "set", f"Shard for {label}", ", ".join(items)]
+    )
+
+
+def add_failure_for_qa_team(failure: str) -> None:
+    step_key = get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
+    pipeline = {
+        "notify": [
+            {
+                "slack": {
+                    "channels": ["#team-testing-bots"],
+                    "message": f"{step_key}: {failure}",
+                }
+            }
+        ]
+    }
+    spawn.runv(
+        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
     )
 
 
