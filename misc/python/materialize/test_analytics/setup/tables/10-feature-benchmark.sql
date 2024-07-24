@@ -15,6 +15,7 @@ CREATE TABLE feature_benchmark_result (
    scenario_name TEXT NOT NULL,
    scenario_group TEXT, -- nullable for now to not break earlier versions
    scenario_version TEXT NOT NULL,
+   cycle INT, -- nullable for now to not break earlier versions
    scale TEXT NOT NULL,
    wallclock DOUBLE,
    messages INT,

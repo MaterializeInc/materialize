@@ -204,7 +204,8 @@ class Benchmark:
 
 
 class Report:
-    def __init__(self) -> None:
+    def __init__(self, cycle: int) -> None:
+        self.cycle = cycle
         self._comparisons: list[Comparator] = []
 
     def append(self, comparison: Comparator) -> None:

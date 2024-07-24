@@ -18,16 +18,12 @@ class FeatureBenchmarkResultEntry:
     scenario_name: str
     scenario_group: str
     scenario_version: str
+    cycle: int
     scale: str
     wallclock: float | None
     messages: int | None
     memory_mz: float | None
     memory_clusterd: float | None
-
-
-@dataclass
-class FeatureBenchmarkDiscardedResultEntry(FeatureBenchmarkResultEntry):
-    cycle: int
 
 
 class FeatureBenchmarkResultStorage(BaseDataStorage):
@@ -52,6 +48,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     scenario_name,
                     scenario_group,
                     scenario_version,
+                    cycle,
                     scale,
                     wallclock,
                     messages,
@@ -64,6 +61,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     '{result_entry.scenario_name}',
                     '{result_entry.scenario_group}',
                     '{result_entry.scenario_version}',
+                    {result_entry.cycle},
                     '{result_entry.scale}',
                     {result_entry.wallclock or 'NULL::DOUBLE'},
                     {result_entry.messages or 'NULL::INT'},
@@ -77,7 +75,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
 
     def add_discarded_entries(
         self,
-        discarded_entries: list[FeatureBenchmarkDiscardedResultEntry],
+        discarded_entries: list[FeatureBenchmarkResultEntry],
     ) -> None:
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
