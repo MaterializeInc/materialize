@@ -335,6 +335,11 @@ where
             ConsolidationPart::Encoded { .. } => false,
             ConsolidationPart::Sorted { .. } => false,
         });
+
+        if wrong_sort {
+            self.metrics.consolidation.wrong_sort.inc();
+        }
+
         if run.len() > 1 && wrong_sort && self.split_old_runs {
             for part in run {
                 self.runs.push(VecDeque::from([part]));
