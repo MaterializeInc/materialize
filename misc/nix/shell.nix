@@ -25,6 +25,7 @@ stdenv.mkDerivation {
     postgresql
     git
     openssh
+    docker
 
     # For lint checks
     shellcheck
