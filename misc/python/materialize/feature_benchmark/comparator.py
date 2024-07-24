@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
@@ -66,11 +66,6 @@ class Comparator(Generic[T]):
         return str(self)
 
 
-class SuccessComparator(Comparator[float]):
-    def is_regression(self) -> bool:
-        return False
-
-
 class RelativeThresholdComparator(Comparator[float | None]):
     def ratio(self) -> float | None:
         if self._points[0] is None or self._points[1] is None:
@@ -114,15 +109,3 @@ class RelativeThresholdComparator(Comparator[float | None]):
             return with_conditional_formatting(
                 f"{(1/ratio):3.1f} times less/faster", COLOR_GOOD, condition=use_colors
             )
-
-
-class Overlappable(Protocol):
-    def overlap(self, other: "Overlappable") -> float: ...
-
-
-class OverlapComparator(Comparator[Overlappable]):
-    def ratio(self) -> float:
-        return self._points[0].overlap(other=self._points[1])
-
-    def is_regression(self) -> bool:
-        return self.ratio() < 1 - self.threshold
