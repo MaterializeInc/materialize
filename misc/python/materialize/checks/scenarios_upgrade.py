@@ -187,7 +187,7 @@ class UpgradeClusterdComputeLast(Scenario):
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(self, tag=None, system_parameter_version=self.base_version()),
             # No useful work can be done while clusterd is old-version
             # and environmentd is new-version. So we proceed
             # to upgrade clusterd as well.

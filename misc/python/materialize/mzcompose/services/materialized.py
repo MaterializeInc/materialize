@@ -16,6 +16,7 @@ from materialize.mzcompose import (
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_MZ_VOLUMES,
     DEFAULT_SYSTEM_PARAMETERS,
+    version_dependent_system_parameters,
 )
 from materialize.mzcompose.service import (
     Service,
@@ -50,6 +51,7 @@ class Materialized(Service):
         ports: list[str] | None = None,
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] | None = None,
+        system_parameter_version: MzVersion | None = None,
         soft_assertions: bool = True,
         sanity_restart: bool = True,
         platform: str | None = None,
@@ -94,6 +96,12 @@ class Materialized(Service):
             # Has to be copied so we later don't modify the
             # DEFAULT_SYSTEM_PARAMETERS dictionary
             system_parameter_defaults = copy(DEFAULT_SYSTEM_PARAMETERS)
+
+            if not system_parameter_version:
+                system_parameter_version = MzVersion.parse_cargo()
+            system_parameter_defaults.update(
+                version_dependent_system_parameters(system_parameter_version)
+            )
 
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)

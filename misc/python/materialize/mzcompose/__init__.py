@@ -23,6 +23,7 @@ from typing import Any, Literal, TypeVar
 import pg8000
 
 from materialize import spawn, ui
+from materialize.mz_version import MzVersion
 from materialize.ui import UIError
 
 T = TypeVar("T")
@@ -107,6 +108,17 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_batch_record_part_format": "true",
     "storage_use_reclock_v2": "true",
 }
+
+
+# For upgrade tests we only want parameters set when all environmentd/clusterd
+# processes have reached a specific version (or higher)
+def version_dependent_system_parameters(version: MzVersion) -> dict[str, str]:
+    return {
+        "persist_schema_register": (
+            "false" if version < MzVersion.parse_mz("v0.110.0") else "true"
+        )
+    }
+
 
 DEFAULT_CRDB_ENVIRONMENT = [
     "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=120s",
