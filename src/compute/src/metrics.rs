@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::{Arc, Mutex};
+
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
 use mz_repr::SharedRow;
 use prometheus::core::{AtomicF64, GenericCounter};
+use prometheus::proto::LabelPair;
 use prometheus::Histogram;
 
 /// Metrics exposed by compute replicas.
@@ -26,6 +29,9 @@ use prometheus::Histogram;
 // types instead, to avoid memory leaks.
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
+    // Optional workload class label to apply to all metrics in registry.
+    workload_class: Arc<Mutex<Option<String>>>,
+
     // command history
     history_command_count: raw::UIntGaugeVec,
     history_dataflow_count: raw::UIntGaugeVec,
@@ -58,7 +64,34 @@ pub struct ComputeMetrics {
 
 impl ComputeMetrics {
     pub fn register_with(registry: &MetricsRegistry) -> Self {
+        let workload_class = Arc::new(Mutex::new(None));
+
+        // Apply a `workload_class` label to all metrics in the registry when we
+        // have a known workload class.
+        registry.register_postprocessor({
+            let workload_class = Arc::clone(&workload_class);
+            move |metrics| {
+                let workload_class: Option<String> =
+                    workload_class.lock().expect("lock poisoned").clone();
+                let Some(workload_class) = workload_class else {
+                    return;
+                };
+                for metric in metrics {
+                    for metric in metric.mut_metric() {
+                        let mut label = LabelPair::default();
+                        label.set_name("workload_class".into());
+                        label.set_value(workload_class.clone());
+
+                        let mut labels = metric.take_label();
+                        labels.push(label);
+                        metric.set_label(labels);
+                    }
+                }
+            }
+        });
+
         Self {
+            workload_class,
             history_command_count: registry.register(metric!(
                 name: "mz_compute_replica_history_command_count",
                 help: "The number of commands in the replica's command history.",
@@ -177,6 +210,12 @@ impl ComputeMetrics {
         self.shared_row_heap_capacity_bytes
             .with_label_values(&[&worker])
             .set(u64::cast_from(binding.borrow().byte_capacity()));
+    }
+
+    /// Sets the workload class for the compute metrics.
+    pub fn set_workload_class(&self, workload_class: Option<String>) {
+        let mut guard = self.workload_class.lock().expect("lock poisoned");
+        *guard = workload_class
     }
 }
 

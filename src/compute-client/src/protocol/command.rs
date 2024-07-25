@@ -394,6 +394,12 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct ComputeParameters {
+    /// An optional arbitrary string that describes the class of the workload
+    /// this compute instance is running (e.g., `production` or `staging`).
+    ///
+    /// When `Some(x)`, a `workload_class=x` label is applied to all metrics
+    /// exported by the metrics registry associated with the compute instance.
+    pub workload_class: Option<Option<String>>,
     /// The maximum allowed size in bytes for results of peeks and subscribes.
     ///
     /// Peeks and subscribes that would return results larger than this maximum return the
@@ -418,12 +424,16 @@ impl ComputeParameters {
     /// Update the parameter values with the set ones from `other`.
     pub fn update(&mut self, other: ComputeParameters) {
         let ComputeParameters {
+            workload_class,
             max_result_size,
             tracing,
             grpc_client,
             dyncfg_updates,
         } = other;
 
+        if workload_class.is_some() {
+            self.workload_class = workload_class;
+        }
         if max_result_size.is_some() {
             self.max_result_size = max_result_size;
         }
@@ -436,15 +446,14 @@ impl ComputeParameters {
 
     /// Return whether all parameters are unset.
     pub fn all_unset(&self) -> bool {
-        self.max_result_size.is_none()
-            && self.grpc_client.all_unset()
-            && self.dyncfg_updates.updates.is_empty()
+        *self == Self::default()
     }
 }
 
 impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn into_proto(&self) -> ProtoComputeParameters {
         ProtoComputeParameters {
+            workload_class: self.workload_class.into_proto(),
             max_result_size: self.max_result_size.into_proto(),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -454,6 +463,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
 
     fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
+            workload_class: proto.workload_class.into_rust()?,
             max_result_size: proto.max_result_size.into_rust()?,
             tracing: proto
                 .tracing
@@ -465,6 +475,18 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 TryFromProtoError::missing_field("ProtoComputeParameters::dyncfg_updates")
             })?,
         })
+    }
+}
+
+impl RustType<ProtoWorkloadClass> for Option<String> {
+    fn into_proto(&self) -> ProtoWorkloadClass {
+        ProtoWorkloadClass {
+            value: self.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoWorkloadClass) -> Result<Self, TryFromProtoError> {
+        Ok(proto.value)
     }
 }
 
