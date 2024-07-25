@@ -13,7 +13,7 @@ use anyhow::anyhow;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::task::JoinHandle;
-use mz_persist::indexed::encoding::BlobTraceUpdates;
+use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec64;
@@ -134,25 +134,46 @@ enum ConsolidationPart<T> {
         key_lower: Vec<u8>,
     },
     Encoded {
-        part: BlobTraceUpdates,
+        part: Columnar<T>,
         cursor: usize,
     },
-    /// A part that was not necessarily in sorted order.
-    /// We store the original part along with a bunch of "pointers" into it that _are_ in sorted
-    /// order / in a convenient format for our streaming iterator. (For lifetimey reasons, these
-    /// are stored as [Cursor]s instead of ordinary references.)
-    Sorted {
-        part: BlobTraceUpdates,
-        cursors: VecDeque<(usize, T)>,
-    },
+}
+
+#[derive(Debug)]
+enum Columnar<T> {
+    Ordered(ColumnarRecords),
+    Shuffled(ColumnarRecords, Vec<(usize, T)>),
+}
+
+impl<T: Codec64> Columnar<T> {
+    fn len(&self) -> usize {
+        match self {
+            Columnar::Ordered(r) => r.len(),
+            Columnar::Shuffled(r, _) => r.len(),
+        }
+    }
+    fn get(&self, index: usize) -> Option<TupleRef<T, [u8; 8]>> {
+        match self {
+            Columnar::Ordered(records) => {
+                let ((k, v), t, d) = records.get(index)?;
+                let t = T::decode(t);
+                Some((k, v, t, d))
+            }
+            Columnar::Shuffled(records, shuffle) => {
+                let (index, t) = shuffle.get(index)?;
+                let ((k, v), _t, d) = records.get(*index)?;
+                Some((k, v, t.clone(), d))
+            }
+        }
+    }
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice> ConsolidationPart<T> {
     pub(crate) fn from_encoded(part: EncodedPart<T>, force_reconsolidation: bool) -> Self {
         let reconsolidate = part.maybe_unconsolidated() || force_reconsolidation;
         let part = part.normalize(&ColumnarMetrics::disconnected());
-        if reconsolidate {
-            let records = part.records();
+        let records = part.records().clone();
+        let columnar = if reconsolidate {
             let mut cursors: Vec<_> = (0..records.len())
                 .map(|i| {
                     let t = T::decode(records.timestamps().value(i).to_le_bytes());
@@ -168,12 +189,14 @@ impl<'a, T: Timestamp + Codec64 + Lattice> ConsolidationPart<T> {
             };
             cursors.sort_by(|a, b| kvt(a).cmp(&kvt(b)));
 
-            ConsolidationPart::Sorted {
-                part,
-                cursors: cursors.into(),
-            }
+            Columnar::Shuffled(records, cursors)
         } else {
-            ConsolidationPart::Encoded { part, cursor: 0 }
+            Columnar::Ordered(records)
+        };
+
+        ConsolidationPart::Encoded {
+            part: columnar,
+            cursor: 0,
         }
     }
 
@@ -184,13 +207,8 @@ impl<'a, T: Timestamp + Codec64 + Lattice> ConsolidationPart<T> {
                 Some((key_lower.as_slice(), &[], T::minimum()))
             }
             ConsolidationPart::Encoded { part, cursor } => {
-                let ((k, v), t, _d) = part.records().get(*cursor)?;
-                Some((k, v, T::decode(t)))
-            }
-            ConsolidationPart::Sorted { part, cursors } => {
-                let (cursor, t) = cursors.front()?;
-                let ((k, v), _t, _d) = part.records().get(*cursor)?;
-                Some((k, v, t.clone()))
+                let (k, v, t, _d) = part.get(*cursor)?;
+                Some((k, v, t))
             }
         }
     }
@@ -199,8 +217,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice> ConsolidationPart<T> {
     /// valid record.
     pub(crate) fn is_empty(&mut self) -> bool {
         match self {
-            ConsolidationPart::Encoded { part, cursor, .. } => *cursor >= part.records().len(),
-            ConsolidationPart::Sorted { cursors, .. } => cursors.is_empty(),
+            ConsolidationPart::Encoded { part, cursor, .. } => *cursor >= part.len(),
             ConsolidationPart::Queued { .. } | ConsolidationPart::Prefetched { .. } => false,
         }
     }
@@ -335,9 +352,7 @@ where
         let wrong_sort = run.iter().any(|(p, _)| match p {
             ConsolidationPart::Queued { data } => data.wrong_sort(),
             ConsolidationPart::Prefetched { wrong_sort, .. } => *wrong_sort,
-            // ConsolidationPart::from_encoded will only keep the original part if the sort is correct.
             ConsolidationPart::Encoded { .. } => false,
-            ConsolidationPart::Sorted { .. } => false,
         });
 
         if wrong_sort {
@@ -390,10 +405,7 @@ where
             if let Some((part, _)) = run.front_mut() {
                 match part {
                     ConsolidationPart::Encoded { part, cursor } => {
-                        iter.push(ConsolidationPartIter::Encoded { part, cursor }, last_in_run);
-                    }
-                    ConsolidationPart::Sorted { part, cursors } => {
-                        iter.push(ConsolidationPartIter::Sorted { part, cursors }, last_in_run);
+                        iter.push(part, cursor, last_in_run);
                     }
                     other @ ConsolidationPart::Queued { .. }
                     | other @ ConsolidationPart::Prefetched { .. } => {
@@ -466,7 +478,7 @@ where
                         self.metrics.consolidation.parts_fetched.inc();
                         *part = ConsolidationPart::from_encoded(handle.await??, *wrong_sort);
                     }
-                    ConsolidationPart::Encoded { .. } | ConsolidationPart::Sorted { .. } => {}
+                    ConsolidationPart::Encoded { .. } => {}
                 }
                 Ok::<_, anyhow::Error>(true)
             })
@@ -505,9 +517,9 @@ where
             .flat_map(|run| {
                 run.iter().map(|(part, size)| match part {
                     ConsolidationPart::Queued { .. } => 0,
-                    ConsolidationPart::Prefetched { .. }
-                    | ConsolidationPart::Encoded { .. }
-                    | ConsolidationPart::Sorted { .. } => *size,
+                    ConsolidationPart::Prefetched { .. } | ConsolidationPart::Encoded { .. } => {
+                        *size
+                    }
                 })
             })
             .sum()
@@ -595,85 +607,6 @@ impl<T, D> Drop for Consolidator<T, D> {
     }
 }
 
-/// The mutable references in this iterator (the [Cursor] for an encoded part, or the set of cursors for a
-/// sorted one) point to state that outlives this iterator, and we take care not to advance them
-/// too eagerly.
-/// In particular, we only advance the cursor past a tuple when that tuple has been returned from
-/// a call to `next`.
-pub(crate) enum ConsolidationPartIter<'a, T: Timestamp> {
-    Encoded {
-        part: &'a BlobTraceUpdates,
-        cursor: &'a mut usize,
-    },
-    Sorted {
-        part: &'a BlobTraceUpdates,
-        cursors: &'a mut VecDeque<(usize, T)>,
-    },
-}
-
-impl<'a, T: Timestamp> Debug for ConsolidationPartIter<'a, T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConsolidationPartIter::Encoded { cursor, .. } => {
-                let mut f = f.debug_struct("Encoded");
-                f.field("cursor", cursor);
-                f.finish()
-            }
-            ConsolidationPartIter::Sorted { cursors, .. } => {
-                let mut f = f.debug_struct("Sorted");
-                f.field("cursors", &cursors.len());
-                f.finish()
-            }
-        }
-    }
-}
-
-impl<'a, T: Timestamp + Codec64 + Lattice> ConsolidationPartIter<'a, T> {
-    fn peek(&self) -> Option<TupleRef<'a, T, [u8; 8]>> {
-        match self {
-            ConsolidationPartIter::Encoded { part, cursor } => {
-                let ((k, v), t, d) = part.records().get(**cursor)?;
-                Some((k, v, T::decode(t), d))
-            }
-            ConsolidationPartIter::Sorted { part, cursors } => {
-                let (cursor, t) = cursors.front()?;
-                let ((k, v), _t, d) = part.records().get(*cursor)?;
-                Some((k, v, t.clone(), d))
-            }
-        }
-    }
-
-    fn advance(&mut self) {
-        match self {
-            ConsolidationPartIter::Encoded { cursor, .. } => {
-                **cursor += 1;
-            }
-            ConsolidationPartIter::Sorted { cursors, .. } => {
-                cursors.pop_front();
-            }
-        }
-    }
-}
-
-impl<'a, T: Timestamp + Codec64 + Lattice> Iterator for ConsolidationPartIter<'a, T> {
-    type Item = TupleRef<'a, T, [u8; 8]>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            ConsolidationPartIter::Encoded { part, cursor } => {
-                let ((k, v), t, d) = part.records().get(**cursor)?;
-                **cursor += 1;
-                Some((k, v, T::decode(t), d))
-            }
-            ConsolidationPartIter::Sorted { part, cursors, .. } => {
-                let (cursor, t) = cursors.pop_front()?;
-                let ((k, v), _t, d) = part.records().get(cursor)?;
-                Some((k, v, t, d))
-            }
-        }
-    }
-}
-
 /// This is used as a max-heap entry: the ordering of the fields is important!
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 struct PartRef<'a, T: Timestamp, D> {
@@ -681,8 +614,12 @@ struct PartRef<'a, T: Timestamp, D> {
     /// This is reverse-sorted: Nones will sort largest (and be popped first on the heap)
     /// and smaller keys will be popped before larger keys.
     next_kvt: Reverse<Option<TupleRef<'a, T, [u8; 8]>>>,
-    /// The index of the corresponding iterator.
-    index: usize,
+    /// The index of the corresponding part within the [ConsolidatingIter]'s list of parts.
+    part_index: usize,
+    /// The index of the next row within that part.
+    /// This is a mutable pointer to long-lived state; we must only advance this index once
+    /// we've rolled any rows before this index into our state.
+    row_index: &'a mut usize,
     /// Whether / not the iterator for the part is the last in its run, or whether there may be
     /// iterators for the same part in the future.
     last_in_run: bool,
@@ -690,19 +627,15 @@ struct PartRef<'a, T: Timestamp, D> {
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T, D> {
-    fn update_peek(
-        &mut self,
-        iter: &mut ConsolidationPartIter<'a, T>,
-        filter: &FetchBatchFilter<T>,
-    ) {
-        let mut peek = iter.peek();
+    fn update_peek(&mut self, part: &'a Columnar<T>, filter: &FetchBatchFilter<T>) {
+        let mut peek = part.get(*self.row_index);
         while let Some((_k, _v, t, _d)) = &mut peek {
             let keep = filter.filter_ts(t);
             if keep {
                 break;
             } else {
-                iter.advance();
-                peek = iter.peek();
+                *self.row_index += 1;
+                peek = part.get(*self.row_index);
             }
         }
         self.next_kvt = Reverse(peek);
@@ -710,13 +643,13 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 
     fn pop(
         &mut self,
-        from: &mut [ConsolidationPartIter<'a, T>],
+        from: &[&'a Columnar<T>],
         filter: &FetchBatchFilter<T>,
     ) -> Option<TupleRef<'a, T, D>> {
-        let iter = &mut from[self.index];
+        let part = &from[self.part_index];
         let Reverse(popped) = mem::take(&mut self.next_kvt);
-        iter.advance();
-        self.update_peek(iter, filter);
+        *self.row_index += 1;
+        self.update_peek(part, filter);
         let (k, v, t, d) = popped?;
         let d = D::decode(d);
         Some((k, v, t, d))
@@ -727,7 +660,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
     context: &'a str,
     filter: &'a FetchBatchFilter<T>,
-    parts: Vec<ConsolidationPartIter<'a, T>>,
+    parts: Vec<&'a Columnar<T>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(&'a [u8], &'a [u8], T)>,
     state: Option<TupleRef<'a, T, D>>,
@@ -756,14 +689,15 @@ where
         }
     }
 
-    fn push(&mut self, mut iter: ConsolidationPartIter<'a, T>, last_in_run: bool) {
+    fn push(&mut self, iter: &'a Columnar<T>, index: &'a mut usize, last_in_run: bool) {
         let mut part_ref = PartRef {
             next_kvt: Reverse(None),
-            index: self.parts.len(),
+            part_index: self.parts.len(),
+            row_index: index,
             last_in_run,
             _phantom: Default::default(),
         };
-        part_ref.update_peek(&mut iter, self.filter);
+        part_ref.update_peek(iter, self.filter);
         self.parts.push(iter);
         self.heap.push(part_ref);
     }
