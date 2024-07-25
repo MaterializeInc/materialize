@@ -255,7 +255,12 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         let debug_name = format!("oneshot-select-{}", self.select_id);
         let mut df_desc = MirDataflowDescription::new(debug_name.to_string());
 
-        df_builder.import_view_into_dataflow(&self.select_id, &expr, &mut df_desc)?;
+        df_builder.import_view_into_dataflow(
+            &self.select_id,
+            &expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         // Resolve all unmaterializable function calls except mz_now(), because

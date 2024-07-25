@@ -225,7 +225,12 @@ impl Optimize<LocalMirPlan> for Optimizer {
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 
-        df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
+        df_builder.import_view_into_dataflow(
+            &self.view_id,
+            &expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         let sink_description = ComputeSinkDesc {

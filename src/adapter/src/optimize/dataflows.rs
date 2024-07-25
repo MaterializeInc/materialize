@@ -18,11 +18,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
+use tracing::warn;
 
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
@@ -34,12 +34,14 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use tracing::warn;
+use mz_transform::analysis::monotonic::Monotonic;
+use mz_transform::analysis::DerivedBuilder;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -167,11 +169,13 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Imports the view, source, or table with `id` into the provided
-    /// dataflow description.
+    /// dataflow description. [`OptimizerFeatures`] is used while running
+    /// the [`Monotonic`] analysis.
     pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,
+        features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         maybe_grow(|| {
             // Avoid importing the item redundantly.
@@ -179,7 +183,7 @@ impl<'a> DataflowBuilder<'a> {
                 return Ok(());
             }
 
-            let monotonic = self.monotonic_object(*id);
+            let monotonic = self.monotonic_object(*id, features);
 
             // A valid index is any index on `id` that is known to index oracle.
             // Here, we import all indexes that belong to all imported collections. Later,
@@ -214,7 +218,7 @@ impl<'a> DataflowBuilder<'a> {
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
-                        self.import_view_into_dataflow(id, &expr, dataflow)?;
+                        self.import_view_into_dataflow(id, &expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
                         dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
@@ -230,7 +234,8 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Imports the view with the specified ID and expression into the provided
-    /// dataflow description.
+    /// dataflow description. [`OptimizerFeatures`] is used while running
+    /// expression [`mz_transform::analysis::Analysis`].
     ///
     /// You should generally prefer calling
     /// [`DataflowBuilder::import_into_dataflow`], which can handle objects of
@@ -242,9 +247,10 @@ impl<'a> DataflowBuilder<'a> {
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
+        features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         for get_id in view.depends_on() {
-            self.import_into_dataflow(&get_id, dataflow)?;
+            self.import_into_dataflow(&get_id, dataflow, features)?;
         }
         dataflow.insert_plan(*view_id, view.clone());
         Ok(())
@@ -308,8 +314,8 @@ impl<'a> DataflowBuilder<'a> {
     /// Note that materialized views are never monotonic, no matter their definition, because the
     /// self-correcting persist_sink may insert retractions to correct the contents of its output
     /// collection.
-    fn monotonic_object(&self, id: GlobalId) -> bool {
-        self.monotonic_object_inner(id, &mut BTreeMap::new())
+    fn monotonic_object(&self, id: GlobalId, features: &OptimizerFeatures) -> bool {
+        self.monotonic_object_inner(id, &mut BTreeMap::new(), features)
             .unwrap_or_else(|e| {
                 warn!(%id, "error inspecting object for monotonicity: {e}");
                 false
@@ -320,6 +326,7 @@ impl<'a> DataflowBuilder<'a> {
         &self,
         id: GlobalId,
         memo: &mut BTreeMap<GlobalId, bool>,
+        features: &OptimizerFeatures,
     ) -> Result<bool, RecursionLimitError> {
         // An object might be reached multiple times. If we already computed the monotonicity of
         // the given ID, use that. If not, then compute it and remember the result.
@@ -331,7 +338,7 @@ impl<'a> DataflowBuilder<'a> {
             match self.catalog.get_entry(&id).item() {
                 CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
                 CatalogItem::View(View { optimized_expr, .. }) => {
-                    let mut view_expr = optimized_expr.clone().into_inner();
+                    let view_expr = optimized_expr.clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
                     // of monotonic dependees.
@@ -343,7 +350,7 @@ impl<'a> DataflowBuilder<'a> {
                                 ..
                             } = e
                             {
-                                if self.monotonic_object_inner(*got_id, memo)? {
+                                if self.monotonic_object_inner(*got_id, memo, features)? {
                                     monotonic_ids.insert(*got_id);
                                 }
                             }
@@ -355,14 +362,18 @@ impl<'a> DataflowBuilder<'a> {
                         warn!(%id, "error inspecting view for monotonicity: {error}");
                     }
 
-                    // Use `monotonic_ids` as a starting point for propagating monotonicity info.
-                    mz_transform::monotonic::MonotonicFlag::default().apply(
-                        &mut view_expr,
-                        &monotonic_ids,
-                        &mut BTreeSet::new(),
-                    )
+                    let mut builder = DerivedBuilder::new(features);
+                    builder.require(Monotonic::new(monotonic_ids.clone()));
+                    let derived = builder.visit(&view_expr);
+
+                    Ok(*derived
+                        .as_view()
+                        .value::<Monotonic>()
+                        .expect("Expected monotonic result from non empty tree"))
                 }
-                CatalogItem::Index(Index { on, .. }) => self.monotonic_object_inner(*on, memo),
+                CatalogItem::Index(Index { on, .. }) => {
+                    self.monotonic_object_inner(*on, memo, features)
+                }
                 CatalogItem::Secret(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Connection(_)
