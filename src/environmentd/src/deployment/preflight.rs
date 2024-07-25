@@ -63,7 +63,6 @@ pub async fn preflight_legacy(
 
     if !openable_adapter_storage.is_initialized().await? {
         tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
-        deployment_state.set_is_leader();
         return Ok(openable_adapter_storage);
     }
     let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
@@ -118,7 +117,6 @@ pub async fn preflight_legacy(
         .await?)
     } else if catalog_generation == deploy_generation {
         tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
-        deployment_state.set_is_leader();
         Ok(openable_adapter_storage)
     } else {
         mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
@@ -146,8 +144,7 @@ pub async fn preflight_0dt(
     info!(%deploy_generation, ?hydration_max_wait, "performing 0dt preflight checks");
 
     if !openable_adapter_storage.is_initialized().await? {
-        info!("catalog not initialized; booting as leader with writes allowed");
-        deployment_state.set_is_leader();
+        info!("catalog not initialized; booting with writes allowed");
         return Ok(PreflightOutput {
             openable_adapter_storage,
             read_only: false,
@@ -219,7 +216,6 @@ pub async fn preflight_0dt(
         })
     } else if catalog_generation == deploy_generation {
         info!("this deployment is the current generation; booting with writes allowed");
-        deployment_state.set_is_leader();
         Ok(PreflightOutput {
             openable_adapter_storage,
             read_only: false,
