@@ -480,12 +480,19 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> 
 
 def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
+    # Used to make sure we don't recalculate hashes since there are multiple
+    # builds (Bazel, Cargo) at the moment
+    deps_check = {}
 
-    def deps_publish(arch: Arch) -> mzbuild.DependencySet:
-        repo = mzbuild.Repository(
-            Path("."), arch=arch, coverage=coverage, sanitizer=sanitizer
-        )
-        return repo.resolve_dependencies(image for image in repo if image.publish)
+    def get_deps(arch: Arch) -> tuple[mzbuild.DependencySet, bool]:
+        if arch not in deps_check:
+            repo = mzbuild.Repository(
+                Path("."), arch=arch, coverage=coverage, sanitizer=sanitizer
+            )
+            deps = repo.resolve_dependencies(image for image in repo if image.publish)
+            check = deps.check()
+            deps_check[arch] = (deps, check)
+        return deps_check[arch]
 
     def hash(deps: mzbuild.DependencySet) -> str:
         h = hashlib.sha1()
@@ -495,8 +502,8 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
 
     for step in steps(pipeline):
         if step.get("id") == "build-x86_64":
-            deps = deps_publish(Arch.X86_64)
-            if deps.check():
+            (deps, check) = get_deps(Arch.X86_64)
+            if check:
                 step["skip"] = True
             else:
                 # Make sure that builds in different pipelines for the same
@@ -504,9 +511,9 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
                 # resources.
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
-        if step.get("id") == "build-aarch64":
-            deps = deps_publish(Arch.AARCH64)
-            if deps.check():
+        elif step.get("id") == "build-aarch64":
+            (deps, check) = get_deps(Arch.AARCH64)
+            if check:
                 step["skip"] = True
             else:
                 # Make sure that builds in different pipelines for the same
@@ -514,6 +521,16 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
                 # resources.
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
+        elif step.get("id") == "build-x86_64-bazel":
+            (_deps, check) = get_deps(Arch.X86_64)
+            if check:
+                step["skip"] = True
+            # Bazel builds are not uploaded yet, so no concurrency group
+        elif step.get("id") == "build-aarch64-bazel":
+            (_deps, check) = get_deps(Arch.AARCH64)
+            if check:
+                step["skip"] = True
+            # Bazel builds are not uploaded yet, so no concurrency group
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
