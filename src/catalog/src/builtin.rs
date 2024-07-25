@@ -281,29 +281,29 @@ impl Fingerprint for &BuiltinLog {
 /// Allows tests to inject arbitrary amounts of whitespace to forcibly change the fingerprint and
 /// trigger a builtin migration.
 #[derive(Debug, Clone, ArgEnum)]
-pub enum DangerousTableFingerprintWhitespace {
+pub enum UnsafeBuiltinTableFingerprintWhitespace {
     /// Inject whitespace into all builtin table fingerprints.
     All,
     /// Inject whitespace into half of the builtin table fingerprints,
     /// which are randomly selected.
     Half,
 }
-pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE: Mutex<
-    Option<(DangerousTableFingerprintWhitespace, String)>,
+pub static UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE: Mutex<
+    Option<(UnsafeBuiltinTableFingerprintWhitespace, String)>,
 > = Mutex::new(None);
 
 impl Fingerprint for &BuiltinTable {
     fn fingerprint(&self) -> String {
         // This is only called during bootstrapping, so it's not that big of a deal to lock a mutex,
         // though it's not great.
-        let guard = REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
+        let guard = UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE
             .lock()
             .expect("lock poisoned");
         match &*guard {
-            Some((DangerousTableFingerprintWhitespace::All, whitespace)) => {
+            Some((UnsafeBuiltinTableFingerprintWhitespace::All, whitespace)) => {
                 format!("{}{}", self.desc.fingerprint(), whitespace)
             }
-            Some((DangerousTableFingerprintWhitespace::Half, whitespace)) => {
+            Some((UnsafeBuiltinTableFingerprintWhitespace::Half, whitespace)) => {
                 let mut rng = rand::thread_rng();
                 let migrate: bool = rng.gen();
                 if migrate {
