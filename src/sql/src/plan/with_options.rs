@@ -299,6 +299,35 @@ impl ImpliedValue for Interval {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OptionalString(pub Option<String>);
+
+impl TryFromValue<Value> for OptionalString {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        Ok(match v {
+            Value::Null => Self(None),
+            v => Self(Some(String::try_from_value(v)?)),
+        })
+    }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(match self.0 {
+            None => Value::Null,
+            Some(s) => s.try_into_value(catalog)?,
+        })
+    }
+
+    fn name() -> String {
+        "optional string".to_string()
+    }
+}
+
+impl ImpliedValue for OptionalString {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a string value")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
 pub struct OptionalDuration(pub Option<Duration>);
 

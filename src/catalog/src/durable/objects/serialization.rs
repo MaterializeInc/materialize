@@ -120,12 +120,14 @@ impl RustType<proto::ClusterConfig> for ClusterConfig {
     fn into_proto(&self) -> proto::ClusterConfig {
         proto::ClusterConfig {
             variant: Some(self.variant.into_proto()),
+            workload_class: self.workload_class.clone(),
         }
     }
 
     fn from_proto(proto: proto::ClusterConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             variant: proto.variant.into_rust_if_some("ClusterConfig::variant")?,
+            workload_class: proto.workload_class,
         })
     }
 }

@@ -125,7 +125,7 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
-use crate::plan::with_options::{OptionalDuration, TryFromValue};
+use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterStrategyCondition, AlterClusterSwapPlan,
@@ -3593,7 +3593,8 @@ generate_extracted_config!(
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
     (Size, String),
-    (Schedule, ClusterScheduleOptionValue)
+    (Schedule, ClusterScheduleOptionValue),
+    (WorkloadClass, OptionalString)
 );
 
 generate_extracted_config!(ClusterAlterOption, (Wait, ClusterAlterOptionValue));
@@ -3667,6 +3668,7 @@ pub fn plan_create_cluster_inner(
         size,
         disk: disk_in,
         schedule,
+        workload_class,
     }: ClusterOptionExtracted = options.try_into()?;
 
     let managed = managed.unwrap_or_else(|| replicas.is_none());
@@ -3675,9 +3677,13 @@ pub fn plan_create_cluster_inner(
         if !features.is_empty() {
             sql_bail!("FEATURES not supported for non-system users");
         }
+        if workload_class.is_some() {
+            sql_bail!("WORKLOAD CLASS not supported for non-system users");
+        }
     }
 
     let schedule = schedule.unwrap_or(ClusterScheduleOptionValue::Manual);
+    let workload_class = workload_class.and_then(|v| v.0);
 
     if managed {
         if replicas.is_some() {
@@ -3763,6 +3769,7 @@ pub fn plan_create_cluster_inner(
                 optimizer_feature_overrides,
                 schedule,
             }),
+            workload_class,
         })
     } else {
         let Some(replica_defs) = replicas else {
@@ -3803,6 +3810,7 @@ pub fn plan_create_cluster_inner(
         Ok(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
+            workload_class,
         })
     }
 }
@@ -3812,7 +3820,11 @@ pub fn plan_create_cluster_inner(
 /// The reverse of [`plan_create_cluster`].
 pub fn unplan_create_cluster(
     scx: &StatementContext,
-    CreateClusterPlan { name, variant }: CreateClusterPlan,
+    CreateClusterPlan {
+        name,
+        variant,
+        workload_class,
+    }: CreateClusterPlan,
 ) -> Result<CreateClusterStatement<Aug>, PlanError> {
     match variant {
         CreateClusterVariant::Managed(CreateClusterManagedPlan {
@@ -3867,6 +3879,7 @@ pub fn unplan_create_cluster(
                     None
                 }
             };
+            let workload_class = workload_class.map(|s| OptionalString(Some(s)));
             let options_extracted = ClusterOptionExtracted {
                 // Seen is ignored when unplanning.
                 seen: Default::default(),
@@ -3879,6 +3892,7 @@ pub fn unplan_create_cluster(
                 replication_factor,
                 size: Some(size),
                 schedule: Some(schedule),
+                workload_class,
             };
             let options = options_extracted.into_values(scx.catalog);
             let name = Ident::new_unchecked(name);
@@ -4995,7 +5009,14 @@ pub fn plan_alter_cluster(
                 size,
                 disk,
                 schedule,
+                workload_class,
             }: ClusterOptionExtracted = set_options.try_into()?;
+
+            if !scx.catalog.active_role_id().is_system() {
+                if workload_class.is_some() {
+                    sql_bail!("WORKLOAD CLASS not supported for non-system users");
+                }
+            }
 
             match managed.unwrap_or_else(|| cluster.is_managed()) {
                 true => {
@@ -5158,10 +5179,20 @@ pub fn plan_alter_cluster(
             if let Some(schedule) = schedule {
                 options.schedule = AlterOptionParameter::Set(plan_cluster_schedule(schedule)?);
             }
+            if let Some(workload_class) = workload_class {
+                options.workload_class = AlterOptionParameter::Set(workload_class.0);
+            }
         }
         AlterClusterAction::ResetOptions(reset_options) => {
             use AlterOptionParameter::Reset;
             use ClusterOptionName::*;
+
+            if !scx.catalog.active_role_id().is_system() {
+                if reset_options.contains(&WorkloadClass) {
+                    sql_bail!("WORKLOAD CLASS not supported for non-system users");
+                }
+            }
+
             for option in reset_options {
                 match option {
                     AvailabilityZones => options.availability_zones = Reset,
@@ -5173,6 +5204,7 @@ pub fn plan_alter_cluster(
                     ReplicationFactor => options.replication_factor = Reset,
                     Size => options.size = Reset,
                     Schedule => options.schedule = Reset,
+                    WorkloadClass => options.workload_class = Reset,
                 }
             }
         }

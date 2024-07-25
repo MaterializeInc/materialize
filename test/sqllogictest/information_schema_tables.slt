@@ -293,6 +293,10 @@ mz_cluster_schedules
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_workload_classes
+BASE TABLE
+materialize
+mz_internal
 mz_comments
 BASE TABLE
 materialize

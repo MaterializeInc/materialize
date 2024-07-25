@@ -279,20 +279,20 @@ impl Coordinator {
                     .values()
                     .map(|decision| decision.cluster_on())
                     .contains(&true);
-                let cluster_config = self
-                    .get_managed_cluster_config(cluster_id)
-                    .expect("cleaned up non-existing and unmanaged clusters above");
-                let has_replica = cluster_config.replication_factor > 0; // Is it On?
+                let cluster_config = self.catalog().get_cluster(cluster_id).config.clone();
+                let mut new_config = cluster_config.clone();
+                let ClusterVariant::Managed(managed_config) = &mut new_config.variant else {
+                    panic!("cleaned up unmanaged clusters above");
+                };
+                let has_replica = managed_config.replication_factor > 0; // Is it On?
                 if needs_replica != has_replica {
                     // Turn the cluster On or Off.
                     altered_a_cluster = true;
-                    let mut new_config = cluster_config.clone();
-                    new_config.replication_factor = if needs_replica { 1 } else { 0 };
+                    managed_config.replication_factor = if needs_replica { 1 } else { 0 };
                     if let Err(e) = self
                         .sequence_alter_cluster_managed_to_managed(
                             None,
                             cluster_id,
-                            &cluster_config,
                             new_config.clone(),
                             crate::catalog::ReplicaCreateDropReason::ClusterScheduling(
                                 decisions.values().cloned().collect(),

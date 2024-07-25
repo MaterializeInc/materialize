@@ -393,7 +393,12 @@ impl Cluster {
                 });
             }
         };
-        Ok(CreateClusterPlan { name, variant })
+        let workload_class = self.config.workload_class.clone();
+        Ok(CreateClusterPlan {
+            name,
+            variant,
+            workload_class,
+        })
     }
 }
 
@@ -2014,6 +2019,7 @@ impl DefaultPrivileges {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterConfig {
     pub variant: ClusterVariant,
+    pub workload_class: Option<String>,
 }
 
 impl ClusterConfig {
@@ -2029,6 +2035,7 @@ impl From<ClusterConfig> for durable::ClusterConfig {
     fn from(config: ClusterConfig) -> Self {
         Self {
             variant: config.variant.into(),
+            workload_class: config.workload_class,
         }
     }
 }
@@ -2037,6 +2044,7 @@ impl From<durable::ClusterConfig> for ClusterConfig {
     fn from(config: durable::ClusterConfig) -> Self {
         Self {
             variant: config.variant.into(),
+            workload_class: config.workload_class,
         }
     }
 }

@@ -1173,6 +1173,7 @@ Snapshot {
             ],
             config: Some(
                 ClusterConfig {
+                    workload_class: None,
                     variant: Some(
                         Managed(
                             ManagedCluster {

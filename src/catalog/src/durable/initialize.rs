@@ -667,6 +667,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
         }),
+        workload_class: None,
     }
 }
 

@@ -567,6 +567,7 @@ mz_cluster_replica_metrics
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
 mz_cluster_schedules
+mz_cluster_workload_classes
 mz_comments
 mz_compute_dependencies
 mz_compute_error_counts_raw_unified
