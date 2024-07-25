@@ -2517,10 +2517,10 @@ pub static MZ_CLUSTER_WORKLOAD_CLASSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
 
 pub const MZ_CLUSTER_WORKLOAD_CLASSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_workload_classes_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_WORKLOAD_CLASSES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_cluster_workload_classes (id)",
+ON mz_internal.mz_cluster_workload_classes (id)",
     is_retained_metrics_object: false,
 };
 

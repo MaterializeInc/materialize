@@ -51,6 +51,9 @@ pub struct ClusterConfig {
     /// Each logging variant is mapped to the identifier under which to register
     /// the arrangement storing the log's data.
     pub arranged_logs: BTreeMap<LogVariant, GlobalId>,
+    /// An optional arbitrary string that describes the class of the workload
+    /// this cluster is running (e.g., `production` or `staging`).
+    pub workload_class: Option<String>,
 }
 
 /// The status of a cluster.
@@ -330,7 +333,19 @@ where
         config: ClusterConfig,
     ) -> Result<(), anyhow::Error> {
         self.storage.create_instance(id);
-        self.compute.create_instance(id, config.arranged_logs)?;
+        self.compute
+            .create_instance(id, config.arranged_logs, config.workload_class)?;
+        Ok(())
+    }
+
+    /// Updates the workload class for a cluster.
+    pub fn update_cluster_workload_class(
+        &mut self,
+        id: ClusterId,
+        workload_class: Option<String>,
+    ) -> Result<(), anyhow::Error> {
+        self.compute
+            .update_instance_workload_class(id, workload_class)?;
         Ok(())
     }
 

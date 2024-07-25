@@ -1800,6 +1800,7 @@ impl Coordinator {
                 instance.id,
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
+                    workload_class: instance.config.workload_class.clone(),
                 },
             )?;
             for replica in instance.replicas() {

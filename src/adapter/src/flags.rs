@@ -25,6 +25,7 @@ use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     ComputeParameters {
+        workload_class: None,
         max_result_size: Some(config.max_result_size()),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),

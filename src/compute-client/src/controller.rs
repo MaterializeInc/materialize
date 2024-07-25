@@ -31,7 +31,7 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate;
@@ -51,6 +51,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_policy::ReadPolicy;
+use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::Antichain;
@@ -144,6 +145,10 @@ impl ComputeReplicaLogging {
 /// A controller for the compute layer.
 pub struct ComputeController<T> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
+    /// A map from an instance ID to an arbitrary string that describes the
+    /// class of the workload that compute instance is running (e.g.,
+    /// `production` or `staging`).
+    instance_workload_classes: Arc<Mutex<BTreeMap<ComputeInstanceId, Option<String>>>>,
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
     storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
@@ -206,8 +211,51 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let mut maintenance_ticker = time::interval(Duration::from_secs(1));
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+        let instance_workload_classes = Arc::new(Mutex::new(BTreeMap::<
+            ComputeInstanceId,
+            Option<String>,
+        >::new()));
+
+        // Apply a `workload_class` label to all metrics in the registry that
+        // have an `instance_id` label for an instance whose workload class is
+        // known.
+        metrics_registry.register_postprocessor({
+            let instance_workload_classes = Arc::clone(&instance_workload_classes);
+            move |metrics| {
+                let instance_workload_classes = instance_workload_classes
+                    .lock()
+                    .expect("lock poisoned")
+                    .iter()
+                    .map(|(id, workload_class)| (id.to_string(), workload_class.clone()))
+                    .collect::<BTreeMap<String, Option<String>>>();
+                for metric in metrics {
+                    'metric: for metric in metric.mut_metric() {
+                        for label in metric.get_label() {
+                            if label.get_name() == "instance_id" {
+                                if let Some(workload_class) = instance_workload_classes
+                                    .get(label.get_value())
+                                    .cloned()
+                                    .flatten()
+                                {
+                                    let mut label = LabelPair::default();
+                                    label.set_name("workload_class".into());
+                                    label.set_value(workload_class.clone());
+
+                                    let mut labels = metric.take_label();
+                                    labels.push(label);
+                                    metric.set_label(labels);
+                                }
+                                continue 'metric;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
         Self {
             instances: BTreeMap::new(),
+            instance_workload_classes,
             build_info,
             storage_collections,
             initialized: false,
@@ -350,6 +398,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
             instances,
+            instance_workload_classes,
             build_info: _,
             storage_collections: _,
             initialized,
@@ -374,6 +423,13 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map(|(id, instance)| Ok((id.to_string(), instance.dump()?)))
             .collect::<Result<_, anyhow::Error>>()?;
 
+        let instance_workload_classes: BTreeMap<_, _> = instance_workload_classes
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|(id, wc)| (id.to_string(), format!("{wc:?}")))
+            .collect();
+
         fn field(
             key: &str,
             value: impl Serialize,
@@ -384,6 +440,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 
         let map = serde_json::Map::from_iter([
             field("instances", instances)?,
+            field("instance_workload_classes", instance_workload_classes)?,
             field("initialized", initialized)?,
             field("read_only", read_only)?,
             field(
@@ -411,6 +468,7 @@ where
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
+        workload_class: Option<String>,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
@@ -431,6 +489,11 @@ where
             ),
         );
 
+        self.instance_workload_classes
+            .lock()
+            .expect("lock poisoned")
+            .insert(id, workload_class.clone());
+
         let instance = self.instances.get_mut(&id).expect("instance just added");
         if self.initialized {
             instance.initialization_complete();
@@ -440,8 +503,29 @@ where
             instance.allow_writes();
         }
 
-        let config_params = self.config.clone();
+        let mut config_params = self.config.clone();
+        config_params.workload_class = Some(workload_class);
         instance.update_configuration(config_params);
+
+        Ok(())
+    }
+
+    /// Updates a compute instance's workload class.
+    pub fn update_instance_workload_class(
+        &mut self,
+        id: ComputeInstanceId,
+        workload_class: Option<String>,
+    ) -> Result<(), InstanceMissing> {
+        // Ensure that the instance exists first.
+        let _ = self.instance(id)?;
+
+        self.instance_workload_classes
+            .lock()
+            .expect("lock poisoned")
+            .insert(id, workload_class);
+
+        // Cause a config update to notify the instance about its new workload class.
+        self.update_configuration(Default::default());
 
         Ok(())
     }
@@ -455,6 +539,11 @@ where
         if let Some(compute_state) = self.instances.remove(&id) {
             compute_state.drop();
         }
+
+        self.instance_workload_classes
+            .lock()
+            .expect("lock poisoned")
+            .remove(&id);
     }
 
     /// Returns the compute controller's config set.
@@ -467,9 +556,17 @@ where
         // Apply dyncfg updates.
         config_params.dyncfg_updates.apply(&self.dyncfg);
 
+        let instance_workload_classes = self
+            .instance_workload_classes
+            .lock()
+            .expect("lock poisoned");
+
         // Forward updates to existing clusters.
-        for instance in self.instances.values_mut() {
-            instance.update_configuration(config_params.clone());
+        // Workload classes are cluster-specific, so we need to overwrite them here.
+        for (id, instance) in self.instances.iter_mut() {
+            let mut params = config_params.clone();
+            params.workload_class = Some(instance_workload_classes[id].clone());
+            instance.update_configuration(params);
         }
 
         // Remember updates for future clusters.
