@@ -157,7 +157,16 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let mut data_write = handle.datas.take_write(&data_id).await;
+                    let mut data_write =
+                        handle
+                            .data_write_commit
+                            .remove(&data_id)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                "data shard {} must be registered with this Txn handle to commit",
+                                data_id
+                            )
+                            });
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches = updates
@@ -174,7 +183,8 @@ where
                             })
                             .collect::<Vec<_>>();
                         if !updates.writes.is_empty() {
-                            let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
+                            let mut batch =
+                                data_write.0.builder(Antichain::from_elem(T::minimum()));
                             for (k, v, d) in updates.writes.iter() {
                                 batch.add(k, v, &commit_ts, d).await.expect("valid usage");
                             }
@@ -264,6 +274,7 @@ where
                         for (data_write, batch_updates) in txn_batches_updates {
                             for (batch, _) in batch_updates {
                                 let batch = data_write
+                                    .0
                                     .batch_from_transmittable_batch(batch)
                                     .into_hollow_batch();
                                 handle.metrics.batches.commit_count.inc();
@@ -273,7 +284,10 @@ where
                                     .commit_bytes
                                     .inc_by(u64::cast_from(batch.encoded_size_bytes()));
                             }
-                            handle.datas.put_write(data_write);
+                            let prev = handle
+                                .data_write_commit
+                                .insert(data_write.0.shard_id(), data_write);
+                            assert!(prev.is_none());
                         }
                         return Ok(TxnApply {
                             is_empty: apply_is_empty,
@@ -288,15 +302,18 @@ where
                             let batches = batch_updates
                                 .into_iter()
                                 .map(|(batch, _)| {
-                                    data_write.batch_from_transmittable_batch(batch.clone())
+                                    data_write.0.batch_from_transmittable_batch(batch.clone())
                                 })
                                 .collect();
                             let txn_write = TxnWrite {
                                 writes: Vec::new(),
                                 batches,
                             };
-                            self.writes.insert(data_write.shard_id(), txn_write);
-                            handle.datas.put_write(data_write);
+                            self.writes.insert(data_write.0.shard_id(), txn_write);
+                            let prev = handle
+                                .data_write_commit
+                                .insert(data_write.0.shard_id(), data_write);
+                            assert!(prev.is_none());
                         }
                         let _ = handle.txns_cache.update_ge(&txns_upper).await;
                         continue;

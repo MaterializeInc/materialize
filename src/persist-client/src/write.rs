@@ -43,6 +43,7 @@ use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch};
 use crate::read::ReadHandle;
+use crate::schema::SchemaId;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
@@ -190,6 +191,11 @@ where
     /// This handle's shard id.
     pub fn shard_id(&self) -> ShardId {
         self.machine.shard_id()
+    }
+
+    /// Returns the schema of this writer.
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        self.schemas.id
     }
 
     /// A cached version of the shard-global `upper` frontier.

@@ -17,6 +17,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mz_dyncfg::ConfigSet;
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
@@ -32,7 +33,7 @@ use tracing::debug;
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
-use crate::TxnsCodecDefault;
+use crate::{TxnsCodecDefault, APPLY_ENSURE_SCHEMA_MATCH};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -101,11 +102,13 @@ use crate::TxnsCodecDefault;
 /// ```
 #[derive(Debug)]
 pub struct TxnsHandle<K: Codec, V: Codec, T, D, O = u64, C: TxnsCodec = TxnsCodecDefault> {
+    pub(crate) dyncfgs: ConfigSet,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
     pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
-    pub(crate) datas: DataHandles<K, V, T, D>,
+    pub(crate) data_write_apply: DataHandles<K, V, T, D>,
+    pub(crate) data_write_commit: BTreeMap<ShardId, DataWriteCommit<K, V, T, D>>,
 }
 
 impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
@@ -131,8 +134,9 @@ where
         client: PersistClient,
         metrics: Arc<Metrics>,
         txns_id: ShardId,
-        // TODO(txn): Get rid of these by introducing a SchemalessWriteHandle to
-        // persist.
+        // TODO(txn): Get rid of these once the persist schema stuff finishes
+        // rolling out. Once every shard in prod has a schema, we can look up
+        // the latest one instead of falling back to these.
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
     ) -> Self {
@@ -165,16 +169,18 @@ where
             .expect("txns schema shouldn't change");
         let txns_cache = TxnsCache::init(init_ts, txns_read, &mut txns_write).await;
         TxnsHandle {
+            dyncfgs: client.dyncfgs().clone(),
             metrics,
             txns_cache,
             txns_write,
             txns_since,
-            datas: DataHandles {
+            data_write_apply: DataHandles {
                 client,
                 data_write: BTreeMap::new(),
                 key_schema,
                 val_schema,
             },
+            data_write_commit: BTreeMap::new(),
         }
     }
 
@@ -284,9 +290,8 @@ where
                 }
             }
             for data_write in data_writes {
-                self.datas
-                    .data_write
-                    .insert(data_write.shard_id(), data_write);
+                self.data_write_commit
+                    .insert(data_write.shard_id(), DataWriteCommit(data_write));
             }
             let tidy = self.apply_le(&register_ts).await;
 
@@ -407,11 +412,9 @@ where
                 }
             }
 
-            // Note: Ordering here matters, we want to generate the Tidy work _before_ removing the
-            // handle because the work will create a handle to the shard.
             let tidy = self.apply_le(&forget_ts).await;
             for data_id in &data_ids {
-                self.datas.data_write.remove(data_id);
+                self.data_write_commit.remove(data_id);
             }
 
             Ok(tidy)
@@ -506,7 +509,7 @@ where
             };
 
             for data_id in registered.iter() {
-                self.datas.data_write.remove(data_id);
+                self.data_write_commit.remove(data_id);
             }
             let tidy = self.apply_le(&forget_ts).await;
 
@@ -548,7 +551,9 @@ where
 
             let retractions = FuturesUnordered::new();
             for (data_id, unapplied) in unapplied_by_data {
-                let mut data_write = self.datas.take_write(&data_id).await;
+                let apply_ensure_schema_match = APPLY_ENSURE_SCHEMA_MATCH.handle(&self.dyncfgs);
+                let client = self.data_write_apply.client.clone();
+                let mut data_write = self.data_write_apply.take_write(&data_id).await;
                 retractions.push(async move {
                     let mut ret = Vec::new();
                     for (unapplied, unapplied_ts) in unapplied {
@@ -572,6 +577,8 @@ where
                                     .map(|batch_raw| batch_raw.as_slice())
                                     .collect();
                                 crate::apply_caa(
+                                    &apply_ensure_schema_match,
+                                    &client,
                                     &mut data_write,
                                     &batch_raws,
                                     unapplied_ts.clone(),
@@ -596,7 +603,7 @@ where
             let retractions = retractions
                 .into_iter()
                 .flat_map(|(data_write, retractions)| {
-                    self.datas.put_write(data_write);
+                    self.data_write_apply.put_write(data_write);
                     retractions
                 })
                 .collect();
@@ -721,6 +728,23 @@ where
     }
 }
 
+/// A newtype wrapper around [WriteHandle] indicating that it has a real schema
+/// registered by the user.
+///
+/// The txn-wal user declares which schema they'd like to use for committing
+/// batches by passing it in (as part of the WriteHandle] in the call to
+/// register. This must be used to encode any new batches written. The wrapper
+/// helps us from accidentally mixing up the WriteHandles that we internally
+/// invent for applying the batches (which use a schema matching the one
+/// declared in the batch).
+#[derive(Debug)]
+pub(crate) struct DataWriteCommit<K: Codec, V: Codec, T, D>(pub(crate) WriteHandle<K, V, T, D>)
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + Codec64,
+    D: Semigroup + Codec64 + Send + Sync;
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, UNIX_EPOCH};
@@ -751,7 +775,7 @@ mod tests {
         }
 
         pub(crate) async fn expect_open_id(client: PersistClient, txns_id: ShardId) -> Self {
-            Self::open(
+            let mut ret = Self::open(
                 0,
                 client,
                 Arc::new(Metrics::new(&MetricsRegistry::new())),
@@ -759,11 +783,13 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
             )
-            .await
+            .await;
+            ret.dyncfgs = crate::all_dyncfgs(ret.dyncfgs.clone());
+            ret
         }
 
         pub(crate) fn new_log(&self) -> CommitLog {
-            CommitLog::new(self.datas.client.clone(), self.txns_id())
+            CommitLog::new(self.data_write_apply.client.clone(), self.txns_id())
         }
 
         pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
@@ -778,7 +804,7 @@ mod tests {
             let data_ids: Vec<_> = (0..amount).map(|_| ShardId::new()).collect();
             let mut writers = Vec::new();
             for data_id in &data_ids {
-                writers.push(writer(&self.datas.client, *data_id).await);
+                writers.push(writer(&self.data_write_apply.client, *data_id).await);
             }
             self.register(register_ts, writers).await.unwrap();
             data_ids
@@ -1194,7 +1220,7 @@ mod tests {
             // registered at this ts by someone else.
             self.txns.begin().commit_at(&mut self.txns, self.ts).await?;
 
-            let mut write = writer(&self.txns.datas.client, data_id).await;
+            let mut write = writer(&self.txns.data_write_apply.client, data_id).await;
             let mut current = write.shared_upper().into_option().unwrap();
             loop {
                 if !(current <= self.ts) {
@@ -1225,7 +1251,7 @@ mod tests {
             self.retry_ts_err(&mut |w: &mut StressWorker| {
                 debug!("stress register {:.9} at {}", data_id.to_string(), w.ts);
                 Box::pin(async move {
-                    let data_write = writer(&w.txns.datas.client, data_id).await;
+                    let data_write = writer(&w.txns.data_write_apply.client, data_id).await;
                     let _ = w.txns.register(w.ts, [data_write]).await?;
                     Ok(())
                 })
@@ -1247,7 +1273,7 @@ mod tests {
                 data_id.to_string(),
                 self.ts
             );
-            let client = self.txns.datas.client.clone();
+            let client = self.txns.data_write_apply.client.clone();
             let txns_id = self.txns.txns_id();
             let as_of = self.ts;
             debug!("start_read {:.9} as_of {}", data_id.to_string(), as_of);
@@ -1425,5 +1451,60 @@ mod tests {
 
         log.assert_snapshot(d0, 4).await;
         log.assert_snapshot(d1, 4).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    #[allow(clippy::unnecessary_get_then_check)] // Makes it less readable.
+    async fn schemas() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns0 = TxnsHandle::expect_open(client.clone()).await;
+        let mut txns1 = TxnsHandle::expect_open_id(client.clone(), txns0.txns_id()).await;
+        let log = txns0.new_log();
+        let d0 = txns0.expect_register(1).await;
+
+        // The register call happened on txns0, which means it has a real schema
+        // and can commit batches.
+        assert!(txns0.data_write_commit.get(&d0).is_some());
+        let mut txn = txns0.begin_test();
+        txn.write(&d0, "foo".into(), (), 1).await;
+        let apply = txn.commit_at(&mut txns0, 2).await.unwrap();
+        log.record_txn(2, &txn);
+
+        // We can use handle without a register call to apply a committed txn.
+        assert!(txns1.data_write_commit.get(&d0).is_none());
+        let _tidy = apply.apply(&mut txns1).await;
+
+        // However, it cannot commit batches.
+        assert!(txns1.data_write_commit.get(&d0).is_none());
+        let res = mz_ore::task::spawn(|| "test", async move {
+            let mut txn = txns1.begin();
+            txn.write(&d0, "bar".into(), (), 1).await;
+            // This panics.
+            let _ = txn.commit_at(&mut txns1, 3).await;
+        });
+        assert!(res.await.is_err());
+
+        // Forgetting the data shard removes it, so we don't leave the schema
+        // sitting around.
+        assert!(txns0.data_write_commit.get(&d0).is_some());
+        txns0.forget(3, [d0]).await.unwrap();
+        assert!(txns0.data_write_commit.get(&d0).is_none());
+
+        // Forget is idempotent.
+        assert!(txns0.data_write_commit.get(&d0).is_none());
+        txns0.forget(4, [d0]).await.unwrap();
+        assert!(txns0.data_write_commit.get(&d0).is_none());
+
+        // We can register it again and commit again.
+        assert!(txns0.data_write_commit.get(&d0).is_none());
+        txns0
+            .register(5, [writer(&client, d0).await])
+            .await
+            .unwrap();
+        assert!(txns0.data_write_commit.get(&d0).is_some());
+        txns0.expect_commit_at(6, d0, &["baz"], &log).await;
+
+        log.assert_snapshot(d0, 6).await;
     }
 }
