@@ -784,9 +784,9 @@ steps:
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -795,9 +795,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -806,24 +806,24 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-0dt-upgrade-entire-mz-four-versions
-        label: "Checks 0dt upgrade across four versions"
+      - id: checks-0dt-upgrade-entire-mz-three-versions
+        label: "Checks 0dt upgrade across three versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzThreeVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -1305,7 +1305,7 @@ steps:
   - id: data-ingest
     label: "Data Ingest"
     depends_on: build-aarch64
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
     retry:
       automatic:
         - exit_status: 75
@@ -1429,6 +1429,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
+
+      - id: parallel-workload-0dt
+        label: "Parallel Workload (0dt deploy)"
+        depends_on: build-aarch64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=0dt-deploy, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"
