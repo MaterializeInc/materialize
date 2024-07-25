@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in {"OptbenchTPCHQ16", "OptbenchTPCHQ19", "OptbenchTPCHQ22"}:
+        # PR#28475 (Simplify analyse_optimistic) increased wallclock
+        min_ancestor_mz_version_per_commit[
+            "4745de2ba5cb5f9c7507a0bc4fb391d1c3446e5b"
+        ] = MzVersion.parse_mz("v0.110.0")
+
     if scenario_class_name == "ManyKafkaSourcesOnSameCluster":
         # PR#28359 (Reapply "storage: wire up new reclock implementation") increased wallclock
         min_ancestor_mz_version_per_commit[
