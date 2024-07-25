@@ -94,7 +94,7 @@ p+p {
 
     ul,
     ol {
-        padding-left: var(--small);
+        padding-left: var(--milli);
     }
 
     li {
@@ -194,12 +194,15 @@ p+p {
     }
 
     .callout {
-        background: var(--graidient-primary);
+        background: var(--brand);
         border-radius: 3px;
         padding: 1px;
-        margin: var(--large) 0;
         border-radius: 1.2rem;
         box-shadow: var(--shadow-default);
+
+        &:not(.bottom) {
+            margin: var(--large) 0;
+        }
 
         a {
             margin-top: var(--milli);
