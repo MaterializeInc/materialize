@@ -62,14 +62,20 @@ class DatabaseConnector:
     def create_connection(
         self, autocommit: bool = False, timeout_in_seconds: int = 5
     ) -> Connection:
-        connection = pg8000.connect(
-            host=self.config.hostname,
-            user=self.config.username,
-            password=self.config.app_password,
-            port=self.config.port,
-            ssl_context=ssl.SSLContext(),
-            timeout=timeout_in_seconds,
-        )
+        try:
+            connection = pg8000.connect(
+                host=self.config.hostname,
+                user=self.config.username,
+                password=self.config.app_password,
+                port=self.config.port,
+                ssl_context=ssl.SSLContext(),
+                timeout=timeout_in_seconds,
+            )
+        except Exception:
+            print(
+                f"Failed to connect to {self.config.hostname} on port {self.config.port}"
+            )
+            raise
 
         connection.autocommit = autocommit
 
