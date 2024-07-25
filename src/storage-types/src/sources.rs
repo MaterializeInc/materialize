@@ -2064,7 +2064,7 @@ mod tests {
         let mut decoded: Vec<(RelationDesc, SourceData)> = encoded
             .lines()
             .map(|s| {
-                let (desc, data) = s.split_once(",").expect("comma separated data");
+                let (desc, data) = s.split_once(',').expect("comma separated data");
                 let desc = base64::decode_config(desc, base64_config).expect("valid base64");
                 let data = base64::decode_config(data, base64_config).expect("valid base64");
                 (desc, data)
