@@ -284,7 +284,6 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
   WHERE export_id LIKE 'u%'
 "Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
-"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
@@ -298,7 +297,6 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 "Dataflow: group_by_limit" DistinctBy
 "Dataflow: group_by_limit" DistinctByErrorCheck
 "Dataflow: group_by_limit" MonotonicTop1
-"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_order_by_in_top_1" "Arranged DistinctBy"

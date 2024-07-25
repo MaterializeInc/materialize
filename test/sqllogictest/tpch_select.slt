@@ -247,27 +247,27 @@ Explained Query:
   Finish order_by=[#0{s_acctbal} desc nulls_first, #2{n_name} asc nulls_last, #1{s_name} asc nulls_last, #3{p_partkey} asc nulls_last] output=[#0..=#7]
     Return // { arity: 8 }
       Project (#5{s_address}, #2{n_name}, #8, #0{s_acctbal}, #1{s_name}, #3{p_partkey}, #4{p_mfgr}, #6{s_phone}) // { arity: 8 }
-        Join on=(#0{p_partkey} = #9{p_partkey} AND #7{ps_supplycost} = #10{min_ps_supplycost}) type=differential // { arity: 11 }
+        Join on=(#0{p_partkey} = #9{ps_partkey} AND #7{ps_supplycost} = #10{min_ps_supplycost}) type=differential // { arity: 11 }
           implementation
             %1[#0, #1]UKK » %0:l4[#0, #7]KK
           ArrangeBy keys=[[#0{p_partkey}, #7{ps_supplycost}]] // { arity: 9 }
             Get l4 // { arity: 9 }
-          ArrangeBy keys=[[#0{p_partkey}, #1{min_ps_supplycost}]] // { arity: 2 }
-            Reduce group_by=[#0{p_partkey}] aggregates=[min(#1{ps_supplycost})] // { arity: 2 }
-              Project (#0{p_partkey}, #4) // { arity: 2 }
+          ArrangeBy keys=[[#0{ps_partkey}, #1{min_ps_supplycost}]] // { arity: 2 }
+            Reduce group_by=[#0{ps_partkey}] aggregates=[min(#1{ps_supplycost})] // { arity: 2 }
+              Project (#0{ps_partkey}, #3) // { arity: 2 }
                 Filter (#18{r_name} = "EUROPE") // { arity: 20 }
-                  Join on=(#0{p_partkey} = #1{ps_partkey} AND #2{ps_suppkey} = #6{s_suppkey} AND #9{s_nationkey} = #13{n_nationkey} AND #15{n_regionkey} = #17{r_regionkey}) type=delta // { arity: 20 }
+                  Join on=(#0{ps_partkey} = #5{p_partkey} AND #1{ps_suppkey} = #6{s_suppkey} AND #9{s_nationkey} = #13{n_nationkey} AND #15{n_regionkey} = #17{r_regionkey}) type=delta // { arity: 20 }
                     implementation
-                      %0 » %1:l1[#0]KA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
-                      %1:l1 » %0[#0]UKA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
-                      %2:l0 » %1:l1[#1]KA » %0[#0]UKA » %3:l2[#0]KA » %4:l3[#0]KAef
-                      %3:l2 » %4:l3[#0]KAef » %2:l0[#3]KA » %1:l1[#1]KA » %0[#0]UKA
-                      %4:l3 » %3:l2[#2]KA » %2:l0[#3]KA » %1:l1[#1]KA » %0[#0]UKA
+                      %0:l1 » %1[#0]UKA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
+                      %1 » %0:l1[#0]KA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
+                      %2:l0 » %0:l1[#1]KA » %1[#0]UKA » %3:l2[#0]KA » %4:l3[#0]KAef
+                      %3:l2 » %4:l3[#0]KAef » %2:l0[#3]KA » %0:l1[#1]KA » %1[#0]UKA
+                      %4:l3 » %3:l2[#2]KA » %2:l0[#3]KA » %0:l1[#1]KA » %1[#0]UKA
+                    Get l1 // { arity: 5 }
                     ArrangeBy keys=[[#0{p_partkey}]] // { arity: 1 }
                       Distinct project=[#0{p_partkey}] // { arity: 1 }
                         Project (#0{p_partkey}) // { arity: 1 }
                           Get l4 // { arity: 9 }
-                    Get l1 // { arity: 5 }
                     Get l0 // { arity: 7 }
                     Get l2 // { arity: 4 }
                     Get l3 // { arity: 3 }
@@ -296,7 +296,7 @@ Explained Query:
           ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
       cte l1 =
         ArrangeBy keys=[[#0{ps_partkey}], [#1{ps_suppkey}]] // { arity: 5 }
-          ReadIndex on=partsupp fk_partsupp_partkey=[delta join lookup] fk_partsupp_suppkey=[delta join lookup] // { arity: 5 }
+          ReadIndex on=partsupp fk_partsupp_partkey=[delta join lookup, delta join 1st input (full scan)] fk_partsupp_suppkey=[delta join lookup] // { arity: 5 }
       cte l0 =
         ArrangeBy keys=[[#0{s_suppkey}], [#3{s_nationkey}]] // { arity: 7 }
           ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
@@ -308,7 +308,7 @@ Used Indexes:
   - materialize.public.pk_part_partkey (delta join 1st input (full scan))
   - materialize.public.pk_supplier_suppkey (delta join lookup)
   - materialize.public.fk_supplier_nationkey (delta join lookup)
-  - materialize.public.fk_partsupp_partkey (delta join lookup)
+  - materialize.public.fk_partsupp_partkey (delta join lookup, delta join 1st input (full scan))
   - materialize.public.fk_partsupp_suppkey (delta join lookup)
 
 Target cluster: quickstart
