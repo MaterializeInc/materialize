@@ -47,8 +47,7 @@ class BuildDataStorage(BaseDataStorage):
                main_ancestor_commit_hash,
                mz_version,
                date,
-               data_version,
-               remarks
+               data_version
             )
             SELECT
               '{pipeline}',
@@ -59,8 +58,7 @@ class BuildDataStorage(BaseDataStorage):
               '{main_ancestor_commit_hash}',
               '{mz_version}',
               now(),
-              {self.data_version},
-              NULL
+              {self.data_version}
             WHERE NOT EXISTS
             (
                 SELECT 1
