@@ -242,7 +242,8 @@ impl Coordinator {
                     cluster_id,
                     new_config,
                     options.replicas,
-                )?;
+                )
+                .await?;
             }
         }
 
