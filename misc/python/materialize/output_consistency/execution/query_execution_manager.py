@@ -139,7 +139,9 @@ class QueryExecutionManager:
     ) -> list[ValidationOutcome]:
         query_no = query_index + 1
         query_id = f"{query_id_prefix}{query_no}"
-        query_execution = QueryExecution(query_template, query_id)
+        query_execution = QueryExecution(
+            query_template, query_id, self.config.query_output_mode
+        )
 
         if self.config.verbose_output:
             # print the header with the query before the execution to have information if it gets stuck
@@ -150,6 +152,7 @@ class QueryExecutionManager:
                 strategy,
                 QueryOutputFormat.SINGLE_LINE,
                 ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+                self.config.query_output_mode,
             )
 
             start_time = datetime.now()

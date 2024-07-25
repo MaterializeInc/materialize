@@ -11,6 +11,9 @@
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.execution.query_output_mode import (
+    QueryOutputMode,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -35,13 +38,17 @@ class ReproductionCodePrinter(BaseOutputPrinter):
     def __init__(
         self,
         input_data: ConsistencyTestInputData,
-        mode: OutputPrinterMode = OutputPrinterMode.PRINT,
+        query_output_mode: QueryOutputMode,
+        print_mode: OutputPrinterMode = OutputPrinterMode.PRINT,
     ):
-        super().__init__(mode=mode)
+        super().__init__(print_mode=print_mode)
         self.input_data = input_data
+        self.query_output_mode = query_output_mode
 
-    def clone(self, mode: OutputPrinterMode):
-        return ReproductionCodePrinter(self.input_data, mode)
+    def clone(self, print_mode: OutputPrinterMode):
+        return ReproductionCodePrinter(
+            self.input_data, self.query_output_mode, print_mode
+        )
 
     def get_reproduction_code_of_error(self, error: ValidationError) -> str:
         reproduction_code_generator = self.clone(OutputPrinterMode.COLLECT)
@@ -153,6 +160,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 evaluation_strategy,
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
+                self.query_output_mode,
                 override_db_object_name=query_template.custom_db_object_name
                 or evaluation_strategy.simple_db_object_name,
             )

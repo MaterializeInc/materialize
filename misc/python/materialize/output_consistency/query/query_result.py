@@ -16,6 +16,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
     EvaluationStrategyKey,
 )
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
@@ -26,14 +27,21 @@ from materialize.output_consistency.selection.selection import (
 class QueryExecution:
     """An executed query with the outcomes of the different evaluation strategies"""
 
-    def __init__(self, query_template: QueryTemplate, query_id: str):
+    def __init__(
+        self,
+        query_template: QueryTemplate,
+        query_id: str,
+        query_output_mode: QueryOutputMode,
+    ):
         self.generic_sql = query_template.to_sql(
             DummyEvaluation(),
             QueryOutputFormat.MULTI_LINE,
             ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+            query_output_mode,
         )
         self.query_id = query_id
         self.query_template = query_template
+        self.query_output_mode = query_output_mode
         self.outcomes: list[QueryOutcome] = []
         self.durations: list[float] = []
 
