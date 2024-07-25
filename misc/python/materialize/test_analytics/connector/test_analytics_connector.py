@@ -60,7 +60,9 @@ class DatabaseConnector:
         return self.open_connection
 
     def create_connection(
-        self, autocommit: bool = False, timeout_in_seconds: int = 60
+        self,
+        autocommit: bool = False,
+        timeout_in_seconds: int = 60,
     ) -> Connection:
         try:
             connection = pg8000.connect(
@@ -78,6 +80,9 @@ class DatabaseConnector:
             )
             raise
 
+        connection.run(f"SET database = {self.config.database}")
+        connection.run(f"SET search_path = {self.config.search_path}")
+        connection.run("SET cluster = 'test_analytics'")
         connection.autocommit = autocommit
 
         return connection
@@ -96,11 +101,7 @@ class DatabaseConnector:
                 connection = self.create_connection(autocommit=autocommit)
 
         cursor = connection.cursor()
-        cursor.execute(f"SET database = {self.config.database}")
-        cursor.execute(f"SET search_path = {self.config.search_path}")
         cursor.execute(f"SET statement_timeout = '{statement_timeout}'")
-        cursor.execute("SET cluster = 'test_analytics'")
-        cursor.execute("SET transaction_isolation = 'serializable'")
         return cursor
 
     def set_read_only(self) -> None:

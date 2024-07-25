@@ -24,7 +24,7 @@ class BaseDataStorage:
         self,
         query: str,
         verbose: bool = True,
-        statement_timeout: str = "1s",
+        statement_timeout: str = "60s",
     ) -> Sequence[Sequence[Any]]:
         cursor = self.database_connector.create_cursor(
             allow_reusing_connection=True, statement_timeout=statement_timeout
