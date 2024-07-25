@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
+use arrow::array::{Array, AsArray, BooleanArray};
+use arrow::compute::FilterBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -22,8 +24,11 @@ use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_panic_no_log, soft_panic_or_log};
+use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
@@ -1078,6 +1083,68 @@ where
         // At time of writing, only user parts may be unconsolidated, and they are always
         // written with a since of [T::minimum()].
         self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
+    }
+
+    /// Returns the updates with all truncation / timestamp rewriting applied.
+    pub(crate) fn normalize(&self, metrics: &ColumnarMetrics) -> BlobTraceUpdates {
+        let updates = self.part.updates.clone();
+        if !self.needs_truncation && self.ts_rewrite.is_none() {
+            return updates;
+        }
+
+        let (records, ext) = match updates {
+            BlobTraceUpdates::Row(r) => (r, None),
+            BlobTraceUpdates::Both(r, e) => (r, Some(e)),
+        };
+
+        let records = match self.ts_rewrite.as_ref() {
+            Some(rewrite) => {
+                let timestamps = records.timestamps().clone();
+                let rewrite = |i: i64| {
+                    let mut t = T::decode(i.to_le_bytes());
+                    t.advance_by(rewrite.borrow());
+                    i64::from_le_bytes(T::encode(&t))
+                };
+                let timestamps = arrow::compute::unary_mut(timestamps, rewrite)
+                    .unwrap_or_else(|i| arrow::compute::unary(&i, rewrite));
+                ColumnarRecords::new(
+                    records.keys().clone(),
+                    records.vals().clone(),
+                    realloc_array(&timestamps, metrics),
+                    records.diffs().clone(),
+                )
+            }
+            None => records,
+        };
+        let (records, ext) = if self.needs_truncation {
+            let filter = BooleanArray::from_unary(records.timestamps(), |i| {
+                let t = T::decode(i.to_le_bytes());
+                let truncate_t = {
+                    !self.registered_desc.lower().less_equal(&t)
+                        || self.registered_desc.upper().less_equal(&t)
+                };
+                !truncate_t
+            });
+            let filter = FilterBuilder::new(&filter).optimize().build();
+            let do_filter = |array: &dyn Array| filter.filter(array).expect("valid filter len");
+            let keys = realloc_array(do_filter(records.keys()).as_binary(), metrics);
+            let values = realloc_array(do_filter(records.vals()).as_binary(), metrics);
+            let timestamps = realloc_array(do_filter(records.timestamps()).as_primitive(), metrics);
+            let diffs = realloc_array(do_filter(records.diffs()).as_primitive(), metrics);
+            let records = ColumnarRecords::new(keys, values, timestamps, diffs);
+            let ext = ext.map(|ext| ColumnarRecordsStructuredExt {
+                key: realloc_any(&do_filter(&ext.key), metrics),
+                val: realloc_any(&do_filter(&ext.val), metrics),
+            });
+            (records, ext)
+        } else {
+            (records, ext)
+        };
+
+        match ext {
+            Some(ext) => BlobTraceUpdates::Both(records, ext),
+            None => BlobTraceUpdates::Row(records),
+        }
     }
 }
 
