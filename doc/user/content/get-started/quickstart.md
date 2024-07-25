@@ -1,6 +1,6 @@
 ---
 title: "Quickstart"
-description: "Learn the basics of Materialize, the operational data warehouse."
+description: "Learn the basics of Materialize."
 menu:
   main:
     parent: "get-started"
@@ -12,20 +12,27 @@ aliases:
   - /install/
 ---
 
-Materialize is the Operational Data Warehouse that delivers the speed of
-streaming with the ease of a data warehouse.
+{{% text-style %}}
 
-This quickstart will get you up and
-running in a few minutes and with no dependencies, so you can experience the
-superpowers of an operational data warehouse first-hand:
+The following quickstart provides a hands-on overview of some of the key
+features of Materialize.
 
-* **Interactivity**: get immediate responses from indexed warehouse relations and derived results.
+In this quickstart, you will:
 
-* **Freshness**: watch results change immediately in response to *your* input changes.
+- Create sources from streaming data. This quickstart uses a
+  Materialize-provided sample data generator.
 
-* **Consistency**: results are always correct; never even transiently wrong.
+- Create a view to save a query on the sources.
 
-![Quickstart](/images/quickstart-console.png)
+- Index a view to <red>maintain and incrementally update view results in
+  memory</red>.
+
+- Create views to find auction flippers in real time.
+
+- Create views to verify that Materialize serves <red>correct and consistent
+  results</red>, even as new data arrives.
+
+![Image of Quickstart in the Materialize Console](/images/quickstart-console.png "Quickstart in the Materialize Console")
 
 ## Prerequisite
 
@@ -33,22 +40,33 @@ A Materialize account. If you do not have an account, you can [sign up for a fre
 
 ## Step 0. Sign in to Materialize
 
-Navigate to the [Materialize console](https://console.materialize.com/) and sign
+Navigate to the [Materialize Console](https://console.materialize.com/) and sign
 in. By default, you should land in the SQL Shell. If you're already signed in,
 you can access the SQL Shell in the left-hand menu.
 
-## Step 1. Ingest streaming data
+{{< note >}}
 
-You'll use a sample auction house data set to build an operational use
-case around auctions, bidders and (gasp) fraud. 🦹
+This quickstart is available from within the [Materialize
+Console](https://console.materialize.com/) itself.
 
-As the auction house operator, you want to detect fraudulent behavior as soon as
-it happens, so you can act on it immediately. Lately, you've been struggling
-with [auction flippers](https://en.wikipedia.org/wiki/Flipping) — users that
-purchase items only to quickly resell them for profit.
+{{</ note>}}
 
-1. Let's start by kicking off the built-in [auction load generator](/sql/create-source/load-generator/#auction), so you have some data to work
-with.
+## Step 1. Create sources
+
+[Sources](/concepts/sources/) are external systems from which Materialize reads
+in data. This tutorial uses Materialize's [sample `Auction` load
+generator](/sql/create-source/load-generator/#auction) to create the
+[sources](/concepts/sources/).
+
+1. Create the [sources](/concepts/sources "External systems from which
+   Materialize reads data.") using the  [`CREATE SOURCE`](/sql/create-source/)
+   command.
+
+   For the [sample `Auction` load
+   generator](/sql/create-source/load-generator/#auction), use [`CREATE
+   SOURCE`](/sql/create-source/) with the `FROM LOAD GENERATOR` clause that
+   works specifically with Materialize's sample data generators. The tutorial
+   specifies that the generator should emit new data every 1s.
 
     ```mzsql
     CREATE SOURCE auction_house
@@ -56,12 +74,19 @@ with.
     (TICK INTERVAL '1s', AS OF 100000)
     FOR ALL TABLES;
     ```
-1. Use the [`SHOW SOURCES`](/sql/show-sources/) command to get an idea of the data being generated:
+
+    `CREATE SOURCE` creates **multiple** sources when ingesting data from
+    multiple upstream tables. For each upstream table that is selected for
+    ingestion, Materialize creates a subsource of type subsource.
+
+1. Use the [`SHOW SOURCES`](/sql/show-sources/) command to see the results of
+   the previous step.
 
     ```mzsql
     SHOW SOURCES;
     ```
-    <p></p>
+
+    The output should resemble the following:
 
     ```nofmt
             name            |      type      | size
@@ -75,189 +100,291 @@ with.
      users                  | subsource      | null
     ```
 
-    For now, you'll focus on the `auctions` and `bids` data sets. Data will
-    be **continually produced** as you walk through the quickstart.
+    A [`subsource`](/sql/show-subsources) is a relation(table).
 
-1. Before moving on, get a sense for the data you'll be working with:
+    - A subsource can only be written by the source; in this case, the
+      load-generator.
+
+    - Users can read from subsources.
+
+1. Use the [`SELECT`](/sql/select) statement to query the subsources. The
+   quickstart uses the `auctions` and `bids` subsources.
+
+    * To view a sample row in `auctions`, run the following
+      [`SELECT`](/sql/select) command:
+
+      ```mzsql
+      SELECT * FROM auctions ORDER BY end_time DESC LIMIT 1;
+      ```
+
+      The output should return a single row (your results may differ):
+
+      ```nofmt
+       id    | seller | item               | end_time
+      -------+--------+--------------------+---------------------------
+       29550 | 2468   | Best Pizza in Town | 2024-07-25 18:24:25.805+00
+      ```
+
+    * To view a sample row in `bids`, run the following [`SELECT`](/sql/select)
+      command:
+
+      ```mzsql
+      SELECT * FROM bids ORDER BY bid_time DESC LIMIT 1;
+      ```
+
+      The output should return a single row (your results may differ):
+
+      ```nofmt
+       id     | buyer | auction_id | amount | bid_time
+      --------+-------+------------+--------+---------------------------
+       295641 | 737   | 29564      | 72     | 2024-07-25 18:25:42.911+00
+      ```
+
+
+    * To view the relationship between `auctions` and `bids`, you can join by
+      the auction id. The following query returns the most recently ended
+      auctions and associated bids (limited to 3 rows):
+
+      ```mzsql
+      SELECT auctions.*, bids.*
+      FROM auctions, bids
+      WHERE auctions.id = bids.auction_id
+      ORDER BY auctions.end_time desc
+      LIMIT 3;
+      ```
+
+      The output should return (at most) 3 rows (your results may
+      differ):
+
+      ```nofmt
+      | id    | seller | item               | end_time                   | id     | buyer | auction_id | amount | bid_time                   |
+      | ----- | ------ | ------------------ | -------------------------- | ------ | ----- | ---------- | ------ | -------------------------- |
+      | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155751 | 215   | 15575      | 27     | 2024-07-25 20:30:16.085+00 |
+      | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155750 | 871   | 15575      | 63     | 2024-07-25 20:30:15.085+00 |
+      | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155752 | 2608  | 15575      | 16     | 2024-07-25 20:30:17.085+00 |
+      ```
+
+      As new data enters the system, above `SELECT` queries could be rerun to
+      get the recent results.
+
+      To efficiently serve queries that have no supporting indexes, Materialize
+      uses the same underlying mechanism it does for indexes. However, without
+      an index, the underlying work is discarded after the results are served.
+      By creating a view to save repeated queries and then indexing the view,
+      Materialize can <redb>maintain and incrementally update</redb> view
+      results in memory.
+
+      Using a query to find winning bids for auctions, subsequent steps in this
+      quickstart show how Materialize uses views and indexes to provide up-to-date results.
+
+## Step 2. Create a view to find winning bids
+
+A view is a saved name for the underlying `SELECT` statement, providing an
+alias/shorthand when referencing the query. The underlying query is not executed
+during the view creation; instead, the underlying query is executed when the
+view is referenced.
+
+Assume you want to find the winning bids for auctions that have ended. The
+winning bid for an auction is the highest bid entered for an auction before the
+auction ended. As new auction and bid data appears, the query must be rerun to
+get up-to-date results.
+
+1. Using the [CREATE VIEW](/sql/create-view/) command, create a
+   [**view**](/concepts/views/ "Saved name/alias for a query") `winning_bids`
+   for the query that finds winning bids for auctions that have ended.
+
+   ```mzsql
+   CREATE VIEW winning_bids AS
+   SELECT DISTINCT ON (auctions.id) bids.*, auctions.item, auctions.seller
+   FROM auctions, bids
+   WHERE auctions.id = bids.auction_id
+     AND bids.bid_time < auctions.end_time
+     AND mz_now() >= auctions.end_time
+   ORDER BY auctions.id,
+     bids.amount DESC,
+     bids.bid_time,
+     bids.buyer;
+   ```
+
+   [`SELECT DISTINCT ON
+   (...)`](https://www.postgresql.org/docs/current/sql-select.html#SQL-DISTINCT)
+   is a PostgreSQL expression that keeps only the first row of each set of
+   matching rows.
+
+1. Query the view to execute the underlying query. For example:
+
+   ```mzsql
+   SELECT * FROM winning_bids
+   ORDER BY bid_time DESC
+   LIMIT 10;
+   ```
+
+   ```mzsql
+   SELECT * FROM winning_bids
+   WHERE item = 'Best Pizza in Town'
+   ORDER BY bid_time DESC
+   LIMIT 10;
+   ```
+
+   Each time you query the view, you are running the underlying statement. Even
+   without an index, Materialize uses the same mechanics used by indexes to
+   optimize computations. However, without an index, the underlying work is
+   discarded after each query run.
+
+   In Materialize, you can create [**indexes**](/concepts/indexes/) on views to
+   keep view results incrementally updated and immediately accessible in memory.
+
+   By indexing the `winning_bids`, Materialize can:
+
+   - Maintain and incrementally update view results in memory; and
+
+   - Further [optimize query performance](/transform-data/optimization/)by
+     supporting point lookups on the indexed field.
+
+## Step 3. Create indexes on the view
+
+In Materialize, you can create [indexes](/concepts/indexes/) on views. In
+Materialize, indexes maintain and, as data changes (inserts/updates/deletes),
+incrementally update view results in memory. That is, the incremental work is
+performed on writes such that reads from indexes are computationally
+<redb>free</redb>. In addition, indexes can also help [optimize
+operations](/transform-data/optimization/) like point lookups and joins.
+
+1. Use the [`CREATE INDEX`](/sql/create-index/) command to create the following
+   index on the `winning_bids` view.
 
     ```mzsql
-    SELECT * FROM auctions LIMIT 1;
+    CREATE INDEX wins_by_item ON winning_bids (item);
     ```
-    <p></p>
 
-    ```nofmt
-     id | seller |        item        |          end_time
-    ----+--------+--------------------+----------------------------
-      1 |   1824 | Best Pizza in Town | 2023-09-10 21:24:54.838+00
-    ```
+   The index **maintains and incrementally updates** the results of
+   `winning_bids` in memory. Because incremental work is performed on writes,
+   reads from indexes are computationally <redb>free</redb>.
+
+   This index can **also**  help [optimize
+   operations](/transform-data/optimization/) like point lookups and delta joins
+   on the index column(s) as well as support ad-hoc queries.
+
+1. Rerun the previous queries on `winning_bids`.
 
     ```mzsql
-    SELECT * FROM bids LIMIT 1;
+    SELECT * FROM winning_bids
+    ORDER BY bid_time DESC
+    LIMIT 10;
     ```
-    <p></p>
-
-    ```nofmt
-     id | buyer | auction_id | amount |          bid_time
-    ----+-------+------------+--------+----------------------------
-     10 |  3844 |          1 |     59 | 2023-09-10 21:25:00.465+00
-    ```
-
-## Step 2. Use indexes for speed
-
-**Operational work requires interactive access to data as soon as it's
-  available**. To identify potential auction flippers, you need to keep track
-  of the winning bids for each completed auction.
-
-1. Create a [**view**](/concepts/views/#views) that
-joins data from `auctions` and `bids` to get the bid with the highest `amount`
-for each auction at its `end_time`.
-
-    ```mzsql
-    CREATE VIEW winning_bids AS
-    SELECT DISTINCT ON (auctions.id) bids.*, auctions.item, auctions.seller
-    FROM auctions, bids
-      -- Where all bids occurred during the auction
-    WHERE auctions.id = bids.auction_id
-      AND bids.bid_time < auctions.end_time
-        -- Where all auctions have completed
-      AND mz_now() >= auctions.end_time
-    ORDER BY auctions.id,
-      bids.amount DESC,
-      bids.bid_time,
-      bids.buyer;
-    ```
-
-    Like in other SQL databases, a view in Materialize is just an alias for the
-    embedded `SELECT` statement; results are computed only when the view is
-    called.
-
-1. You can query the view directly, but this shouldn't be very impressive just
-yet! Querying the view re-runs the embedded statement, which comes at some cost
-on growing amounts of data.
 
     ```mzsql
     SELECT * FROM winning_bids
     WHERE item = 'Best Pizza in Town'
-    ORDER BY bid_time DESC;
+    ORDER BY bid_time DESC
+    LIMIT 10;
     ```
 
-   Yikes! In Materialize, you use [**indexes**](/sql/create-index/) to
-   keep results incrementally updated and immediately accessible.
+   The queries should be faster as the reads are served from memory.
 
-1. Next, try creating several indexes on the `winning_bids` view using columns
-that can help optimize operations like point lookups and joins.
+1. To verify that an index is used (i.e., the results are served from memory),
+   you can run explain on the queries:
+
+   - The following [`EXPLAIN`](/sql/explain/) results should show that the query
+     uses the index.
+
+     ```mzsql
+     EXPLAIN
+     SELECT * FROM winning_bids
+     ORDER BY bid_time DESC
+     LIMIT 10;
+     ```
+
+   - The following [`EXPLAIN`](/sql/explain/) results should show that the query
+     uses the index and perform a point lookup on the indexed column.
+
+      ```mzsql
+      EXPLAIN
+      SELECT * FROM winning_bids
+      WHERE item = 'Best Pizza in Town'
+      ORDER BY bid_time DESC
+      LIMIT 10;
+      ```
+
+{{< tip >}}
+
+- Before creating an index, consider its memory usage as well as its compute
+  cost implications.
+
+- In Materialize, underlying data structures that is being maintained for an
+  index (or a materialized view) can be reused by other views/queries. As
+  such, an existing index may be sufficient to support your queries.
+
+- If you have created various views to act as the building blocks for a view
+  from which you will serve the results, indexing the serving view only may be
+  sufficient.
+
+- Even without indexes, Materialize can optimize computations for queries.
+  However, this underlying work is discarded after each query run.
+
+{{</ tip >}}
+
+## Step 4. Create views to find auction flippers in real time.
+
+This step creates two views from other views:
+
+- One view to find auction flipping activities.
+
+- Another view to find auction flippers based on flipping activities.
+
+1. Create a view to detect auction flipping activities. For the purposes of this
+   quickstart (where data is emitted every 1 second), auction flipping
+   activities are those activities where the winning bidder of an item in one
+   auction is the seller of the same item at a higher price in another auction
+   within a 30 minute period.
 
     ```mzsql
-    CREATE INDEX wins_by_item ON winning_bids (item);
-    CREATE INDEX wins_by_bidder ON winning_bids (buyer);
-    CREATE INDEX wins_by_seller ON winning_bids (seller);
-    ```
-
-   These indexes will hold the results of `winning_bids` **in memory**, and work
-   like a cache — except you don't need to wire up one, or worry about the
-   results getting stale.
-
-1. If you now try to read out of `winning_bids` while hitting one of these
-indexes (e.g., with a point lookup), things should be a whole lot more
-interactive.
-
-    ```mzsql
-    SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC;
-    ```
-
-   But to detect and act upon fraud, you can't rely on manual checks, right? You
-   want to keep a running tab on these flippers. Luckily, the indexes you
-   created in the previous step also make joins more interactive (as in other
-   databases)!
-
-    [//]: # "NOTE(morsapaes) This query is borderline unpredictable since we're
-    relying on a load generator, but _mostly_ returns some results. The experience
-    won't be great when it doesn't."
-
-1. Create a view that detects when a user wins an auction as a bidder, and then
-is identified as a seller for an item at a higher price.
-
-    ```mzsql
-    CREATE VIEW fraud_activity AS
+    CREATE VIEW flip_activities AS
     SELECT w2.seller,
-           w2.item AS seller_item,
-           w2.amount AS seller_amount,
-           w1.item buyer_item,
-           w1.amount buyer_amount
+           w2.item AS item,
+           w2.amount AS sold_amount,
+           w1.amount AS purchased_amount,
+           w2.amount - w1.amount AS diff_amount,
+           datediff('minutes', w2.bid_time, w1.bid_time) AS timeframe_minutes
     FROM winning_bids w1,
-         winning_bids w2
-    -- Identified as a buyer and seller for any two auctions
-    WHERE w1.buyer = w2.seller
-      -- For the same item
-      AND w1.item = w2.item
-      -- Tries to sell at a higher price
-      AND w2.amount > w1.amount;
+          winning_bids w2
+    WHERE w1.buyer = w2.seller     -- Buyer and seller are the same
+      AND w1.item = w2.item        -- The item is the same
+      AND w2.amount > w1.amount    -- And sold at a higher price
+      AND datediff('minutes', w2.bid_time, w1.bid_time) < 30;
     ```
 
-    Aha! You can now catch any auction flippers in real time, based on the results of this view.
+    To view a sample row in `flip_activities`, run the following
+    [`SELECT`](/sql/select) command:
 
     ```mzsql
-    SELECT * FROM fraud_activity LIMIT 100;
+    SELECT * FROM flip_activities LIMIT 10;
     ```
 
-## Step 3. See results change!
-
-**Operational work needs to surface and act on the most recent data.** The
-  moment your data changes, Materialize reacts. Let's verify that this _really_
-  happens by manually flagging some accounts as fraudulent, and observing
-  results change in real time!
-
-1. Create a [**table**](/sql/create-table/) that allows you to manually flag
-fraudulent accounts.
+1. Create a view `flippers` to flag known flipper accounts. Flippers are those
+   users with more than 2 flipping activities.
 
     ```mzsql
-    CREATE TABLE fraud_accounts (id bigint);
+    CREATE VIEW flippers AS
+    SELECT seller, count(*) AS flip_count
+    FROM flip_activities
+    GROUP BY seller
+    HAVING count(*) >= 2;
     ```
 
-1. In a new browser window, side-by-side with this one, navigate to the [Materialize console](https://console.materialize.com/),
-   and pop open another SQL Shell.
-
-1. To see results change over time, let's `SUBSCRIBE` to a query that returns
-the Top 5 auction winners, overall.
+1. In the `SQL Shell`, use the [`SUBSCRIBE`](/sql/subscribe/) command to see
+   flippers as new data come in.
 
    ```mzsql
    SUBSCRIBE TO (
-     SELECT buyer, count(*)
-     FROM winning_bids
-     WHERE buyer NOT IN (SELECT id FROM fraud_accounts)
-     GROUP BY buyer
-     ORDER BY 2 DESC LIMIT 5
-   );
+     SELECT *
+     FROM flippers
+   ) with (snapshot = false);
    ```
 
-   You can keep an eye on the results, but these may not change much at the
-   moment. You'll fix that in the next step!
+   To cancel out of the `SUBSCRIBE`, click **Stop streaming**.
 
-1. Pick one of the buyers from the list maintained in the window that is running
-the `SUBSCRIBE`, and mark them as fraudulent by adding them to the
-`fraud_accounts` table.
-
-   ```mzsql
-   INSERT INTO fraud_accounts VALUES (<id>);
-   ```
-
-   This should cause the flagged buyer to immediately drop out of the Top 5! If
-   you click **Show diffs**, you'll notice that the picked buyer was kicked
-   out, and the next non-fraudulent buyer in line automatically entered the
-   Top 5.
-
-   When you're done, cancel out of the `SUBSCRIBE` using **Stop streaming**, and close
-   the secondary browser window.
-
-## Step 4. Serve correct results
-
-With fraud out of the way, you can now shift your focus to a different
-operational use case: profit & loss alerts.
-
-**Operational work needs to act on correct and consistent data.** Before you
-  warn a user that they've spent much more than they've earned, you want to be
-  sure your results are trustworthy — it's real money we're talking about,
-  after all!
+## Step 5. Create a view to verify that reads return correct and consistent data.
 
 1. Create a view to track the sales and purchases of each auction house user.
 
@@ -296,17 +423,16 @@ and total debit amounts should always add up.
 
    It is never wrong, is it?
 
-## Step 5. Clean up
+## Step 6. Clean up
 
-As the auction house operator, you should now have a high degree of confidence that Materialize can help you implement and automate operational use cases that depend on fresh, consistent results served in an interactive way.
-
-Once you’re done exploring the auction house source, remember to clean up your environment:
+Use the `DROP SOURCE ... CASCADE` command to clean up your environment:
 
 ```mzsql
 DROP SOURCE auction_house CASCADE;
-
-DROP TABLE fraud_accounts;
 ```
+
+## Summary
+
 
 ## What's next?
 
