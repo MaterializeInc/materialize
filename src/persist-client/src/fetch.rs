@@ -752,32 +752,16 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     validate_structured: true,
                 },
             ) => {
-                let maybe_key = structured
-                    .key
-                    .as_ref()
-                    .map(|col| {
-                        let decoder = Schema2::decoder_any(schemas.key.as_ref(), col)?;
-                        Ok::<_, anyhow::Error>(Arc::new(decoder))
-                    })
-                    .transpose();
-                let key = match maybe_key {
-                    Ok(key) => key,
+                let key = match Schema2::decoder_any(schemas.key.as_ref(), &*structured.key) {
+                    Ok(key) => Some(Arc::new(key)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create key decoder");
                         None
                     }
                 };
 
-                let maybe_val = structured
-                    .val
-                    .as_ref()
-                    .map(|col| {
-                        let decoder = Schema2::decoder_any(schemas.val.as_ref(), col)?;
-                        Ok::<_, anyhow::Error>(Arc::new(decoder))
-                    })
-                    .transpose();
-                let val = match maybe_val {
-                    Ok(val) => val,
+                let val = match Schema2::decoder_any(schemas.val.as_ref(), &*structured.val) {
+                    Ok(val) => Some(Arc::new(val)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create val decoder");
                         None

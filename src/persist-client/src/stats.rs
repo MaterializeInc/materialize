@@ -12,11 +12,11 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow::array::Array;
 use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::soft_panic_or_log;
+use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
-use mz_persist_types::part::{Part2, PartBuilder, PartBuilder2};
+use mz_persist_types::columnar::codec_to_schema2;
+use mz_persist_types::part::PartBuilder;
 use mz_persist_types::stats::{ColumnStatKinds, PartStats};
 use mz_persist_types::Codec;
 
@@ -123,53 +123,33 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
     }
 }
 
-/// Encodes a [`BlobTraceUpdates`] into a `Part` and calculates [`PartStats`].
-///
-/// Note: The `Part` will contain the same data as [`BlobTraceUpdates`], but
-/// the `Part` will have the data fully structured as opposed to an opaque
-/// binary blob.
+/// Encodes a [`BlobTraceUpdates`] and calculates [`PartStats`].
+/// We also return structured data iff [BatchColumnarFormat::is_structured] is enabled.
 pub(crate) fn encode_updates<K, V>(
     schemas: &Schemas<K, V>,
     updates: &BlobTraceUpdates,
     format: &BatchColumnarFormat,
-) -> Result<((Option<Arc<dyn Array>>, Option<Arc<dyn Array>>), PartStats), String>
+) -> Result<(Option<ColumnarRecordsStructuredExt>, PartStats), String>
 where
     K: Codec,
     V: Codec,
 {
-    let updates = match updates {
-        BlobTraceUpdates::Row(updates) => updates,
-        BlobTraceUpdates::Both(codec, _structured) => {
-            // This is super unexpected, but not worthy of a panic.
-            soft_panic_or_log!("re-encoding structured data?");
-            codec
-        }
-    };
-
-    // Optionally we reuse instances of K and V and create instances of
-    // K::Storage and V::Storage to reduce allocations.
-    let mut k_reuse = K::default();
-    let mut v_reuse = V::default();
-    let mut k_storage = Some(K::Storage::default());
-    let mut v_storage = Some(V::Storage::default());
+    let records = updates.records();
 
     if format.is_structured() {
-        let mut builder = PartBuilder2::new(schemas.key.as_ref(), schemas.val.as_ref());
-        for ((k, v), t, d) in updates.iter() {
-            let t = i64::from_le_bytes(t);
-            let d = i64::from_le_bytes(d);
-            K::decode_from(&mut k_reuse, k, &mut k_storage)?;
-            V::decode_from(&mut v_reuse, v, &mut v_storage)?;
-
-            builder.push(&k_reuse, &v_reuse, t, d);
-        }
-
-        let Part2 {
-            key,
-            key_stats,
-            val,
-            ..
-        } = builder.finish();
+        // At the moment, the only way to collect stats is to re-encode the key column.
+        // However, we only need to re-encode the structured values if they weren't passed in.
+        // TODO(bkirwi): reuse the existing encoded data once we have separate stats collection methods.
+        let (key, key_stats) = codec_to_schema2::<K>(schemas.key.as_ref(), records.keys())
+            .map_err(|e| e.to_string())?;
+        let val = match updates {
+            BlobTraceUpdates::Row(_) => {
+                let (val, _) = codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
+                    .map_err(|e| e.to_string())?;
+                val
+            }
+            BlobTraceUpdates::Both(_, ext) => Arc::clone(&ext.val),
+        };
         let key_stats = match key_stats.into_non_null_values() {
             Some(ColumnStatKinds::Struct(stats)) => stats,
             key_stats => Err(format!(
@@ -177,10 +157,13 @@ where
             ))?,
         };
 
-        Ok(((Some(key), Some(val)), PartStats { key: key_stats }))
+        Ok((
+            Some(ColumnarRecordsStructuredExt { key, val }),
+            PartStats { key: key_stats },
+        ))
     } else {
         let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
-        for ((k, v), t, d) in updates.iter() {
+        for ((k, v), t, d) in records.iter() {
             let k = K::decode(k)?;
             let v = V::decode(v)?;
             let t = i64::from_le_bytes(t);
@@ -192,16 +175,7 @@ where
         let part = builder.finish();
         let stats = PartStats::new(&part)?;
 
-        let key = part.to_key_arrow().map(|(_field, array)| {
-            let array: Arc<dyn Array> = Arc::new(array);
-            array
-        });
-        let val = part.to_val_arrow().map(|(_field, array)| {
-            let array: Arc<dyn Array> = Arc::new(array);
-            array
-        });
-
-        Ok(((key, val), stats))
+        Ok((None, stats))
     }
 }
 

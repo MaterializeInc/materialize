@@ -47,14 +47,17 @@
 //! column structure. It also provides a [PartEncoder] and [PartDecoder] for
 //! amortizing any downcasting that does need to happen.
 
+use anyhow::anyhow;
+use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder};
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
-use crate::stats::{ColumnStats, DynStats, StatsFrom};
+use crate::stats::{ColumnStats, ColumnarStats, DynStats, StatsFrom};
 use crate::Codec;
 
 /// A type understood by persist.
@@ -383,3 +386,57 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
 /// Opaque binary encoded data.
 #[derive(Debug)]
 pub struct OpaqueData;
+
+/// Helper to convert from codec-encoded data to structured data.
+pub fn codec_to_schema2<A: Codec + Default>(
+    schema: &A::Schema,
+    data: &BinaryArray,
+) -> anyhow::Result<(ArrayRef, ColumnarStats)> {
+    let mut encoder = Schema2::encoder(schema)?;
+
+    let mut value: A = A::default();
+    let mut storage = Some(A::Storage::default());
+
+    for bytes in data.iter() {
+        if let Some(bytes) = bytes {
+            A::decode_from(&mut value, bytes, &mut storage).map_err(|e| {
+                anyhow!(
+                    "unable to decode bytes with {} codec: {e:#?}",
+                    A::codec_name()
+                )
+            })?;
+            encoder.append(&value);
+        } else {
+            encoder.append_null();
+        }
+    }
+
+    let (col, stats) = encoder.finish();
+    Ok((Arc::new(col), stats.into_columnar_stats()))
+}
+
+/// Helper to convert from structured data to codec-encoded data.
+pub fn schema2_to_codec<A: Codec + Default>(
+    schema: &A::Schema,
+    data: &dyn Array,
+) -> anyhow::Result<BinaryArray> {
+    let len = data.len();
+    let decoder = Schema2::decoder_any(schema, data)?;
+    let mut builder = BinaryBuilder::new();
+
+    let mut value: A = A::default();
+    let mut buffer = vec![];
+
+    for i in 0..len {
+        if decoder.is_null(i) {
+            builder.append_null();
+        } else {
+            decoder.decode(i, &mut value);
+            Codec::encode(&value, &mut buffer);
+            builder.append_value(&buffer);
+            buffer.clear()
+        }
+    }
+
+    Ok(BinaryBuilder::finish(&mut builder))
+}

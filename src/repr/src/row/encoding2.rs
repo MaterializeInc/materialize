@@ -1650,6 +1650,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::columnar::{codec_to_schema2, schema2_to_codec};
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
@@ -1691,7 +1692,7 @@ mod tests {
             assert_eq!(col, col_rnd);
         }
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
+        let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col.clone()).unwrap();
 
         // Collect all of our lower and upper bounds.
         let arena = RowArena::new();
@@ -1757,6 +1758,11 @@ mod tests {
                 "column {col_idx} has incorrect number of nulls!"
             );
         }
+
+        // Validate that we can convert losslessly to codec and back
+        let codec = schema2_to_codec::<Row>(desc, &col).unwrap();
+        let (col2, _) = codec_to_schema2::<Row>(desc, &codec).unwrap();
+        assert_eq!(col2.as_ref(), &col);
     }
 
     #[mz_ore::test]
