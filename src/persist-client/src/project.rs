@@ -149,7 +149,7 @@ impl ProjectionPushdown {
 
         let mut faked_data = ColumnarRecordsBuilder::default();
         assert!(faked_data.push(((key_bytes, val_bytes), T::encode(as_of), diffs_sum)));
-        let updates = faked_data.finish(&metrics.columnar).into_proto();
+        let updates = faked_data.finish(&metrics.columnar).into_proto(None);
         let faked_data = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
             desc: Some(desc.into_proto()),
             index: 0,

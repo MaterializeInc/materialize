@@ -19,6 +19,7 @@ fn main() {
             "#[derive(serde::Serialize)]",
         )
         .bytes([".mz_persist.gen.persist.ProtoColumnarRecords"])
+        .extern_path(".mz_persist_types.arrow", "::mz_persist_types::arrow")
         .compile_protos(&["persist/src/persist.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

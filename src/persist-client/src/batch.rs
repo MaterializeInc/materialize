@@ -897,15 +897,49 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let ts_rewrite = None;
 
         let handle = if updates.goodbytes() < self.cfg.inline_writes_single_max_bytes {
+            let cfg = self.cfg.clone();
+            let metrics = Arc::clone(&self.metrics);
+            let schemas = schemas.clone();
+
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
             mz_ore::task::spawn(
                 || "batch::inline_part",
                 async move {
+                    let should_columnar_encode = cfg.batch_columnar_format.is_structured()
+                        && !cfg.batch_columnar_stats_only_override;
+
+                    // Wrap our updates just so the types match.
+                    let updates = BlobTraceUpdates::Row(updates);
+                    let structured_ext = if should_columnar_encode {
+                        let result = metrics.columnar.arrow().measure_part_build(|| {
+                            encode_updates(&schemas, &updates, &cfg.batch_columnar_format)
+                        });
+                        match result {
+                            Ok(((key_col, val_col), _stats)) => {
+                                Some(ColumnarRecordsStructuredExt {
+                                    key: key_col,
+                                    val: val_col,
+                                })
+                            }
+                            Err(err) => {
+                                tracing::error!(?err, "failed to encode in columnar format!");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Take our updates back out.
+                    let BlobTraceUpdates::Row(updates) = updates else {
+                        panic!("programming error, checked above");
+                    };
+
                     let start = Instant::now();
                     let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
                         desc: Some(desc.into_proto()),
                         index: index.into_proto(),
-                        updates: Some(updates.into_proto()),
+                        updates: Some(updates.into_proto(structured_ext)),
                     });
                     batch_metrics
                         .step_inline

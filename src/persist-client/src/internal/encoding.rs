@@ -1423,11 +1423,16 @@ impl ProtoInlineBatchPart {
         let updates = proto
             .updates
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoInlineBatchPart::updates"))?;
-        let updates = ColumnarRecords::from_proto(lgbytes, updates)?;
+        let (updates, ext) = ColumnarRecords::from_proto(lgbytes, updates)?;
+        let updates = match ext {
+            None => BlobTraceUpdates::Row(updates),
+            Some(ext) => BlobTraceUpdates::Both(updates, ext),
+        };
+
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
             index: proto.index.into_rust()?,
-            updates: BlobTraceUpdates::Row(updates),
+            updates,
         })
     }
 }
