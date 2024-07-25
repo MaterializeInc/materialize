@@ -27,6 +27,9 @@ stdenv.mkDerivation {
     openssh
     docker
 
+    # For docs
+    hugo
+
     # For lint checks
     shellcheck
     buf
