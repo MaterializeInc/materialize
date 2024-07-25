@@ -70,7 +70,7 @@ class DatabaseConnector:
                 port=self.config.port,
                 ssl_context=ssl.SSLContext(),
                 timeout=timeout_in_seconds,
-                application_name="test-analytics",
+                application_name=self.config.application_name,
             )
         except Exception:
             print(

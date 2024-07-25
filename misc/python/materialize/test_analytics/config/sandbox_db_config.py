@@ -30,4 +30,5 @@ def create_local_dev_config_for_sandbox() -> MzDbConfig:
         database=database,
         search_path=search_path,
         enabled=True,
+        application_name="sandbox",
     )
