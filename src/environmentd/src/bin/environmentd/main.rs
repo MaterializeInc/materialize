@@ -27,6 +27,10 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
+use mz_catalog::builtin::{
+    DangerousTableFingerprintWhitespace,
+    REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE,
+};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
@@ -541,6 +545,24 @@ pub struct Args {
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    // === Testing options. ===
+    /// Injects arbitrary whitespace into builtin table fingerprints, which can
+    /// trigger builtin item migrations. The amount of whitespace is determined
+    /// by
+    /// `really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace_version`.
+    /// This argument is meant for testing only and as the names suggests
+    /// should not be set in production.
+    #[clap(long, arg_enum, requires = "unsafe-mode")]
+    really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace:
+        Option<DangerousTableFingerprintWhitespace>,
+    /// Controls the amount of whitespace injected by
+    /// `really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace`.
+    /// Incrementing this value can allow triggering multiple builtin
+    /// migrations from a single test. This argument is meant for testing only
+    /// and as the names suggests should not be set in production.
+    #[clap(long, requires = "unsafe-mode", default_value = "1")]
+    really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace_version: usize,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -578,6 +600,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // handled to our liking ASAP.
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
+
+    // Configure testing options.
+    if let Some(fingerprint_whitespace) =
+        args.really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace
+    {
+        assert!(args.unsafe_mode);
+        let whitespace = "\n".repeat(args.really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace_version);
+        *REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
+            .lock()
+            .expect("lock poisoned") = Some((fingerprint_whitespace, whitespace));
+    }
 
     // Start Tokio runtime.
 

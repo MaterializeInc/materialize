@@ -1918,7 +1918,7 @@ mod tests {
     use uuid::Uuid;
 
     use mz_catalog::builtin::{
-        Builtin, BuiltinType, BUILTINS,
+        Builtin, BuiltinType, DangerousTableFingerprintWhitespace, BUILTINS,
         REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE,
     };
     use mz_catalog::durable::{CatalogError, DurableCatalogError};
@@ -3199,7 +3199,7 @@ mod tests {
                 REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
                     .lock()
                     .expect("lock poisoned");
-            *guard = Some("\n".to_string());
+            *guard = Some((DangerousTableFingerprintWhitespace::All, "\n".to_string()));
         }
         {
             let catalog = Catalog::open_debug_catalog(persist_client, organization_id)

@@ -4348,6 +4348,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
+ "clap",
  "derivative",
  "differential-dataflow",
  "fail",
