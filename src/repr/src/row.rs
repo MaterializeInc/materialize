@@ -43,7 +43,7 @@ use crate::adt::range::{
 };
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::{arb_datum, DatumKind};
-use crate::{Datum, Timestamp};
+use crate::{Datum, RelationDesc, Timestamp};
 
 pub mod collection;
 pub(crate) mod encoding;
@@ -116,12 +116,37 @@ pub struct Row {
 impl Row {
     const SIZE: usize = CompactBytes::MAX_INLINE;
 
-    /// A variant of `Row::from_proto` that allows for reuse of internal allocs.
-    pub fn decode_from_proto(&mut self, proto: &ProtoRow) -> Result<(), String> {
+    /// A variant of `Row::from_proto` that allows for reuse of internal allocs
+    /// and validates the decoding against a provided [`RelationDesc`].
+    pub fn decode_from_proto(
+        &mut self,
+        proto: &ProtoRow,
+        desc: &RelationDesc,
+    ) -> Result<(), String> {
+        let mut col_idx = 0;
         let mut packer = self.packer();
         for d in proto.datums.iter() {
             packer.try_push_proto(d)?;
+            col_idx += 1;
         }
+
+        // TODO(parkmycar): This is where we'll add new default values to Codec
+        // data whose upstream relation has had columns added.
+
+        // HACK(parkmycar): Only validate that the decoded Row matches the RelationDesc if it was
+        // non-empty. We have an optimization for queries like COUNT(*) that returns a fake empty
+        // Part instead of decoding the data, which this assertion will fail on.
+        if col_idx != 0 {
+            let num_columns = desc.typ().column_types.len();
+            mz_ore::soft_assert_eq_or_log!(
+                col_idx,
+                num_columns,
+                "wrong number of columns when decoding a Row!, got {row:?}, expected {desc:?}",
+                row = self,
+                desc = desc,
+            );
+        }
+
         Ok(())
     }
 

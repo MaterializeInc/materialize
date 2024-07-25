@@ -82,7 +82,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
     //
     // TODO: Mechanically, this could return a ref to the original bytes
     // without any copies, see if we can make the types work out for that.
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
+    fn decode<'a>(buf: &'a [u8], schema: &Self::Schema) -> Result<Self, String>;
 
     /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
     /// if unnecessary.
@@ -104,8 +104,9 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
         &mut self,
         buf: &'a [u8],
         _storage: &mut Option<Self::Storage>,
+        schema: &Self::Schema,
     ) -> Result<(), String> {
-        *self = Self::decode(buf)?;
+        *self = Self::decode(buf, schema)?;
         Ok(())
     }
 }

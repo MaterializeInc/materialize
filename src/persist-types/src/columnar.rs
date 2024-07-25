@@ -399,7 +399,7 @@ pub fn codec_to_schema2<A: Codec + Default>(
 
     for bytes in data.iter() {
         if let Some(bytes) = bytes {
-            A::decode_from(&mut value, bytes, &mut storage).map_err(|e| {
+            A::decode_from(&mut value, bytes, &mut storage, &schema).map_err(|e| {
                 anyhow!(
                     "unable to decode bytes with {} codec: {e:#?}",
                     A::codec_name()

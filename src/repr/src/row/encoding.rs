@@ -73,7 +73,7 @@ impl Codec for Row {
     /// This perfectly round-trips through [Row::encode]. It can read rows
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
-    fn decode(buf: &[u8]) -> Result<Row, String> {
+    fn decode(buf: &[u8], schema: &RelationDesc) -> Result<Row, String> {
         // NB: We could easily implement this directly instead of via
         // `decode_from`, but do this so that we get maximal coverage of the
         // more complicated codepath.
@@ -82,7 +82,7 @@ impl Codec for Row {
         // predict the length of the resulting Row, but it's definitely
         // correlated, so probably a decent estimate.
         let mut row = Row::with_capacity(buf.len());
-        <Self as Codec>::decode_from(&mut row, buf, &mut None)?;
+        <Self as Codec>::decode_from(&mut row, buf, &mut None, schema)?;
         Ok(row)
     }
 
@@ -90,11 +90,12 @@ impl Codec for Row {
         &mut self,
         buf: &'a [u8],
         storage: &mut Option<ProtoRow>,
+        schema: &RelationDesc,
     ) -> Result<(), String> {
         let mut proto = storage.take().unwrap_or_default();
         proto.clear();
         proto.merge(buf).map_err(|err| err.to_string())?;
-        let ret = self.decode_from_proto(&proto);
+        let ret = self.decode_from_proto(&proto, schema);
         storage.replace(proto);
         ret
     }
@@ -1212,8 +1213,15 @@ mod tests {
             }
         });
 
+        let mut desc = RelationDesc::empty();
+        for (idx, _) in row.iter().enumerate() {
+            // HACK(parkmycar): We don't currently validate the types of the `RelationDesc` are
+            // correct, just the number of columns. So we can fill in any type here.
+            desc = desc.with_column(idx.to_string(), ScalarType::Int32.nullable(true));
+        }
+
         let encoded = row.encode_to_vec();
-        assert_eq!(Row::decode(&encoded), Ok(row));
+        assert_eq!(Row::decode(&encoded, &desc), Ok(row));
     }
 
     fn schema_and_row() -> (RelationDesc, Row) {

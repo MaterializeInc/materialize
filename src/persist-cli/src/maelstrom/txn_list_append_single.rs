@@ -744,7 +744,7 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &MaelstromKeySchema) -> Result<Self, String> {
             Ok(MaelstromKey(
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
@@ -819,7 +819,7 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &MaelstromValSchema) -> Result<Self, String> {
             Ok(MaelstromVal(
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
@@ -838,7 +838,8 @@ mod codec_impls {
         }
 
         fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
-            *self = MaelstromVal::decode(column.value(idx)).expect("should be valid MaelstromVal");
+            *self = MaelstromVal::decode(column.value(idx), &MaelstromValSchema)
+                .expect("should be valid MaelstromVal");
         }
     }
 
@@ -855,7 +856,8 @@ mod codec_impls {
 
         fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
             SimpleSchema::<MaelstromVal, Vec<u8>>::decoder(cols, |val, ret| {
-                *ret = MaelstromVal::decode(val).expect("should be valid MaelstromVal")
+                *ret = MaelstromVal::decode(val, &MaelstromValSchema)
+                    .expect("should be valid MaelstromVal")
             })
         }
 
