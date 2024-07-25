@@ -256,6 +256,7 @@ def workflow_read_only(c: Composition) -> None:
                 c.exec(
                     "mz_old",
                     "curl",
+                    "-s",
                     "localhost:6878/api/leader/status",
                     capture=True,
                 ).stdout
@@ -269,6 +270,7 @@ def workflow_read_only(c: Composition) -> None:
             c.exec(
                 "mz_old",
                 "curl",
+                "-s",
                 "-X",
                 "POST",
                 "localhost:6878/api/leader/promote",
@@ -656,7 +658,7 @@ def workflow_basic(c: Composition) -> None:
                 c.exec(
                     "mz_new",
                     "curl",
-                    "localhost:6878/api/leader/status",
+                    "-s" "localhost:6878/api/leader/status",
                     capture=True,
                 ).stdout
             )
@@ -669,6 +671,7 @@ def workflow_basic(c: Composition) -> None:
             c.exec(
                 "mz_new",
                 "curl",
+                "-s",
                 "-X",
                 "POST",
                 "localhost:6878/api/leader/promote",

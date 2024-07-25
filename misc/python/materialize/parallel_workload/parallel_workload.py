@@ -364,7 +364,17 @@ def run(
             os._exit(0)
         os._exit(1)
 
-    conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
+    try:
+        conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
+    except Exception:
+        if scenario == Scenario.ZeroDowntimeDeploy:
+            print("Failed connecting to materialized, using materialized2: {e}")
+            conn = pg8000.connect(
+                host=host, port=ports["materialized2"], user="materialize"
+            )
+        else:
+            raise
+
     conn.autocommit = True
     with conn.cursor() as cur:
         # Dropping the database also releases the long running connections

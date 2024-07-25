@@ -946,7 +946,7 @@ class AlterSink(Check):
                 > ALTER SINK sink_alter SET FROM table_alter2;
 
                 # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
 
                 > INSERT INTO table_alter1 VALUES (10, 'aa')
                 > INSERT INTO table_alter2 VALUES (11, 'bb')
@@ -956,7 +956,7 @@ class AlterSink(Check):
                 > ALTER SINK sink_alter SET FROM table_alter3;
 
                 # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
 
                 > INSERT INTO table_alter1 VALUES (100, 'aaa')
                 > INSERT INTO table_alter2 VALUES (101, 'bbb')

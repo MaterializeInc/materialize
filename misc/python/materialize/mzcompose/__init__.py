@@ -59,6 +59,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
     "compute_hydration_concurrency": 2,
     "disk_cluster_replicas_default": "true",
+    "enable_0dt_deployment": "true",
     "enable_alter_swap": "true",
     "enable_assert_not_null": "true",
     "enable_columnation_lgalloc": "true",
@@ -95,8 +96,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_stats_audit_percent": "100",
     "persist_txn_tables": "lazy",  # removed, but keep value for older versions
     "persist_use_critical_since_catalog": "true",
-    "persist_use_critical_since_snapshot": "true",
-    "persist_use_critical_since_source": "true",
+    "persist_use_critical_since_snapshot": "false",  # Disabled because of 0dt upgrades, TODO: reenable
+    "persist_use_critical_since_source": "false",  # Disabled because of 0dt upgrades, TODO: reenable
     "persist_part_decode_format": "row_with_validate",
     "statement_logging_default_sample_rate": "0.01",
     "statement_logging_max_sample_rate": "0.01",

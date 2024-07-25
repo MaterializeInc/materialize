@@ -43,6 +43,7 @@ class StartMz(MzcomposeAction):
         platform: str | None = None,
         healthcheck: list[str] | None = None,
         deploy_generation: int | None = None,
+        restart: str | None = None,
     ) -> None:
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
@@ -54,6 +55,7 @@ class StartMz(MzcomposeAction):
         self.mz_service = mz_service
         self.platform = platform
         self.deploy_generation = deploy_generation
+        self.restart = restart
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -73,6 +75,7 @@ class StartMz(MzcomposeAction):
             platform=self.platform,
             healthcheck=self.healthcheck,
             deploy_generation=self.deploy_generation,
+            restart=self.restart,
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs
@@ -221,6 +224,15 @@ class KillMz(MzcomposeAction):
 
             if self.capture_logs:
                 c.capture_logs(self.mz_service)
+
+
+class Stop(MzcomposeAction):
+    def __init__(self, service: str = "materialized") -> None:
+        self.service = service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        c.stop(self.service, wait=True)
 
 
 class Down(MzcomposeAction):
@@ -410,6 +422,33 @@ class PromoteMz(MzcomposeAction):
 
         mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
         e.current_mz_version = mz_version
+
+        time.sleep(5)
+
+        # Wait until new Materialize is ready to handle queries
+        for i in range(300):
+            try:
+                result = json.loads(
+                    c.exec(
+                        self.mz_service,
+                        "curl",
+                        "localhost:6878/api/leader/status",
+                        capture=True,
+                    ).stdout
+                )
+                assert result["status"] == "IsLeader"
+                result = c.exec(
+                    self.mz_service,
+                    "curl",
+                    "http://127.0.0.1:6878/api/readyz",
+                    capture=True,
+                ).stdout
+                assert result == "ready", f"Unexpected result {result}"
+                assert c.sql_query("SELECT 1", service=self.mz_service) == ([1],)
+            except:
+                time.sleep(1)
+                continue
+            break
 
 
 class SystemVarChange(MzcomposeAction):
