@@ -896,7 +896,18 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let ts_rewrite = None;
 
-        let handle = if updates.goodbytes() < self.cfg.inline_writes_single_max_bytes {
+        let should_columnar_encode = self.cfg.batch_columnar_format.is_structured()
+            && !self.cfg.batch_columnar_stats_only_override;
+
+        // If we're going to encode structured data then halve our limit since we're storing
+        // it twice, once as binary encoded and once as structured.
+        let inline_threshold = if should_columnar_encode {
+            self.cfg.inline_writes_single_max_bytes.saturating_div(2)
+        } else {
+            self.cfg.inline_writes_single_max_bytes
+        };
+
+        let handle = if updates.goodbytes() < inline_threshold {
             let cfg = self.cfg.clone();
             let metrics = Arc::clone(&self.metrics);
             let schemas = schemas.clone();
@@ -905,9 +916,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             mz_ore::task::spawn(
                 || "batch::inline_part",
                 async move {
-                    let should_columnar_encode = cfg.batch_columnar_format.is_structured()
-                        && !cfg.batch_columnar_stats_only_override;
-
                     // Wrap our updates just so the types match.
                     let updates = BlobTraceUpdates::Row(updates);
                     let structured_ext = if should_columnar_encode {
