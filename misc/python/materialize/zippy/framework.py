@@ -18,6 +18,15 @@ if TYPE_CHECKING:
     from materialize.zippy.scenarios import Scenario
 
 
+class State:
+    mz_service: str
+    deploy_generation: int
+
+    def __init__(self):
+        self.mz_service = "materialized"
+        self.deploy_generation = 0
+
+
 class Capability:
     """Base class for a Zippy capability.
 
@@ -125,7 +134,7 @@ class Action:
         """Compute the capabilities that this action will make available."""
         return []
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         """Run this action on the provided copmosition."""
         assert False
 
@@ -174,6 +183,7 @@ class Test:
         self._actions_with_weight: dict[ActionOrFactory, float] = (
             self._scenario.actions_with_weight()
         )
+        self._state = State()
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():
@@ -208,7 +218,7 @@ class Test:
         max_time = datetime.now() + self._max_execution_time
         for action in self._actions:
             print(action)
-            action.run(c)
+            action.run(c, self._state)
             if datetime.now() > max_time:
                 print(
                     f"--- Desired execution time of {self._max_execution_time} has been reached."
@@ -217,7 +227,7 @@ class Test:
 
         for action in self._final_actions:
             print(action)
-            action.run(c)
+            action.run(c, self._state)
 
     def _pick_action_or_factory(self) -> ActionOrFactory:
         """Select the next Action to run in the Test"""

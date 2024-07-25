@@ -140,8 +140,8 @@ IGNORE_RE = re.compile(
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # Fencing warnings are OK in fencing/0dt tests
-    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-data-ingest-).* \| .*unexpected\ fence\ epoch
-    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-).* \| .*fenced\ by\ new\ catalog
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-).* \| .*unexpected\ fence\ epoch
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-).* \| .*fenced\ by\ new\ catalog
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
     # For platform-checks upgrade tests
     | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future

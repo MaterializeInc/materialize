@@ -15,7 +15,13 @@ from textwrap import dedent
 import numpy as np
 
 from materialize.mzcompose.composition import Composition
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+    State,
+)
 from materialize.zippy.kafka_capabilities import Envelope, KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 
@@ -45,7 +51,7 @@ class KafkaStart(Action):
     def provides(self) -> list[Capability]:
         return [KafkaRunning()]
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.up("redpanda")
 
 
@@ -59,7 +65,7 @@ class KafkaStop(Action):
     def withholds(self) -> set[type[Capability]]:
         return {KafkaRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("redpanda")
 
 
@@ -112,7 +118,7 @@ class CreateTopic(Action):
     def provides(self) -> list[Capability]:
         return [self.topic]
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.testdrive(
             SCHEMA
             + dedent(
@@ -121,7 +127,8 @@ class CreateTopic(Action):
                 $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} repeat=1
                 {{"key": 0}} {{"f1": 0, "pad": ""}}
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
 
@@ -151,7 +158,7 @@ class KafkaInsert(Ingest):
     def parallel(self) -> bool:
         return False
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         prev_max = self.topic.watermarks.max
         self.topic.watermarks.max = prev_max + self.delta
         assert self.topic.watermarks.max >= 0
@@ -167,7 +174,7 @@ class KafkaInsert(Ingest):
         if self.parallel():
             threading.Thread(target=c.testdrive, args=[testdrive_str]).start()
         else:
-            c.testdrive(testdrive_str)
+            c.testdrive(testdrive_str, mz_service=state.mz_service)
 
 
 class KafkaInsertParallel(KafkaInsert):
@@ -184,7 +191,7 @@ class KafkaInsertParallel(KafkaInsert):
 class KafkaUpsertFromHead(Ingest):
     """Updates records from the head in-place by modifying their pad"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.topic.envelope is Envelope.NONE:
             return
 
@@ -200,14 +207,15 @@ class KafkaUpsertFromHead(Ingest):
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={start} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
 class KafkaDeleteFromHead(Ingest):
     """Deletes the largest values previously inserted."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.topic.envelope is Envelope.NONE:
             return
 
@@ -228,14 +236,15 @@ class KafkaDeleteFromHead(Ingest):
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}}
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
 class KafkaUpsertFromTail(Ingest):
     """Updates records from the tail in-place by modifying their pad"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.topic.envelope is Envelope.NONE:
             return
 
@@ -251,14 +260,15 @@ class KafkaUpsertFromTail(Ingest):
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={tail} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
 class KafkaDeleteFromTail(Ingest):
     """Deletes the smallest values previously inserted."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.topic.envelope is Envelope.NONE:
             return
 
@@ -278,5 +288,6 @@ class KafkaDeleteFromTail(Ingest):
                    $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} repeat={actual_delta}
                    {{"key": ${{kafka-ingest.iteration}}}}
                    """
-                )
+                ),
+                mz_service=state.mz_service,
             )

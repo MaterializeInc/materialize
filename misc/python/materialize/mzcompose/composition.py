@@ -1337,8 +1337,8 @@ class Composition:
             """,
         )
 
-    def restore_mz(self) -> None:
-        self.kill("materialized")
+    def restore_mz(self, mz_service: str = "materialized") -> None:
+        self.kill(mz_service)
         self.exec(
             "cockroach",
             "cockroach",
@@ -1362,7 +1362,7 @@ class Composition:
             f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
-        self.up("materialized")
+        self.up(mz_service)
 
     def await_mz_deployment_status(
         self,

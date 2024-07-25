@@ -9,10 +9,20 @@
 
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import (
+    LEADER_STATUS_HEALTHCHECK,
+    DeploymentStatus,
+    Materialized,
+)
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+    State,
+)
 from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.view_capabilities import ViewExists
@@ -62,20 +72,23 @@ class MzStart(Action):
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         print(
             f"Starting Mz with additional_system_parameter_defaults = {self.additional_system_parameter_defaults}"
         )
 
         with c.override(
             Materialized(
-                external_minio="minio",
-                external_cockroach="cockroach",
+                name=state.mz_service,
+                external_minio=True,
+                external_cockroach=True,
+                deploy_generation=state.deploy_generation,
                 sanity_restart=False,
+                restart="on-failure",
                 additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             )
         ):
-            c.up("materialized")
+            c.up(state.mz_service)
 
         for config_param in [
             "max_tables",
@@ -89,6 +102,7 @@ class MzStart(Action):
                 user="mz_system",
                 port=6877,
                 print_statement=False,
+                service=state.mz_service,
             )
 
         c.sql(
@@ -97,6 +111,7 @@ class MzStart(Action):
             """,
             user="mz_system",
             port=6877,
+            service=state.mz_service,
         )
 
         # Make sure all eligible LIMIT queries use the PeekPersist optimization
@@ -104,6 +119,7 @@ class MzStart(Action):
             "ALTER SYSTEM SET persist_fast_path_limit = 1000000000",
             user="mz_system",
             port=6877,
+            service=state.mz_service,
         )
 
     def provides(self) -> list[Capability]:
@@ -121,8 +137,8 @@ class MzStop(Action):
         # other and no other useful work can be performed in the meantime.
         return {MzIsRunning, BalancerdIsRunning}
 
-    def run(self, c: Composition) -> None:
-        c.kill("materialized")
+    def run(self, c: Composition, state: State) -> None:
+        c.kill(state.mz_service)
 
     def withholds(self) -> set[type[Capability]]:
         return {MzIsRunning}
@@ -135,9 +151,62 @@ class MzRestart(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
-    def run(self, c: Composition) -> None:
-        c.kill("materialized")
-        c.up("materialized")
+    def run(self, c: Composition, state: State) -> None:
+        with c.override(
+            Materialized(
+                name=state.mz_service,
+                external_minio=True,
+                external_cockroach=True,
+                deploy_generation=state.deploy_generation,
+                sanity_restart=False,
+                restart="on-failure",
+            )
+        ):
+            c.kill(state.mz_service)
+            c.up(state.mz_service)
+
+
+class Mz0dtDeploy(Action):
+    """Switches Mz to a new deployment using 0dt."""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {MzIsRunning}
+
+    def run(self, c: Composition, state: State) -> None:
+        state.deploy_generation += 1
+
+        state.mz_service = (
+            "materialized" if state.deploy_generation % 2 == 0 else "materialized2"
+        )
+
+        print(f"Deploying generation {state.deploy_generation} on {state.mz_service}")
+
+        with c.override(
+            Materialized(
+                name=state.mz_service,
+                external_minio=True,
+                external_cockroach=True,
+                deploy_generation=state.deploy_generation,
+                sanity_restart=False,
+                restart="on-failure",
+                healthcheck=LEADER_STATUS_HEALTHCHECK,
+            ),
+        ):
+            c.up(state.mz_service, detach=True)
+            c.await_mz_deployment_status(
+                DeploymentStatus.READY_TO_PROMOTE, state.mz_service
+            )
+            c.promote_mz(state.mz_service)
+            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, state.mz_service)
+            c.stop(
+                (
+                    "materialized2"
+                    if state.mz_service == "materialized"
+                    else "materialized"
+                ),
+                wait=True,
+            )
 
 
 class KillClusterd(Action):
@@ -147,6 +216,6 @@ class KillClusterd(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, ViewExists}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         # Depending on the workload, clusterd may not be running, hence the || true
-        c.exec("materialized", "bash", "-c", "kill -9 `pidof clusterd` || true")
+        c.exec(state.mz_service, "bash", "-c", "kill -9 `pidof clusterd` || true")
