@@ -725,7 +725,13 @@ where
             } else if self.expect_consolidated {
                 columnar.keys().value(0)
             } else {
-                ::arrow::compute::min_binary(columnar.keys()).expect("min of nonempty array")
+                // WIP ::arrow::compute::min_binary(columnar.keys()).expect("min of nonempty array")
+                columnar
+                    .keys()
+                    .iter()
+                    .flatten()
+                    .min()
+                    .expect("min of nonempty array")
             }
         };
         let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)

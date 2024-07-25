@@ -39,8 +39,8 @@ use crate::metrics::ColumnarMetrics;
 /// u64::MAX]`, but realtime sources are overwhelmingly the common case.
 pub static SCHEMA_ARROW_RS_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
     let schema = Schema::new(vec![
-        Field::new("k", DataType::Binary, false),
-        Field::new("v", DataType::Binary, false),
+        Field::new("k", DataType::BinaryView, false),
+        Field::new("v", DataType::BinaryView, false),
         Field::new("t", DataType::Int64, false),
         Field::new("d", DataType::Int64, false),
     ]);
@@ -192,11 +192,11 @@ pub fn decode_arrow_batch_kvtd(
     };
 
     let key = key_col
-        .as_binary_opt::<i32>()
+        .as_binary_view_opt()
         .ok_or_else(|| "key column is wrong type".to_string())?;
 
     let val = val_col
-        .as_binary_opt::<i32>()
+        .as_binary_view_opt()
         .ok_or_else(|| "val column is wrong type".to_string())?;
 
     let time = ts_col

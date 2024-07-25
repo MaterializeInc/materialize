@@ -327,6 +327,10 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
+# WIP
+arrow = { git = "https://github.com/apache/arrow-rs.git" }
+parquet = { git = "https://github.com/apache/arrow-rs.git" }
+
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }

@@ -14,7 +14,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array};
+use ::arrow::array::{Array, AsArray, BinaryArray, BinaryViewArray, BinaryViewBuilder, Int64Array};
 use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
 use bytes::Bytes;
@@ -73,21 +73,27 @@ const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 /// - len <= u32::MAX (since we use arrow's `BinaryArray` for our binary data)
 /// - the length of all arrays should == len
 /// - all entries should be non-null
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct ColumnarRecords {
     len: usize,
-    key_data: BinaryArray,
-    val_data: BinaryArray,
+    key_data: BinaryViewArray,
+    val_data: BinaryViewArray,
     timestamps: Int64Array,
     diffs: Int64Array,
+}
+
+impl PartialEq for ColumnarRecords {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
 }
 
 impl Default for ColumnarRecords {
     fn default() -> Self {
         Self {
             len: 0,
-            key_data: BinaryArray::from_vec(vec![]),
-            val_data: BinaryArray::from_vec(vec![]),
+            key_data: BinaryViewArray::from(Vec::<&[u8]>::new()),
+            val_data: BinaryViewArray::from(Vec::<&[u8]>::new()),
             timestamps: Int64Array::from_iter_values([]),
             diffs: Int64Array::from_iter_values([]),
         }
@@ -108,15 +114,24 @@ impl ColumnarRecords {
     }
 
     /// The keys in this columnar records as an array.
-    pub fn keys(&self) -> &BinaryArray {
+    pub fn keys(&self) -> &BinaryViewArray {
         &self.key_data
     }
 
     /// The number of logical bytes in the represented data, excluding offsets
     /// and lengths.
     pub fn goodbytes(&self) -> usize {
-        self.key_data.values().len()
-            + self.val_data.values().len()
+        self.key_data
+            .data_buffers()
+            .iter()
+            .map(|x| x.len())
+            .sum::<usize>()
+            + self
+                .val_data
+                .data_buffers()
+                .iter()
+                .map(|x| x.len())
+                .sum::<usize>()
             + self.timestamps.values().inner().len()
             + self.diffs.values().inner().len()
     }
@@ -167,8 +182,8 @@ impl ColumnarRecords {
 
         Self {
             len: records.iter().map(|c| c.len).sum(),
-            key_data: realloc_array(concat(|c| &c.key_data).as_binary(), metrics),
-            val_data: realloc_array(concat(|c| &c.val_data).as_binary(), metrics),
+            key_data: realloc_array(concat(|c| &c.key_data).as_binary_view(), metrics),
+            val_data: realloc_array(concat(|c| &c.val_data).as_binary_view(), metrics),
             timestamps: realloc_array(concat(|c| &c.timestamps).as_primitive(), metrics),
             diffs: realloc_array(concat(|c| &c.diffs).as_primitive(), metrics),
         }
@@ -179,8 +194,8 @@ impl ColumnarRecords {
 #[derive(Clone)]
 struct ColumnarRecordsRef<'a> {
     len: usize,
-    key_data: &'a BinaryArray,
-    val_data: &'a BinaryArray,
+    key_data: &'a BinaryViewArray,
+    val_data: &'a BinaryViewArray,
     timestamps: &'a [i64],
     diffs: &'a [i64],
 }
@@ -200,29 +215,29 @@ impl<'a> ColumnarRecordsRef<'a> {
             }
             let null_count = array.null_count();
             if null_count > 0 {
-                return Err(format!("{null_count} unexpected nulls in {name} array"));
+                panic!("{null_count} unexpected nulls in {name} array: {:?}", array);
             }
             Ok(())
         };
 
-        let key_data_size =
-            self.key_data.values().len() + self.key_data.offsets().inner().inner().len();
-        if key_data_size > KEY_VAL_DATA_MAX_LEN {
-            return Err(format!(
-                "expected encoded key offsets and data size to be less than or equal to {} got {}",
-                KEY_VAL_DATA_MAX_LEN, key_data_size
-            ));
-        }
+        // let key_data_size =
+        //     self.key_data.values().len() + self.key_data.offsets().inner().inner().len();
+        // if key_data_size > KEY_VAL_DATA_MAX_LEN {
+        //     return Err(format!(
+        //         "expected encoded key offsets and data size to be less than or equal to {} got {}",
+        //         KEY_VAL_DATA_MAX_LEN, key_data_size
+        //     ));
+        // }
         validate_array("keys", &self.key_data)?;
 
-        let val_data_size =
-            self.val_data.values().len() + self.val_data.offsets().inner().inner().len();
-        if val_data_size > KEY_VAL_DATA_MAX_LEN {
-            return Err(format!(
-                "expected encoded val offsets and data size to be less than or equal to {} got {}",
-                KEY_VAL_DATA_MAX_LEN, val_data_size
-            ));
-        }
+        // let val_data_size =
+        //     self.val_data.values().len() + self.val_data.offsets().inner().inner().len();
+        // if val_data_size > KEY_VAL_DATA_MAX_LEN {
+        //     return Err(format!(
+        //         "expected encoded val offsets and data size to be less than or equal to {} got {}",
+        //         KEY_VAL_DATA_MAX_LEN, val_data_size
+        //     ));
+        // }
         validate_array("vals", &self.val_data)?;
 
         if self.diffs.len() != self.len {
@@ -298,8 +313,8 @@ impl<'a> ExactSizeIterator for ColumnarRecordsIter<'a> {}
 #[derive(Debug)]
 pub struct ColumnarRecordsBuilder {
     len: usize,
-    key_data: BinaryBuilder,
-    val_data: BinaryBuilder,
+    key_data: BinaryViewBuilder,
+    val_data: BinaryViewBuilder,
     timestamps: Vec<i64>,
     diffs: Vec<i64>,
 }
@@ -308,8 +323,8 @@ impl Default for ColumnarRecordsBuilder {
     fn default() -> Self {
         ColumnarRecordsBuilder {
             len: 0,
-            key_data: BinaryBuilder::new(),
-            val_data: BinaryBuilder::new(),
+            key_data: BinaryViewBuilder::new(),
+            val_data: BinaryViewBuilder::new(),
             timestamps: Vec::new(),
             diffs: Vec::new(),
         }
@@ -319,9 +334,9 @@ impl Default for ColumnarRecordsBuilder {
 impl ColumnarRecordsBuilder {
     /// Reserve space for the given number of items with the given sizes in bytes.
     /// If they end up being too small, the underlying buffers will be resized as usual.
-    pub fn with_capacity(items: usize, key_bytes: usize, val_bytes: usize) -> Self {
-        let key_data = BinaryBuilder::with_capacity(items, key_bytes);
-        let val_data = BinaryBuilder::with_capacity(items, val_bytes);
+    pub fn with_capacity(items: usize, _key_bytes: usize, _val_bytes: usize) -> Self {
+        let key_data = BinaryViewBuilder::with_capacity(items);
+        let val_data = BinaryViewBuilder::with_capacity(items);
         let timestamps = Vec::with_capacity(items);
         let diffs = Vec::with_capacity(items);
         Self {
@@ -344,25 +359,25 @@ impl ColumnarRecordsBuilder {
     ///
     /// Note that limit is always [KEY_VAL_DATA_MAX_LEN] in production. It's
     /// only override-able here for testing.
-    pub fn can_fit(&self, key: &[u8], val: &[u8], limit: usize) -> bool {
-        let key_data_size = self.key_data.values_slice().len()
-            + self.key_data.offsets_slice().to_byte_slice().len()
-            + key.len();
-        let val_data_size = self.val_data.values_slice().len()
-            + self.val_data.offsets_slice().to_byte_slice().len()
-            + val.len();
-        key_data_size <= limit && val_data_size <= limit
+    pub fn can_fit(&self, _key: &[u8], _val: &[u8], _limit: usize) -> bool {
+        // let key_data_size = self.key_data.values_slice().len()
+        //     + self.key_data.offsets_slice().to_byte_slice().len()
+        //     + key.len();
+        // let val_data_size = self.val_data.values_slice().len()
+        //     + self.val_data.offsets_slice().to_byte_slice().len()
+        //     + val.len();
+        // key_data_size <= limit && val_data_size <= limit
+        true
     }
 
     /// The current size of the columnar records data, useful for bounding batches at a
     /// target size.
     pub fn total_bytes(&self) -> usize {
-        self.key_data.values_slice().len()
-            + self.key_data.offsets_slice().to_byte_slice().len()
-            + self.val_data.values_slice().len()
-            + self.val_data.offsets_slice().to_byte_slice().len()
-            + self.timestamps.to_byte_slice().len()
-            + self.diffs.to_byte_slice().len()
+        // self.key_data.values_slice().len()
+        //     + self.key_data.offsets_slice().to_byte_slice().len()
+        //     + self.val_data.values_slice().len()
+        //     + self.val_data.offsets_slice().to_byte_slice().len()
+        self.timestamps.to_byte_slice().len() + self.diffs.to_byte_slice().len()
     }
 
     /// Add a record to Self.
@@ -396,8 +411,8 @@ impl ColumnarRecordsBuilder {
         // Revisit if that changes.
         let ret = ColumnarRecords {
             len: self.len,
-            key_data: BinaryBuilder::finish(&mut self.key_data),
-            val_data: BinaryBuilder::finish(&mut self.val_data),
+            key_data: BinaryViewBuilder::finish(&mut self.key_data),
+            val_data: BinaryViewBuilder::finish(&mut self.val_data),
             timestamps: self.timestamps.into(),
             diffs: self.diffs.into(),
         };
@@ -416,12 +431,15 @@ impl ColumnarRecordsBuilder {
 impl ColumnarRecords {
     /// See [RustType::into_proto].
     pub fn into_proto(&self) -> ProtoColumnarRecords {
+        // WIP
+        let key_data = self.key_data.iter().collect::<BinaryArray>();
+        let val_data = self.val_data.iter().collect::<BinaryArray>();
         ProtoColumnarRecords {
             len: self.len.into_proto(),
-            key_offsets: self.key_data.offsets().to_vec(),
-            key_data: Bytes::copy_from_slice(self.key_data.value_data()),
-            val_offsets: self.val_data.offsets().to_vec(),
-            val_data: Bytes::copy_from_slice(self.val_data.value_data()),
+            key_offsets: key_data.offsets().to_vec(),
+            key_data: Bytes::copy_from_slice(key_data.value_data()),
+            val_offsets: val_data.offsets().to_vec(),
+            val_data: Bytes::copy_from_slice(val_data.value_data()),
             timestamps: self.timestamps.values().to_vec(),
             diffs: self.diffs.values().to_vec(),
         }
@@ -432,12 +450,15 @@ impl ColumnarRecords {
         lgbytes: &ColumnarMetrics,
         proto: ProtoColumnarRecords,
     ) -> Result<Self, TryFromProtoError> {
-        let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
+        let binary_view_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
             OffsetBuffer::new(offsets.into()),
             data.into(),
             None,
         ) {
-            Ok(data) => Ok(realloc_array(&data, lgbytes)),
+            Ok(data) => {
+                let data = data.iter().collect::<BinaryViewArray>();
+                Ok(realloc_array(&data, lgbytes))
+            }
             Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
                 "Unable to decode binary array from repeated proto fields: {e:?}"
             ))),
@@ -445,8 +466,8 @@ impl ColumnarRecords {
 
         let ret = ColumnarRecords {
             len: proto.len.into_rust()?,
-            key_data: binary_array(proto.key_data, proto.key_offsets)?,
-            val_data: binary_array(proto.val_data, proto.val_offsets)?,
+            key_data: binary_view_array(proto.key_data, proto.key_offsets)?,
+            val_data: binary_view_array(proto.val_data, proto.val_offsets)?,
             timestamps: realloc_array(&proto.timestamps.into(), lgbytes),
             diffs: realloc_array(&proto.diffs.into(), lgbytes),
         };
@@ -484,6 +505,9 @@ pub struct ColumnarRecordsStructuredExt {
 
 #[cfg(test)]
 mod tests {
+    use ::arrow::array::{ArrayRef, RecordBatch};
+    use ::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use ::parquet::arrow::ArrowWriter;
     use mz_persist_types::Codec64;
 
     use super::*;
@@ -517,5 +541,33 @@ mod tests {
             .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), u64::decode(t), i64::decode(d)))
             .collect();
         assert_eq!(reads, updates);
+    }
+
+    #[test]
+    fn binary_view_bug() {
+        #[track_caller]
+        fn roundtrips(x: &[u8]) {
+            let before = BinaryViewArray::from(vec![x]);
+            let batch =
+                RecordBatch::try_from_iter(vec![("val", Arc::new(before.clone()) as ArrayRef)])
+                    .unwrap();
+
+            let mut buf = Vec::new();
+            let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+
+            let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf)).unwrap();
+            let mut reader = builder.build().unwrap();
+            let batch = reader.next().unwrap().unwrap();
+            let after = batch.columns()[0].as_binary_view();
+            assert_eq!(
+                before.iter().collect::<Vec<_>>(),
+                after.iter().collect::<Vec<_>>()
+            );
+        }
+
+        roundtrips(&[1]);
+        roundtrips(&[]); // This one fails
     }
 }
