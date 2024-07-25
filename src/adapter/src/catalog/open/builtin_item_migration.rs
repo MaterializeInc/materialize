@@ -430,7 +430,7 @@ async fn write_to_migration_shard(
         Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
         Some(Ok(updated)) => soft_assert_or_log!(
             updated == downgrade_to,
-            "updated bound should match expected"
+            "updated bound ({updated:?}) should match expected ({downgrade_to:?})"
         ),
     }
 
