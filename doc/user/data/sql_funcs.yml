@@ -902,6 +902,8 @@
     side_effecting: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
+  - signature: 'pg_size_pretty(expr: numeric) -> text'
+    description: Converts a size in bytes into a human-readable format.
   - signature: 'pg_get_constraintdef(oid: oid[, pretty: bool]) -> text'
     description: |
       Returns the constraint definition for the given `oid`. Currently always
