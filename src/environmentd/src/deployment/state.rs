@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 enum DeploymentStateInner {
     Initializing,
     ReadyToPromote { _promote_trigger: Trigger },
+    Promoting,
     IsLeader,
 }
 
@@ -42,6 +43,7 @@ enum DeploymentStateInner {
 /// `set_ready_to_promote` will resolve when promotion has occurred and the
 /// deployment should take over from the prior generation and begin serving
 /// queries.
+#[derive(Clone)]
 pub struct DeploymentState {
     inner: Arc<Mutex<DeploymentStateInner>>,
 }
@@ -63,7 +65,7 @@ impl DeploymentState {
     ///
     /// Returns a future that resolves when the leadership promotion occurs.
     /// When the function returns, the state will be `ReadyToPromote`. When the
-    /// returned future resolves, the state will be `IsLeader`.
+    /// returned future resolves, the state will be `Promoting`.
     ///
     /// Panics if the leader state is not `Initializing`.
     pub fn set_ready_to_promote(&self) -> impl Future<Output = ()> {
@@ -83,11 +85,14 @@ impl DeploymentState {
 
     /// Marks the deployment as the leader.
     ///
-    /// Panics if the leader state is not `Initializing`.
+    /// Panics if the leader state is not `Initializing` or `Promoting`.
     pub fn set_is_leader(&self) {
         let mut inner = self.inner.lock().expect("lock poisoned");
         assert!(
-            matches!(*inner, DeploymentStateInner::Initializing),
+            matches!(
+                *inner,
+                DeploymentStateInner::Initializing | DeploymentStateInner::Promoting
+            ),
             "LeaderState::set_is_leader called on non-initializing state",
         );
         *inner = DeploymentStateInner::IsLeader;
@@ -112,6 +117,7 @@ impl DeploymentStateHandle {
         match *inner {
             DeploymentStateInner::Initializing => DeploymentStatus::Initializing,
             DeploymentStateInner::ReadyToPromote { .. } => DeploymentStatus::ReadyToPromote,
+            DeploymentStateInner::Promoting => DeploymentStatus::Promoting,
             DeploymentStateInner::IsLeader => DeploymentStatus::IsLeader,
         }
     }
@@ -119,8 +125,8 @@ impl DeploymentStateHandle {
     /// Attempts to promote this deployment to the leader.
     ///
     /// Deployments in the `Initializing` state cannot be promoted. Deployments
-    /// in the `ReadyToPromote` state or `IsLeader` state can be promoted (with
-    /// the latter case being a no-op).
+    /// in the `ReadyToPromote`, `Promoting`, and `IsLeader` states can be
+    /// promoted (with the latter two cases being no-ops).
     ///
     /// If the leader was successfully promoted, returns `Ok`. Otherwise,
     /// returns `Err`.
@@ -129,9 +135,10 @@ impl DeploymentStateHandle {
         match *inner {
             DeploymentStateInner::Initializing => Err(()),
             DeploymentStateInner::ReadyToPromote { .. } => {
-                *inner = DeploymentStateInner::IsLeader;
+                *inner = DeploymentStateInner::Promoting;
                 Ok(())
             }
+            DeploymentStateInner::Promoting => Ok(()),
             DeploymentStateInner::IsLeader => Ok(()),
         }
     }
@@ -148,6 +155,8 @@ pub enum DeploymentStatus {
     Initializing,
     /// This deployment is not the leader, but it is ready to become the leader.
     ReadyToPromote,
+    /// This deployment is in the process of becoming the leader.
+    Promoting,
     /// This deployment is the leader.
     IsLeader,
 }

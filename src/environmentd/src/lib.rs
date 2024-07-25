@@ -445,7 +445,7 @@ impl Listeners {
                 .clone(),
             bootstrap_role: config.bootstrap_role.clone(),
             deploy_generation: config.controller.deploy_generation,
-            deployment_state,
+            deployment_state: deployment_state.clone(),
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
             hydration_max_wait: with_0dt_deployment_max_wait,
@@ -466,29 +466,42 @@ impl Listeners {
             bootstrap_role: config.bootstrap_role,
         };
 
+        // Load the adapter durable storage.
         let adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
-            openable_adapter_storage
+            let adapter_storage = openable_adapter_storage
                 .open_savepoint(
                     boot_ts,
                     &bootstrap_args,
                     config.controller.deploy_generation,
                     None,
                 )
-                .await?
+                .await?;
+
+            // In read-only mode, we intentionally do not call `set_is_leader`,
+            // because we are by definition not the leader if we are in
+            // read-only mode.
+
+            adapter_storage
         } else {
-            openable_adapter_storage
+            let adapter_storage = openable_adapter_storage
                 .open(
                     boot_ts,
                     &bootstrap_args,
                     config.controller.deploy_generation,
                     None,
                 )
-                .await?
+                .await?;
+
+            // Once we have successfully opened the adapter storage in
+            // read/write mode, we can announce we are the leader, as we've
+            // fenced out all other environments using the adapter storage.
+            deployment_state.set_is_leader();
+
+            adapter_storage
         };
 
-        // Load the adapter catalog from disk.
         if !config
             .cluster_replica_sizes
             .0
