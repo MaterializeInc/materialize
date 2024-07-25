@@ -51,4 +51,5 @@ def create_test_analytics_config_with_credentials(
         database=database,
         search_path=search_path,
         enabled=enabled,
+        application_name="test-analytics",
     )

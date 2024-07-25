@@ -14,6 +14,7 @@ class MzDbConfig:
     hostname: str
     username: str
     app_password: str | None
+    application_name: str | None
 
     database: str
     search_path: str

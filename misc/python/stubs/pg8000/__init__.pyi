@@ -46,4 +46,5 @@ def connect(
     password: str | None = ...,
     timeout: int | None = ...,
     ssl_context: SSLContext | None = ...,
+    application_name: str | None = ...,
 ) -> Connection: ...

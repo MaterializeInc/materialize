@@ -60,7 +60,7 @@ class DatabaseConnector:
         return self.open_connection
 
     def create_connection(
-        self, autocommit: bool = False, timeout_in_seconds: int = 5
+        self, autocommit: bool = False, timeout_in_seconds: int = 60
     ) -> Connection:
         try:
             connection = pg8000.connect(
@@ -70,6 +70,7 @@ class DatabaseConnector:
                 port=self.config.port,
                 ssl_context=ssl.SSLContext(),
                 timeout=timeout_in_seconds,
+                application_name=self.config.application_name,
             )
         except Exception:
             print(
@@ -86,7 +87,7 @@ class DatabaseConnector:
         connection: Connection | None = None,
         autocommit: bool = False,
         allow_reusing_connection: bool = False,
-        statement_timeout: str = "1s",
+        statement_timeout: str = "60s",
     ) -> Cursor:
         if connection is None:
             if allow_reusing_connection:
@@ -98,6 +99,8 @@ class DatabaseConnector:
         cursor.execute(f"SET database = {self.config.database}")
         cursor.execute(f"SET search_path = {self.config.search_path}")
         cursor.execute(f"SET statement_timeout = '{statement_timeout}'")
+        cursor.execute("SET cluster = 'test_analytics'")
+        cursor.execute("SET transaction_isolation = 'serializable'")
         return cursor
 
     def set_read_only(self) -> None:
@@ -133,9 +136,7 @@ class DatabaseConnector:
         if len(self.update_statements) == 0:
             return
 
-        cursor = self.create_cursor(
-            autocommit=not self._use_transaction, statement_timeout="30s"
-        )
+        cursor = self.create_cursor(autocommit=not self._use_transaction)
 
         self._disable_if_uploads_not_allowed(cursor)
 
