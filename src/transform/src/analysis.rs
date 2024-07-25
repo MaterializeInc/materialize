@@ -438,10 +438,20 @@ pub mod common {
                     return Err(());
                 }
 
+                // Track if repetitions may be required, to avoid iteration if they are not.
+                let mut is_recursive = false;
                 // Update each derived value and track if any have changed.
                 for index in lower..upper {
                     let value = self.derive(exprs[index], index, depends);
                     changed = lattice.meet_assign(&mut self.results[index], value) || changed;
+                    if let MirRelationExpr::LetRec { .. } = &exprs[index] {
+                        is_recursive = true;
+                    }
+                }
+
+                // Un-set the potential loop if there was no recursion.
+                if !is_recursive {
+                    changed = false;
                 }
             }
             Ok(true)
