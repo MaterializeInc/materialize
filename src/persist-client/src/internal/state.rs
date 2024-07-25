@@ -265,6 +265,13 @@ impl<T> BatchPart<T> {
             BatchPart::Inline { ts_rewrite, .. } => ts_rewrite.as_ref(),
         }
     }
+
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        match self {
+            BatchPart::Hollow(x) => x.schema_id,
+            BatchPart::Inline { schema_id, .. } => *schema_id,
+        }
+    }
 }
 
 impl<T: Ord> PartialOrd for BatchPart<T> {

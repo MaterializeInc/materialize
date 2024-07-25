@@ -53,6 +53,7 @@ use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
     BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, WRITE_DIFFS_SUM,
 };
+use crate::schema::SchemaId;
 use crate::stats::{
     encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
@@ -171,6 +172,11 @@ where
                 &self.metrics.retries.external.batch_delete,
             )
             .await;
+    }
+
+    /// Returns the schemas of parts in this batch.
+    pub fn schemas(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        self.batch.parts.iter().flat_map(|b| b.schema_id())
     }
 
     /// Turns this [`Batch`] into a `HollowBatch`.
