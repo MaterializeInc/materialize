@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use futures::future::BoxFuture;
-use mz_catalog::durable::Transaction;
-use mz_catalog::memory::objects::StateUpdate;
+use mz_catalog::memory::objects::{StateDiff, StateUpdate};
+use mz_catalog::{durable::Transaction, memory::objects::StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
@@ -79,7 +79,6 @@ where
 pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
-    item_updates: Vec<StateUpdate>,
     _now: NowFn,
     _boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
@@ -100,9 +99,9 @@ pub(crate) async fn migrate(
         Box::pin(async move {
             // Add per-item AST migrations below.
             //
-            // Each migration should be a function that takes `item` (the AST
+            // Each migration should be a function that takes `stmt` (the AST
             // representing the creation SQL for the item) as input. Any
-            // mutations to `item` will be staged for commit to the catalog.
+            // mutations to `stmt` will be staged for commit to the catalog.
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
@@ -115,6 +114,17 @@ pub(crate) async fn migrate(
     // Load up a temporary catalog.
     let mut state = state.clone();
     // The catalog is temporary, so we can throw out the builtin updates.
+    let item_updates = tx
+        .get_items()
+        .map(|item| {
+            let item = mz_catalog::durable::objects::Item::from(item);
+            StateUpdate {
+                kind: StateUpdateKind::Item(item),
+                ts: tx.commit_ts(),
+                diff: StateDiff::Addition,
+            }
+        })
+        .collect();
     let _ = state.apply_updates_for_bootstrap(item_updates).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
@@ -210,6 +220,7 @@ fn ast_rewrite_create_subsource_options(
                         // migrated
                         return;
                     }
+                    info!("migrate: populating subsource details: {:?}", node);
 
                     let external_reference = node
                         .with_options
@@ -425,6 +436,7 @@ fn ast_rewrite_create_subsource_options(
                         },
                         _ => unreachable!("source must be a source"),
                     };
+                    info!("migrated subsource: {:?}", node);
                 }
             }
         }
