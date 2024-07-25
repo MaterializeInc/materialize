@@ -10,6 +10,7 @@ usage: buildkite-artifact-search [-h]
                                  [--include-zst-files | --no-include-zst-files]
                                  [--job-id JOB_ID]
                                  [--max-results MAX_RESULTS]
+                                 [--search-logs-instead-of-artifacts]
                                  [--use-regex]
                                  {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,qa-canary,release-qualification,security,slt,test,www}
                                  buildnumber
