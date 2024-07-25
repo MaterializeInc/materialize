@@ -22,13 +22,20 @@ stdenv.mkDerivation {
     python3
     openssl
 
+    # CLI tools
     postgresql
     git
+    docker
+
+    # For docs
+    hugo
 
     # For lint checks
     shellcheck
     buf
     nodejs_22
+    jq
+    openssh
   ] ++ lib.optionals stdenv.isDarwin [
     libiconv
     darwin.apple_sdk.frameworks.DiskArbitration
