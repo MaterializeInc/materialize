@@ -715,11 +715,13 @@ mod non_negative {
                     .map(|r| r.iter().all(|(_, diff)| diff >= &0))
                     .unwrap_or(true),
                 MirRelationExpr::Get { id, .. } => match id {
-                    Id::Local(id) => depends
-                        .bindings()
-                        .get(id)
-                        .map(|off| results[*off])
-                        .unwrap_or(false),
+                    Id::Local(id) => {
+                        let index = *depends
+                            .bindings()
+                            .get(id)
+                            .expect("Dependency info not found");
+                        *results.get(index).unwrap_or(&false)
+                    }
                     Id::Global(_) => true,
                 },
                 // Negate must be false unless input is "non-positive".
