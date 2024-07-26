@@ -45,7 +45,9 @@ class Workload:
     mz_service: str
     deploy_generation: int
 
-    def __init__(self, mz_service: str, deploy_generation: int) -> None:
+    def __init__(
+        self, mz_service: str = "materailized", deploy_generation: int = 0
+    ) -> None:
         self.mz_service = mz_service
         self.deploy_generation = deploy_generation
 
@@ -59,7 +61,10 @@ class Workload:
 
 class SingleSensorUpdating(Workload):
     def __init__(
-        self, composition: Composition | None, mz_service: str, deploy_generation: int
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
     ) -> None:
         super().__init__(mz_service, deploy_generation)
         self.cycle = [
@@ -77,7 +82,10 @@ class SingleSensorUpdating(Workload):
 
 class SingleSensorUpdatingDisruptions(Workload):
     def __init__(
-        self, composition: Composition | None, mz_service: str, deploy_generation: int
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
     ) -> None:
         super().__init__(mz_service, deploy_generation)
         self.cycle = [
@@ -97,7 +105,10 @@ class SingleSensorUpdatingDisruptions(Workload):
 
 class SingleSensorUpdating0dtDeploy(Workload):
     def __init__(
-        self, composition: Composition | None, mz_service: str, deploy_generation: int
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
     ) -> None:
         super().__init__(mz_service, deploy_generation)
         self.cycle = [
@@ -119,7 +130,10 @@ class SingleSensorUpdating0dtDeploy(Workload):
 
 class DeleteDataAtEndOfDay(Workload):
     def __init__(
-        self, composition: Composition | None, mz_service: str, deploy_generation: int
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
     ) -> None:
         super().__init__(mz_service, deploy_generation)
         insert = Insert(
@@ -148,7 +162,10 @@ class DeleteDataAtEndOfDay(Workload):
 
 class DeleteDataAtEndOfDayDisruptions(Workload):
     def __init__(
-        self, composition: Composition | None, mz_service: str, deploy_generation: int
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
     ) -> None:
         super().__init__(mz_service, deploy_generation)
         insert = Insert(
@@ -180,7 +197,10 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
 
 class DeleteDataAtEndOfDay0dtDeploys(Workload):
     def __init__(
-        self, composition: Composition | None, mz_service: str, deploy_generation: int
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
     ) -> None:
         super().__init__(mz_service, deploy_generation)
         insert = Insert(
@@ -215,7 +235,7 @@ class DeleteDataAtEndOfDay0dtDeploys(Workload):
 # TODO: Implement
 # class ProgressivelyEnrichRecords(Workload):
 #    def __init__(
-#        self, composition: Composition | None, mz_service: str, deploy_generation: int
+#        self, composition: Composition | None = None, mz_service: str = "materialized", deploy_generation: int = 0
 #    ) -> None:
 #        super().__init__(mz_service, deploy_generation)
 #        self.cycle: list[Definition] = [
