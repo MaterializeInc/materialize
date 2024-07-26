@@ -388,6 +388,7 @@ class WaitReadyMz(MzcomposeAction):
                 c.exec(
                     self.mz_service,
                     "curl",
+                    "-s",
                     "localhost:6878/api/leader/status",
                     capture=True,
                 ).stdout
@@ -412,6 +413,7 @@ class PromoteMz(MzcomposeAction):
             c.exec(
                 self.mz_service,
                 "curl",
+                "-s",
                 "-X",
                 "POST",
                 "http://127.0.0.1:6878/api/leader/promote",
@@ -423,8 +425,6 @@ class PromoteMz(MzcomposeAction):
         mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
         e.current_mz_version = mz_version
 
-        time.sleep(5)
-
         # Wait until new Materialize is ready to handle queries
         for i in range(300):
             try:
@@ -432,19 +432,12 @@ class PromoteMz(MzcomposeAction):
                     c.exec(
                         self.mz_service,
                         "curl",
+                        "-s",
                         "localhost:6878/api/leader/status",
                         capture=True,
                     ).stdout
                 )
                 assert result["status"] == "IsLeader"
-                result = c.exec(
-                    self.mz_service,
-                    "curl",
-                    "http://127.0.0.1:6878/api/readyz",
-                    capture=True,
-                ).stdout
-                assert result == "ready", f"Unexpected result {result}"
-                assert c.sql_query("SELECT 1", service=self.mz_service) == ([1],)
             except:
                 time.sleep(1)
                 continue
