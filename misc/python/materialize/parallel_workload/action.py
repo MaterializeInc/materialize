@@ -2052,9 +2052,9 @@ class HttpPostAction(Action):
                     raise
             except QueryError as e:
                 # expected, see #20465
-                # TODO(def-): Why in 0dt?
                 if exe.db.scenario not in (
                     Scenario.Kill,
+                    # TODO(def-): Why in 0dt? Add explicit webhook test to verify
                     Scenario.ZeroDowntimeDeploy,
                 ) or ("404: no object was found at the path" not in e.msg):
                     raise e
