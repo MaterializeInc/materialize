@@ -55,6 +55,7 @@ class Materialized(Service):
         platform: str | None = None,
         healthcheck: list[str] | None = None,
         deploy_generation: int | None = None,
+        force_migrations: str | None = "all",
     ) -> None:
         if name is None:
             name = "materialized"
@@ -128,6 +129,12 @@ class Materialized(Service):
 
         if deploy_generation is not None:
             command += [f"--deploy-generation={deploy_generation}"]
+
+        if force_migrations is not None and image is None:
+            command += [
+                "--unsafe-mode",
+                f"--unsafe-builtin-table-fingerprint-whitespace={force_migrations}",
+            ]
 
         self.default_storage_size = (
             str(default_size)
