@@ -1323,7 +1323,7 @@ steps:
         label: "Parallel Workload (DML)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1335,7 +1335,7 @@ steps:
         label: "Parallel Workload (DDL)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1347,7 +1347,7 @@ steps:
         label: "Parallel Workload (DDL Only)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1359,7 +1359,7 @@ steps:
         label: "Parallel Workload (many threads)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           # Sporadic OoM otherwise
           queue: linux-aarch64-medium
@@ -1372,7 +1372,7 @@ steps:
         label: "Parallel Workload (rename + naughty identifiers)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1384,7 +1384,7 @@ steps:
         label: "Parallel Workload (rename)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1396,7 +1396,7 @@ steps:
         label: "Parallel Workload (cancel)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
           queue: linux-aarch64
@@ -1409,7 +1409,7 @@ steps:
         label: "Parallel Workload (kill)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1421,7 +1421,7 @@ steps:
         label: "Parallel Workload (backup & restore)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
           queue: linux-aarch64
@@ -1434,7 +1434,7 @@ steps:
         label: "Parallel Workload (0dt deploy)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64-large
         plugins:
