@@ -173,10 +173,6 @@ class DatabaseConnector:
             except:
                 pass
 
-            # TODO(def-): Remove when #28472 is fixed
-            if str(e) == "network error":
-                return
-
             error_msg = f"Failed to write to test analytics database! Cause: {e}"
             raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
         finally:
