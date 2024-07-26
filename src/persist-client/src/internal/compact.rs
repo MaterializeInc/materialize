@@ -731,7 +731,7 @@ where
                 break;
             };
             timings.part_fetching += fetch_start.elapsed();
-            for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
+            for ((k, v), t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
                 key_vec.clear();
                 key_vec.extend_from_slice(k);
                 val_vec.clear();
