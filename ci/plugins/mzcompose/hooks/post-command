@@ -17,8 +17,7 @@ run() {
     bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
-ci_unimportant_heading "Upload log artifacts"
-
+echo "Collecting logs"
 # Run before potential "run down" in coverage
 docker ps --all --quiet | xargs --no-run-if-empty docker inspect > docker-inspect.log
 # services.log might already exist and contain logs from before composition was downed
@@ -36,8 +35,8 @@ ps aux > ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
 docker stats --all --no-stream > docker-stats.log
 
-# Down docker containers to save memory
-run --mz-quiet down --volumes
+echo "Downing docker containers"
+run down --volumes
 
 mv "$HOME"/cores .
 
@@ -55,6 +54,7 @@ if find cores -name 'core.*' | grep -q .; then
     run cp testdrive:/usr/local/bin/testdrive cores/ || true
 fi
 
+echo "Finding core files"
 find cores -name 'core.*' | while read -r core; do
     exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9]*/\1/" -e "s/.*\!//")
     # Core dumps can take a while to be written, so if extracting the info fails, try again later
@@ -68,8 +68,10 @@ done
 # can be huge, clean up
 rm -rf cores
 
+echo "Compressing parallel-workload-queries.log"
 bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 
+echo "Uploading log artifacts"
 mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
@@ -94,7 +96,7 @@ export_cov() {
 }
 
 if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
-    ci_unimportant_heading "Generate coverage information"
+    echo "Generating coverage information"
     if [ -n "$(find . -name '*.profraw')" ]; then
         # Workaround for "invalid instrumentation profile data (file header is corrupt)"
         rm -rf profraws
