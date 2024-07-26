@@ -23,6 +23,7 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import get_published_minor_mz_versions
 
 # late initialization
@@ -65,12 +66,7 @@ def start_mz_read_only(
         tag=tag,
         mz_service=mz_service,
         deploy_generation=deploy_generation,
-        healthcheck=[
-            "CMD",
-            "curl",
-            "-f",
-            "localhost:6878/api/leader/status",
-        ],
+        healthcheck=LEADER_STATUS_HEALTHCHECK,
         restart="unless-stopped",
     )
 

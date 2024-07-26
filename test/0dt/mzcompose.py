@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
 import time
 from textwrap import dedent
 
@@ -17,7 +16,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -174,14 +173,23 @@ def workflow_read_only(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
-        > CREATE SOURCE kafka_sink_source1
+        > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE NONE
 
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
         <null> <null> 1 2
+
+        > CREATE SOURCE webhook_source
+          IN CLUSTER cluster
+          FROM WEBHOOK BODY FORMAT TEXT
+
+        $ webhook-append database=materialize schema=public name=webhook_source
+        AAA
+        > SELECT * FROM webhook_source
+        AAA
         """
         )
     )
@@ -196,6 +204,9 @@ def workflow_read_only(c: Composition) -> None:
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            BBB
+
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
             key2A,key2B:value2A,value2B
 
@@ -226,7 +237,6 @@ def workflow_read_only(c: Composition) -> None:
             1
             ! DROP INDEX t_idx
             contains: cannot write in read-only mode
-            # TODO: Doesn't error currently
             ! CREATE INDEX t_idx2 ON t (a, b)
             contains: cannot write in read-only mode
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
@@ -243,41 +253,17 @@ def workflow_read_only(c: Composition) -> None:
             A 0
             > SELECT * FROM mysql_source_table;
             A 0
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
+            > SELECT * FROM webhook_source
+            AAA
             """
             )
         )
 
         c.up("mz_old")
-        # Wait up to 60s for the new deployment to become ready for promotion.
-        for _ in range(1, 60):
-            result = json.loads(
-                c.exec(
-                    "mz_old",
-                    "curl",
-                    "-s",
-                    "localhost:6878/api/leader/status",
-                    capture=True,
-                ).stdout
-            )
-            if result["status"] == "ReadyToPromote":
-                break
-            assert result["status"] == "Initializing", f"Unexpected status {result}"
-            print("Not ready yet, waiting 1s")
-            time.sleep(1)
-        result = json.loads(
-            c.exec(
-                "mz_old",
-                "curl",
-                "-s",
-                "-X",
-                "POST",
-                "localhost:6878/api/leader/promote",
-                capture=True,
-            ).stdout
-        )
-        assert result["result"] == "Success", f"Unexpected result {result}"
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
+        c.promote_mz("mz_old")
 
     # After promotion, the deployment should boot with writes allowed.
     with c.override(
@@ -296,6 +282,8 @@ def workflow_read_only(c: Composition) -> None:
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source
+            CCC
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
@@ -321,7 +309,7 @@ def workflow_read_only(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
             <null> <null> 7 8
 
@@ -348,6 +336,9 @@ def workflow_read_only(c: Composition) -> None:
             A 0
             B 1
             C 2
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
             """
             )
         )
@@ -458,14 +449,23 @@ def workflow_basic(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
-        > CREATE SOURCE kafka_sink_source2
+        > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE NONE
 
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
         <null> <null> 1 2
+
+        > CREATE SOURCE webhook_source
+          IN CLUSTER cluster
+          FROM WEBHOOK BODY FORMAT TEXT
+
+        $ webhook-append database=materialize schema=public name=webhook_source
+        AAA
+        > SELECT * FROM webhook_source
+        AAA
         """
         )
     )
@@ -490,6 +490,9 @@ def workflow_basic(c: Composition) -> None:
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            BBB
+
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
             key2A,key2B:value2A,value2B
 
@@ -520,7 +523,6 @@ def workflow_basic(c: Composition) -> None:
             1
             ! DROP INDEX t_idx
             contains: cannot write in read-only mode
-            # TODO: Doesn't error currently
             ! CREATE INDEX t_idx2 ON t (a, b)
             contains: cannot write in read-only mode
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
@@ -540,8 +542,11 @@ def workflow_basic(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
+
+            > SELECT * FROM webhook_source
+            AAA
             """
             )
         )
@@ -551,6 +556,9 @@ def workflow_basic(c: Composition) -> None:
     c.testdrive(
         dedent(
             f"""
+        $ webhook-append database=materialize schema=public name=webhook_source
+        CCC
+
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
         key3A,key3B:value3A,value3B
 
@@ -597,10 +605,13 @@ def workflow_basic(c: Composition) -> None:
         A 0
         B 1
         C 2
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
         <null> <null> 1 2
         <null> <null> 3 4
         <null> <null> 5 6
+        > SELECT * FROM webhook_source
+        AAA
+        CCC
         """
         )
     )
@@ -620,6 +631,9 @@ def workflow_basic(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            DDD
+
             > SET CLUSTER = cluster;
             > SELECT 1
             1
@@ -644,42 +658,19 @@ def workflow_basic(c: Composition) -> None:
             A 0
             B 1
             C 2
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
             """
             )
         )
 
-        # Wait up to 60s for the new deployment to become ready for promotion.
-        for _ in range(1, 60):
-            result = json.loads(
-                c.exec(
-                    "mz_new",
-                    "curl",
-                    "-s",
-                    "localhost:6878/api/leader/status",
-                    capture=True,
-                ).stdout
-            )
-            if result["status"] == "ReadyToPromote":
-                break
-            assert result["status"] == "Initializing", f"Unexpected status {result}"
-            print("Not ready yet, waiting 1s")
-            time.sleep(1)
-        result = json.loads(
-            c.exec(
-                "mz_new",
-                "curl",
-                "-s",
-                "-X",
-                "POST",
-                "localhost:6878/api/leader/promote",
-                capture=True,
-            ).stdout
-        )
-        assert result["result"] == "Success", f"Unexpected result {result}"
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        c.promote_mz("mz_new")
 
         # Give some time for Mz to restart after promotion
         for i in range(10):
@@ -713,9 +704,13 @@ def workflow_basic(c: Composition) -> None:
         else:
             assert False, "mz_new didn't come up within 10 seconds"
 
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source
+            EEE
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
@@ -773,11 +768,15 @@ def workflow_basic(c: Composition) -> None:
             B 1
             C 2
             D 3
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
             <null> <null> 7 8
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
+            EEE
             """
             )
         )

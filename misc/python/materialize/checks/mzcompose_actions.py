@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-import time
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -16,7 +15,7 @@ from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
@@ -381,23 +380,9 @@ class WaitReadyMz(MzcomposeAction):
         self.mz_service = mz_service
 
     def execute(self, e: Executor) -> None:
-        c = e.mzcompose_composition()
-
-        while True:
-            result = json.loads(
-                c.exec(
-                    self.mz_service,
-                    "curl",
-                    "-s",
-                    "localhost:6878/api/leader/status",
-                    capture=True,
-                ).stdout
-            )
-            if result["status"] == "ReadyToPromote":
-                return
-            assert result["status"] == "Initializing", f"Unexpected status {result}"
-            print("Not ready yet, waiting 1 s")
-            time.sleep(1)
+        e.mzcompose_composition().await_mz_deployment_status(
+            DeploymentStatus.READY_TO_PROMOTE, self.mz_service
+        )
 
 
 class PromoteMz(MzcomposeAction):
@@ -426,22 +411,7 @@ class PromoteMz(MzcomposeAction):
         e.current_mz_version = mz_version
 
         # Wait until new Materialize is ready to handle queries
-        for i in range(300):
-            try:
-                result = json.loads(
-                    c.exec(
-                        self.mz_service,
-                        "curl",
-                        "-s",
-                        "localhost:6878/api/leader/status",
-                        capture=True,
-                    ).stdout
-                )
-                assert result["status"] == "IsLeader"
-            except:
-                time.sleep(1)
-                continue
-            break
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, self.mz_service)
 
 
 class SystemVarChange(MzcomposeAction):
