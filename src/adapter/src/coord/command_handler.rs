@@ -22,9 +22,9 @@ use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_ore::instrument;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
@@ -215,8 +215,12 @@ impl Coordinator {
                         }
                     };
 
+                    let conn_id = ctx.session().conn_id().clone();
                     self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                         .await;
+                    // Part of the Command::Commit contract is that the Coordinator guarantees that
+                    // it has cleared its transaction state for the connection.
+                    self.clear_connection(&conn_id).await;
                 }
 
                 Command::CatalogSnapshot { tx } => {
@@ -749,9 +753,11 @@ impl Coordinator {
                     // (Terminating the connection is maybe what we would prefer to do, but is not
                     // currently a thing we can do from the coordinator: calling handle_terminate
                     // cleans up Coordinator state for the session but doesn't inform the
-                    // AdapterClient that the session should terminate.) Once the bug here
-                    // (https://github.com/MaterializeInc/materialize/issues/28400) is fixed, this
-                    // could be changed to an assert.
+                    // AdapterClient that the session should terminate.)
+                    soft_panic_or_log!(
+                        "session {} attempted to get ddl lock while already owning it",
+                        ctx.session().conn_id()
+                    );
                     ctx.retire(Err(AdapterError::Internal(format!(
                         "session attempted to get ddl lock while already owning it"
                     ))));
