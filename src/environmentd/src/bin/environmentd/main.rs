@@ -550,7 +550,7 @@ pub struct Args {
     /// Injects arbitrary whitespace into builtin table fingerprints, which can
     /// trigger builtin item migrations. The amount of whitespace is determined
     /// by
-    /// `really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace_version`.
+    /// `unsafe_builtin_table_fingerprint_whitespace_version`.
     /// This argument is meant for testing only and as the names suggests
     /// should not be set in production.
     #[clap(long, arg_enum, requires = "unsafe-mode")]
