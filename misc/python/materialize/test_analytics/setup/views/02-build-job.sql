@@ -38,6 +38,7 @@ SELECT
     bj.shard_index,
     count(*) AS count_all,
     sum(CASE WHEN bj.success THEN 1 ELSE 0 END) AS count_successful,
+    -- avg(bj.end_time - bj.start_time) AS mean_duration_on_success, -- TODO #28559: avg(interval) not supported
     avg(bj.retry_count) AS mean_retry_count
 FROM build b
 INNER JOIN build_job bj
