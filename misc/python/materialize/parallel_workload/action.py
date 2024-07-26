@@ -183,7 +183,7 @@ class Action:
                     "Connection refused",
                 ]
             )
-        if exe.db.scenario in (Scenario.Kill,):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             # Expected, see #20465
             result.extend(["unknown catalog item", "unknown schema"])
         if exe.db.scenario == Scenario.Rename:
@@ -1104,7 +1104,7 @@ class DropRoleAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill,)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1156,7 +1156,7 @@ class DropClusterAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill,)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown cluster" not in e.msg
                 ):
                     raise e
@@ -1286,7 +1286,7 @@ class DropClusterReplicaAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill,)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "has no CLUSTER REPLICA named" not in e.msg
                 ):
                     raise e
@@ -1315,7 +1315,7 @@ class GrantPrivilegesAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill,)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1344,7 +1344,7 @@ class RevokePrivilegesAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill,)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1643,7 +1643,7 @@ class BackupRestoreAction(Action):
 class CreateWebhookSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill,):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1697,7 +1697,7 @@ class DropWebhookSourceAction(Action):
 class CreateKafkaSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill,):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1765,7 +1765,7 @@ class DropKafkaSourceAction(Action):
 class CreateMySqlSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill,):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1837,7 +1837,7 @@ class DropMySqlSourceAction(Action):
 class CreatePostgresSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill,):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -2029,7 +2029,6 @@ class HttpPostAction(Action):
                 # expected, see #20465
                 if exe.db.scenario not in (
                     Scenario.Kill,
-                    # TODO(def-): Why in 0dt? Add explicit webhook test to verify
                     Scenario.ZeroDowntimeDeploy,
                 ) or ("404: no object was found at the path" not in e.msg):
                     raise e
