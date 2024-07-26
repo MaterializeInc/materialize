@@ -48,6 +48,9 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
 
 COPY crosstool.asc ./
 
+# Faster uncompression
+ARG XZ_OPT=-T0
+
 RUN gpg --import crosstool.asc \
     && rm crosstool.asc \
     && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
