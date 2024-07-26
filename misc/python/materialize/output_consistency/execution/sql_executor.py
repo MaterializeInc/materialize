@@ -15,9 +15,6 @@ from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError, InterfaceError
 
-from materialize.output_consistency.common.configuration import (
-    ConsistencyTestConfiguration,
-)
 from materialize.output_consistency.output.output_printer import OutputPrinter
 
 
@@ -190,29 +187,3 @@ class DryRunSqlExecutor(SqlExecutor):
 
     def query_version(self) -> str:
         return "(dry-run)"
-
-
-def create_sql_executor(
-    config: ConsistencyTestConfiguration,
-    default_connection: Connection,
-    mz_system_connection: Connection | None,
-    output_printer: OutputPrinter,
-    name: str,
-    is_mz: bool = True,
-) -> SqlExecutor:
-    if config.dry_run:
-        return DryRunSqlExecutor(output_printer, name)
-
-    if is_mz:
-        assert mz_system_connection is not None
-        return MzDatabaseSqlExecutor(
-            default_connection,
-            mz_system_connection,
-            config.use_autocommit,
-            output_printer,
-            name,
-        )
-
-    return PgWireDatabaseSqlExecutor(
-        default_connection, config.use_autocommit, output_printer, name
-    )

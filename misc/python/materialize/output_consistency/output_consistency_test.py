@@ -24,7 +24,12 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
 from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
-from materialize.output_consistency.execution.sql_executor import create_sql_executor
+from materialize.output_consistency.execution.sql_executor import (
+    DryRunSqlExecutor,
+    MzDatabaseSqlExecutor,
+    PgWireDatabaseSqlExecutor,
+    SqlExecutor,
+)
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
@@ -238,9 +243,47 @@ class OutputConsistencyTest:
         output_printer: OutputPrinter,
     ) -> SqlExecutors:
         return SqlExecutors(
-            create_sql_executor(
+            self.create_sql_executor(
                 config, default_connection, mz_system_connection, output_printer, "mz"
             )
+        )
+
+    def create_sql_executor(
+        self,
+        config: ConsistencyTestConfiguration,
+        default_connection: Connection,
+        mz_system_connection: Connection | None,
+        output_printer: OutputPrinter,
+        name: str,
+        is_mz: bool = True,
+    ) -> SqlExecutor:
+        if config.dry_run:
+            return DryRunSqlExecutor(output_printer, name)
+
+        if is_mz:
+            return self.create_mz_sql_executor(
+                config, default_connection, mz_system_connection, output_printer, name
+            )
+
+        return PgWireDatabaseSqlExecutor(
+            default_connection, config.use_autocommit, output_printer, name
+        )
+
+    def create_mz_sql_executor(
+        self,
+        config: ConsistencyTestConfiguration,
+        default_connection: Connection,
+        mz_system_connection: Connection | None,
+        output_printer: OutputPrinter,
+        name: str,
+    ) -> SqlExecutor:
+        assert mz_system_connection is not None
+        return MzDatabaseSqlExecutor(
+            default_connection,
+            mz_system_connection,
+            config.use_autocommit,
+            output_printer,
+            name,
         )
 
     def get_scenario(self) -> EvaluationScenario:

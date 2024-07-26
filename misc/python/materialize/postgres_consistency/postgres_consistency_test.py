@@ -19,7 +19,6 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
 from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
-from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
@@ -69,10 +68,10 @@ class PostgresConsistencyTest(OutputConsistencyTest):
             raise RuntimeError("Postgres connection is not initialized")
 
         return PgSqlExecutors(
-            create_sql_executor(
+            self.create_sql_executor(
                 config, default_connection, mz_system_connection, output_printer, "mz"
             ),
-            create_sql_executor(
+            self.create_sql_executor(
                 config, self.pg_connection, None, output_printer, "pg", is_mz=False
             ),
         )

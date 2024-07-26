@@ -25,7 +25,6 @@ from materialize.output_consistency.execution.query_output_mode import (
     QUERY_OUTPUT_MODE_CHOICES,
     QueryOutputMode,
 )
-from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
@@ -98,10 +97,10 @@ class VersionConsistencyTest(OutputConsistencyTest):
             self.mz2_system_connection is not None
         ), "Second system connection is not initialized"
 
-        mz1_sql_executor = create_sql_executor(
+        mz1_sql_executor = self.create_sql_executor(
             config, default_connection, mz_system_connection, output_printer, "mz1"
         )
-        mz2_sql_executor = create_sql_executor(
+        mz2_sql_executor = self.create_sql_executor(
             config,
             self.mz2_connection,
             self.mz2_system_connection,
