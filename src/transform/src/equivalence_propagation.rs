@@ -299,6 +299,22 @@ impl EquivalencePropagation {
                 let mut children: Vec<_> = derived.children_rev().collect::<Vec<_>>();
                 children.reverse();
 
+                // Assemble the appended input types, for use in expression minimization.
+                // Do not use `expr_types`, which may reflect nullability that does not hold for the inputs.
+                let input_types = Some(
+                    children
+                        .iter()
+                        .flat_map(|c| {
+                            c.value::<RelationType>()
+                                .expect("RelationType required")
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .cloned()
+                        })
+                        .collect::<Vec<_>>(),
+                );
+
                 // For each child, assemble its equivalences using join-relative column numbers.
                 // Don't do anything with the children yet, as we'll want to revisit each with
                 // this information at hand.
@@ -314,7 +330,7 @@ impl EquivalencePropagation {
                     if let Some(mut equivalences) = equivalences {
                         let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
                         equivalences.permute(&permutation);
-                        equivalences.minimize(expr_type);
+                        equivalences.minimize(&input_types);
                         input_equivalences.push(equivalences);
                     }
                     columns += child_arity;
@@ -339,13 +355,15 @@ impl EquivalencePropagation {
                             // literal substitution.
                             let old = expr.clone();
                             input_equivs.reduce_expr(expr);
+                            expr.reduce(input_types.as_ref().unwrap());
                             if !expr.is_literal() {
                                 expr.clone_from(&old);
                             }
                         }
                     }
                 }
-                join_equivalences.minimize(expr_type);
+                // Minimize relative to appended input types.
+                join_equivalences.minimize(&input_types);
 
                 // Revisit each child, determining the information to present to it, and recurring.
                 let mut columns = 0;
@@ -389,11 +407,16 @@ impl EquivalencePropagation {
                     .value::<Equivalences>()
                     .expect("Equivalences required");
                 if let Some(input_equivalences) = input_equivalences {
+                    let input_type = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
                     for key in group_key.iter_mut() {
                         // Semijoin elimination currently fails if you do more advanced simplification than
                         // literal substitution.
                         let old_key = key.clone();
                         input_equivalences.reduce_expr(key);
+                        key.reduce(input_type.as_ref().unwrap());
                         if !key.is_literal() {
                             key.clone_from(&old_key);
                         }
