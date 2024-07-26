@@ -28,7 +28,11 @@ from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import (
+    LEADER_STATUS_HEALTHCHECK,
+    DeploymentStatus,
+    Materialized,
+)
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
     DB,
@@ -1560,46 +1564,17 @@ class ZeroDowntimeDeployAction(Action):
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
                 restart="on-failure",
-                healthcheck=[
-                    "CMD",
-                    "curl",
-                    "-f",
-                    "localhost:6878/api/leader/status",
-                ],
+                healthcheck=LEADER_STATUS_HEALTHCHECK,
             ),
         ):
             self.composition.up(mz_service, detach=True)
-
-            # Wait until ready to promote
-            while True:
-                result = json.loads(
-                    self.composition.exec(
-                        mz_service,
-                        "curl",
-                        "-s",
-                        "localhost:6878/api/leader/status",
-                        capture=True,
-                    ).stdout
-                )
-                if result["status"] == "ReadyToPromote":
-                    break
-                assert result["status"] == "Initializing", f"Unexpected status {result}"
-                print("Not ready yet, waiting 1 s")
-                time.sleep(1)
-
-            # Promote new Mz service
-            result = json.loads(
-                self.composition.exec(
-                    mz_service,
-                    "curl",
-                    "-s",
-                    "-X",
-                    "POST",
-                    "http://127.0.0.1:6878/api/leader/promote",
-                    capture=True,
-                ).stdout
+            self.composition.await_mz_deployment_status(
+                DeploymentStatus.READY_TO_PROMOTE, mz_service
             )
-            assert result["result"] == "Success", f"Unexpected result {result}"
+            self.composition.promote_mz(mz_service)
+            self.composition.await_mz_deployment_status(
+                DeploymentStatus.IS_LEADER, mz_service
+            )
 
         time.sleep(self.rng.uniform(60, 120))
         return True

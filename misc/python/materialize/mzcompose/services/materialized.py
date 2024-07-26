@@ -9,6 +9,7 @@
 
 
 from copy import copy
+from enum import Enum
 
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
@@ -232,3 +233,20 @@ class Materialized(Service):
             )
 
         super().__init__(name=name, config=config)
+
+
+class DeploymentStatus(Enum):
+    """See DeploymentStateInner for reference"""
+
+    INITIALIZING = "Initializing"
+    READY_TO_PROMOTE = "ReadyToPromote"
+    PROMOTING = "Promoting"
+    IS_LEADER = "IsLeader"
+
+
+LEADER_STATUS_HEALTHCHECK: list[str] = [
+    "CMD",
+    "curl",
+    "-f",
+    "localhost:6878/api/leader/status",
+]

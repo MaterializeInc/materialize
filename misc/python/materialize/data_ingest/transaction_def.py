@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
 import random
 import time
 from collections.abc import Iterator
@@ -19,7 +18,11 @@ from materialize.data_ingest.field import Field
 from materialize.data_ingest.rowlist import RowList
 from materialize.data_ingest.transaction import Transaction
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import (
+    LEADER_STATUS_HEALTHCHECK,
+    DeploymentStatus,
+    Materialized,
+)
 
 if TYPE_CHECKING:
     from materialize.data_ingest.workload import Workload
@@ -126,65 +129,16 @@ class ZeroDowntimeDeploy(TransactionDef):
                     additional_system_parameter_defaults={"enable_table_keys": "true"},
                     deploy_generation=self.workload.deploy_generation,
                     restart="on-failure",
-                    healthcheck=[
-                        "CMD",
-                        "curl",
-                        "-f",
-                        "localhost:6878/api/leader/status",
-                    ],
+                    healthcheck=LEADER_STATUS_HEALTHCHECK,
                 ),
             ):
                 self.composition.up(self.workload.mz_service, detach=True)
-
-                # Wait until ready to promote
-                while True:
-                    result = json.loads(
-                        self.composition.exec(
-                            self.workload.mz_service,
-                            "curl",
-                            "-s",
-                            "localhost:6878/api/leader/status",
-                            capture=True,
-                        ).stdout
-                    )
-                    if result["status"] == "ReadyToPromote":
-                        break
-                    assert (
-                        result["status"] == "Initializing"
-                    ), f"Unexpected status {result}"
-                    print("Not ready yet, waiting 1 s")
-                    time.sleep(1)
-
-                # Promote new Mz service
-                result = json.loads(
-                    self.composition.exec(
-                        self.workload.mz_service,
-                        "curl",
-                        "-s",
-                        "-X",
-                        "POST",
-                        "http://127.0.0.1:6878/api/leader/promote",
-                        capture=True,
-                    ).stdout
+                self.composition.await_mz_deployment_status(
+                    DeploymentStatus.READY_TO_PROMOTE, self.workload.mz_service
                 )
-                assert result["result"] == "Success", f"Unexpected result {result}"
-
-                # Wait until new Materialize is ready to handle queries
-                for i in range(300):
-                    try:
-                        result = json.loads(
-                            self.composition.exec(
-                                self.workload.mz_service,
-                                "curl",
-                                "-s",
-                                "localhost:6878/api/leader/status",
-                                capture=True,
-                            ).stdout
-                        )
-                        assert result["status"] == "IsLeader"
-                    except:
-                        time.sleep(1)
-                        continue
-                    break
+                self.composition.promote_mz(self.workload.mz_service)
+                self.composition.await_mz_deployment_status(
+                    DeploymentStatus.IS_LEADER, self.workload.mz_service
+                )
 
         yield None
