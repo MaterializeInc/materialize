@@ -16,7 +16,7 @@ See details at https://www.notion.so/materialize/Project-Management-b3d2da90abbf
 
 ## Notion epic
 <!--
-Link to notion epic page.
+Link to Notion epic page.
 -->
 
 ## Work items
