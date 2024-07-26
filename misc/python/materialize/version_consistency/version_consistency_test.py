@@ -16,6 +16,9 @@ from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.execution.evaluation_strategy import (
+    EVALUATION_STRATEGY_NAME_CTF,
+    EVALUATION_STRATEGY_NAME_DFR,
+    INTERNAL_EVALUATION_STRATEGY_NAMES,
     ConstantFoldingEvaluation,
     DataFlowRenderingEvaluation,
     EvaluationStrategy,
@@ -51,10 +54,6 @@ from materialize.version_consistency.ignore_filter.version_consistency_ignore_fi
 from materialize.version_consistency.validation.version_consistency_error_message_normalizer import (
     VersionConsistencyErrorMessageNormalizer,
 )
-
-EVALUATION_STRATEGY_NAME_DFR = "dataflow_rendering"
-EVALUATION_STRATEGY_NAME_CTF = "constant_folding"
-EVALUATION_STRATEGY_NAMES = [EVALUATION_STRATEGY_NAME_DFR, EVALUATION_STRATEGY_NAME_CTF]
 
 
 class VersionConsistencyTest(OutputConsistencyTest):
@@ -222,7 +221,7 @@ def main() -> int:
         "--evaluation-strategy",
         default=EVALUATION_STRATEGY_NAME_DFR,
         type=str,
-        choices=EVALUATION_STRATEGY_NAMES,
+        choices=INTERNAL_EVALUATION_STRATEGY_NAMES,
     )
     parser.add_argument(
         "--other-tag",

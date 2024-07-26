@@ -14,6 +14,10 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
+from materialize.output_consistency.execution.evaluation_strategy import (
+    EVALUATION_STRATEGY_NAME_DFR,
+    INTERNAL_EVALUATION_STRATEGY_NAMES,
+)
 from materialize.output_consistency.execution.query_output_mode import (
     QUERY_OUTPUT_MODE_CHOICES,
     QueryOutputMode,
@@ -25,8 +29,6 @@ from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
 )
 from materialize.version_consistency.version_consistency_test import (
-    EVALUATION_STRATEGY_NAME_DFR,
-    EVALUATION_STRATEGY_NAMES,
     VersionConsistencyTest,
 )
 from materialize.version_list import (
@@ -55,7 +57,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--evaluation-strategy",
         default=EVALUATION_STRATEGY_NAME_DFR,
         type=str,
-        choices=EVALUATION_STRATEGY_NAMES,
+        choices=INTERNAL_EVALUATION_STRATEGY_NAMES,
     )
 
     parser.add_argument(

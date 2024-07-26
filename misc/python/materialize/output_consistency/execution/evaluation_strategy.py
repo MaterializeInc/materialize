@@ -29,6 +29,13 @@ from materialize.output_consistency.selection.selection import (
     TableColumnByNameSelection,
 )
 
+EVALUATION_STRATEGY_NAME_DFR = "dataflow_rendering"
+EVALUATION_STRATEGY_NAME_CTF = "constant_folding"
+INTERNAL_EVALUATION_STRATEGY_NAMES = [
+    EVALUATION_STRATEGY_NAME_DFR,
+    EVALUATION_STRATEGY_NAME_CTF,
+]
+
 
 class EvaluationStrategyKey(Enum):
     DUMMY = 1
