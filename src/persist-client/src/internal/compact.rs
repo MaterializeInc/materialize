@@ -694,7 +694,7 @@ where
             true,
         );
 
-        let mut consolidator = Consolidator::new(
+        let mut consolidator = Consolidator::<T, D>::new(
             format!(
                 "{}[lower={:?},upper={:?}]",
                 shard_id,
