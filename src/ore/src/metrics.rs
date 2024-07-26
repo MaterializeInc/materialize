@@ -153,34 +153,13 @@ impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
     }
 }
 
-impl<M: GaugeVecExt> GaugeVecExt for DeleteOnDropWrapper<M> {
-    type GaugeType = M::GaugeType;
-
-    fn get_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
+impl<M: MetricVecExt> DeleteOnDropWrapper<M> {
+    /// Returns a metric that deletes its labels from this metrics vector when dropped.
+    pub fn get_delete_on_drop_metric<'a, L: PromLabelsExt<'a>>(
         &self,
         labels: L,
-    ) -> DeleteOnDropGauge<'a, Self::GaugeType, L> {
-        self.inner.get_delete_on_drop_gauge(labels)
-    }
-}
-
-impl<M: CounterVecExt> CounterVecExt for DeleteOnDropWrapper<M> {
-    type CounterType = M::CounterType;
-
-    fn get_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropCounter<'a, Self::CounterType, L> {
-        self.inner.get_delete_on_drop_counter(labels)
-    }
-}
-
-impl<M: HistogramVecExt> HistogramVecExt for DeleteOnDropWrapper<M> {
-    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropHistogram<'a, L> {
-        self.inner.get_delete_on_drop_histogram(labels)
+    ) -> DeleteOnDropMetric<'a, M, L> {
+        self.inner.get_delete_on_drop_metric(labels)
     }
 }
 

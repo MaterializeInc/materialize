@@ -29,8 +29,8 @@ use std::time::Instant;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec, IntGaugeVec,
-    MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, IntGaugeVec, MetricsRegistry,
+    UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::statistics::{Gauge, SinkStatisticsUpdate, SourceStatisticsUpdate};
@@ -179,47 +179,47 @@ impl SourceStatisticsMetrics {
         };
 
         SourceStatisticsMetrics {
-            snapshot_committed: defs.snapshot_committed.get_delete_on_drop_gauge(vec![
+            snapshot_committed: defs.snapshot_committed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            messages_received: defs.messages_received.get_delete_on_drop_counter(vec![
+            messages_received: defs.messages_received.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            updates_staged: defs.updates_staged.get_delete_on_drop_counter(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                parent_source_id.to_string(),
-                shard.clone(),
-            ]),
-            updates_committed: defs.updates_committed.get_delete_on_drop_counter(vec![
+            updates_staged: defs.updates_staged.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            bytes_received: defs.bytes_received.get_delete_on_drop_counter(vec![
-                id.to_string(),
-                worker_id.to_string(),
-                parent_source_id.to_string(),
-            ]),
-            bytes_indexed: defs.bytes_indexed.get_delete_on_drop_gauge(vec![
+            updates_committed: defs.updates_committed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            records_indexed: defs.records_indexed.get_delete_on_drop_gauge(vec![
+            bytes_received: defs.bytes_received.get_delete_on_drop_metric(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            bytes_indexed: defs.bytes_indexed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            envelope_state_tombstones: defs.envelope_state_tombstones.get_delete_on_drop_gauge(
+            records_indexed: defs.records_indexed.get_delete_on_drop_metric(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            envelope_state_tombstones: defs.envelope_state_tombstones.get_delete_on_drop_metric(
                 vec![
                     id.to_string(),
                     worker_id.to_string(),
@@ -227,29 +227,29 @@ impl SourceStatisticsMetrics {
                     shard.clone(),
                 ],
             ),
-            rehydration_latency_ms: defs.rehydration_latency_ms.get_delete_on_drop_gauge(vec![
+            rehydration_latency_ms: defs.rehydration_latency_ms.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
                 envelope.to_string(),
             ]),
-            offset_known: defs.offset_known.get_delete_on_drop_gauge(vec![
+            offset_known: defs.offset_known.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            offset_committed: defs.offset_committed.get_delete_on_drop_gauge(vec![
+            offset_committed: defs.offset_committed.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            snapshot_records_known: defs.snapshot_records_known.get_delete_on_drop_gauge(vec![
+            snapshot_records_known: defs.snapshot_records_known.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            snapshot_records_staged: defs.snapshot_records_staged.get_delete_on_drop_gauge(vec![
+            snapshot_records_staged: defs.snapshot_records_staged.get_delete_on_drop_metric(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -313,16 +313,16 @@ impl SinkStatisticsMetrics {
         SinkStatisticsMetrics {
             messages_staged: defs
                 .messages_staged
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
             messages_committed: defs
                 .messages_committed
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
             bytes_staged: defs
                 .bytes_staged
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
             bytes_committed: defs
                 .bytes_committed
-                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()]),
         }
     }
 }

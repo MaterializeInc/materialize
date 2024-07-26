@@ -19,8 +19,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec,
-    GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry,
+    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec, HistogramVec,
+    IntCounterVec, MetricVecExt, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -177,33 +177,32 @@ impl ComputeControllerMetrics {
     /// Return an object suitable for tracking metrics for the given compute instance.
     pub fn for_instance(&self, instance_id: ComputeInstanceId) -> InstanceMetrics {
         let labels = vec![instance_id.to_string()];
-        let replica_count = self.replica_count.get_delete_on_drop_gauge(labels.clone());
+        let replica_count = self.replica_count.get_delete_on_drop_metric(labels.clone());
         let collection_count = self
             .collection_count
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let collection_unscheduled_count = self
             .collection_unscheduled_count
-            .get_delete_on_drop_gauge(labels.clone());
-        let peek_count = self.peek_count.get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
+        let peek_count = self.peek_count.get_delete_on_drop_metric(labels.clone());
         let subscribe_count = self
             .subscribe_count
-            .get_delete_on_drop_gauge(labels.clone());
-        let copy_to_count = self.copy_to_count.get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
+        let copy_to_count = self.copy_to_count.get_delete_on_drop_metric(labels.clone());
         let history_command_count = CommandMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
-            self.history_command_count.get_delete_on_drop_gauge(labels)
+            self.history_command_count.get_delete_on_drop_metric(labels)
         });
         let history_dataflow_count = self
             .history_dataflow_count
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let peeks_total = PeekMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
-            self.peeks_total.get_delete_on_drop_counter(labels)
+            self.peeks_total.get_delete_on_drop_metric(labels)
         });
         let peek_duration_seconds = PeekMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
-            self.peek_duration_seconds
-                .get_delete_on_drop_histogram(labels)
+            self.peek_duration_seconds.get_delete_on_drop_metric(labels)
         });
 
         InstanceMetrics {
@@ -267,39 +266,39 @@ impl InstanceMetrics {
             let labels = extended_labels(typ);
             self.metrics
                 .commands_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let command_message_bytes_total = CommandMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .command_message_bytes_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let responses_total = ResponseMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .responses_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let response_message_bytes_total = ResponseMetrics::build(|typ| {
             let labels = extended_labels(typ);
             self.metrics
                 .response_message_bytes_total
-                .get_delete_on_drop_counter(labels)
+                .get_delete_on_drop_metric(labels)
         });
 
         let command_queue_size = self
             .metrics
             .command_queue_size
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let response_queue_size = self
             .metrics
             .response_queue_size
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let hydration_queue_size = self
             .metrics
             .hydration_queue_size
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
 
         ReplicaMetrics {
             instance_id: self.instance_id,
@@ -324,12 +323,12 @@ impl InstanceMetrics {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
             self.metrics
                 .history_command_count
-                .get_delete_on_drop_gauge(labels)
+                .get_delete_on_drop_metric(labels)
         });
         let dataflow_count = self
             .metrics
             .history_dataflow_count
-            .get_delete_on_drop_gauge(labels);
+            .get_delete_on_drop_metric(labels);
 
         HistoryMetrics {
             command_counts,
@@ -394,11 +393,11 @@ impl ReplicaMetrics {
         let initial_output_duration_seconds = self
             .metrics
             .dataflow_initial_output_duration_seconds
-            .get_delete_on_drop_gauge(labels.clone());
+            .get_delete_on_drop_metric(labels.clone());
         let wallclock_lag_seconds = self
             .metrics
             .dataflow_wallclock_lag_seconds
-            .get_delete_on_drop_histogram(labels);
+            .get_delete_on_drop_metric(labels);
 
         Some(ReplicaCollectionMetrics {
             initial_output_duration_seconds,
