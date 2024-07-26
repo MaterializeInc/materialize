@@ -174,14 +174,23 @@ def workflow_read_only(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
-        > CREATE SOURCE kafka_sink_source1
+        > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE NONE
 
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
         <null> <null> 1 2
+
+        > CREATE SOURCE webhook_source
+          IN CLUSTER cluster
+          FROM WEBHOOK BODY FORMAT TEXT
+
+        $ webhook-append database=materialize schema=public name=webhook_source
+        AAA
+        > SELECT * FROM webhook_source
+        AAA
         """
         )
     )
@@ -196,6 +205,9 @@ def workflow_read_only(c: Composition) -> None:
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            BBB
+
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
             key2A,key2B:value2A,value2B
 
@@ -226,7 +238,6 @@ def workflow_read_only(c: Composition) -> None:
             1
             ! DROP INDEX t_idx
             contains: cannot write in read-only mode
-            # TODO: Doesn't error currently
             ! CREATE INDEX t_idx2 ON t (a, b)
             contains: cannot write in read-only mode
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
@@ -243,8 +254,10 @@ def workflow_read_only(c: Composition) -> None:
             A 0
             > SELECT * FROM mysql_source_table;
             A 0
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
+            > SELECT * FROM webhook_source
+            AAA
             """
             )
         )
@@ -296,6 +309,8 @@ def workflow_read_only(c: Composition) -> None:
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source
+            CCC
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
@@ -321,7 +336,7 @@ def workflow_read_only(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source1
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
             <null> <null> 7 8
 
@@ -348,6 +363,9 @@ def workflow_read_only(c: Composition) -> None:
             A 0
             B 1
             C 2
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
             """
             )
         )
@@ -458,14 +476,23 @@ def workflow_basic(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
-        > CREATE SOURCE kafka_sink_source2
+        > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE NONE
 
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
         <null> <null> 1 2
+
+        > CREATE SOURCE webhook_source
+          IN CLUSTER cluster
+          FROM WEBHOOK BODY FORMAT TEXT
+
+        $ webhook-append database=materialize schema=public name=webhook_source
+        AAA
+        > SELECT * FROM webhook_source
+        AAA
         """
         )
     )
@@ -490,6 +517,9 @@ def workflow_basic(c: Composition) -> None:
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            BBB
+
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
             key2A,key2B:value2A,value2B
 
@@ -520,7 +550,6 @@ def workflow_basic(c: Composition) -> None:
             1
             ! DROP INDEX t_idx
             contains: cannot write in read-only mode
-            # TODO: Doesn't error currently
             ! CREATE INDEX t_idx2 ON t (a, b)
             contains: cannot write in read-only mode
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
@@ -540,8 +569,11 @@ def workflow_basic(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
+
+            > SELECT * FROM webhook_source
+            AAA
             """
             )
         )
@@ -551,6 +583,9 @@ def workflow_basic(c: Composition) -> None:
     c.testdrive(
         dedent(
             f"""
+        $ webhook-append database=materialize schema=public name=webhook_source
+        CCC
+
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
         key3A,key3B:value3A,value3B
 
@@ -597,10 +632,13 @@ def workflow_basic(c: Composition) -> None:
         A 0
         B 1
         C 2
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
         <null> <null> 1 2
         <null> <null> 3 4
         <null> <null> 5 6
+        > SELECT * FROM webhook_source
+        AAA
+        CCC
         """
         )
     )
@@ -620,6 +658,9 @@ def workflow_basic(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
+            $ webhook-append database=materialize schema=public name=webhook_source status=500
+            DDD
+
             > SET CLUSTER = cluster;
             > SELECT 1
             1
@@ -644,10 +685,13 @@ def workflow_basic(c: Composition) -> None:
             A 0
             B 1
             C 2
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
             """
             )
         )
@@ -716,6 +760,8 @@ def workflow_basic(c: Composition) -> None:
         c.testdrive(
             dedent(
                 f"""
+            $ webhook-append database=materialize schema=public name=webhook_source
+            EEE
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > CREATE MATERIALIZED VIEW mv3 AS SELECT sum(a) FROM t;
@@ -773,11 +819,15 @@ def workflow_basic(c: Composition) -> None:
             B 1
             C 2
             D 3
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source2
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
             <null> <null> 7 8
+            > SELECT * FROM webhook_source
+            AAA
+            CCC
+            EEE
             """
             )
         )
