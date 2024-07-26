@@ -70,6 +70,7 @@
   {% set warn_if = config.get('warn_if') %}
   {% set error_if = config.get('error_if') %}
   {% set cluster = config.get('cluster') %}
+  {% if cluster == none %}{% set cluster = target.cluster %}{% endif %}
 
   {% call statement('main', fetch_result=True) -%}
 
