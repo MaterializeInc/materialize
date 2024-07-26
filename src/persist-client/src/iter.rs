@@ -384,7 +384,7 @@ where
     /// Return an iterator over the next consolidated chunk of output, if there's any left.
     ///
     /// Requirement: at least the first part of each run should be fetched and nonempty.
-    fn iter(&mut self) -> Option<ConsolidatingIter<T, D>> {
+    fn iter(&mut self) -> Option<impl Iterator<Item = TupleRef<T, D>>> {
         // At this point, the `initial_state` of the previously-returned iterator has either been
         // fully consolidated and returned, or put back into `drop_stash`. In either case, this is
         // safe to overwrite.
@@ -502,7 +502,9 @@ where
     /// Wait until data is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
-    pub(crate) async fn next(&mut self) -> anyhow::Result<Option<ConsolidatingIter<T, D>>> {
+    pub(crate) async fn next(
+        &mut self,
+    ) -> anyhow::Result<Option<impl Iterator<Item = TupleRef<T, D>>>> {
         self.trim();
         self.unblock_progress().await?;
         Ok(self.iter())
