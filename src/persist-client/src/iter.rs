@@ -10,6 +10,8 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
+use arrow::array::{Array, AsArray, Int32Array, Int64Array, Int64Builder};
+use arrow::datatypes::ArrowNativeType;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -131,35 +133,22 @@ enum ConsolidationPart<T, D> {
 }
 
 #[derive(Debug)]
-enum Columnar<T, D> {
-    Ordered(ColumnarRecords),
-    Shuffled(ColumnarRecords, Vec<(usize, T)>),
-    Stashed(((Vec<u8>, Vec<u8>), T, D)),
+struct Columnar<T, D> {
+    records: ColumnarRecords,
+    _phantom: PhantomData<fn() -> (T, D)>,
 }
 
 impl<T: Codec64, D: Codec64> Columnar<T, D> {
+    fn records(&self) -> &ColumnarRecords {
+        &self.records
+    }
+
     fn len(&self) -> usize {
-        match self {
-            Columnar::Ordered(r) => r.len(),
-            Columnar::Shuffled(r, _) => r.len(),
-            Columnar::Stashed(_) => 1,
-        }
+        self.records.len()
     }
     fn get(&self, index: usize) -> Option<(KV, T, D)> {
-        match self {
-            Columnar::Ordered(records) => {
-                let ((k, v), t, d) = records.get(index)?;
-                Some(((k, v), T::decode(t), D::decode(d)))
-            }
-            Columnar::Shuffled(records, shuffle) => {
-                let (index, t) = shuffle.get(index)?;
-                let ((k, v), _t, d) = records.get(*index)?;
-                Some(((k, v), t.clone(), D::decode(d)))
-            }
-            Columnar::Stashed(((k, v), t, d)) => {
-                (index == 0).then(|| ((k.as_slice(), v.as_slice()), t.clone(), d.clone()))
-            }
-        }
+        let ((k, v), t, d) = self.records.get(index)?;
+        Some(((k, v), T::decode(t), D::decode(d)))
     }
 }
 
@@ -168,29 +157,35 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
         let reconsolidate = part.maybe_unconsolidated() || force_reconsolidation;
         let part = part.normalize(&ColumnarMetrics::disconnected());
         let records = part.records().clone();
-        let columnar = if reconsolidate {
-            let mut cursors: Vec<_> = (0..records.len())
-                .map(|i| {
-                    let t = T::decode(records.timestamps().value(i).to_le_bytes());
-                    (i, t)
-                })
-                .collect();
-
-            // Sort the cursors by the data that they point to.
-            let kvt = |(i, t): &(usize, T)| {
-                let k = records.keys().value(*i);
-                let v = records.vals().value(*i);
-                (k, v, t.clone())
-            };
-            cursors.sort_by(|a, b| kvt(a).cmp(&kvt(b)));
-
-            Columnar::Shuffled(records, cursors)
+        let records = if reconsolidate {
+            let mut indices: Vec<i32> = (0..i32::usize_as(records.len())).collect();
+            indices.sort_by_key(|i| {
+                let i = i.as_usize();
+                let k = records.keys().value(i);
+                let v = records.vals().value(i);
+                let t = T::decode(records.timestamps().value(i).to_le_bytes());
+                (k, v, t)
+            });
+            let indices = Int32Array::from(indices);
+            let keys = ::arrow::compute::take(records.keys(), &indices, None).expect("ok");
+            let vals = ::arrow::compute::take(records.vals(), &indices, None).expect("ok");
+            let times = ::arrow::compute::take(records.timestamps(), &indices, None).expect("ok");
+            let diffs = ::arrow::compute::take(records.diffs(), &indices, None).expect("ok");
+            ColumnarRecords::new(
+                keys.as_binary().clone(),
+                vals.as_binary().clone(),
+                times.as_primitive().clone(),
+                diffs.as_primitive().clone(),
+            )
         } else {
-            Columnar::Ordered(records)
+            records
         };
 
         ConsolidationPart::Encoded {
-            part: columnar,
+            part: Columnar {
+                records,
+                _phantom: Default::default(),
+            },
             cursor: 0,
         }
     }
@@ -374,7 +369,7 @@ where
     /// Return an iterator over the next consolidated chunk of output, if there's any left.
     ///
     /// Requirement: at least the first part of each run should be fetched and nonempty.
-    fn iter(&mut self) -> Option<impl Iterator<Item = (KV, T, D)>> {
+    fn iter(&mut self) -> Option<ConsolidatingIter<T, D>> {
         // If an incompletely-consolidated part has been stashed by the last iterator,
         // push that into state as a new run.
         // One might worry about the list of runs growing indefinitely, if we're adding a new
@@ -412,7 +407,7 @@ where
             }
         }
 
-        Some(iter.map(|(_idx, kv, t, d)| (kv, t, d)))
+        Some(iter)
     }
 
     /// We don't need to have fetched every part to make progress, but we do at least need
@@ -497,7 +492,22 @@ where
     ) -> anyhow::Result<Option<impl Iterator<Item = (KV, T, D)>>> {
         self.trim();
         self.unblock_progress().await?;
-        Ok(self.iter())
+        Ok(self.iter().map(|i| i.map(|(_idx, kv, t, d)| (kv, t, d))))
+    }
+
+    /// Wait until data is available, then return an iterator over the next
+    /// consolidated chunk of output. If this method returns `None`, that all the data has been
+    /// exhausted and the full consolidated dataset has been returned.
+    pub(crate) async fn next_chunk(
+        &mut self,
+        max_len: usize,
+    ) -> anyhow::Result<Option<ColumnarRecords>> {
+        self.trim();
+        self.unblock_progress().await?;
+        let chunk = self
+            .iter()
+            .map(|mut i| i.next_chunk(max_len).records().clone());
+        Ok(chunk)
     }
 
     /// The size of the data that we _might_ be holding concurrently in memory. While this is
@@ -654,7 +664,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 }
 
 #[derive(Debug)]
-pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
+pub(crate) struct ConsolidatingIter<'a, T: Timestamp + Codec64, D: Codec64> {
     context: &'a str,
     filter: &'a FetchBatchFilter<T>,
     parts: Vec<&'a Columnar<T, D>>,
@@ -764,6 +774,62 @@ where
 
         self.state.take()
     }
+
+    fn next_chunk(&mut self, max_len: usize) -> Columnar<T, D> {
+        let mut indices = vec![];
+        let mut timestamps = Int64Builder::new();
+        let mut diffs = Int64Builder::new();
+        while let Some((idx, _, t, d)) = self.next() {
+            indices.push(idx);
+            timestamps.append_value(i64::from_le_bytes(T::encode(&t)));
+            diffs.append_value(i64::from_le_bytes(D::encode(&d)));
+            if indices.len() >= max_len {
+                break;
+            }
+        }
+
+        self.interleave(
+            indices.as_slice(),
+            Int64Builder::finish(&mut timestamps),
+            Int64Builder::finish(&mut diffs),
+        )
+    }
+}
+
+impl<'a, T, D> ConsolidatingIter<'a, T, D>
+where
+    T: Timestamp + Codec64,
+    D: Codec64,
+{
+    fn interleave(
+        &self,
+        indices: &[Indices],
+        timestamps: Int64Array,
+        diffs: Int64Array,
+    ) -> Columnar<T, D> {
+        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(self.parts.len());
+        for part in &self.parts {
+            arrays.push(part.records().keys());
+        }
+        let keys =
+            ::arrow::compute::interleave(arrays.as_slice(), indices).expect("valid references");
+        arrays.clear();
+        for part in &self.parts {
+            arrays.push(part.records().vals());
+        }
+        let vals =
+            ::arrow::compute::interleave(arrays.as_slice(), indices).expect("valid references");
+        let records = ColumnarRecords::new(
+            keys.as_binary().clone(),
+            vals.as_binary().clone(),
+            timestamps,
+            diffs,
+        );
+        Columnar {
+            records,
+            _phantom: Default::default(),
+        }
+    }
 }
 
 impl<'a, T, D> Iterator for ConsolidatingIter<'a, T, D>
@@ -783,14 +849,18 @@ where
     }
 }
 
-impl<'a, T: Timestamp, D> Drop for ConsolidatingIter<'a, T, D> {
+impl<'a, T: Timestamp + Codec64, D: Codec64> Drop for ConsolidatingIter<'a, T, D> {
     fn drop(&mut self) {
         // Make sure to stash any incomplete state in a place where we'll pick it up on the next run.
         // See the comment on `Consolidator` for more on why this is necessary.
-        *self.drop_stash = self
-            .state
-            .take()
-            .map(|(_idx, (k, v), t, d)| Columnar::Stashed(((k.to_vec(), v.to_vec()), t, d)));
+        if let Some((idx, _, t, d)) = self.state.take() {
+            let part = self.interleave(
+                &[idx],
+                vec![i64::from_le_bytes(t.encode())].into(),
+                vec![i64::from_le_bytes(d.encode())].into(),
+            );
+            *self.drop_stash = Some(part);
+        }
     }
 }
 
@@ -898,7 +968,7 @@ mod tests {
                     let Some(iter) = consolidator.iter() else {
                         break;
                     };
-                    out.extend(iter.map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d)));
+                    out.extend(iter.map(|(_, (k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d)));
                 }
                 out
             };
