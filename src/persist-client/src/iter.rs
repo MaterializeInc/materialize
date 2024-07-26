@@ -412,7 +412,7 @@ where
             }
         }
 
-        Some(iter)
+        Some(iter.map(|(_idx, kv, t, d)| (kv, t, d)))
     }
 
     /// We don't need to have fetched every part to make progress, but we do at least need
@@ -599,6 +599,11 @@ impl<T, D> Drop for Consolidator<T, D> {
     }
 }
 
+/// A pair of indices, referencing a specific row in a specific part.
+/// In the consolidating iterator, this is used to track the coordinates of some part that
+/// holds a particular K and V.
+type Indices = (usize, usize);
+
 /// This is used as a max-heap entry: the ordering of the fields is important!
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 struct PartRef<'a, T: Timestamp, D> {
@@ -637,13 +642,14 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
         &mut self,
         from: &[&'a Columnar<T, D>],
         filter: &FetchBatchFilter<T>,
-    ) -> Option<(KV<'a>, T, D)> {
+    ) -> Option<(Indices, KV<'a>, T, D)> {
         let part = &from[self.part_index];
         let Reverse(popped) = mem::take(&mut self.next_kvt);
+        let indices = (self.part_index, *self.row_index);
         *self.row_index += 1;
         self.update_peek(part, filter);
         let (kv, t, d) = popped?;
-        Some((kv, t, d))
+        Some((indices, kv, t, d))
     }
 }
 
@@ -654,7 +660,7 @@ pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
     parts: Vec<&'a Columnar<T, D>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
     upper_bound: Option<(KV<'a>, T)>,
-    state: Option<(KV<'a>, T, D)>,
+    state: Option<(Indices, KV<'a>, T, D)>,
     drop_stash: &'a mut Option<Columnar<T, D>>,
 }
 
@@ -705,13 +711,13 @@ where
     }
 
     /// Attempt to consolidate as much into the current state as possible.
-    fn consolidate(&mut self) -> Option<(KV<'a>, T, D)> {
+    fn consolidate(&mut self) -> Option<(Indices, KV<'a>, T, D)> {
         loop {
             let Some(mut part) = self.heap.peek_mut() else {
                 break;
             };
             if let Some((kv1, t1, _)) = part.next_kvt.0.as_ref() {
-                if let Some((kv0, t0, d0)) = &mut self.state {
+                if let Some((idx0, kv0, t0, d0)) = &mut self.state {
                     let consolidates = match (*kv0, &*t0).cmp(&(*kv1, t1)) {
                         Ordering::Less => false,
                         Ordering::Equal => true,
@@ -726,10 +732,11 @@ where
                         }
                     };
                     if consolidates {
-                        let (_, _, d1) = part
+                        let (idx1, _, _, d1) = part
                             .pop(&mut self.parts, self.filter)
                             .expect("popping from a non-empty iterator");
                         d0.plus_equals(&d1);
+                        *idx0 = idx1;
                     } else {
                         break;
                     }
@@ -764,12 +771,12 @@ where
     T: Timestamp + Codec64 + Lattice,
     D: Codec64 + Semigroup + Ord,
 {
-    type Item = (KV<'a>, T, D);
+    type Item = (Indices, KV<'a>, T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.consolidate() {
-                Some((_, _, d)) if d.is_zero() => continue,
+                Some((_, _, _, d)) if d.is_zero() => continue,
                 other => break other,
             }
         }
@@ -783,7 +790,7 @@ impl<'a, T: Timestamp, D> Drop for ConsolidatingIter<'a, T, D> {
         *self.drop_stash = self
             .state
             .take()
-            .map(|((k, v), t, d)| Columnar::Stashed(((k.to_vec(), v.to_vec()), t, d)));
+            .map(|(_idx, (k, v), t, d)| Columnar::Stashed(((k.to_vec(), v.to_vec()), t, d)));
     }
 }
 
