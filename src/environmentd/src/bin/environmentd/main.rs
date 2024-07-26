@@ -556,7 +556,7 @@ pub struct Args {
     #[clap(long, arg_enum, requires = "unsafe-mode")]
     unsafe_builtin_table_fingerprint_whitespace: Option<UnsafeBuiltinTableFingerprintWhitespace>,
     /// Controls the amount of whitespace injected by
-    /// `really_dangerous_do_not_call_this_in_production_table_fingerprint_whitespace`.
+    /// `unsafe_builtin_table_fingerprint_whitespace`.
     /// Incrementing this value can allow triggering multiple builtin
     /// migrations from a single test. This argument is meant for testing only
     /// and as the names suggests should not be set in production.
