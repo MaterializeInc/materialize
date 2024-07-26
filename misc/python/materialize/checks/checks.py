@@ -67,6 +67,9 @@ class Check:
         """Note that the validation method may be invoked multiple times (depending on the scenario)."""
         assert False
 
+    def readonly(self) -> Testdrive:
+        return Testdrive(TESTDRIVE_NOP)
+
     def start_initialize(self, e: Executor, a: "Action") -> None:
         if self._can_run(e) and self.enabled:
             self.current_version = e.current_mz_version
@@ -102,6 +105,16 @@ class Check:
     def join_validate(self, e: Executor) -> None:
         if self._can_run(e) and self.enabled:
             self._validate.join(e)
+
+    def start_readonly(self, e: Executor, a: "Action") -> None:
+        if self._can_run(e) and self.enabled:
+            self.current_version = e.current_mz_version
+            self._readonly = self.readonly()
+            self._readonly.execute(e, a.mz_service)
+
+    def join_readonly(self, e: Executor) -> None:
+        if self._can_run(e) and self.enabled:
+            self._readonly.join(e)
 
 
 def disabled(ignore_reason: str):
