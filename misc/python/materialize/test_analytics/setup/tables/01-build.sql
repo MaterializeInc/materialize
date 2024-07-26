@@ -19,7 +19,7 @@ CREATE TABLE build (
    date TIMESTAMPTZ NOT NULL,
    build_url TEXT, -- nullable, will eventually be removed
    data_version UINT4 NOT NULL,
-   remarks TEXT -- not in use, remove eventually
+   remarks TEXT -- not in use, will eventually be removed
 );
 
 CREATE INDEX IN CLUSTER test_analytics ON build (build_id);
