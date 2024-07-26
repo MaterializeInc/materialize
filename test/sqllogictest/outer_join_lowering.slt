@@ -215,25 +215,24 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
-          Union // { arity: 17 }
-            Get l3 // { arity: 17 }
-            CrossJoin // { arity: 17 }
-              Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
-                Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
-                  Union // { arity: 11 }
-                    Negate // { arity: 11 }
-                      Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
-                        Get l3 // { arity: 17 }
+  Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
+        Union // { arity: 17 }
+          Get l3 // { arity: 17 }
+          CrossJoin // { arity: 17 }
+            Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
+              Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
+                Union // { arity: 11 }
+                  Negate // { arity: 11 }
                     Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
-                      Get l2 // { arity: 11 }
-                  Get l2 // { arity: 11 }
-              Constant // { arity: 6 }
-                - (null, null, null, null, null, null)
+                      Get l3 // { arity: 17 }
+                  Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
+                    Get l2 // { arity: 11 }
+                Get l2 // { arity: 11 }
+            Constant // { arity: 6 }
+              - (null, null, null, null, null, null)
 With
   cte l3 =
     Filter ((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) // { arity: 17 }
@@ -276,25 +275,24 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
-          Union // { arity: 17 }
-            Map (null, null, null, null, null, null) // { arity: 17 }
-              Union // { arity: 11 }
-                Negate // { arity: 11 }
-                  Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
-                    Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                      Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
-                        Get l2 // { arity: 11 }
-                      Distinct project=[#0{x}..=#2] // { arity: 3 }
-                        Project (#17..=#19) // { arity: 3 }
-                          Map (#0{x}, #1{y}, (#3{dim01_k01} + #0{x})) // { arity: 20 }
-                            Get l3 // { arity: 17 }
-                Get l2 // { arity: 11 }
-            Get l3 // { arity: 17 }
+  Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
+        Union // { arity: 17 }
+          Map (null, null, null, null, null, null) // { arity: 17 }
+            Union // { arity: 11 }
+              Negate // { arity: 11 }
+                Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
+                  Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
+                    Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
+                      Get l2 // { arity: 11 }
+                    Distinct project=[#0{x}..=#2] // { arity: 3 }
+                      Project (#17..=#19) // { arity: 3 }
+                        Map (#0{x}, #1{y}, (#3{dim01_k01} + #0{x})) // { arity: 20 }
+                          Get l3 // { arity: 17 }
+              Get l2 // { arity: 11 }
+          Get l3 // { arity: 17 }
 With
   cte l3 =
     Filter ((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) // { arity: 17 }
@@ -337,26 +335,25 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}, #1{y}, #8, #12, #9, #3{facts_d01}) // { arity: 6 }
-          Union // { arity: 17 }
-            Project (#0{x}, #1{y}, #11{dim03_k01}..=#16{facts_d05}, #2..=#10{dim02_k01}) // { arity: 17 }
-              Map (null, null, null, null, null, null) // { arity: 17 }
-                Union // { arity: 11 }
-                  Negate // { arity: 11 }
-                    Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
-                      Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                        Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
-                          Get l2 // { arity: 11 }
-                        Distinct project=[#0{x}..=#2] // { arity: 3 }
-                          Project (#17..=#19) // { arity: 3 }
-                            Map (#0{x}, #1{y}, (#2{dim01_k01} + #1{y})) // { arity: 20 }
-                              Get l3 // { arity: 17 }
-                  Get l2 // { arity: 11 }
-            Get l3 // { arity: 17 }
+  Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}, #1{y}, #8, #12, #9, #3{facts_d01}) // { arity: 6 }
+        Union // { arity: 17 }
+          Project (#0{x}, #1{y}, #11{dim03_k01}..=#16{facts_d05}, #2..=#10{dim02_k01}) // { arity: 17 }
+            Map (null, null, null, null, null, null) // { arity: 17 }
+              Union // { arity: 11 }
+                Negate // { arity: 11 }
+                  Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
+                    Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
+                      Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL // { arity: 11 }
+                        Get l2 // { arity: 11 }
+                      Distinct project=[#0{x}..=#2] // { arity: 3 }
+                        Project (#17..=#19) // { arity: 3 }
+                          Map (#0{x}, #1{y}, (#2{dim01_k01} + #1{y})) // { arity: 20 }
+                            Get l3 // { arity: 17 }
+                Get l2 // { arity: 11 }
+          Get l3 // { arity: 17 }
 With
   cte l3 =
     Filter ((#2{dim01_k01} + #1{y}) = (#9{dim01_k01} + #0{x})) // { arity: 17 }
@@ -403,25 +400,24 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
-          Union // { arity: 17 }
-            Get l3 // { arity: 17 }
-            CrossJoin // { arity: 17 }
-              Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
-                Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
-                  Union // { arity: 11 }
-                    Negate // { arity: 11 }
-                      Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
-                        Get l3 // { arity: 17 }
+  Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
+        Union // { arity: 17 }
+          Get l3 // { arity: 17 }
+          CrossJoin // { arity: 17 }
+            Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
+              Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
+                Union // { arity: 11 }
+                  Negate // { arity: 11 }
                     Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
-                      Get l2 // { arity: 11 }
-                  Get l2 // { arity: 11 }
-              Constant // { arity: 6 }
-                - (null, null, null, null, null, null)
+                      Get l3 // { arity: 17 }
+                  Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
+                    Get l2 // { arity: 11 }
+                Get l2 // { arity: 11 }
+            Constant // { arity: 6 }
+              - (null, null, null, null, null, null)
 With
   cte l3 =
     Filter ((((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) AND (#7{facts_d02} = 42)) AND (#13{dim01_d02} = 24)) // { arity: 17 }
@@ -468,25 +464,24 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
-          Union // { arity: 17 }
-            Map (null, null, null, null, null, null) // { arity: 17 }
-              Union // { arity: 11 }
-                Negate // { arity: 11 }
-                  Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
-                    Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                      Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
-                        Get l2 // { arity: 11 }
-                      Distinct project=[#0{x}..=#2] // { arity: 3 }
-                        Project (#17..=#19) // { arity: 3 }
-                          Map (#0{x}, #1{y}, (#3{dim01_k01} + #0{x})) // { arity: 20 }
-                            Get l3 // { arity: 17 }
-                Get l2 // { arity: 11 }
-            Get l3 // { arity: 17 }
+  Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
+        Union // { arity: 17 }
+          Map (null, null, null, null, null, null) // { arity: 17 }
+            Union // { arity: 11 }
+              Negate // { arity: 11 }
+                Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
+                  Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
+                    Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
+                      Get l2 // { arity: 11 }
+                    Distinct project=[#0{x}..=#2] // { arity: 3 }
+                      Project (#17..=#19) // { arity: 3 }
+                        Map (#0{x}, #1{y}, (#3{dim01_k01} + #0{x})) // { arity: 20 }
+                          Get l3 // { arity: 17 }
+              Get l2 // { arity: 11 }
+          Get l3 // { arity: 17 }
 With
   cte l3 =
     Filter (#7{facts_d02} = 42) AND (#13{dim01_d02} = 24) AND ((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) // { arity: 17 }
@@ -533,26 +528,25 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}, #1{y}, #8, #12, #9, #3{facts_d01}) // { arity: 6 }
-          Union // { arity: 17 }
-            Project (#0{x}, #1{y}, #11{dim03_k01}..=#16{facts_d05}, #2..=#10{dim02_k01}) // { arity: 17 }
-              Map (null, null, null, null, null, null) // { arity: 17 }
-                Union // { arity: 11 }
-                  Negate // { arity: 11 }
-                    Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
-                      Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
-                        Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
-                          Get l2 // { arity: 11 }
-                        Distinct project=[#0{x}..=#2] // { arity: 3 }
-                          Project (#17..=#19) // { arity: 3 }
-                            Map (#0{x}, #1{y}, (#2{dim01_k01} + #1{y})) // { arity: 20 }
-                              Get l3 // { arity: 17 }
-                  Get l2 // { arity: 11 }
-            Get l3 // { arity: 17 }
+  Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}, #1{y}, #8, #12, #9, #3{facts_d01}) // { arity: 6 }
+        Union // { arity: 17 }
+          Project (#0{x}, #1{y}, #11{dim03_k01}..=#16{facts_d05}, #2..=#10{dim02_k01}) // { arity: 17 }
+            Map (null, null, null, null, null, null) // { arity: 17 }
+              Union // { arity: 11 }
+                Negate // { arity: 11 }
+                  Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
+                    Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
+                      Filter ((#3{dim01_k01} + #0{x})) IS NOT NULL AND (#7{facts_d02} = 42) // { arity: 11 }
+                        Get l2 // { arity: 11 }
+                      Distinct project=[#0{x}..=#2] // { arity: 3 }
+                        Project (#17..=#19) // { arity: 3 }
+                          Map (#0{x}, #1{y}, (#2{dim01_k01} + #1{y})) // { arity: 20 }
+                            Get l3 // { arity: 17 }
+                Get l2 // { arity: 11 }
+          Get l3 // { arity: 17 }
 With
   cte l3 =
     Filter (#4{dim01_d02} = 24) AND (#13{facts_d02} = 42) AND ((#2{dim01_k01} + #1{y}) = (#9{dim01_k01} + #0{x})) // { arity: 17 }
@@ -598,32 +592,31 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim02_d02}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}..=#2{dim01_k01}, #2{dim01_k01}, #10, #10) // { arity: 6 }
-          Union // { arity: 14 }
-            Project (#0{x}, #1{y}, #8{dim02_k01}..=#13{dim02_d05}, #2..=#7) // { arity: 14 }
-              Map (null, null, null, null, null, null) // { arity: 14 }
-                Union // { arity: 8 }
-                  Negate // { arity: 8 }
-                    Project (#0{x}..=#7{dim02_d05}) // { arity: 8 }
-                      Join on=(#0{x} = #8{x} AND #1{y} = #9{y} AND coalesce(#2{dim02_k01}, #1{y}) = #10) // { arity: 11 }
-                        Filter (coalesce(#2{dim02_k01}, #1{y})) IS NOT NULL AND (#5{dim02_d03} < 24) // { arity: 8 }
-                          Get l3 // { arity: 8 }
-                        Get l5 // { arity: 3 }
-                  Get l3 // { arity: 8 }
+  Project (#0{x}, #1{y}, #4{dim02_d02}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}..=#2{dim01_k01}, #2{dim01_k01}, #10, #10) // { arity: 6 }
+        Union // { arity: 14 }
+          Project (#0{x}, #1{y}, #8{dim02_k01}..=#13{dim02_d05}, #2..=#7) // { arity: 14 }
             Map (null, null, null, null, null, null) // { arity: 14 }
               Union // { arity: 8 }
                 Negate // { arity: 8 }
-                  Project (#0{x}..=#7{dim01_d05}) // { arity: 8 }
-                    Join on=(#0{x} = #8{x} AND #1{y} = #9{y} AND coalesce(#2{dim01_k01}, #0{x}) = #10) // { arity: 11 }
-                      Filter (coalesce(#2{dim01_k01}, #0{x})) IS NOT NULL AND (#5{dim01_d03} > 42) // { arity: 8 }
-                        Get l2 // { arity: 8 }
+                  Project (#0{x}..=#7{dim02_d05}) // { arity: 8 }
+                    Join on=(#0{x} = #8{x} AND #1{y} = #9{y} AND coalesce(#2{dim02_k01}, #1{y}) = #10) // { arity: 11 }
+                      Filter (coalesce(#2{dim02_k01}, #1{y})) IS NOT NULL AND (#5{dim02_d03} < 24) // { arity: 8 }
+                        Get l3 // { arity: 8 }
                       Get l5 // { arity: 3 }
-                Get l2 // { arity: 8 }
-            Get l4 // { arity: 14 }
+                Get l3 // { arity: 8 }
+          Map (null, null, null, null, null, null) // { arity: 14 }
+            Union // { arity: 8 }
+              Negate // { arity: 8 }
+                Project (#0{x}..=#7{dim01_d05}) // { arity: 8 }
+                  Join on=(#0{x} = #8{x} AND #1{y} = #9{y} AND coalesce(#2{dim01_k01}, #0{x}) = #10) // { arity: 11 }
+                    Filter (coalesce(#2{dim01_k01}, #0{x})) IS NOT NULL AND (#5{dim01_d03} > 42) // { arity: 8 }
+                      Get l2 // { arity: 8 }
+                    Get l5 // { arity: 3 }
+              Get l2 // { arity: 8 }
+          Get l4 // { arity: 14 }
 With
   cte l5 =
     Distinct project=[#0{x}..=#2] // { arity: 3 }
@@ -677,25 +670,24 @@ SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
 );
 ----
 Return // { arity: 6 }
-  Filter true // { arity: 6 }
-    Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
-      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
-        Get l0 // { arity: 2 }
-        Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
-          Union // { arity: 17 }
-            Get l8 // { arity: 17 }
-            CrossJoin // { arity: 17 }
-              Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
-                Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
-                  Union // { arity: 11 }
-                    Negate // { arity: 11 }
-                      Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
-                        Get l8 // { arity: 17 }
+  Project (#0{x}, #1{y}, #4{dim01_k01}..=#7) // { arity: 6 }
+    Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+      Get l0 // { arity: 2 }
+      Project (#0{x}..=#2{facts_k01}, #6, #3{facts_d01}, #12) // { arity: 6 }
+        Union // { arity: 17 }
+          Get l8 // { arity: 17 }
+          CrossJoin // { arity: 17 }
+            Project (#0{x}..=#10{facts_d05}) // { arity: 11 }
+              Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
+                Union // { arity: 11 }
+                  Negate // { arity: 11 }
                     Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
-                      Get l2 // { arity: 11 }
-                  Get l2 // { arity: 11 }
-              Constant // { arity: 6 }
-                - (null, null, null, null, null, null)
+                      Get l8 // { arity: 17 }
+                  Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
+                    Get l2 // { arity: 11 }
+                Get l2 // { arity: 11 }
+            Constant // { arity: 6 }
+              - (null, null, null, null, null, null)
 With
   cte l8 =
     Project (#0{x}..=#16{dim01_d05}) // { arity: 17 }

@@ -242,11 +242,10 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 2 }
   cte l0 =
-    Filter true // { arity: 2 }
-      CrossJoin // { arity: 2 }
-        Constant // { arity: 0 }
-          - ()
-        Get materialize.public.t1 // { arity: 2 }
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t1 // { arity: 2 }
 
 Target cluster: quickstart
 
@@ -337,21 +336,20 @@ query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER() FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
 Return // { arity: 5 }
-  Filter true // { arity: 5 }
-    Project (#0, #1, #3..=#5) // { arity: 5 }
-      Join on=(#1 = #2) // { arity: 6 }
-        Get l0 // { arity: 2 }
-        Project (#0..=#2, #4) // { arity: 4 }
-          Map (#3) // { arity: 5 }
-            Project (#3..=#6) // { arity: 4 }
-              Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
-                FlatMap unnest_list(#1) // { arity: 3 }
-                  Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                    Filter (#2 = #0) // { arity: 3 }
-                      CrossJoin // { arity: 3 }
-                        Distinct project=[#1] // { arity: 1 }
-                          Get l0 // { arity: 2 }
-                        Get materialize.public.t1 // { arity: 2 }
+  Project (#0, #1, #3..=#5) // { arity: 5 }
+    Join on=(#1 = #2) // { arity: 6 }
+      Get l0 // { arity: 2 }
+      Project (#0..=#2, #4) // { arity: 4 }
+        Map (#3) // { arity: 5 }
+          Project (#3..=#6) // { arity: 4 }
+            Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
+              FlatMap unnest_list(#1) // { arity: 3 }
+                Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                  Filter (#2 = #0) // { arity: 3 }
+                    CrossJoin // { arity: 3 }
+                      Distinct project=[#1] // { arity: 1 }
+                        Get l0 // { arity: 2 }
+                      Get materialize.public.t1 // { arity: 2 }
 With
   cte l0 =
     CrossJoin // { arity: 2 }
@@ -367,21 +365,20 @@ query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t2, LATERAL(SELECT t1.*, ROW_NUMBER() OVER(PARTITION BY f1) FROM t1 WHERE t1.f2 = t2.f2) AS foo;
 ----
 Return // { arity: 5 }
-  Filter true // { arity: 5 }
-    Project (#0, #1, #3..=#5) // { arity: 5 }
-      Join on=(#1 = #2) // { arity: 6 }
-        Get l0 // { arity: 2 }
-        Project (#0..=#2, #4) // { arity: 4 }
-          Map (#3) // { arity: 5 }
-            Project (#4..=#7) // { arity: 4 }
-              Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
-                FlatMap unnest_list(#2) // { arity: 4 }
-                  Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
-                    Filter (#2 = #0) // { arity: 3 }
-                      CrossJoin // { arity: 3 }
-                        Distinct project=[#1] // { arity: 1 }
-                          Get l0 // { arity: 2 }
-                        Get materialize.public.t1 // { arity: 2 }
+  Project (#0, #1, #3..=#5) // { arity: 5 }
+    Join on=(#1 = #2) // { arity: 6 }
+      Get l0 // { arity: 2 }
+      Project (#0..=#2, #4) // { arity: 4 }
+        Map (#3) // { arity: 5 }
+          Project (#4..=#7) // { arity: 4 }
+            Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
+              FlatMap unnest_list(#2) // { arity: 4 }
+                Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
+                  Filter (#2 = #0) // { arity: 3 }
+                    CrossJoin // { arity: 3 }
+                      Distinct project=[#1] // { arity: 1 }
+                        Get l0 // { arity: 2 }
+                      Get materialize.public.t1 // { arity: 2 }
 With
   cte l0 =
     CrossJoin // { arity: 2 }
