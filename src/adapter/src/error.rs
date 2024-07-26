@@ -179,8 +179,6 @@ pub enum AdapterError {
     },
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
-    /// The transaction only supports single table writes
-    MultiTableWriteTransaction,
     /// The transaction can only execute a single statement.
     SingleStatementTransaction,
     /// The transaction can only execute simple DDL.
@@ -528,7 +526,6 @@ impl AdapterError {
             // transaction" are not things in Postgres. This error code is the generic "bad txn
             // thing" code, so it's probably the best choice.
             AdapterError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::DDLOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
@@ -721,9 +718,6 @@ impl fmt::Display for AdapterError {
             ),
             AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
-            }
-            AdapterError::MultiTableWriteTransaction => {
-                f.write_str("write transactions only support writes to a single table")
             }
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",

@@ -12,7 +12,7 @@
 #![warn(missing_docs)]
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
@@ -1183,16 +1183,6 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                             // it anyway.
                             assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
                             txn_writes.append(&mut add_writes);
-
-                            if txn_writes
-                                .iter()
-                                .map(|op| op.id)
-                                .collect::<BTreeSet<_>>()
-                                .len()
-                                > 1
-                            {
-                                return Err(AdapterError::MultiTableWriteTransaction);
-                            }
                         }
                         // Iff peeks do not have a timestamp (i.e. they are
                         // constant), we can permit them.

@@ -531,6 +531,8 @@ pub trait StorageController: Debug {
     /// The method returns a oneshot that can be awaited to indicate completion of the write.
     /// The method may return an error, indicating an immediately visible error, and also the
     /// oneshot may return an error if one is encountered during the write.
+    ///
+    /// All updates in `commands` are applied atomically.
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     fn append_table(
         &mut self,
