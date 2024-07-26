@@ -18,5 +18,6 @@ CREATE TABLE build (
    mz_version TEXT NOT NULL,
    date TIMESTAMPTZ NOT NULL,
    build_url TEXT, -- nullable, will eventually be removed
-   data_version UINT4 NOT NULL
+   data_version UINT4 NOT NULL,
+   remarks TEXT -- not in use, remove eventually
 );

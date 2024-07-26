@@ -19,5 +19,6 @@ CREATE TABLE build_job (
     insert_date TIMESTAMPTZ NOT NULL,
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
-    aws_instance_type TEXT NOT NULL
+    aws_instance_type TEXT NOT NULL,
+    remarks TEXT -- not in use, remove eventually
 );
