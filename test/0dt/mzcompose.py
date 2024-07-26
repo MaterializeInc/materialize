@@ -658,7 +658,8 @@ def workflow_basic(c: Composition) -> None:
                 c.exec(
                     "mz_new",
                     "curl",
-                    "-s" "localhost:6878/api/leader/status",
+                    "-s",
+                    "localhost:6878/api/leader/status",
                     capture=True,
                 ).stdout
             )
