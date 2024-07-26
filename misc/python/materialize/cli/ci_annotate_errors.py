@@ -28,8 +28,8 @@ from junitparser.junitparser import Error, Failure, JUnitXml
 from materialize import ci_util, ui
 from materialize.buildkite import (
     add_annotation_raw,
-    add_failure_for_qa_team,
     get_artifact_url,
+    notify_qa_team_about_failure,
 )
 from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
@@ -353,7 +353,7 @@ and finds associated open GitHub issues in Materialize repository.""",
 
         return_code = annotate_logged_errors(args.log_files, test_analytics)
     except Exception as e:
-        add_failure_for_qa_team(f"ci_annotate_errors failed! {e}")
+        notify_qa_team_about_failure(f"ci_annotate_errors failed! {e}")
         raise
 
     try:
@@ -363,7 +363,7 @@ and finds associated open GitHub issues in Materialize repository.""",
             print(traceback.format_exc())
 
         # An error during an upload must never cause the build to fail
-        add_failure_for_qa_team(f"Uploading results failed! {e}")
+        notify_qa_team_about_failure(f"Uploading results failed! {e}")
 
     return return_code
 
@@ -759,7 +759,7 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         else:
             return build_history
     except Exception as e:
-        add_failure_for_qa_team(
+        notify_qa_team_about_failure(
             f"Loading build history from test analytics failed: {e}"
         )
 
