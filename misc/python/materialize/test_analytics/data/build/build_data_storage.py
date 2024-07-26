@@ -105,8 +105,7 @@ class BuildDataStorage(BaseDataStorage):
                 insert_date,
                 is_latest_retry,
                 success,
-                aws_instance_type,
-                remarks
+                aws_instance_type
             )
             SELECT
               '{job_id}',
@@ -118,8 +117,7 @@ class BuildDataStorage(BaseDataStorage):
               now(),
               TRUE,
               {was_successful},
-              '{aws_instance_type}',
-              NULL
+              '{aws_instance_type}'
             WHERE NOT EXISTS
             (
                 SELECT 1
