@@ -12,9 +12,12 @@
 # ci-annotate-errors - Detect errors in junit xml as well as log files during
 # CI and find associated open GitHub issues in Materialize repository.
 
-HOSTNAME=$(exec "$(dirname "$0")"/ci-builder run stable "$(dirname "$0")"/mzcompose --mz-quiet --find get-cloud-hostname run default --app-password-env-var "PRODUCTION_ANALYTICS_APP_PASSWORD")
+OUTPUT=$(exec "$(dirname "$0")"/ci-builder run stable "$(dirname "$0")"/mzcompose --mz-quiet --find get-cloud-hostname run default --app-password-env-var "PRODUCTION_ANALYTICS_APP_PASSWORD")
 
-# keep only the first line because there is a further line containing the mzcompose result summary
-HOSTNAME=$(echo "$HOSTNAME" | head -n 1)
+# Discard all but the last two lines, previous content can be retries when docker pull has problems
+OUTPUT=$(echo "$OUTPUT" | tail -n 2)
+
+# keep only the remaining first line because there is a further line containing the mzcompose result summary
+HOSTNAME=$(echo "$OUTPUT" | head -n 1)
 
 exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_annotate_errors --cloud-hostname "$HOSTNAME" "$@"
