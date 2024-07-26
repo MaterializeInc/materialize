@@ -702,7 +702,6 @@ Explained Query:
       Project () // { arity: 0 }
         ReadStorage materialize.public.y // { arity: 1 }
 
-Source materialize.public.x
 Source materialize.public.y
 
 Target cluster: quickstart

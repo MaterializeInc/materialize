@@ -51,7 +51,8 @@ Explained Query:
 
 Source materialize.public.t0
 Source materialize.public.t3
-  filter=((#1 = text_to_char(text_to_varchar(boolean_to_text(like["0.31161855206970124"](padchar(#1)))))))
+  filter=(NOT(#4) AND (#4 OR (#1 = text_to_char(text_to_varchar(boolean_to_text(like["0.31161855206970124"](padchar(#1))))))))
+  map=((#1) IS NULL)
 Source materialize.public.t5
 
 Target cluster: quickstart
