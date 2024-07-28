@@ -1925,8 +1925,8 @@ mod tests {
     use uuid::Uuid;
 
     use mz_catalog::builtin::{
-        Builtin, BuiltinType, BUILTINS,
-        REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE,
+        Builtin, BuiltinType, UnsafeBuiltinTableFingerprintWhitespace, BUILTINS,
+        UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
     };
     use mz_catalog::durable::{CatalogError, DurableCatalogError};
     use mz_catalog::SYSTEM_CONN_ID;
@@ -3203,10 +3203,13 @@ mod tests {
         // Forcibly migrate all tables.
         {
             let mut guard =
-                REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
+                UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE
                     .lock()
                     .expect("lock poisoned");
-            *guard = Some("\n".to_string());
+            *guard = Some((
+                UnsafeBuiltinTableFingerprintWhitespace::All,
+                "\n".to_string(),
+            ));
         }
         {
             let catalog = Catalog::open_debug_catalog(persist_client, organization_id)

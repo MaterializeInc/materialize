@@ -838,25 +838,25 @@ select * from c0;
 ----
 Explained Query:
   Return // { arity: 3 }
-    Get l3 // { arity: 3 }
+    Get l2 // { arity: 3 }
   With Mutually Recursive
-    cte l3 =
+    cte l2 =
       Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
             Join on=(#0 = #3 AND #1 = #4 AND #7 = case when (#6) IS NULL then null else #5 end) type=delta // { arity: 8 }
               ArrangeBy keys=[[#0], [#1]] // { arity: 3 }
-                Get l3 // { arity: 3 }
+                Get l2 // { arity: 3 }
               ArrangeBy keys=[[#0]] // { arity: 1 }
                 Union // { arity: 1 }
-                  Get l1 // { arity: 1 }
+                  Get l0 // { arity: 1 }
                   Threshold // { arity: 1 }
                     Union // { arity: 1 }
                       Negate // { arity: 1 }
-                        Get l1 // { arity: 1 }
+                        Get l0 // { arity: 1 }
                       Distinct project=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
-                          Get l0 // { arity: 2 }
+                          Get l2 // { arity: 3 }
               ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]] // { arity: 3 }
                 Union // { arity: 3 }
                   Project (#0, #1, #3) // { arity: 3 }
@@ -870,14 +870,14 @@ Explained Query:
                             ReadStorage materialize.public.baz // { arity: 3 }
                         Distinct project=[#0] // { arity: 1 }
                           Project (#1) // { arity: 1 }
-                            Get l0 // { arity: 2 }
+                            Get l2 // { arity: 3 }
               ArrangeBy keys=[[#0]] // { arity: 1 }
                 Union // { arity: 1 }
-                  Get l2 // { arity: 1 }
+                  Get l1 // { arity: 1 }
                   Threshold // { arity: 1 }
                     Union // { arity: 1 }
                       Negate // { arity: 1 }
-                        Get l2 // { arity: 1 }
+                        Get l1 // { arity: 1 }
                       Distinct project=[#0] // { arity: 1 }
                         Union // { arity: 1 }
                           Project (#1) // { arity: 1 }
@@ -885,19 +885,13 @@ Explained Query:
                           Constant // { arity: 1 }
                             - (null)
           ReadStorage materialize.public.foo // { arity: 3 }
-    cte l2 =
+    cte l1 =
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.quux // { arity: 2 }
-    cte l1 =
+    cte l0 =
       Project (#0) // { arity: 1 }
         Filter (#0) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.bar // { arity: 2 }
-    cte l0 =
-      Union // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Get l3 // { arity: 3 }
-        Constant // { arity: 2 }
-          - (null, null)
 
 Source materialize.public.foo
 Source materialize.public.bar

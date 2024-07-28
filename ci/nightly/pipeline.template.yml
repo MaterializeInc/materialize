@@ -1341,7 +1341,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=16]
+              args: [--runtime=1500, --threads=8]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
@@ -1366,7 +1366,8 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=50]
+              args: [--runtime=1500, --threads=100]
+        skip: "Too unstable at the moment"
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"

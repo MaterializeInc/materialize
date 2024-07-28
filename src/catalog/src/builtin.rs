@@ -29,6 +29,7 @@ use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
 
+use clap::clap_derive::ArgEnum;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -55,6 +56,7 @@ use mz_storage_client::healthcheck::{
 };
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
 use once_cell::sync::Lazy;
+use rand::Rng;
 use serde::Serialize;
 
 use crate::durable::objects::SystemObjectDescription;
@@ -277,25 +279,40 @@ impl Fingerprint for &BuiltinLog {
 }
 
 /// Allows tests to inject arbitrary amounts of whitespace to forcibly change the fingerprint and
-/// trigger a builtin migration. Ideally this would be guarded by a `#[cfg(test)]` but unfortunately,
-/// the builtin migrations are in a different crate and would not be able to modify this value.
-/// There is an open issue to move builtin migrations to this crate:
-/// <https://github.com/MaterializeInc/materialize/issues/22593>
-pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE: Mutex<
-    Option<String>,
+/// trigger a builtin migration.
+#[derive(Debug, Clone, ArgEnum)]
+pub enum UnsafeBuiltinTableFingerprintWhitespace {
+    /// Inject whitespace into all builtin table fingerprints.
+    All,
+    /// Inject whitespace into half of the builtin table fingerprints,
+    /// which are randomly selected.
+    Half,
+}
+pub static UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE: Mutex<
+    Option<(UnsafeBuiltinTableFingerprintWhitespace, String)>,
 > = Mutex::new(None);
 
 impl Fingerprint for &BuiltinTable {
     fn fingerprint(&self) -> String {
         // This is only called during bootstrapping, so it's not that big of a deal to lock a mutex,
         // though it's not great.
-        let guard = REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_TABLE_FINGERPRINT_WHITESPACE
+        let guard = UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE
             .lock()
             .expect("lock poisoned");
-        if let Some(whitespace) = &*guard {
-            format!("{}{}", self.desc.fingerprint(), whitespace)
-        } else {
-            self.desc.fingerprint()
+        match &*guard {
+            Some((UnsafeBuiltinTableFingerprintWhitespace::All, whitespace)) => {
+                format!("{}{}", self.desc.fingerprint(), whitespace)
+            }
+            Some((UnsafeBuiltinTableFingerprintWhitespace::Half, whitespace)) => {
+                let mut rng = rand::thread_rng();
+                let migrate: bool = rng.gen();
+                if migrate {
+                    format!("{}{}", self.desc.fingerprint(), whitespace)
+                } else {
+                    self.desc.fingerprint()
+                }
+            }
+            None => self.desc.fingerprint(),
         }
     }
 }

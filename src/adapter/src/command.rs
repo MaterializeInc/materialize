@@ -71,6 +71,10 @@ pub enum Command {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     },
 
+    /// Attempts to commit or abort the session's transaction. Guarantees that the Coordinator's
+    /// transaction state has been cleared, even if the commit or abort fails. (A failure can
+    /// happen, for example, if the session's role id has been dropped which will prevent
+    /// sequence_end_transaction from running.)
     Commit {
         action: EndTransactionAction,
         session: Session,
