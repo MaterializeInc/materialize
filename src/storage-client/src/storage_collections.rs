@@ -2471,6 +2471,8 @@ async fn finalize_shards_task<T>(
         let persist_client = persist.open(persist_location.clone()).await.unwrap();
 
         let metrics = &metrics;
+        let finalizable_shards = &finalizable_shards;
+        let finalized_shards = &finalized_shards;
         let persist_client = &persist_client;
         let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
@@ -2479,7 +2481,7 @@ async fn finalize_shards_task<T>(
 
         let epoch = &PersistEpoch::from(envd_epoch);
 
-        let current_finalized_shards: BTreeSet<ShardId> = futures::stream::iter(current_finalizable_shards.clone())
+        futures::stream::iter(current_finalizable_shards.clone())
             .map(|shard_id| async move {
                 let persist_client = persist_client.clone();
                 let diagnostics = diagnostics.clone();
@@ -2594,33 +2596,33 @@ async fn finalize_shards_task<T>(
             // TODO(benesch): the concurrency here should be configurable
             // via LaunchDarkly.
             .buffer_unordered(10)
-            .inspect(|shard_id| match shard_id {
-                None => metrics.finalization_failed.inc(),
-                Some(_) => metrics.finalization_succeeded.inc(),
+            // HERE BE DRAGONS: see warning on other uses of buffer_unordered.
+            // The closure passed to `for_each` must remain fast or we risk
+            // starving the finalization futures of calls to `poll`.
+            .for_each(|shard_id| async move {
+                match shard_id {
+                    None => metrics.finalization_failed.inc(),
+                    Some(shard_id) => {
+                        // We make successfully finalized shards available for
+                        // removal from the finalization WAL one by one, so that
+                        // a handful of stuck shards don't prevent us from
+                        // removing the shards that have made progress. The
+                        // overhead of repeatedly acquiring and releasing the
+                        // locks is negligible.
+                        {
+                            let mut finalizable_shards = finalizable_shards.lock();
+                            let mut finalized_shards = finalized_shards.lock();
+                            finalizable_shards.remove(&shard_id);
+                            finalized_shards.insert(shard_id);
+                        }
+
+                        metrics.finalization_succeeded.inc();
+                    }
+                }
             })
-            // HERE BE DRAGONS: see warning on other uses of buffer_unordered
-            // before any changes to `collect`
-            .collect::<BTreeSet<Option<ShardId>>>()
-            .await
-            .into_iter()
-            .filter_map(|shard| shard)
-            .collect();
+            .await;
 
-        let mut shared_finalizable_shards = finalizable_shards.lock();
-        let mut shared_finalized_shards = finalized_shards.lock();
-
-        for id in current_finalized_shards.iter() {
-            shared_finalizable_shards.remove(id);
-            shared_finalized_shards.insert(*id);
-        }
-
-        debug!(
-            ?current_finalizable_shards,
-            ?current_finalized_shards,
-            ?shared_finalizable_shards,
-            ?shared_finalized_shards,
-            "done finalizing shards"
-        );
+        debug!("done finalizing shards");
     }
 }
 
