@@ -210,10 +210,6 @@ def notify_qa_team_about_failure(failure: str) -> None:
     if not is_on_default_branch():
         return
 
-    # TODO(def-): Remove when #28472 is fixed
-    if "network error" in failure:
-        return
-
     step_key = get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
     message = f"{step_key}: {failure}"
     print(message)
