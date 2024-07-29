@@ -2,6 +2,17 @@
 # `build:[ linux | macos | windows | freebsd | openbsd ]`
 common --enable_platform_specific_config
 
+# C Toolchain Configuration
+common --compiler=clang
+common --cxxopt=-stdlib=libc++
+
+# LLVM's libc++ has different assertion modes which can be configured to catch
+# undefined behavior. See: <https://libcxx.llvm.org/Hardening.html>
+#
+# TODO(parkmycar): Configure this differently for Debug and CI builds.
+build --copt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST"
+build --host_copt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST"
+
 # Required for remote caching to be effective.
 #
 # Otherwise Bazel will passthrough the current system's PATH in the execution
@@ -32,8 +43,8 @@ build --workspace_status_command "python3 misc/bazel/build-info/workspace_status
 test --test_output=all
 
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
-common --explain=bazel-explain.log
-common --verbose_explanations
+# common --explain=bazel-explain.log
+# common --verbose_explanations
 
 # Compress any artifacts larger than 2MiB with zstd.
 common --remote_cache_compression
