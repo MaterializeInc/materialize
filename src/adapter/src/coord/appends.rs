@@ -526,7 +526,20 @@ impl<'a> BuiltinTableAppend<'a> {
     /// back off the next group commit instead of triggering a potentially expensive group commit.
     ///
     /// Note: __do not__ call this for DDL which needs the system tables updated immediately.
-    pub fn background(self, updates: Vec<BuiltinTableUpdate>) {
+    ///
+    /// Note: When in read-only mode, this will buffer the update and return
+    /// immediately.
+    pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) {
+        if self.coord.controller.read_only() {
+            self.coord
+                .buffered_builtin_table_updates
+                .as_mut()
+                .expect("in read-only mode")
+                .append(&mut updates);
+
+            return;
+        }
+
         self.coord.pending_writes.push(PendingWriteTxn::System {
             updates,
             source: BuiltinTableUpdateSource::Background,
@@ -537,12 +550,19 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// Returns a `Future` that resolves when the write has completed, does not block the
     /// Coordinator.
-    pub fn defer(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+    ///
+    /// Note: When in read-only mode, this will buffer the update and the
+    /// returned future will resolve immediately, without the update actually
+    /// having been written.
+    pub fn defer(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         if self.coord.controller.read_only() {
-            panic!(
-                "attempting deferred table write in read-only mode: {:?}",
-                updates
-            );
+            self.coord
+                .buffered_builtin_table_updates
+                .as_mut()
+                .expect("in read-only mode")
+                .append(&mut updates);
+
+            return futures::future::ready(()).boxed();
         }
 
         let (tx, rx) = oneshot::channel();
@@ -559,12 +579,19 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// This method will block the Coordinator on acquiring a write timestamp from the timestamp
     /// oracle, and then returns a `Future` that will complete once the write has been applied.
-    pub async fn execute(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+    ///
+    /// Note: When in read-only mode, this will buffer the update and the
+    /// returned future will resolve immediately, without the update actually
+    /// having been written.
+    pub async fn execute(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         if self.coord.controller.read_only() {
-            panic!(
-                "trying to append to builtin tables in read-only mode: {:?}",
-                updates
-            );
+            self.coord
+                .buffered_builtin_table_updates
+                .as_mut()
+                .expect("in read-only mode")
+                .append(&mut updates);
+
+            return futures::future::ready(()).boxed();
         }
 
         let (tx, rx) = oneshot::channel();
@@ -592,6 +619,10 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// Note: if possible you should use the `execute(...)` method, which returns a `Future` that
     /// can be `await`-ed concurrently with other tasks.
+    ///
+    /// Note: When in read-only mode, this will buffer the update and the
+    /// returned future will resolve immediately, without the update actually
+    /// having been written.
     pub async fn blocking(self, updates: Vec<BuiltinTableUpdate>) {
         let notify = self.execute(updates).await;
         notify.await;
