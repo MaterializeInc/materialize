@@ -86,6 +86,8 @@ def c_repositories():
         http_archive,
         name = "protobuf",
         integrity = PROTOC_INTEGRITY,
+        patch_args = ["-p1"],
+        patches = ["//misc/bazel/c_deps:patches/protobuf_zlib_1.3.1.patch"],
         strip_prefix = "protobuf-{}".format(PROTOC_VERSION),
         urls = [
             "https://github.com/protocolbuffers/protobuf/archive/v{}.tar.gz".format(PROTOC_VERSION),
