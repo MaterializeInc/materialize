@@ -23,6 +23,7 @@ use futures::{Future, FutureExt, StreamExt};
 use itertools::Itertools;
 
 use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument};
@@ -63,6 +64,9 @@ use tracing::{debug, info, trace, warn};
 use crate::controller::{
     CollectionDescription, DataSource, DataSourceOther, PersistEpoch, StorageMetadata, StorageTxn,
 };
+use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
+
+mod metrics;
 
 /// An abstraction for keeping track of storage collections and managing access
 /// to them.
@@ -316,13 +320,13 @@ pub struct StorageCollectionsImpl<
 
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
     /// been persisted by the caller of [StorageCollections::prepare_state].
-    finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalizable_shards: Arc<ShardIdSet>,
 
     /// The set of [ShardIds](ShardId) that we have finalized. We keep track of
     /// shards here until we are given a chance to let our callers know that
     /// these have been finalized, for example via
     /// [StorageCollections::prepare_state].
-    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalized_shards: Arc<ShardIdSet>,
 
     /// Collections maintained by this [StorageCollections].
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
@@ -388,6 +392,7 @@ where
     pub async fn new(
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
+        metrics_registry: &MetricsRegistry,
         _now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
@@ -395,6 +400,8 @@ where
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
     ) -> Self {
+        let metrics = StorageCollectionsMetrics::register_into(metrics_registry);
+
         // This value must be already installed because we must ensure it's
         // durably recorded before it is used, otherwise we risk leaking persist
         // state.
@@ -438,8 +445,10 @@ where
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
-        let finalizable_shards = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
-        let finalized_shards = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
+        let finalizable_shards =
+            Arc::new(ShardIdSet::new(metrics.finalization_outstanding.clone()));
+        let finalized_shards =
+            Arc::new(ShardIdSet::new(metrics.finalization_pending_commit.clone()));
         let config = Arc::new(Mutex::new(StorageConfiguration::new(
             connection_context,
             mz_dyncfgs::all_dyncfgs(),
@@ -472,6 +481,7 @@ where
             finalize_shards_task::<T>(FinalizeShardsTaskConfig {
                 envd_epoch: envd_epoch.clone(),
                 config: Arc::clone(&config),
+                metrics,
                 finalizable_shards: Arc::clone(&finalizable_shards),
                 finalized_shards: Arc::clone(&finalized_shards),
                 persist_location: persist_location.clone(),
@@ -1058,7 +1068,6 @@ where
     fn synchronize_finalized_shards(&self, storage_metadata: &StorageMetadata) {
         self.finalized_shards
             .lock()
-            .expect("lock poisoned")
             .retain(|shard| storage_metadata.unfinalized_shards.contains(shard));
     }
 }
@@ -1105,7 +1114,6 @@ where
 
         self.finalizable_shards
             .lock()
-            .expect("lock poisoned")
             .extend(unfinalized_shards.into_iter());
 
         Ok(())
@@ -1301,13 +1309,7 @@ where
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
-        let finalized_shards = self
-            .finalized_shards
-            .lock()
-            .expect("lock poisoned")
-            .iter()
-            .copied()
-            .collect();
+        let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
         txn.mark_shards_as_finalized(finalized_shards);
 
         Ok(())
@@ -2077,7 +2079,7 @@ struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
     cmds_tx: mpsc::UnboundedSender<BackgroundCmd<T>>,
     cmds_rx: mpsc::UnboundedReceiver<BackgroundCmd<T>>,
     holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
-    finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalizable_shards: Arc<ShardIdSet>,
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
     // So we know what shard ID corresponds to what global ID, which we need
     // when re-enqueing futures for determining the next upper update.
@@ -2391,10 +2393,7 @@ where
 
                 info!(%id, %dropped_shard_id, "enqueing shard finalization due to dropped collection and dropped persist handle");
 
-                self.finalizable_shards
-                    .lock()
-                    .expect("lock poisoned")
-                    .insert(dropped_shard_id);
+                self.finalizable_shards.lock().insert(dropped_shard_id);
 
                 res
             } else {
@@ -2413,8 +2412,9 @@ where
 struct FinalizeShardsTaskConfig {
     envd_epoch: NonZeroI64,
     config: Arc<Mutex<StorageConfiguration>>,
-    finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
-    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    metrics: StorageCollectionsMetrics,
+    finalizable_shards: Arc<ShardIdSet>,
+    finalized_shards: Arc<ShardIdSet>,
     persist_location: PersistLocation,
     persist: Arc<PersistClientCache>,
     read_only: bool,
@@ -2424,6 +2424,7 @@ async fn finalize_shards_task<T>(
     FinalizeShardsTaskConfig {
         envd_epoch,
         config,
+        metrics,
         finalizable_shards,
         finalized_shards,
         persist_location,
@@ -2456,8 +2457,7 @@ async fn finalize_shards_task<T>(
         let current_finalizable_shards = {
             // We hold the lock for as short as possible and pull our cloned set
             // of shards.
-            let shared_shards = finalizable_shards.lock().expect("lock poisoned");
-            shared_shards.iter().cloned().collect_vec()
+            finalizable_shards.lock().iter().cloned().collect_vec()
         };
 
         if current_finalizable_shards.is_empty() {
@@ -2470,6 +2470,9 @@ async fn finalize_shards_task<T>(
         // Open a persist client to delete unused shards.
         let persist_client = persist.open(persist_location.clone()).await.unwrap();
 
+        let metrics = &metrics;
+        let finalizable_shards = &finalizable_shards;
+        let finalized_shards = &finalized_shards;
         let persist_client = &persist_client;
         let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
@@ -2478,11 +2481,13 @@ async fn finalize_shards_task<T>(
 
         let epoch = &PersistEpoch::from(envd_epoch);
 
-        let current_finalized_shards: BTreeSet<ShardId> = futures::stream::iter(current_finalizable_shards.clone())
+        futures::stream::iter(current_finalizable_shards.clone())
             .map(|shard_id| async move {
                 let persist_client = persist_client.clone();
                 let diagnostics = diagnostics.clone();
                 let epoch = epoch.clone();
+
+                metrics.finalization_started.inc();
 
                 let is_finalized = persist_client
                     .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
@@ -2495,15 +2500,23 @@ async fn finalize_shards_task<T>(
                 } else {
                     debug!(%shard_id, "finalizing shard");
                         let finalize = || async move {
+                        // TODO: thread the global ID into the shard finalization WAL
+                        let diagnostics = Diagnostics::from_purpose("finalizing shards");
+
+                        let schemas = persist_client.latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics.clone()).await.expect("codecs have not changed");
+                        let (key_schema, val_schema) = match schemas {
+                            Some((_, key_schema, val_schema)) => (key_schema, val_schema),
+                            None => (RelationDesc::empty(), UnitSchema),
+                        };
+
                         let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
                         let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
                             persist_client
                                 .open_writer(
                                     shard_id,
-                                    Arc::new(RelationDesc::empty()),
-                                    Arc::new(UnitSchema),
-                                    // TODO: thread the global ID into the shard finalization WAL
-                                    Diagnostics::from_purpose("finalizing shards"),
+                                    Arc::new(key_schema),
+                                    Arc::new(val_schema),
+                                    diagnostics,
                                 )
                                 .await
                                 .expect("invalid persist usage");
@@ -2591,29 +2604,33 @@ async fn finalize_shards_task<T>(
             // TODO(benesch): the concurrency here should be configurable
             // via LaunchDarkly.
             .buffer_unordered(10)
-            // HERE BE DRAGONS: see warning on other uses of buffer_unordered
-            // before any changes to `collect`
-            .collect::<BTreeSet<Option<ShardId>>>()
-            .await
-            .into_iter()
-            .filter_map(|shard| shard)
-            .collect();
+            // HERE BE DRAGONS: see warning on other uses of buffer_unordered.
+            // The closure passed to `for_each` must remain fast or we risk
+            // starving the finalization futures of calls to `poll`.
+            .for_each(|shard_id| async move {
+                match shard_id {
+                    None => metrics.finalization_failed.inc(),
+                    Some(shard_id) => {
+                        // We make successfully finalized shards available for
+                        // removal from the finalization WAL one by one, so that
+                        // a handful of stuck shards don't prevent us from
+                        // removing the shards that have made progress. The
+                        // overhead of repeatedly acquiring and releasing the
+                        // locks is negligible.
+                        {
+                            let mut finalizable_shards = finalizable_shards.lock();
+                            let mut finalized_shards = finalized_shards.lock();
+                            finalizable_shards.remove(&shard_id);
+                            finalized_shards.insert(shard_id);
+                        }
 
-        let mut shared_finalizable_shards = finalizable_shards.lock().expect("lock poisoned");
-        let mut shared_finalized_shards = finalized_shards.lock().expect("lock poisoned");
+                        metrics.finalization_succeeded.inc();
+                    }
+                }
+            })
+            .await;
 
-        for id in current_finalized_shards.iter() {
-            shared_finalizable_shards.remove(id);
-            shared_finalized_shards.insert(*id);
-        }
-
-        debug!(
-            ?current_finalizable_shards,
-            ?current_finalized_shards,
-            ?shared_finalizable_shards,
-            ?shared_finalized_shards,
-            "done finalizing shards"
-        );
+        debug!("done finalizing shards");
     }
 }
 
@@ -2634,7 +2651,7 @@ mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigSet;
     use mz_ore::assert_err;
-    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::metrics::{MetricsRegistry, UIntGauge};
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
@@ -2801,7 +2818,9 @@ mod tests {
                 cmds_tx: cmds_tx.clone(),
                 cmds_rx,
                 holds_rx,
-                finalizable_shards: Arc::new(Mutex::new(BTreeSet::new())),
+                finalizable_shards: Arc::new(ShardIdSet::new(
+                    UIntGauge::new("finalizable_shards", "dummy gauge for tests").unwrap(),
+                )),
                 collections: Arc::new(Mutex::new(BTreeMap::new())),
                 shard_by_id: BTreeMap::new(),
                 since_handles: BTreeMap::new(),

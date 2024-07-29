@@ -102,7 +102,8 @@ use mz_storage_types::sources::postgres::{
     ProtoPostgresSourcePublicationDetails,
 };
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SourceReferenceResolver, Timeline,
+    GenericSourceConnection, ProtoSourceExportStatementDetails, SourceConnection, SourceDesc,
+    SourceExportStatementDetails, SourceReferenceResolver, Timeline,
 };
 use prost::Message;
 
@@ -1426,7 +1427,10 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (ExternalReference, UnresolvedItemName)
+    (ExternalReference, UnresolvedItemName),
+    (TextColumns, Vec::<Ident>, Default(vec![])),
+    (IgnoreColumns, Vec::<Ident>, Default(vec![])),
+    (Details, String)
 );
 
 pub fn plan_create_subsource(
@@ -1445,7 +1449,10 @@ pub fn plan_create_subsource(
     let CreateSubsourceOptionExtracted {
         progress,
         external_reference,
-        ..
+        text_columns,
+        ignore_columns,
+        details,
+        seen: _,
     } = with_options.clone().try_into()?;
 
     // This invariant is enforced during purification; we are responsible for
@@ -1560,6 +1567,22 @@ pub fn plan_create_subsource(
         // not a legacy subsource with the inverted structure.
         let ingestion_id = *source_reference.item_id();
         let external_reference = external_reference.unwrap();
+
+        // Decode the details option stored on the subsource statement, which contains information
+        // created during the purification process.
+        let details = details
+            .as_ref()
+            .ok_or_else(|| sql_err!("internal error: source-export subsource missing details"))?;
+        let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
+        let details =
+            ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+        let details =
+            SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+        // TODO(roshan): Use these options in the IngestionExport struct below. For now we just
+        // decode here to ensure that the details are present and valid.
+        let _ = details;
+        let _ = text_columns;
+        let _ = ignore_columns;
 
         DataSourceDesc::IngestionExport {
             ingestion_id,

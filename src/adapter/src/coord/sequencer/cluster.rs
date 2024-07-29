@@ -376,6 +376,7 @@ impl Coordinator {
                 cluster_id,
                 mz_controller::clusters::ClusterConfig {
                     arranged_logs: cluster.log_indexes.clone(),
+                    workload_class: cluster.config.workload_class.clone(),
                 },
             )
             .expect("creating cluster must not fail");
@@ -874,14 +875,27 @@ impl Coordinator {
         Ok(())
     }
 
-    pub(crate) fn sequence_alter_cluster_unmanaged_to_unmanaged(
-        &self,
-        _session: &Session,
-        _cluster_id: ClusterId,
-        _new_config: ClusterConfig,
-        _replicas: AlterOptionParameter<Vec<(String, mz_sql::plan::ReplicaConfig)>>,
+    pub(crate) async fn sequence_alter_cluster_unmanaged_to_unmanaged(
+        &mut self,
+        session: &Session,
+        cluster_id: ClusterId,
+        new_config: ClusterConfig,
+        replicas: AlterOptionParameter<Vec<(String, mz_sql::plan::ReplicaConfig)>>,
     ) -> Result<(), AdapterError> {
-        coord_bail!("Cannot alter unmanaged cluster");
+        if !matches!(replicas, AlterOptionParameter::Unchanged) {
+            coord_bail!("Cannot alter replicas in unmanaged cluster");
+        }
+
+        let cluster = self.catalog().get_cluster(cluster_id);
+
+        let ops = vec![catalog::Op::UpdateClusterConfig {
+            id: cluster_id,
+            name: cluster.name().to_string(),
+            config: new_config,
+        }];
+
+        self.catalog_transact(Some(session), ops).await?;
+        Ok(())
     }
 
     pub(super) async fn sequence_alter_cluster_rename(

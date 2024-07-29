@@ -310,6 +310,8 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresSourcePublicationDetails {
+    // NOTE(roshan): This field is planned for deprecation, since relevant table descriptions
+    // are now stored on source export statements directly.
     #[proptest(strategy = "proptest::collection::vec(any::<PostgresTableDesc>(), 0..4)")]
     pub tables: Vec<PostgresTableDesc>,
     pub slot: String,
@@ -323,7 +325,7 @@ pub struct PostgresSourcePublicationDetails {
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
     fn into_proto(&self) -> ProtoPostgresSourcePublicationDetails {
         ProtoPostgresSourcePublicationDetails {
-            tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+            deprecated_tables: self.tables.iter().map(|t| t.into_proto()).collect(),
             slot: self.slot.clone(),
             timeline_id: self.timeline_id.clone(),
             database: self.database.clone(),
@@ -333,7 +335,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
     fn from_proto(proto: ProtoPostgresSourcePublicationDetails) -> Result<Self, TryFromProtoError> {
         Ok(PostgresSourcePublicationDetails {
             tables: proto
-                .tables
+                .deprecated_tables
                 .into_iter()
                 .map(PostgresTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,

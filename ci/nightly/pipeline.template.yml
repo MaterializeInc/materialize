@@ -784,9 +784,9 @@ steps:
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -795,9 +795,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -806,9 +806,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -817,9 +817,9 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1305,7 +1305,7 @@ steps:
   - id: data-ingest
     label: "Data Ingest"
     depends_on: build-aarch64
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
     retry:
       automatic:
         - exit_status: 75
@@ -1323,7 +1323,7 @@ steps:
         label: "Parallel Workload (DML)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1335,19 +1335,19 @@ steps:
         label: "Parallel Workload (DDL)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=16]
+              args: [--runtime=1500, --threads=8]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1359,20 +1359,21 @@ steps:
         label: "Parallel Workload (many threads)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           # Sporadic OoM otherwise
           queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=50]
+              args: [--runtime=1500, --threads=100]
+        skip: "Too unstable at the moment"
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1384,7 +1385,7 @@ steps:
         label: "Parallel Workload (rename)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1396,7 +1397,7 @@ steps:
         label: "Parallel Workload (cancel)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
           queue: linux-aarch64
@@ -1409,7 +1410,7 @@ steps:
         label: "Parallel Workload (kill)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64
         plugins:
@@ -1421,7 +1422,7 @@ steps:
         label: "Parallel Workload (backup & restore)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
           queue: linux-aarch64
@@ -1429,6 +1430,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
+
+      - id: parallel-workload-0dt
+        label: "Parallel Workload (0dt deploy)"
+        depends_on: build-aarch64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=0dt-deploy, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"

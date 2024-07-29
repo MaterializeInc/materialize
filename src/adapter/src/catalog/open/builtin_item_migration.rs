@@ -430,7 +430,7 @@ async fn write_to_migration_shard(
         Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
         Some(Ok(updated)) => soft_assert_or_log!(
             updated == downgrade_to,
-            "updated bound should match expected"
+            "updated bound ({updated:?}) should match expected ({downgrade_to:?})"
         ),
     }
 
@@ -441,7 +441,7 @@ mod persist_schema {
     use std::num::ParseIntError;
 
     use arrow::array::{StringArray, StringBuilder};
-    use bytes::BufMut;
+    use bytes::{BufMut, Bytes};
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
         SimpleEncoder, SimpleSchema,
@@ -507,9 +507,16 @@ mod persist_schema {
         fn encode<B: BufMut>(&self, buf: &mut B) {
             buf.put(self.to_string().as_bytes())
         }
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &TableKeySchema) -> Result<Self, String> {
             let table_key = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
             table_key.parse()
+        }
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            TableKeySchema
         }
     }
 
@@ -529,7 +536,7 @@ mod persist_schema {
     }
 
     /// An implementation of [Schema] for [TableKey].
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub(super) struct TableKeySchema;
 
     impl Schema<TableKey> for TableKeySchema {

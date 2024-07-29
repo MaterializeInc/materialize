@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -192,6 +193,14 @@ class PostExecutionInconsistencyIgnoreFilterBase:
                 involved_characteristics,
             )
 
+        if error.error_type == ValidationErrorType.EXPLAIN_PLAN_MISMATCH:
+            return self._shall_ignore_explain_plan_mismatch(
+                error,
+                query_template,
+                contains_aggregation,
+                error.query_execution.query_output_mode,
+            )
+
         if error.error_type == ValidationErrorType.ROW_COUNT_MISMATCH:
             return self._shall_ignore_error_mismatch(
                 error, query_template, contains_aggregation
@@ -258,6 +267,15 @@ class PostExecutionInconsistencyIgnoreFilterBase:
     ) -> IgnoreVerdict:
         # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
         # expressions in other parts of the query like, for example, the WHERE part)!
+        return NoIgnore()
+
+    def _shall_ignore_explain_plan_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+        query_output_mode: QueryOutputMode,
+    ) -> IgnoreVerdict:
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(

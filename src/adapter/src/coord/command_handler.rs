@@ -14,7 +14,6 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::sync::Arc;
 
 use futures::future::LocalBoxFuture;
@@ -22,9 +21,9 @@ use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_ore::instrument;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
@@ -57,7 +56,6 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::BuiltinTableUpdate;
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
@@ -215,8 +213,12 @@ impl Coordinator {
                         }
                     };
 
+                    let conn_id = ctx.session().conn_id().clone();
                     self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                         .await;
+                    // Part of the Command::Commit contract is that the Coordinator guarantees that
+                    // it has cleared its transaction state for the connection.
+                    self.clear_connection(&conn_id).await;
                 }
 
                 Command::CatalogSnapshot { tx } => {
@@ -332,7 +334,7 @@ impl Coordinator {
                 // Note: Do NOT await the notify here, we pass this back to
                 // whatever requested the startup to prevent blocking the
                 // Coordinator on a builtin table update.
-                let notify = self.buffer_or_write_table_update(update);
+                let notify = self.builtin_table_update().defer(vec![update]);
 
                 let resp = Ok(StartupResponse {
                     role_id,
@@ -718,7 +720,9 @@ impl Coordinator {
         // DDLs must be planned and sequenced serially. We do not rely on PlanValidity checking
         // variaous IDs because we have incorrectly done that in the past. Attempt to acquire the
         // ddl lock. The lock is stashed in the ConnMeta which is dropped at transaction end. If
-        // acquired, proceed with sequencing. If not, enque and return.
+        // acquired, proceed with sequencing. If not, enque and return. This logic assumes that
+        // Coordinator::clear_transaction is correctly called when session transactions are ended
+        // because that function will release the held lock from active_conns.
         if Self::must_serialize_ddl(&stmt) {
             if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
                 let prev = self
@@ -732,6 +736,31 @@ impl Coordinator {
                     "connections should have at most one lock guard"
                 );
             } else {
+                if self
+                    .active_conns
+                    .get(ctx.session().conn_id())
+                    .expect("connection must exist")
+                    .deferred_lock
+                    .is_some()
+                {
+                    // This session *already* has the lock, and incorrectly tried to execute another
+                    // DDL while still holding the lock, violating the assumption documented above.
+                    // This is an internal error, probably in some AdapterClient user (pgwire or
+                    // http). Because the session is now in some unexpected state, return an error
+                    // which should cause the AdapterClient user to fail the transaction.
+                    // (Terminating the connection is maybe what we would prefer to do, but is not
+                    // currently a thing we can do from the coordinator: calling handle_terminate
+                    // cleans up Coordinator state for the session but doesn't inform the
+                    // AdapterClient that the session should terminate.)
+                    soft_panic_or_log!(
+                        "session {} attempted to get ddl lock while already owning it",
+                        ctx.session().conn_id()
+                    );
+                    ctx.retire(Err(AdapterError::Internal(format!(
+                        "session attempted to get ddl lock while already owning it"
+                    ))));
+                    return;
+                }
                 self.serialized_ddl.push_back(DeferredPlanStatement {
                     ctx,
                     ps: PlanStatement::Statement { stmt, params },
@@ -1224,32 +1253,7 @@ impl Coordinator {
         let update = self.catalog().state().pack_session_update(&conn, -1);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
-        let _builtin_update_notify = self.buffer_or_write_table_update(update);
-    }
-
-    /// Buffers the given update when in read-only mode or puts in a deferred
-    /// write when in read-write mode.
-    ///
-    /// Returns a `Future` that can be await'ed to be notified when the write is
-    /// complete.
-    fn buffer_or_write_table_update(
-        &mut self,
-        update: BuiltinTableUpdate,
-    ) -> impl Future<Output = ()> + Send {
-        let notify = if self.controller.read_only() {
-            self.buffered_builtin_table_updates
-                .as_mut()
-                .expect("in read-only mode")
-                .push(update);
-
-            futures::future::ready(()).boxed()
-        } else {
-            let notify = self.builtin_table_update().defer(vec![update]);
-
-            notify
-        };
-
-        notify
+        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send

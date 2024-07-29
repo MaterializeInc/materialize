@@ -13,7 +13,13 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+    State,
+)
 from materialize.zippy.mysql_cdc_capabilities import MySqlCdcTableExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
@@ -88,7 +94,7 @@ class CreateView(Action):
         self.view = view
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         first_input = self.view.inputs[0]
         outer_join = " ".join(f"JOIN {f.name} USING (f1)" for f in self.view.inputs[1:])
 
@@ -123,7 +129,8 @@ class CreateView(Action):
                   {outer_join}
                 """
             )
-            + index
+            + index,
+            mz_service=state.mz_service,
         )
 
     def provides(self) -> list[Capability]:
@@ -149,24 +156,27 @@ class ValidateView(Action):
         self.select_limit = random.choice(["", "LIMIT 1"])
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         watermarks = self.view.get_watermarks()
         view_min = watermarks.min
         view_max = watermarks.max
 
         if view_min <= view_max:
             c.testdrive(
-                dedent(
-                    f"""
+                (
+                    dedent(
+                        f"""
                     > SELECT count_all, count_distinct, min_value, max_value FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} count_distinct = {(view_max-view_min)+1} min_value = {view_min} max_value = {view_max} */ ;
                     {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max}
                 """
-                )
-                if self.view.expensive_aggregates
-                else dedent(
-                    f"""
+                    )
+                    if self.view.expensive_aggregates
+                    else dedent(
+                        f"""
                     > SELECT count_all FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} */ ;
                     {(view_max-view_min)+1}
                 """
-                )
+                    )
+                ),
+                mz_service=state.mz_service,
             )

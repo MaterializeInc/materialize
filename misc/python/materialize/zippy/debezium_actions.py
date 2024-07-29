@@ -18,7 +18,7 @@ from materialize.zippy.debezium_capabilities import (
     DebeziumSourceExists,
     PostgresTableExists,
 )
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.kafka_capabilities import KafkaRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import source_capable_clusters
@@ -31,7 +31,7 @@ class DebeziumStart(Action):
     def provides(self) -> list[Capability]:
         return [DebeziumRunning()]
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.up("debezium")
 
 
@@ -45,7 +45,7 @@ class DebeziumStop(Action):
     def withholds(self) -> set[type[Capability]]:
         return {DebeziumRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("debezium")
 
 
@@ -93,7 +93,7 @@ class CreateDebeziumSource(Action):
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_debezium_source:
             c.testdrive(
                 dedent(

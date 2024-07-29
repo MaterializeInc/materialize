@@ -215,6 +215,7 @@ impl Coordinator {
             )));
         }
 
+        let new_workload_class = new_config.workload_class.clone();
         match (&config.variant, &new_config.variant) {
             (Managed(_), Managed(_)) => {
                 self.sequence_alter_cluster_managed_to_managed(
@@ -241,9 +242,14 @@ impl Coordinator {
                     cluster_id,
                     new_config,
                     options.replicas,
-                )?;
+                )
+                .await?;
             }
         }
+
+        self.controller
+            .update_cluster_workload_class(cluster_id, new_workload_class)?;
+
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
         )))

@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-import time
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -16,7 +15,7 @@ from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
@@ -39,10 +38,12 @@ class StartMz(MzcomposeAction):
         environment_extra: list[str] = [],
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] = {},
+        system_parameter_version: MzVersion | None = None,
         mz_service: str | None = None,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
         deploy_generation: int | None = None,
+        restart: str | None = None,
     ) -> None:
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
@@ -50,10 +51,12 @@ class StartMz(MzcomposeAction):
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
+        self.system_parameter_version = system_parameter_version or tag
         self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
         self.deploy_generation = deploy_generation
+        self.restart = restart
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -69,10 +72,12 @@ class StartMz(MzcomposeAction):
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            system_parameter_version=self.system_parameter_version,
             sanity_restart=False,
             platform=self.platform,
             healthcheck=self.healthcheck,
             deploy_generation=self.deploy_generation,
+            restart=self.restart,
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs
@@ -223,6 +228,15 @@ class KillMz(MzcomposeAction):
                 c.capture_logs(self.mz_service)
 
 
+class Stop(MzcomposeAction):
+    def __init__(self, service: str = "materialized") -> None:
+        self.service = service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        c.stop(self.service, wait=True)
+
+
 class Down(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -369,22 +383,9 @@ class WaitReadyMz(MzcomposeAction):
         self.mz_service = mz_service
 
     def execute(self, e: Executor) -> None:
-        c = e.mzcompose_composition()
-
-        while True:
-            result = json.loads(
-                c.exec(
-                    self.mz_service,
-                    "curl",
-                    "localhost:6878/api/leader/status",
-                    capture=True,
-                ).stdout
-            )
-            if result["status"] == "ReadyToPromote":
-                return
-            assert result["status"] == "Initializing", f"Unexpected status {result}"
-            print("Not ready yet, waiting 1 s")
-            time.sleep(1)
+        e.mzcompose_composition().await_mz_deployment_status(
+            DeploymentStatus.READY_TO_PROMOTE, self.mz_service
+        )
 
 
 class PromoteMz(MzcomposeAction):
@@ -400,6 +401,7 @@ class PromoteMz(MzcomposeAction):
             c.exec(
                 self.mz_service,
                 "curl",
+                "-s",
                 "-X",
                 "POST",
                 "http://127.0.0.1:6878/api/leader/promote",
@@ -410,6 +412,9 @@ class PromoteMz(MzcomposeAction):
 
         mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
         e.current_mz_version = mz_version
+
+        # Wait until new Materialize is ready to handle queries
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, self.mz_service)
 
 
 class SystemVarChange(MzcomposeAction):

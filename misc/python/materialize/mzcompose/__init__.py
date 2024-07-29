@@ -23,6 +23,7 @@ from typing import Any, Literal, TypeVar
 import pg8000
 
 from materialize import spawn, ui
+from materialize.mz_version import MzVersion
 from materialize.ui import UIError
 
 T = TypeVar("T")
@@ -59,6 +60,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
     "compute_hydration_concurrency": 2,
     "disk_cluster_replicas_default": "true",
+    "enable_0dt_deployment": "true",
     "enable_alter_swap": "true",
     "enable_assert_not_null": "true",
     "enable_columnation_lgalloc": "true",
@@ -95,8 +97,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_stats_audit_percent": "100",
     "persist_txn_tables": "lazy",  # removed, but keep value for older versions
     "persist_use_critical_since_catalog": "true",
-    "persist_use_critical_since_snapshot": "true",
-    "persist_use_critical_since_source": "true",
+    "persist_use_critical_since_snapshot": "false",  # Disabled because of 0dt upgrades, TODO: reenable
+    "persist_use_critical_since_source": "false",  # Disabled because of 0dt upgrades, TODO: reenable
     "persist_part_decode_format": "row_with_validate",
     "statement_logging_default_sample_rate": "0.01",
     "statement_logging_max_sample_rate": "0.01",
@@ -106,7 +108,19 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "wait_catalog_consolidation_on_startup": "true",
     "persist_batch_record_part_format": "true",
     "storage_use_reclock_v2": "true",
+    "persist_schema_require": "true",
 }
+
+
+# For upgrade tests we only want parameters set when all environmentd/clusterd
+# processes have reached a specific version (or higher)
+def version_dependent_system_parameters(version: MzVersion) -> dict[str, str]:
+    return {
+        "persist_schema_register": (
+            "false" if version < MzVersion.parse_mz("v0.111.0") else "true"
+        )
+    }
+
 
 DEFAULT_CRDB_ENVIRONMENT = [
     "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=120s",

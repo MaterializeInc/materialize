@@ -15,7 +15,7 @@ use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::uri::PathAndQuery;
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
 use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
 use mz_proto::{ProtoType, RustType};
 use once_cell::sync::Lazy;
@@ -433,7 +433,7 @@ impl GrpcServerMetrics {
         PerGrpcServerMetrics {
             last_command_received: self
                 .last_command_received
-                .get_delete_on_drop_gauge(vec![name]),
+                .get_delete_on_drop_metric(vec![name]),
         }
     }
 }

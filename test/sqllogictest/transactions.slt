@@ -573,11 +573,21 @@ BEGIN
 statement ok
 INSERT INTO foo VALUES (42)
 
-statement error write transactions only support writes to a single table
-INSERT INTO bar VALUES (42)
+statement ok
+INSERT INTO bar VALUES (43)
 
 statement ok
-ROLLBACK
+COMMIT
+
+query I
+SELECT a FROM foo
+----
+42
+
+query I
+SELECT a FROM bar
+----
+43
 
 # Test that constant reads are allowed in write-only transactions
 

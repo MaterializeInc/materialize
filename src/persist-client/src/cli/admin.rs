@@ -481,6 +481,7 @@ where
                 continue;
             }
             let schemas = Schemas {
+                id: None,
                 key: Arc::clone(&key_schema),
                 val: Arc::clone(&val_schema),
             };

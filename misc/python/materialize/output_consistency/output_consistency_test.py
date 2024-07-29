@@ -23,6 +23,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     DataFlowRenderingEvaluation,
     EvaluationStrategy,
 )
+from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.generators.expression_generator import (
@@ -57,6 +58,7 @@ class OutputConsistencyTest:
         self,
         connection: Connection,
         args: argparse.Namespace,
+        query_output_mode: QueryOutputMode,
     ) -> ConsistencyTestSummary:
         """Entry point for output consistency tests"""
 
@@ -71,6 +73,7 @@ class OutputConsistencyTest:
             args.max_iterations,
             args.avoid_expressions_expecting_db_error,
             args.disable_predefined_queries,
+            query_output_mode=query_output_mode,
         )
 
     def parse_output_consistency_input_args(
@@ -123,10 +126,10 @@ class OutputConsistencyTest:
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
         disable_predefined_queries: bool,
+        query_output_mode: QueryOutputMode,
     ) -> ConsistencyTestSummary:
         input_data = self.create_input_data()
 
-        output_printer = OutputPrinter(input_data)
         scenario = self.get_scenario()
 
         config = ConsistencyTestConfiguration(
@@ -145,8 +148,10 @@ class OutputConsistencyTest:
             split_and_retry_on_db_error=True,
             print_reproduction_code=True,
             disable_predefined_queries=disable_predefined_queries,
+            query_output_mode=query_output_mode,
         )
 
+        output_printer = OutputPrinter(input_data, config.query_output_mode)
         output_printer.print_config(config)
         config.validate()
 
@@ -278,7 +283,7 @@ def upload_output_consistency_results_to_test_analytics(
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail
-        buildkite.add_failure_for_qa_team(f"Uploading results failed! {e}")
+        test_analytics.on_upload_failed(e)
 
 
 def connect(host: str, port: int, user: str, password: str | None = None) -> Connection:
@@ -311,7 +316,9 @@ def main() -> int:
     except InterfaceError:
         return 1
 
-    result = test.run_output_consistency_tests(connection, args)
+    result = test.run_output_consistency_tests(
+        connection, args, query_output_mode=QueryOutputMode.SELECT
+    )
     return 0 if result.all_passed() else 1
 
 

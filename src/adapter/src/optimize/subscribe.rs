@@ -204,7 +204,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
 
-                df_builder.import_into_dataflow(&from_id, &mut df_desc)?;
+                df_builder.import_into_dataflow(&from_id, &mut df_desc, &self.config.features)?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc
@@ -233,7 +233,12 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
-                df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
+                df_builder.import_view_into_dataflow(
+                    &self.view_id,
+                    &expr,
+                    &mut df_desc,
+                    &self.config.features,
+                )?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc

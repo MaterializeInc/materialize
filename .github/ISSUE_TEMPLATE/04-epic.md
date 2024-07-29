@@ -6,30 +6,17 @@ labels: Epic
 ---
 
 <!--
-For EPD-wide tracking, assign the issue to the Product Roadmap GitHub project
-and set the relevant attributes, including Team, Priority (Now/Next/Later),
-Status. If you have a target date, set the Release Date attribute.
+Purpose: For engineering to manage and track tasks associated with an epic.
+Each epic should map to a corresponding epic in the Notion R&D roadmap.
+All other project management beyond task management, such as the product brief,
+decision log, and target date should be set on the Notion epic.
+
+See details at https://www.notion.so/materialize/Project-Management-b3d2da90abbf4dce8483484eb3788496.
 -->
 
-## Product outcome
-
+## Notion epic
 <!--
-Briefly describe the desired product outcome. If possible, focus on the
-customer's perspective, for example:
-
-> Users can customize the Avro schema that is generated for a Kafka Avro sink. The customizations are limited to the common requests we've gotten to date.
--->
-
-## Discovery
-
-<!--
-Briefly outline the discovery work that has happened or is planned to happen.
-
-If you are working on a prototype or a design document, you should point it out
-here. Once you have a design document, link it here. If there are other related
-GitHub issues, link them here.
-
-If you are skipping the discovery step, please point it out explicitly.
+Link to Notion epic page.
 -->
 
 ## Work items
@@ -51,17 +38,3 @@ Please use the "problem" issue template for work items.
 ```[tasklist]
 - [ ] #1
 ```
-
-## Decision log
-
-<!--
-Record all notable decisions as the project evolves, such as setting a target
-date or changing the epic's scope or its breakdown. Please order entries in
-descending order (the latest update should be the top most item).
-
-Example:
-> * **18 September 2023.** Added Nullability control for Avro-formatted sinks #21722 as a work item.
-> * **28 August 2023.** Set a target release date of October 31.
--->
-
-* **1 January 1970.** Issue created.

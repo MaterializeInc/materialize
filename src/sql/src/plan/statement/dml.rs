@@ -1214,7 +1214,13 @@ pub fn plan_copy(
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
-            scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
+            // System users are always allowed to use this feature, even when
+            // the flag is disabled, so that we can dogfood for analytics in
+            // production environments. The feature is stable enough that we're
+            // not worried about it crashing.
+            if !scx.catalog.active_role_id().is_system() {
+                scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
+            }
 
             let format = match format {
                 Some(inner) => inner,

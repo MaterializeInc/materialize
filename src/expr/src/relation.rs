@@ -1212,6 +1212,7 @@ impl MirRelationExpr {
         };
         // Normalize collection of predicates.
         new_predicates.extend(predicates);
+        new_predicates.retain(|p| !p.is_literal_true());
         new_predicates.sort();
         new_predicates.dedup();
         // Introduce a `Filter` only if we have predicates.
@@ -1301,9 +1302,12 @@ impl MirRelationExpr {
 
     /// Constructs a join operator from inputs and required-equal scalar expressions.
     pub fn join_scalars(
-        inputs: Vec<MirRelationExpr>,
+        mut inputs: Vec<MirRelationExpr>,
         equivalences: Vec<Vec<MirScalarExpr>>,
     ) -> Self {
+        // Remove all constant inputs that are the identity for join.
+        // They neither introduce nor modify any column references.
+        inputs.retain(|i| !i.is_constant_singleton());
         MirRelationExpr::Join {
             inputs,
             equivalences,

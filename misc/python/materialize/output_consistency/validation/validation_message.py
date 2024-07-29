@@ -22,6 +22,7 @@ class ValidationErrorType(Enum):
     CONTENT_TYPE_MISMATCH = 3
     CONTENT_MISMATCH = 4
     ERROR_MISMATCH = 5
+    EXPLAIN_PLAN_MISMATCH = 6
 
 
 class ValidationMessage:

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::metrics::{CounterVecExt, HistogramVecExt};
+use mz_ore::metrics::MetricVecExt;
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_rocksdb::{
     InstanceOptions, KeyUpdate, RocksDBConfig, RocksDBInstance, RocksDBInstanceMetrics,
@@ -22,8 +22,8 @@ fn shared_metrics_for_tests() -> Result<Box<RocksDBSharedMetrics>, anyhow::Error
         HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
 
     Ok(Box::new(RocksDBSharedMetrics {
-        multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
-        multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
+        multi_get_latency: fake_hist_vec.get_delete_on_drop_metric(vec!["one".to_string()]),
+        multi_put_latency: fake_hist_vec.get_delete_on_drop_metric(vec!["four".to_string()]),
     }))
 }
 
@@ -32,14 +32,14 @@ fn instance_metrics_for_tests() -> Result<Box<RocksDBInstanceMetrics>, anyhow::E
         IntCounterVec::new(Opts::new("fake_counter", "fake_help"), &["fake_label"])?;
 
     Ok(Box::new(RocksDBInstanceMetrics {
-        multi_get_size: face_counter_vec.get_delete_on_drop_counter(vec!["two".to_string()]),
+        multi_get_size: face_counter_vec.get_delete_on_drop_metric(vec!["two".to_string()]),
         multi_get_result_count: face_counter_vec
-            .get_delete_on_drop_counter(vec!["three".to_string()]),
+            .get_delete_on_drop_metric(vec!["three".to_string()]),
         multi_get_result_bytes: face_counter_vec
-            .get_delete_on_drop_counter(vec!["four".to_string()]),
-        multi_get_count: face_counter_vec.get_delete_on_drop_counter(vec!["five".to_string()]),
-        multi_put_count: face_counter_vec.get_delete_on_drop_counter(vec!["six".to_string()]),
-        multi_put_size: face_counter_vec.get_delete_on_drop_counter(vec!["seven".to_string()]),
+            .get_delete_on_drop_metric(vec!["four".to_string()]),
+        multi_get_count: face_counter_vec.get_delete_on_drop_metric(vec!["five".to_string()]),
+        multi_put_count: face_counter_vec.get_delete_on_drop_metric(vec!["six".to_string()]),
+        multi_put_size: face_counter_vec.get_delete_on_drop_metric(vec!["seven".to_string()]),
     }))
 }
 

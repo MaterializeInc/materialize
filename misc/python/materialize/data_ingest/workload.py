@@ -9,6 +9,7 @@
 
 import random
 import time
+import traceback
 from collections.abc import Iterator
 from typing import Any
 
@@ -33,6 +34,7 @@ from materialize.data_ingest.transaction_def import (
     RestartMz,
     TransactionDef,
     TransactionSize,
+    ZeroDowntimeDeploy,
 )
 from materialize.mzcompose.composition import Composition
 from materialize.util import all_subclasses
@@ -40,9 +42,14 @@ from materialize.util import all_subclasses
 
 class Workload:
     cycle: list[TransactionDef]
+    mz_service: str
+    deploy_generation: int
 
-    def __init__(self, composition: Composition | None) -> None:
-        raise NotImplementedError
+    def __init__(
+        self, mz_service: str = "materailized", deploy_generation: int = 0
+    ) -> None:
+        self.mz_service = mz_service
+        self.deploy_generation = deploy_generation
 
     def generate(self, fields: list[Field]) -> Iterator[Transaction]:
         while True:
@@ -53,7 +60,13 @@ class Workload:
 
 
 class SingleSensorUpdating(Workload):
-    def __init__(self, composition: Composition | None) -> None:
+    def __init__(
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -68,7 +81,13 @@ class SingleSensorUpdating(Workload):
 
 
 class SingleSensorUpdatingDisruptions(Workload):
-    def __init__(self, composition: Composition | None) -> None:
+    def __init__(
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -81,11 +100,42 @@ class SingleSensorUpdatingDisruptions(Workload):
             ),
         ]
         if composition:
-            self.cycle.append(RestartMz(composition, probability=0.1))
+            self.cycle.append(RestartMz(composition, probability=0.1, workload=self))
+
+
+class SingleSensorUpdating0dtDeploy(Workload):
+    def __init__(
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(mz_service, deploy_generation)
+        self.cycle = [
+            TransactionDef(
+                [
+                    Upsert(
+                        keyspace=Keyspace.SINGLE_VALUE,
+                        count=Records.ONE,
+                        record_size=RecordSize.SMALL,
+                    ),
+                ]
+            ),
+        ]
+        if composition:
+            self.cycle.append(
+                ZeroDowntimeDeploy(composition, probability=0.1, workload=self)
+            )
 
 
 class DeleteDataAtEndOfDay(Workload):
-    def __init__(self, composition: Composition | None) -> None:
+    def __init__(
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -111,7 +161,13 @@ class DeleteDataAtEndOfDay(Workload):
 
 
 class DeleteDataAtEndOfDayDisruptions(Workload):
-    def __init__(self, composition: Composition | None) -> None:
+    def __init__(
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -136,12 +192,52 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
         ]
 
         if composition:
-            self.cycle.append(RestartMz(composition, probability=0.1))
+            self.cycle.append(RestartMz(composition, probability=0.1, workload=self))
+
+
+class DeleteDataAtEndOfDay0dtDeploys(Workload):
+    def __init__(
+        self,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(mz_service, deploy_generation)
+        insert = Insert(
+            count=Records.SOME,
+            record_size=RecordSize.SMALL,
+        )
+        insert_phase = TransactionDef(
+            size=TransactionSize.HUGE,
+            operations=[insert],
+        )
+        # Delete all records in a single transaction
+        delete_phase = TransactionDef(
+            [
+                Delete(
+                    number_of_records=Records.ALL,
+                    record_size=RecordSize.SMALL,
+                    num=insert.max_key(),
+                )
+            ]
+        )
+        self.cycle = [
+            insert_phase,
+            delete_phase,
+        ]
+
+        if composition:
+            self.cycle.append(
+                ZeroDowntimeDeploy(composition, probability=0.1, workload=self)
+            )
 
 
 # TODO: Implement
 # class ProgressivelyEnrichRecords(Workload):
-#    def __init__(self) -> None:
+#    def __init__(
+#        self, composition: Composition | None = None, mz_service: str = "materialized", deploy_generation: int = 0
+#    ) -> None:
+#        super().__init__(mz_service, deploy_generation)
 #        self.cycle: list[Definition] = [
 #        ]
 
@@ -166,7 +262,9 @@ def execute_workload(
     print(f"With fields: {fields}")
 
     executors = [
-        executor_class(num, ports, fields, "materialize")
+        executor_class(
+            num, ports, fields, "materialize", mz_service=workload.mz_service
+        )
         for executor_class in [PgExecutor] + executor_classes
     ]
     pg_executor = executors[0]
@@ -183,6 +281,7 @@ def execute_workload(
             assert i > 0
             break
         for executor in run_executors:
+            executor.mz_service = workload.mz_service
             executor.run(transaction)
 
     order_str = ", ".join(str(i + 1) for i in range(len(fields)))
@@ -195,12 +294,13 @@ def execute_workload(
     # Reconnect as Mz disruptions may have destroyed the previous connection
     conn = pg8000.connect(
         host="localhost",
-        port=ports["materialized"],
+        port=ports[workload.mz_service],
         user="materialize",
         database="materialize",
     )
 
     for executor in executors:
+        executor.mz_service = workload.mz_service
         conn.autocommit = True
         with conn.cursor() as cur:
             try:
@@ -208,8 +308,9 @@ def execute_workload(
                 cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
                 actual_result = cur.fetchall()
                 cur.execute("SET REAL_TIME_RECENCY TO FALSE")
-            except:
-                print(f"Comparing against {type(executor).__name__} failed")
+            except Exception as e:
+                print(f"Comparing against {type(executor).__name__} failed: {e}")
+                print(traceback.format_exc())
                 raise
         conn.autocommit = False
         if actual_result != expected_result:

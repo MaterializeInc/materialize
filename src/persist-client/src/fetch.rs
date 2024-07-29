@@ -179,6 +179,7 @@ where
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                ..
             } => {
                 let buf = FetchedBlobBuf::Inline {
                     desc: part.desc.clone(),
@@ -752,32 +753,16 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     validate_structured: true,
                 },
             ) => {
-                let maybe_key = structured
-                    .key
-                    .as_ref()
-                    .map(|col| {
-                        let decoder = Schema2::decoder_any(schemas.key.as_ref(), col)?;
-                        Ok::<_, anyhow::Error>(Arc::new(decoder))
-                    })
-                    .transpose();
-                let key = match maybe_key {
-                    Ok(key) => key,
+                let key = match Schema2::decoder_any(schemas.key.as_ref(), &*structured.key) {
+                    Ok(key) => Some(Arc::new(key)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create key decoder");
                         None
                     }
                 };
 
-                let maybe_val = structured
-                    .val
-                    .as_ref()
-                    .map(|col| {
-                        let decoder = Schema2::decoder_any(schemas.val.as_ref(), col)?;
-                        Ok::<_, anyhow::Error>(Arc::new(decoder))
-                    })
-                    .transpose();
-                let val = match maybe_val {
-                    Ok(val) => val,
+                let val = match Schema2::decoder_any(schemas.val.as_ref(), &*structured.val) {
+                    Ok(val) => Some(Arc::new(val)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create val decoder");
                         None
@@ -877,18 +862,24 @@ where
                 return Some(((Ok(key), Ok(val)), t, d));
             } else {
                 let k = self.metrics.codecs.key.decode(|| match key.take() {
-                    Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
-                        Ok(()) => Ok(key),
-                        Err(err) => Err(err),
-                    },
-                    None => K::decode(k),
+                    Some(mut key) => {
+                        match K::decode_from(&mut key, k, &mut self.key_storage, &self.schemas.key)
+                        {
+                            Ok(()) => Ok(key),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    None => K::decode(k, &self.schemas.key),
                 });
                 let v = self.metrics.codecs.val.decode(|| match val.take() {
-                    Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
-                        Ok(()) => Ok(val),
-                        Err(err) => Err(err),
-                    },
-                    None => V::decode(v),
+                    Some(mut val) => {
+                        match V::decode_from(&mut val, v, &mut self.val_storage, &self.schemas.val)
+                        {
+                            Ok(()) => Ok(val),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    None => V::decode(v, &self.schemas.val),
                 });
 
                 // Note: We only provide structured columns, if they were originally written, and a
@@ -975,6 +966,7 @@ where
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                ..
             } => Ok(EncodedPart::from_inline(
                 metrics,
                 read_metrics.clone(),

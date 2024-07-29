@@ -28,7 +28,6 @@ from junitparser.junitparser import Error, Failure, JUnitXml
 from materialize import ci_util, ui
 from materialize.buildkite import (
     add_annotation_raw,
-    add_failure_for_qa_team,
     get_artifact_url,
 )
 from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
@@ -139,22 +138,17 @@ IGNORE_RE = re.compile(
     | larger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
-    # Fencing warnings are OK in fencing tests
-    | txn-wal-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
-    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
-    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ epoch
-    | platform-checks-mz_txn_tables.* \| .*unexpected\ fence\ epoch
-    | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ upper
-    | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ epoch
-    # For platform-checks upgrade tests
-    | platform-checks-clusterd.* \| .* received\ persist\ state\ from\ the\ future
-    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
+    # Fencing warnings are OK in fencing/0dt tests
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-).* \| .*unexpected\ fence\ epoch
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-).* \| .*fenced\ by\ new\ catalog
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
+    # For platform-checks upgrade tests
+    | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     # For tests we purposely trigger this error
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ at\ a\ time
     # For 0dt upgrades
-    | halting\ process:\ unable\ to\ confirm\ leadership
-    | halting\ process:\ fenced\ out\ old\ deployment;\ rebooting\ as\ leader
+    | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
     )
     """,
     re.VERBOSE | re.MULTILINE,
@@ -345,12 +339,12 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    try:
-        test_analytics_config = create_test_analytics_config_with_hostname(
-            args.cloud_hostname
-        )
-        test_analytics = TestAnalyticsDb(test_analytics_config)
+    test_analytics_config = create_test_analytics_config_with_hostname(
+        args.cloud_hostname
+    )
+    test_analytics = TestAnalyticsDb(test_analytics_config)
 
+    try:
         # always insert a build job regardless whether it has annotations or not
         test_analytics.builds.add_build_job(
             was_successful=has_successful_buildkite_status()
@@ -358,7 +352,7 @@ and finds associated open GitHub issues in Materialize repository.""",
 
         return_code = annotate_logged_errors(args.log_files, test_analytics)
     except Exception as e:
-        add_failure_for_qa_team(f"ci_annotate_errors failed! {e}")
+        test_analytics.on_upload_failed(e)
         raise
 
     try:
@@ -368,7 +362,7 @@ and finds associated open GitHub issues in Materialize repository.""",
             print(traceback.format_exc())
 
         # An error during an upload must never cause the build to fail
-        add_failure_for_qa_team(f"Uploading results failed! {e}")
+        test_analytics.on_upload_failed(e)
 
     return return_code
 
@@ -764,9 +758,7 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         else:
             return build_history
     except Exception as e:
-        add_failure_for_qa_team(
-            f"Loading build history from test analytics failed: {e}"
-        )
+        test_analytics.on_data_retrieval_failed(e)
 
     print("Loading build history from buildkite instead")
     return _get_failures_on_main_from_buildkite(

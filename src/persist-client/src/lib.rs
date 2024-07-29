@@ -24,7 +24,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dyncfg::ConfigSet;
-use mz_ore::instrument;
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::Timestamp;
@@ -43,6 +43,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
+use crate::schema::{SchemaId, SCHEMA_REGISTER, SCHEMA_REQUIRE};
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
@@ -109,6 +110,7 @@ pub mod operators {
 pub mod project;
 pub mod read;
 pub mod rpc;
+pub mod schema;
 pub mod stats;
 pub mod usage;
 pub mod write;
@@ -364,6 +366,7 @@ impl PersistClient {
             .await;
         maintenance.start_performing(&machine, &gc);
         let schemas = Schemas {
+            id: None,
             key: key_schema,
             val: val_schema,
         };
@@ -418,6 +421,7 @@ impl PersistClient {
             .maybe_init_shard::<K, V, T, D>(&shard_metrics)
             .await;
         let schemas = Schemas {
+            id: None,
             key: key_schema,
             val: val_schema,
         };
@@ -532,10 +536,37 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
-        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+
+        // TODO: Because schemas are ordered, as part of the persist schema
+        // changes work, we probably want to build some way to allow persist
+        // users to control the order. For example, maybe a
+        // `PersistClient::compare_and_append_schema(current_schema_id,
+        // next_schema)`. Presumably this would then be passed in to open_writer
+        // instead of us implicitly registering it here.
+        let schema_id = if SCHEMA_REGISTER.get(&self.cfg) {
+            // NB: The overwhelming common case is that this schema is already
+            // registered. In this case, the cmd breaks early and nothing is
+            // written to (or read from) CRDB.
+            let (schema, maintenance) = machine.register_schema(&*key_schema, &*val_schema).await;
+            maintenance.start_performing(&machine, &gc);
+            if SCHEMA_REQUIRE.get(&self.cfg) {
+                soft_assert_or_log!(
+                    schema.is_some(),
+                    "unable to register schemas {:?} {:?}",
+                    key_schema,
+                    val_schema,
+                );
+            }
+            schema
+        } else {
+            None
+        };
+
         let writer_id = WriterId::new();
         let schemas = Schemas {
+            id: schema_id,
             key: key_schema,
             val: val_schema,
         };
@@ -550,6 +581,43 @@ impl PersistClient {
             schemas,
         );
         Ok(writer)
+    }
+
+    /// Returns the requested schema, if known at the current state.
+    pub async fn get_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        schema_id: SchemaId,
+        diagnostics: Diagnostics,
+    ) -> Result<Option<(K::Schema, V::Schema)>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.get_schema(schema_id))
+    }
+
+    /// Returns the latest schema registered at the current state.
+    pub async fn latest_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<Option<(SchemaId, K::Schema, V::Schema)>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.latest_schema())
     }
 
     /// Check if the given shard is in a finalized state; ie. it can no longer be
@@ -747,6 +815,7 @@ mod tests {
         blob: &dyn Blob,
         key: &BlobKey,
         metrics: &Metrics,
+        schemas: &Schemas<K, V>,
     ) -> (
         BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -766,7 +835,11 @@ mod tests {
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
         let mut updates = Vec::new();
         for ((k, v), t, d) in part.updates.records().iter() {
-            updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
+            updates.push((
+                (K::decode(k, &schemas.key), V::decode(v, &schemas.val)),
+                T::decode(t),
+                D::decode(d),
+            ));
         }
         (part, updates)
     }

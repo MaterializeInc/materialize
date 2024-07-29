@@ -112,6 +112,7 @@ impl<'a> DirectiveArgs<'a> {
                         ts_rewrite: None,
                         diffs_sum: None,
                         format: None,
+                        schema_id: None,
                     })
                 })
                 .collect(),

@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use arrow::array::{Array, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
@@ -37,8 +37,9 @@ use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    arb_row_for_relation, ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow,
-    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
+    arb_row_for_relation, ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId,
+    ProtoRelationDesc, ProtoRow, RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder,
+    RowDecoder, RowEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::collection::vec;
@@ -1109,6 +1110,83 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
     }
 }
 
+/// Details necessary to store in the `Details` option of a source export
+/// statement (currently only `CREATE SUBSOURCE` statements), to generate the
+/// appropriate `SourceExportDetails` struct during planning.
+/// NOTE that this is serialized as proto to the catalog, so any changes here
+/// must be backwards compatible or will require a migration.
+/// We only support `CREATE SUBSOURCE` statements for Postgres and MySQL
+/// for now, so we only need to support those here.
+pub enum SourceExportStatementDetails {
+    Postgres {
+        table: mz_postgres_util::desc::PostgresTableDesc,
+    },
+    MySql {
+        table: mz_mysql_util::MySqlTableDesc,
+        initial_gtid_set: String,
+    },
+    LoadGenerator,
+}
+
+impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
+    fn into_proto(&self) -> ProtoSourceExportStatementDetails {
+        match self {
+            SourceExportStatementDetails::Postgres { table } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Postgres(
+                    postgres::ProtoPostgresSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::MySql {
+                table,
+                initial_gtid_set,
+            } => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Mysql(
+                    mysql::ProtoMySqlSourceExportStatementDetails {
+                        table: Some(table.into_proto()),
+                        initial_gtid_set: initial_gtid_set.clone(),
+                    },
+                )),
+            },
+            SourceExportStatementDetails::LoadGenerator => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Loadgen(())),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportStatementDetails) -> Result<Self, TryFromProtoError> {
+        use proto_source_export_statement_details::Kind;
+        Ok(match proto.kind {
+            Some(Kind::Postgres(details)) => SourceExportStatementDetails::Postgres {
+                table: mz_postgres_util::desc::PostgresTableDesc::from_proto(
+                    details.table.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "ProtoPostgresSourceExportStatementDetails::table",
+                        )
+                    })?,
+                )?,
+            },
+            Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
+                table: mz_mysql_util::MySqlTableDesc::from_proto(details.table.ok_or_else(
+                    || {
+                        TryFromProtoError::missing_field(
+                            "ProtoMySqlSourceExportStatementDetails::table",
+                        )
+                    },
+                )?)?,
+                initial_gtid_set: details.initial_gtid_set,
+            },
+            Some(Kind::Loadgen(_)) => SourceExportStatementDetails::LoadGenerator,
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoSourceExportStatementDetails::kind",
+                ))
+            }
+        })
+    }
+}
+
 #[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);
@@ -1170,15 +1248,17 @@ impl Codec for SourceData {
             .expect("no required fields means no initialization errors");
     }
 
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
+    fn decode(buf: &[u8], schema: &RelationDesc) -> Result<Self, String> {
+        let mut val = SourceData::default();
+        <Self as Codec>::decode_from(&mut val, buf, &mut None, schema)?;
+        Ok(val)
     }
 
     fn decode_from<'a>(
         &mut self,
         buf: &'a [u8],
         storage: &mut Option<ProtoRow>,
+        schema: &RelationDesc,
     ) -> Result<(), String> {
         // Optimize for common case of `Ok` by leaving a (cleared) `ProtoRow` in
         // the `Ok` variant of `ProtoSourceData`. prost's `Message::merge` impl
@@ -1192,7 +1272,7 @@ impl Codec for SourceData {
         match (proto.kind, &mut self.0) {
             // Again, optimize for the common case...
             (Some(proto_source_data::Kind::Ok(proto)), Ok(row)) => {
-                let ret = row.decode_from_proto(&proto);
+                let ret = row.decode_from_proto(&proto, schema);
                 storage.replace(proto);
                 ret
             }
@@ -1204,6 +1284,15 @@ impl Codec for SourceData {
                 Ok(())
             }
         }
+    }
+
+    fn encode_schema(schema: &Self::Schema) -> Bytes {
+        schema.into_proto().encode_to_vec().into()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        let proto = ProtoRelationDesc::decode(buf.as_ref()).expect("valid schema");
+        proto.into_rust().expect("valid schema")
     }
 }
 
@@ -1745,7 +1834,7 @@ impl SourceDataRowColumnarEncoder {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
             SourceDataRowColumnarEncoder::EmptyRow => {
-                // TODO(parkmcar): Re-enable this check.
+                // TODO(#28146): Re-enable this check.
                 if false {
                     assert_eq!(row.iter().count(), 0)
                 }
@@ -1886,7 +1975,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
-    use mz_repr::{arb_datum_for_scalar, ScalarType};
+    use mz_repr::{arb_datum_for_scalar, ProtoRelationDesc, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
 
@@ -2011,6 +2100,12 @@ mod tests {
             decoder.decode(idx, &mut rnd_data);
             assert_eq!(og_data, rnd_data);
         }
+
+        // Verify that the RelationDesc itself roundtrips through
+        // {encode,decode}_schema.
+        let encoded_schema = SourceData::encode_schema(&desc);
+        let roundtrip_desc = SourceData::decode_schema(&encoded_schema);
+        assert_eq!(desc, roundtrip_desc);
     }
 
     #[mz_ore::test]
@@ -2059,16 +2154,29 @@ mod tests {
         let encoded = include_str!("snapshots/source-datas.txt");
 
         // Decode the pre-generated source datas
-        let mut decoded: Vec<SourceData> = encoded
+        let mut decoded: Vec<(RelationDesc, SourceData)> = encoded
             .lines()
-            .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
-            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .map(|s| {
+                let (desc, data) = s.split_once(',').expect("comma separated data");
+                let desc = base64::decode_config(desc, base64_config).expect("valid base64");
+                let data = base64::decode_config(data, base64_config).expect("valid base64");
+                (desc, data)
+            })
+            .map(|(desc, data)| {
+                let desc = ProtoRelationDesc::decode(&desc[..]).expect("valid proto");
+                let desc = desc.into_rust().expect("valid proto");
+                let data = SourceData::decode(&data, &desc).expect("valid proto");
+                (desc, data)
+            })
             .collect();
 
         // If there are fewer than the minimum examples, generate some new ones arbitrarily
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let strategy = RelationDesc::arbitrary().prop_flat_map(|desc| {
+            arb_source_data_for_relation_desc(&desc).prop_map(move |data| (desc.clone(), data))
+        });
         while decoded.len() < min_protos {
-            let mut runner = proptest::test_runner::TestRunner::deterministic();
-            let arbitrary_data: SourceData = SourceData::arbitrary()
+            let arbitrary_data = strategy
                 .new_tree(&mut runner)
                 .expect("source data")
                 .current();
@@ -2078,9 +2186,14 @@ mod tests {
         // Reencode and compare the strings
         let mut reencoded = String::new();
         let mut buf = vec![];
-        for s in decoded {
+        for (desc, data) in decoded {
             buf.clear();
-            s.encode(&mut buf);
+            desc.into_proto().encode(&mut buf).expect("success");
+            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            reencoded.push(',');
+
+            buf.clear();
+            data.encode(&mut buf);
             base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
             reencoded.push('\n');
         }

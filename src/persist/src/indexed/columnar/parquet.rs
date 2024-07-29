@@ -227,15 +227,23 @@ pub fn decode_parquet_file_kvtd(
                 .iter()
                 .position(|field| field.name() == "v_s")
                 .map(|idx| Arc::clone(&columns[idx]));
-            if k_s_column.is_none() && v_s_column.is_none() {
-                return Err(
-                    format!("at least one of k_s or v_s should exist, found {schema:?}").into(),
-                );
-            }
 
-            let (records, structured_ext) =
-                decode_arrow_batch_kvtd_ks_vs(primary_columns, k_s_column, v_s_column, metrics)?;
-            Ok(BlobTraceUpdates::Both(records, structured_ext))
+            match (k_s_column, v_s_column) {
+                (Some(ks), Some(vs)) => {
+                    let (records, structured_ext) =
+                        decode_arrow_batch_kvtd_ks_vs(primary_columns, ks, vs, metrics)?;
+                    Ok(BlobTraceUpdates::Both(records, structured_ext))
+                }
+                (ks, vs) => {
+                    warn!(
+                        "unable to read back structured data! version={v} ks={} vs={}",
+                        ks.is_some(),
+                        vs.is_some()
+                    );
+                    let records = decode_arrow_batch_kvtd(primary_columns, metrics)?;
+                    Ok(BlobTraceUpdates::Row(records))
+                }
+            }
         }
         unknown => Err(format!("unkown ProtoFormatMetadata, {unknown:?}"))?,
     }

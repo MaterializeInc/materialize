@@ -624,18 +624,25 @@ impl SessionClient {
         result
     }
 
-    /// Ends a transaction.
+    /// Ends a transaction. Even if an error is returned, guarantees that the transaction in the
+    /// session and Coordinator has cleared its state.
     #[instrument(level = "debug")]
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.send(|tx, session| Command::Commit {
-            action,
-            session,
-            tx,
-        })
-        .await
+        let res = self
+            .send(|tx, session| Command::Commit {
+                action,
+                session,
+                tx,
+            })
+            .await;
+        // Commit isn't guaranteed to set the session's state to anything specific, so clear it
+        // here. It's safe to ignore the returned `TransactionStatus` because that doesn't contain
+        // any data that the Coordinator must act on for correctness.
+        let _ = self.session().clear_transaction();
+        res
     }
 
     /// Fails a transaction.

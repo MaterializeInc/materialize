@@ -192,6 +192,12 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
+        // This function is *usually* called when transactions end, but it can fail to be called in
+        // some cases (for example if the session's role id was dropped, then we return early and
+        // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
+        // and `AdapterClient::end_transaction` protect against this by each executing their parts
+        // of this function. Thus, if this function changes, ensure that the changes are propogated
+        // to either of those components.
         self.clear_connection(session.conn_id()).await;
         session.clear_transaction()
     }

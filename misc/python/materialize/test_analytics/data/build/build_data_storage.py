@@ -47,8 +47,7 @@ class BuildDataStorage(BaseDataStorage):
                main_ancestor_commit_hash,
                mz_version,
                date,
-               data_version,
-               remarks
+               data_version
             )
             SELECT
               '{pipeline}',
@@ -59,8 +58,7 @@ class BuildDataStorage(BaseDataStorage):
               '{main_ancestor_commit_hash}',
               '{mz_version}',
               now(),
-              {self.data_version},
-              NULL
+              {self.data_version}
             WHERE NOT EXISTS
             (
                 SELECT 1
@@ -107,8 +105,7 @@ class BuildDataStorage(BaseDataStorage):
                 insert_date,
                 is_latest_retry,
                 success,
-                aws_instance_type,
-                remarks
+                aws_instance_type
             )
             SELECT
               '{job_id}',
@@ -120,8 +117,7 @@ class BuildDataStorage(BaseDataStorage):
               now(),
               TRUE,
               {was_successful},
-              '{aws_instance_type}',
-              NULL
+              '{aws_instance_type}'
             WHERE NOT EXISTS
             (
                 SELECT 1

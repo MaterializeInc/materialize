@@ -21,9 +21,9 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ExternalReferenceExport, ExternalReferences, ObjectType, ShowCreateClusterStatement,
-    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
-    SystemObjectType, UnresolvedItemName, WithOptionValue,
+    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
+    ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
+    ShowObjectType, SystemObjectType, UnresolvedItemName, WithOptionValue,
 };
 use query::QueryContext;
 
@@ -1059,6 +1059,18 @@ fn humanize_sql_for_show_create(
                 subsources.sort();
                 stmt.external_references = Some(ExternalReferences::SubsetTables(subsources));
             }
+        }
+        Statement::CreateSubsource(stmt) => {
+            stmt.with_options.retain_mut(|o| {
+                match o.name {
+                    CreateSubsourceOptionName::TextColumns => true,
+                    CreateSubsourceOptionName::IgnoreColumns => true,
+                    // Drop details, which does not rountrip.
+                    CreateSubsourceOptionName::Details => false,
+                    CreateSubsourceOptionName::ExternalReference => true,
+                    CreateSubsourceOptionName::Progress => true,
+                }
+            });
         }
         _ => (),
     }

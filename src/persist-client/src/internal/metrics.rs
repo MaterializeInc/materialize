@@ -24,9 +24,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    raw, ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, CounterVecExt,
-    DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector,
-    MetricsRegistry, UIntGauge, UIntGaugeVec,
+    raw, ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
+    DeleteOnDropGauge, IntCounter, MakeCollector, MetricVecExt, MetricsRegistry, UIntGauge,
+    UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -1219,6 +1219,7 @@ pub struct ShardsMetrics {
     compact_batches: UIntGaugeVec,
     compacting_batches: UIntGaugeVec,
     noncompact_batches: UIntGaugeVec,
+    schema_registry_version_count: UIntGaugeVec,
     inline_backpressure_count: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
@@ -1434,6 +1435,11 @@ impl ShardsMetrics {
                 help: "number of batches in the shard that aren't compact and have no ongoing compaction",
                 var_labels: ["shard", "name"],
             )),
+            schema_registry_version_count: registry.register(metric!(
+                name: "mz_persist_shard_schema_registry_version_count",
+                help: "count of versions in the schema registry",
+                var_labels: ["shard", "name"],
+            )),
             inline_backpressure_count: registry.register(metric!(
                 name: "mz_persist_shard_inline_backpressure_count",
                 help: "count of CaA attempts retried because of inline backpressure",
@@ -1481,6 +1487,7 @@ impl ShardsMetrics {
 #[derive(Debug)]
 pub struct ShardMetrics {
     pub shard_id: ShardId,
+    pub name: String,
     pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1522,6 +1529,7 @@ pub struct ShardMetrics {
     pub compact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub compacting_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub noncompact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub schema_registry_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
@@ -1530,129 +1538,133 @@ impl ShardMetrics {
         let shard = shard_id.to_string();
         ShardMetrics {
             shard_id: *shard_id,
+            name: name.to_string(),
             since: shards_metrics
                 .since
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             upper: shards_metrics
                 .upper
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             latest_rollup_size: shards_metrics
                 .encoded_rollup_size
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             encoded_diff_size: shards_metrics
                 .encoded_diff_size
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             hollow_batch_count: shards_metrics
                 .hollow_batch_count
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             spine_batch_count: shards_metrics
                 .spine_batch_count
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             batch_part_count: shards_metrics
                 .batch_part_count
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             update_count: shards_metrics
                 .update_count
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             rollup_count: shards_metrics
                 .rollup_count
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             largest_batch_size: shards_metrics
                 .largest_batch_size
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             seqnos_held: shards_metrics
                 .seqnos_held
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             seqnos_since_last_rollup: shards_metrics
                 .seqnos_since_last_rollup
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             gc_seqno_held_parts: shards_metrics
                 .gc_seqno_held_parts
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             gc_live_diffs: shards_metrics
                 .gc_live_diffs
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             gc_finished: shards_metrics
                 .gc_finished
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             compaction_applied: shards_metrics
                 .compaction_applied
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             cmd_succeeded: shards_metrics
                 .cmd_succeeded
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             usage_current_state_batches_bytes: shards_metrics
                 .usage_current_state_batches_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             usage_current_state_rollups_bytes: shards_metrics
                 .usage_current_state_rollups_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             usage_referenced_not_current_state_bytes: shards_metrics
                 .usage_referenced_not_current_state_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             usage_not_leaked_not_referenced_bytes: shards_metrics
                 .usage_not_leaked_not_referenced_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             usage_leaked_bytes: shards_metrics
                 .usage_leaked_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_applied: shards_metrics
                 .pubsub_push_diff_applied
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_not_applied_stale: shards_metrics
                 .pubsub_push_diff_not_applied_stale
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_not_applied_out_of_order: shards_metrics
                 .pubsub_push_diff_not_applied_out_of_order
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             blob_gets: shards_metrics
                 .blob_gets
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             blob_sets: shards_metrics
                 .blob_sets
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             live_writers: shards_metrics
                 .live_writers
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             unconsolidated_snapshot: shards_metrics
                 .unconsolidated_snapshot
-                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             backpressure_emitted_bytes: Arc::new(
                 shards_metrics
                     .backpressure_emitted_bytes
-                    .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                    .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             ),
             backpressure_last_backpressured_bytes: Arc::new(
                 shards_metrics
                     .backpressure_last_backpressured_bytes
-                    .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                    .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             ),
             backpressure_retired_bytes: Arc::new(
                 shards_metrics
                     .backpressure_retired_bytes
-                    .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+                    .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             ),
             rewrite_part_count: shards_metrics
                 .rewrite_part_count
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             inline_part_count: shards_metrics
                 .inline_part_count
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             inline_part_bytes: shards_metrics
                 .inline_part_bytes
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             compact_batches: shards_metrics
                 .compact_batches
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             compacting_batches: shards_metrics
                 .compacting_batches
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             noncompact_batches: shards_metrics
                 .noncompact_batches
-                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
+            schema_registry_version_count: shards_metrics
+                .schema_registry_version_count
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             inline_backpressure_count: shards_metrics
                 .inline_backpressure_count
-                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+                .get_delete_on_drop_metric(vec![shard, name.to_string()]),
         }
     }
 

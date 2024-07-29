@@ -10,14 +10,14 @@
 import time
 
 from materialize.mzcompose.composition import Composition
-from materialize.zippy.framework import Action, Capability
+from materialize.zippy.framework import Action, Capability, State
 from materialize.zippy.minio_capabilities import MinioIsRunning
 
 
 class MinioStart(Action):
     """Starts a Minio instance."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.up("minio")
 
     def provides(self) -> list[Capability]:
@@ -31,7 +31,7 @@ class MinioRestart(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MinioIsRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("minio")
         time.sleep(1)
         c.up("minio")

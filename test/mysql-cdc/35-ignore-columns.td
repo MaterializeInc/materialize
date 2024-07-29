@@ -61,6 +61,9 @@ INSERT INTO t1 SELECT * FROM t1;
 "test"
 "test"
 
+> SHOW CREATE SOURCE t1;
+materialize.public.t1 "CREATE SUBSOURCE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"int4\", \"f4\" \"pg_catalog\".\"varchar\"(64)) OF SOURCE \"materialize\".\"public\".\"da\" WITH (EXTERNAL REFERENCE = \"public\".\"t1\", IGNORE COLUMNS = (\"f2\", \"f3\"))"
+
 ! SELECT f2 FROM t1;
 contains:column "f2" does not exist
 

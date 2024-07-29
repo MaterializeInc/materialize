@@ -342,6 +342,9 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
 
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"\"f2\""
+
 # Drop a table, which shuffles the tables' output indexes, then add a table and ensure it can be added.
 $ mysql-execute name=mysql
 DROP TABLE table_c, table_d;
@@ -355,6 +358,9 @@ INSERT INTO table_f VALUES (3, 'var1');
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
+
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+"\"f2\""
 
 > SELECT * FROM table_f
 1 var0
@@ -408,6 +414,9 @@ contains: invalid IGNORE COLUMNS option value: unexpected multiple references to
 
 > SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
+
+> SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+"\"f2\""
 
 > SELECT * FROM table_i
 1

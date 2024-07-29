@@ -601,7 +601,7 @@ def upload_results_to_test_analytics(
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail
-        buildkite.add_failure_for_qa_team(f"Uploading results failed! {e}")
+        test_analytics.on_upload_failed(e)
 
 
 def _get_head_target_endpoint(endpoints: list[Endpoint]) -> Endpoint | None:

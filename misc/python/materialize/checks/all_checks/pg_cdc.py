@@ -43,10 +43,10 @@ class PgCdcBase:
 
                 DROP TABLE IF EXISTS postgres_source_table{self.suffix};
 
-                CREATE TABLE postgres_source_table{self.suffix} (f1 TEXT, f2 INTEGER, f3 TEXT UNIQUE NOT NULL, PRIMARY KEY(f1, f2));
+                CREATE TABLE postgres_source_table{self.suffix} (f1 TEXT, f2 INTEGER, f3 TEXT UNIQUE NOT NULL, f4 JSONB, PRIMARY KEY(f1, f2));
                 ALTER TABLE postgres_source_table{self.suffix} REPLICA IDENTITY FULL;
 
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
 
                 CREATE PUBLICATION postgres_source{self.suffix} FOR ALL TABLES;
 
@@ -68,13 +68,14 @@ class PgCdcBase:
                 f"""
                 > CREATE SOURCE postgres_source1{self.suffix}
                   FROM POSTGRES CONNECTION pg1{self.suffix}
-                  (PUBLICATION 'postgres_source{self.suffix}')
+                  (PUBLICATION 'postgres_source{self.suffix}',
+                   TEXT COLUMNS = (postgres_source_table{self.suffix}.f4))
                   FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableA{self.suffix});
 
                 > CREATE DEFAULT INDEX ON postgres_source_tableA{self.suffix};
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'B', i, REPEAT('B', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'B', i, REPEAT('B', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SECRET pgpass2{self.suffix} AS 'postgres';
@@ -86,14 +87,14 @@ class PgCdcBase:
                   PASSWORD SECRET pgpass1{self.suffix}
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
                 $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
                 GRANT USAGE ON CONNECTION pg2{self.suffix} TO materialize
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SOURCE postgres_source2{self.suffix}
@@ -124,11 +125,11 @@ class PgCdcBase:
                 f"""
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SECRET pgpass3{self.suffix} AS 'postgres';
@@ -145,12 +146,12 @@ class PgCdcBase:
                   FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableC{self.suffix});
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
                 """
                 + (
@@ -210,6 +211,10 @@ class PgCdcBase:
 
             > SELECT total_rows FROM table_a_b_count_sum;
             1600
+
+            # TODO: Figure out the quoting here -- it returns "f4" when done using the SQL shell
+            # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \\((.*?)\\)')[1] FROM (SHOW CREATE SOURCE postgres_source_tableA{self.suffix});
+            # "\"f4\""
             """
         )
 

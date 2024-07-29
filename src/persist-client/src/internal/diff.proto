@@ -24,6 +24,7 @@ enum ProtoStateField {
     LEASED_READERS = 2;
     CRITICAL_READERS = 6;
     WRITERS = 3;
+    SCHEMAS = 12;
     SINCE = 4;
     LEGACY_BATCHES = 5;
     HOLLOW_BATCHES = 9;

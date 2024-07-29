@@ -359,15 +359,22 @@ def run(
         if scenario == Scenario.Rename:
             # TODO(def-): Switch to failing exit code when #28182 is fixed
             os._exit(0)
-        if complexity in (Complexity.DDLOnly, Complexity.DDL):
-            # TODO(def-): Switch to failing exit code when #28400 is fixed
-            os._exit(0)
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
             os._exit(0)
         os._exit(1)
 
-    conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
+    try:
+        conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
+    except Exception:
+        if scenario == Scenario.ZeroDowntimeDeploy:
+            print("Failed connecting to materialized, using materialized2: {e}")
+            conn = pg8000.connect(
+                host=host, port=ports["materialized2"], user="materialize"
+            )
+        else:
+            raise
+
     conn.autocommit = True
     with conn.cursor() as cur:
         # Dropping the database also releases the long running connections

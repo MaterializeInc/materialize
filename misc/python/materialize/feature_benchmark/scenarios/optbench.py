@@ -31,6 +31,8 @@ from materialize.feature_benchmark.scenario import Scenario
 # for pdoc ignores
 __pdoc__ = {}
 
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
+
 
 class OptbenchInit(Action):
     def __init__(self, scenario: str, no_indexes: bool = False) -> None:
@@ -55,7 +57,7 @@ class OptbenchInit(Action):
 
 class OptbenchRun(MeasurementSource):
     def __init__(self, optbench_scenario: str, query: int):
-        self._executor: Executor | None = None
+        super().__init__()
         self._optbench_scenario = optbench_scenario
         self._query = query
 
@@ -75,13 +77,16 @@ class OptbenchRun(MeasurementSource):
         explain_output = materialize.optbench.sql.ExplainOutput(
             e._composition.sql_query(explain_query)[0][0]  # type: ignore
         )
-        # Optimization time is in microseconds, divide by 3 to get a more readable number (still in wrong unit)
-        optimization_duration = float(explain_output.optimization_time()) / 3  # type: ignore
+        # Optimization time is in nanoseconds, divide by 3 to get a more readable number (still in wrong unit)
+        optimization_time = explain_output.optimization_time()
+        assert optimization_time is not None
+        optimization_time_in_ns = optimization_time.astype("timedelta64[ns]")
+        optimization_duration_in_triple_ns = float(optimization_time_in_ns) / 3
         timestamps = [
-            WallclockMeasurement(0, WallclockUnit.ONE_THIRD_MICROSECONDS),
+            WallclockMeasurement(0, WallclockUnit.TRIPLE_NANOSECONDS),
             WallclockMeasurement(
-                optimization_duration,
-                WallclockUnit.ONE_THIRD_MICROSECONDS,
+                optimization_duration_in_triple_ns,
+                WallclockUnit.TRIPLE_NANOSECONDS,
             ),
         ]
         return timestamps
@@ -116,3 +121,6 @@ class OptbenchTPCH(Scenario):
 
     def benchmark(self) -> MeasurementSource:
         return OptbenchRun("tpch", self.QUERY)
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)

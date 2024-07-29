@@ -16,8 +16,8 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, IntCounterVec,
-    IntGaugeVec, MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec, IntGaugeVec,
+    MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -152,19 +152,19 @@ impl SourceMetrics {
             worker_id.to_string(),
         ];
         SourceMetrics {
-            capability: defs.capability.get_delete_on_drop_gauge(labels.to_vec()),
+            capability: defs.capability.get_delete_on_drop_metric(labels.to_vec()),
             resume_upper: defs
                 .resume_upper
-                .get_delete_on_drop_gauge(vec![source_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string()]),
             inmemory_remap_bindings: defs
                 .inmemory_remap_bindings
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
             commit_upper_ready_times: defs
                 .commit_upper_ready_times
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
             commit_upper_accepted_times: defs
                 .commit_upper_accepted_times
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
         }
     }
 }
@@ -191,31 +191,31 @@ impl SourcePersistSinkMetrics {
     ) -> SourcePersistSinkMetrics {
         let shard = shard_id.to_string();
         SourcePersistSinkMetrics {
-            progress: defs.progress.get_delete_on_drop_gauge(vec![
+            progress: defs.progress.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            row_inserts: defs.row_inserts.get_delete_on_drop_counter(vec![
+            row_inserts: defs.row_inserts.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            row_retractions: defs.row_retractions.get_delete_on_drop_counter(vec![
+            row_retractions: defs.row_retractions.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            error_inserts: defs.error_inserts.get_delete_on_drop_counter(vec![
+            error_inserts: defs.error_inserts.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
                 worker_id.to_string(),
             ]),
-            error_retractions: defs.error_retractions.get_delete_on_drop_counter(vec![
+            error_retractions: defs.error_retractions.get_delete_on_drop_metric(vec![
                 parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
@@ -223,7 +223,7 @@ impl SourcePersistSinkMetrics {
             ]),
             processed_batches: defs
                 .persist_sink_processed_batches
-                .get_delete_on_drop_counter(vec![
+                .get_delete_on_drop_metric(vec![
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard,
@@ -245,7 +245,7 @@ impl OffsetCommitMetrics {
         OffsetCommitMetrics {
             offset_commit_failures: defs
                 .offset_commit_failures
-                .get_delete_on_drop_counter(vec![source_id.to_string()]),
+                .get_delete_on_drop_metric(vec![source_id.to_string()]),
         }
     }
 }

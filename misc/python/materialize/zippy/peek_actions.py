@@ -11,7 +11,7 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, Capability
+from materialize.zippy.framework import Action, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 
 
@@ -22,7 +22,7 @@ class PeekCancellation(Action):
     def requires(cls) -> set[type[Capability]]:
         return {BalancerdIsRunning, MzIsRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.testdrive(
             dedent(
                 """
@@ -36,5 +36,6 @@ class PeekCancellation(Action):
                       SELECT 1 FROM peek_cancellation AS a1, peek_cancellation AS a2, peek_cancellation AS a3;
                     contains: timeout
                     """
-            )
+            ),
+            mz_service=state.mz_service,
         )

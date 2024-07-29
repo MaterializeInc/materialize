@@ -10,7 +10,7 @@
 //! Metrics for kafka sinks.
 
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{DeleteOnDropGauge, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -207,56 +207,56 @@ impl KafkaSinkMetrics {
         Self {
             rdkafka_msg_cnt: defs
                 .rdkafka_msg_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_msg_size: defs
                 .rdkafka_msg_size
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txmsgs: defs
                 .rdkafka_txmsgs
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txmsg_bytes: defs
                 .rdkafka_txmsg_bytes
-                .get_delete_on_drop_gauge(labels.to_vec()),
-            rdkafka_tx: defs.rdkafka_tx.get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
+            rdkafka_tx: defs.rdkafka_tx.get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_tx_bytes: defs
                 .rdkafka_tx_bytes
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_outbuf_cnt: defs
                 .rdkafka_outbuf_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_outbuf_msg_cnt: defs
                 .rdkafka_outbuf_msg_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_waitresp_cnt: defs
                 .rdkafka_waitresp_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_waitresp_msg_cnt: defs
                 .rdkafka_waitresp_msg_cnt
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txerrs: defs
                 .rdkafka_txerrs
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_txretries: defs
                 .rdkafka_txretries
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_req_timeouts: defs
                 .rdkafka_req_timeouts
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_connects: defs
                 .rdkafka_connects
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             rdkafka_disconnects: defs
                 .rdkafka_disconnects
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             outstanding_progress_records: defs
                 .outstanding_progress_records
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             consumed_progress_records: defs
                 .consumed_progress_records
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
             partition_count: defs
                 .partition_count
-                .get_delete_on_drop_gauge(labels.to_vec()),
+                .get_delete_on_drop_metric(labels.to_vec()),
         }
     }
 }

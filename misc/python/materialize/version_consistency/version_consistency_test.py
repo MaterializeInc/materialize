@@ -21,6 +21,10 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
     EvaluationStrategyKey,
 )
+from materialize.output_consistency.execution.query_output_mode import (
+    QUERY_OUTPUT_MODE_CHOICES,
+    QueryOutputMode,
+)
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
@@ -195,7 +199,7 @@ def sanitize_and_shorten_version_string(version: str) -> str:
 def main() -> int:
     test = VersionConsistencyTest()
     parser = argparse.ArgumentParser(
-        prog="postgres-consistency-test",
+        prog="version-consistency-test",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Test the consistency of different versions of mz",
     )
@@ -220,6 +224,12 @@ def main() -> int:
         action=argparse.BooleanOptionalAction,
         default=False,
     )
+    parser.add_argument(
+        "--query-output-mode",
+        type=lambda mode: QueryOutputMode[mode.upper()],
+        choices=QUERY_OUTPUT_MODE_CHOICES,
+        default=QueryOutputMode.SELECT,
+    )
 
     args = test.parse_output_consistency_input_args(parser)
 
@@ -232,7 +242,9 @@ def main() -> int:
     except InterfaceError:
         return 1
 
-    result = test.run_output_consistency_tests(mz_connection, args)
+    result = test.run_output_consistency_tests(
+        mz_connection, args, query_output_mode=args.query_output_mode
+    )
     return 0 if result.all_passed() else 1
 
 

@@ -46,7 +46,11 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import (
+    LEADER_STATUS_HEALTHCHECK,
+    DeploymentStatus,
+    Materialized,
+)
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -775,6 +779,7 @@ class Composition:
         check: bool = True,
         workdir: str | None = None,
         env_extra: dict[str, str] = {},
+        silent: bool = False,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -806,6 +811,7 @@ class Composition:
             capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
+            silent=silent,
         )
 
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
@@ -948,46 +954,16 @@ class Composition:
                 Materialized(
                     image=f"materialize/materialized:{version}",
                     environment_extra=["MZ_DEPLOY_GENERATION=1"],
-                    healthcheck=[
-                        "CMD",
-                        "curl",
-                        "-f",
-                        "localhost:6878/api/leader/status",
-                    ],
+                    healthcheck=LEADER_STATUS_HEALTHCHECK,
                 )
             ):
                 self.up("materialized")
-                while True:
-                    result = json.loads(
-                        self.exec(
-                            "materialized",
-                            "curl",
-                            "localhost:6878/api/leader/status",
-                            capture=True,
-                        ).stdout
-                    )
-                    if result["status"] == "ReadyToPromote":
-                        return
-                    assert (
-                        result["status"] == "Initializing"
-                    ), f"Unexpected status {result}"
-                    print("Not ready yet, waiting 1 s")
-                    time.sleep(1)
+                self.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE)
                 if rollback:
                     with self.override(Materialized()):
                         self.up("materialized")
                 else:
-                    result = json.loads(
-                        self.exec(
-                            "materialized",
-                            "curl",
-                            "-X",
-                            "POST",
-                            "localhost:6878/api/leader/promote",
-                            capture=True,
-                        ).stdout
-                    )
-                    assert result["result"] == "Success", f"Unexpected result {result}"
+                    self.promote_mz()
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
@@ -1361,8 +1337,8 @@ class Composition:
             """,
         )
 
-    def restore_mz(self) -> None:
-        self.kill("materialized")
+    def restore_mz(self, mz_service: str = "materialized") -> None:
+        self.kill(mz_service)
         self.exec(
             "cockroach",
             "cockroach",
@@ -1386,7 +1362,57 @@ class Composition:
             f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
-        self.up("materialized")
+        self.up(mz_service)
+
+    def await_mz_deployment_status(
+        self,
+        status: DeploymentStatus,
+        mz_service: str = "materialized",
+        timeout: int | None = None,
+    ) -> None:
+        timeout = timeout or 300
+        print(
+            f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
+            end="",
+        )
+
+        result = {}
+        for i in range(1, timeout):
+            try:
+                result = json.loads(
+                    self.exec(
+                        mz_service,
+                        "curl",
+                        "-s",
+                        "localhost:6878/api/leader/status",
+                        capture=True,
+                        silent=True,
+                    ).stdout
+                )
+                if result["status"] == status.value:
+                    print(" Reached!")
+                    return
+            except:
+                pass
+            print(".", end="")
+            time.sleep(1)
+        raise UIError(
+            f"Timed out waiting for {mz_service} to reach Mz deployment status {status.value}, still in status {result.get('status')}"
+        )
+
+    def promote_mz(self, mz_service: str = "materialized") -> None:
+        result = json.loads(
+            self.exec(
+                mz_service,
+                "curl",
+                "-s",
+                "-X",
+                "POST",
+                "localhost:6878/api/leader/promote",
+                capture=True,
+            ).stdout
+        )
+        assert result["result"] == "Success", f"Unexpected result {result}"
 
     def cloud_hostname(self, quiet: bool = False) -> str:
         """Uses the mz command line tool to get the hostname of the cloud instance"""

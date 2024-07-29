@@ -79,7 +79,7 @@ impl Analysis for Equivalences {
                 }
                 Some(equivalences)
             }
-            MirRelationExpr::Get { id, .. } => {
+            MirRelationExpr::Get { id, typ, .. } => {
                 let mut equivalences = Some(EquivalenceClasses::default());
                 // Find local identifiers, but nothing for external identifiers.
                 if let Id::Local(id) = id {
@@ -94,6 +94,19 @@ impl Analysis for Equivalences {
                         }
                     }
                 }
+                // Incorporate statements about column nullability.
+                let mut non_null_cols = vec![MirScalarExpr::literal_false()];
+                for (index, col_type) in typ.column_types.iter().enumerate() {
+                    if !col_type.nullable {
+                        non_null_cols.push(MirScalarExpr::column(index).call_is_null());
+                    }
+                }
+                if non_null_cols.len() > 1 {
+                    if let Some(equivalences) = equivalences.as_mut() {
+                        equivalences.classes.push(non_null_cols);
+                    }
+                }
+
                 equivalences
             }
             MirRelationExpr::Let { .. } => results.get(index - 1).unwrap().clone(),
@@ -178,6 +191,11 @@ impl Analysis for Equivalences {
                             .classes
                             .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
                     }
+
+                    // Having added classes to `equivalences`, we should minimize the classes to fold the
+                    // information in before applying the `project`, to set it up for success.
+                    equivalences.minimize(&None);
+
                     // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
                     // They also pass through equivalences of them and other constant columns (e.g. key columns).
                     // However, it is not correct to simply project onto these columns, as relationships amongst
@@ -201,8 +219,13 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = &depends.results::<RelationType>().unwrap()[index];
-        equivalences.as_mut().map(|e| e.minimize(expr_type));
+        // Capture the expression type, but remove statements about column nullability.
+        // Using such statements will optimize away equivalence expressions stating the same.
+        let mut expr_type = depends.results::<RelationType>().unwrap()[index].clone();
+        for typ in expr_type.as_mut().unwrap().iter_mut() {
+            typ.nullable = true;
+        }
+        equivalences.as_mut().map(|e| e.minimize(&expr_type));
         equivalences
     }
 

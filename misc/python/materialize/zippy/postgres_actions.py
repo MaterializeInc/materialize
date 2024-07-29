@@ -12,7 +12,7 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTableExists
 
@@ -23,7 +23,7 @@ class PostgresStart(Action):
     def provides(self) -> list[Capability]:
         return [PostgresRunning()]
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.up("postgres")
 
 
@@ -37,14 +37,14 @@ class PostgresStop(Action):
     def withholds(self) -> set[type[Capability]]:
         return {PostgresRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("postgres")
 
 
 class PostgresRestart(Action):
     """Restart the Postgres instance."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("postgres")
         c.up("postgres")
 
@@ -81,7 +81,7 @@ class CreatePostgresTable(Action):
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_postgres_table:
             primary_key = "PRIMARY KEY" if self.postgres_table.has_pk else ""
             c.testdrive(
@@ -92,7 +92,8 @@ class CreatePostgresTable(Action):
                     ALTER TABLE {self.postgres_table.name} REPLICA IDENTITY FULL;
                     INSERT INTO {self.postgres_table.name} VALUES ({self.postgres_table.watermarks.max});
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
     def provides(self) -> list[Capability]:
@@ -122,7 +123,7 @@ class PostgresDML(Action):
 class PostgresInsert(PostgresDML):
     """Inserts rows into a Postgres table."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         prev_max = self.postgres_table.watermarks.max
         self.postgres_table.watermarks.max = prev_max + self.delta
         c.testdrive(
@@ -131,14 +132,15 @@ class PostgresInsert(PostgresDML):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO {self.postgres_table.name} SELECT * FROM generate_series({prev_max + 1}, {self.postgres_table.watermarks.max});
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
 
 class PostgresShiftForward(PostgresDML):
     """Update all rows from a Postgres table by incrementing their values by a constant (tables without a PK only)"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if not self.postgres_table.has_pk:
             self.postgres_table.watermarks.shift(self.delta)
             c.testdrive(
@@ -147,14 +149,15 @@ class PostgresShiftForward(PostgresDML):
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE {self.postgres_table.name} SET f1 = f1 + {self.delta};
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
 class PostgresShiftBackward(PostgresDML):
     """Update all rows from a Postgres table by decrementing their values by a constant (tables without a PK only)"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if not self.postgres_table.has_pk:
             self.postgres_table.watermarks.shift(-self.delta)
             c.testdrive(
@@ -163,14 +166,15 @@ class PostgresShiftBackward(PostgresDML):
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE {self.postgres_table.name} SET f1 = f1 - {self.delta};
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
 class PostgresDeleteFromHead(PostgresDML):
     """Delete the largest values from a Postgres table"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.postgres_table.watermarks.max = max(
             self.postgres_table.watermarks.max - self.delta,
             self.postgres_table.watermarks.min,
@@ -181,14 +185,15 @@ class PostgresDeleteFromHead(PostgresDML):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DELETE FROM {self.postgres_table.name} WHERE f1 > {self.postgres_table.watermarks.max};
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
 
 class PostgresDeleteFromTail(PostgresDML):
     """Delete the smallest values from a Postgres table"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.postgres_table.watermarks.min = min(
             self.postgres_table.watermarks.min + self.delta,
             self.postgres_table.watermarks.max,
@@ -199,5 +204,6 @@ class PostgresDeleteFromTail(PostgresDML):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DELETE FROM {self.postgres_table.name} WHERE f1 < {self.postgres_table.watermarks.min};
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )

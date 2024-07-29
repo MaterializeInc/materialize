@@ -44,6 +44,7 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Materialized(),
+    Materialized(name="materialized2"),
     Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
@@ -76,7 +77,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.override(
         Materialized(
-            restart="on-failure",
             external_minio="toxiproxy",
             external_cockroach="toxiproxy",
             ports=["6975:6875", "6976:6876", "6977:6877"],
@@ -102,6 +102,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ports = {s: c.default_port(s) for s in service_names}
         ports["http"] = c.port("materialized", 6876)
         ports["mz_system"] = c.port("materialized", 6877)
+        if scenario == Scenario.ZeroDowntimeDeploy:
+            ports["materialized2"] = 7075
+            ports["http2"] = 7076
+            ports["mz_system2"] = 7077
         # try:
         run(
             "localhost",

@@ -1,0 +1,278 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (
+  a INT NOT NULL,
+  b TEXT NOT NULL,
+  c TEXT
+);
+
+statement ok
+INSERT INTO t VALUES (1, '10', 'x'), (2, '20', NULL), (3, '30', NULL), (4, '40', 'x'), (5, '50a', 'x'), (5, '50b', 'y'), (5, '50c', 'z');
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+    Project (#0, #1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), array_agg[order_by=[]](row(array[#2]))]
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), string_agg[order_by=[]](row(row(#2, ",")))]
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), string_agg[order_by=[#0 desc nulls_first]](row(row(#2, ","), #1))]
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), max(#2)]
+    Filter (#2 != "x")
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#2 != "x"))
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
+----
+Explained Query:
+  Project (#0..=#2)
+    Filter (#3 > 1)
+      Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), max(#1), count(*)]
+        Project (#0, #1)
+          ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, min(b), max(b) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[min(#1), max(#1)]
+    Project (#0, #1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)), array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1))]
+    Project (#0, #1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
+----
+Explained Query:
+  Return
+    Project (#0, #1, #3)
+      Map ((#2 > 0))
+        Union
+          Get l0
+          Map (null, null, null)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#0], #0)), array_agg[order_by=[#0 desc nulls_first]](row(array[#0], #0)), sum(1)]
+        Project (#1)
+          ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
+----
+Explained Query:
+  Return
+    Project (#0, #1, #1)
+      Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+        Project (#0, #1)
+          Join on=(#1 = #2) type=differential
+            ArrangeBy keys=[[#1]]
+              Project (#0, #2)
+                Get l0
+            ArrangeBy keys=[[#0]]
+              Project (#2)
+                Get l0
+  With
+    cte l0 =
+      Filter (#2) IS NOT NULL
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#2) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
+----
+Explained Query:
+  Return
+    Project (#0..=#2, #2)
+      Union
+        Get l0
+        Map (null, null, null)
+          Union
+            Negate
+              Project ()
+                Get l0
+            Constant
+              - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0), jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#1))), array_agg[order_by=[]](row(array[#1]))]
+        Project (#0, #1)
+          ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (#1 = #2)
+      Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)), array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1))]
+        Project (#0, #1)
+          ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
+
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), array_agg[order_by=[]](row(array[digest(text_to_bytea(#1), "sha256")]))]
+    Project (#0, #1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+
+query T multiline
+EXPLAIN SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), array_agg[order_by=[]](row(array[case when (#0 = 1) then "ooo" else #1 end]))]
+    Project (#0, #1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
+----
+Explained Query:
+  Project (#3, #5, #4)
+    Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Reduce aggregates=[dense_rank[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0))]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+            Project (#0, #1)
+              ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF

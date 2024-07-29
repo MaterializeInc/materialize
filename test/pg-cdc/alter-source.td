@@ -136,6 +136,9 @@ table_g               subsource
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"\"f2\""
+
 #
 # State checking
 #
@@ -357,6 +360,9 @@ INSERT INTO table_f VALUES (3, 'var1');
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
+
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+"\"f2\""
 
 > SELECT * FROM table_f
 1 var0

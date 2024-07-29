@@ -33,120 +33,148 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use prometheus::core::{
-    Atomic, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec, MetricVec,
+    Atomic, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec, Metric, MetricVec,
     MetricVecBuilder,
 };
 use prometheus::{Histogram, HistogramVec};
+
+/// The `prometheus` API uses the `HashMap` type to pass metrics labels, so we have to allow its
+/// usage when calling that API.
+#[allow(clippy::disallowed_types)]
+type PromLabelMap<'a> = std::collections::HashMap<&'a str, &'a str>;
+
+/// A trait that allows being generic over [`MetricVec`]s.
+pub trait MetricVec_: Sized {
+    /// The associated Metric collected.
+    type M: Metric;
+
+    /// See [`MetricVec::get_metric_with_label_values`].
+    fn get_metric_with_label_values(&self, vals: &[&str]) -> Result<Self::M, prometheus::Error>;
+
+    /// See [`MetricVec::get_metric_with`].
+    fn get_metric_with(&self, labels: &PromLabelMap) -> Result<Self::M, prometheus::Error>;
+
+    /// See [`MetricVec::remove_label_values`].
+    fn remove_label_values(&self, vals: &[&str]) -> Result<(), prometheus::Error>;
+
+    /// See [`MetricVec::remove`].
+    fn remove(&self, labels: &PromLabelMap) -> Result<(), prometheus::Error>;
+}
+
+impl<P: MetricVecBuilder> MetricVec_ for MetricVec<P> {
+    type M = P::M;
+
+    fn get_metric_with_label_values(&self, vals: &[&str]) -> prometheus::Result<Self::M> {
+        self.get_metric_with_label_values(vals)
+    }
+
+    fn get_metric_with(&self, labels: &PromLabelMap) -> Result<Self::M, prometheus::Error> {
+        self.get_metric_with(labels)
+    }
+
+    fn remove_label_values(&self, vals: &[&str]) -> Result<(), prometheus::Error> {
+        self.remove_label_values(vals)
+    }
+
+    fn remove(&self, labels: &PromLabelMap) -> Result<(), prometheus::Error> {
+        self.remove(labels)
+    }
+}
+
+/// Extension trait for metrics vectors.
+///
+/// It adds a method to create a concrete metric from the vector that gets removed from the vector
+/// when the concrete metric is dropped.
+pub trait MetricVecExt: MetricVec_ {
+    /// Returns a metric that deletes its labels from this metrics vector when dropped.
+    fn get_delete_on_drop_metric<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropMetric<'a, Self, L>;
+}
+
+impl<V: MetricVec_ + Clone> MetricVecExt for V {
+    fn get_delete_on_drop_metric<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropMetric<'a, Self, L> {
+        DeleteOnDropMetric::from_metric_vector(self.clone(), labels)
+    }
+}
 
 /// An extension trait for types that are valid (or convertible into) prometheus labels:
 /// slices/vectors of strings, and [`BTreeMap`]s.
 pub trait PromLabelsExt<'a> {
     /// Returns or creates a metric with the given metric label values.
     /// Panics if retrieving the metric returns an error.
-    fn get_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> <P as MetricVecBuilder>::M;
+    fn get_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> V::M;
 
     /// Removes a metric with these labels from a metrics vector.
-    fn remove_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> Result<(), prometheus::Error>;
+    fn remove_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> Result<(), prometheus::Error>;
 }
 
 impl<'a> PromLabelsExt<'a> for &'a [&'a str] {
-    fn get_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> <P as MetricVecBuilder>::M {
+    fn get_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> V::M {
         vec.get_metric_with_label_values(self)
             .expect("retrieving a metric by label values")
     }
 
-    fn remove_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> Result<(), prometheus::Error> {
+    fn remove_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> Result<(), prometheus::Error> {
         vec.remove_label_values(self)
     }
 }
 
 impl PromLabelsExt<'static> for Vec<String> {
-    fn get_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> <P as MetricVecBuilder>::M {
+    fn get_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> V::M {
         let labels: Vec<&str> = self.iter().map(String::as_str).collect();
         vec.get_metric_with_label_values(labels.as_slice())
             .expect("retrieving a metric by label values")
     }
 
-    fn remove_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> Result<(), prometheus::Error> {
+    fn remove_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> Result<(), prometheus::Error> {
         let labels: Vec<&str> = self.iter().map(String::as_str).collect();
         vec.remove_label_values(labels.as_slice())
     }
 }
 
 impl<'a> PromLabelsExt<'a> for Vec<&'a str> {
-    fn get_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> <P as MetricVecBuilder>::M {
+    fn get_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> V::M {
         vec.get_metric_with_label_values(self.as_slice())
             .expect("retrieving a metric by label values")
     }
 
-    fn remove_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> Result<(), prometheus::Error> {
+    fn remove_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> Result<(), prometheus::Error> {
         vec.remove_label_values(self.as_slice())
     }
 }
 
 impl PromLabelsExt<'static> for BTreeMap<String, String> {
-    fn get_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> <P as MetricVecBuilder>::M {
+    fn get_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> V::M {
         let labels = self.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         vec.get_metric_with(&labels)
             .expect("retrieving a metric by label values")
     }
 
-    fn remove_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> Result<(), prometheus::Error> {
+    fn remove_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> Result<(), prometheus::Error> {
         let labels = self.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         vec.remove(&labels)
     }
 }
 
 impl<'a> PromLabelsExt<'a> for BTreeMap<&'a str, &'a str> {
-    fn get_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> <P as MetricVecBuilder>::M {
+    fn get_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> V::M {
         let labels = self.iter().map(|(k, v)| (*k, *v)).collect();
         vec.get_metric_with(&labels)
             .expect("retrieving a metric by label values")
     }
 
-    fn remove_from_metric_vec<P: MetricVecBuilder>(
-        &self,
-        vec: &MetricVec<P>,
-    ) -> Result<(), prometheus::Error> {
+    fn remove_from_metric_vec<V: MetricVec_>(&self, vec: &V) -> Result<(), prometheus::Error> {
         let labels = self.iter().map(|(k, v)| (*k, *v)).collect();
         vec.remove(&labels)
     }
 }
 
-/// A [`GenericCounter`] wrapper that deletes its labels from the vec when it is dropped
+/// A [`Metric`] wrapper that deletes its labels from the vec when it is dropped.
 ///
 /// It adds a method to create a concrete metric from the vector that gets removed from the vector
 /// when the concrete metric is dropped.
@@ -155,21 +183,23 @@ impl<'a> PromLabelsExt<'a> for BTreeMap<&'a str, &'a str> {
 /// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
 /// type.
 #[derive(Debug)]
-pub struct DeleteOnDropHistogram<'a, L>
+pub struct DeleteOnDropMetric<'a, V, L>
 where
+    V: MetricVec_,
     L: PromLabelsExt<'a>,
 {
-    inner: Histogram,
+    inner: V::M,
     labels: L,
-    vec: HistogramVec,
+    vec: V,
     _phantom: &'a PhantomData<()>,
 }
 
-impl<'a, L> DeleteOnDropHistogram<'a, L>
+impl<'a, V, L> DeleteOnDropMetric<'a, V, L>
 where
+    V: MetricVec_,
     L: PromLabelsExt<'a>,
 {
-    fn from_metric_vector(vec: HistogramVec, labels: L) -> Self {
+    fn from_metric_vector(vec: V, labels: L) -> Self {
         let inner = labels.get_from_metric_vec(&vec);
         Self {
             inner,
@@ -180,27 +210,21 @@ where
     }
 }
 
-impl<'a, L> Deref for DeleteOnDropHistogram<'a, L>
+impl<'a, V, L> Deref for DeleteOnDropMetric<'a, V, L>
 where
+    V: MetricVec_,
     L: PromLabelsExt<'a>,
 {
-    type Target = Histogram;
+    type Target = V::M;
+
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<'a, L> Borrow<Histogram> for DeleteOnDropHistogram<'a, L>
+impl<'a, V, L> Drop for DeleteOnDropMetric<'a, V, L>
 where
-    L: PromLabelsExt<'a>,
-{
-    fn borrow(&self) -> &Histogram {
-        &self.inner
-    }
-}
-
-impl<'a, L> Drop for DeleteOnDropHistogram<'a, L>
-where
+    V: MetricVec_,
     L: PromLabelsExt<'a>,
 {
     fn drop(&mut self) {
@@ -210,52 +234,8 @@ where
     }
 }
 
-/// A [`GenericCounter`] wrapper that deletes its labels from the vec when it is dropped
-///
-/// It adds a method to create a concrete metric from the vector that gets removed from the vector
-/// when the concrete metric is dropped.
-///
-/// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
-/// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
-/// type.
-#[derive(Debug)]
-pub struct DeleteOnDropCounter<'a, P, L>
-where
-    P: Atomic,
-    L: PromLabelsExt<'a>,
-{
-    inner: GenericCounter<P>,
-    labels: L,
-    vec: GenericCounterVec<P>,
-    _phantom: &'a PhantomData<()>,
-}
-
-impl<'a, P, L> DeleteOnDropCounter<'a, P, L>
-where
-    P: Atomic,
-    L: PromLabelsExt<'a>,
-{
-    fn from_metric_vector(vec: GenericCounterVec<P>, labels: L) -> Self {
-        let inner = labels.get_from_metric_vec(&vec);
-        Self {
-            inner,
-            labels,
-            vec,
-            _phantom: &PhantomData,
-        }
-    }
-}
-
-impl<'a, P, L> Deref for DeleteOnDropCounter<'a, P, L>
-where
-    P: Atomic,
-    L: PromLabelsExt<'a>,
-{
-    type Target = GenericCounter<P>;
-    fn deref(&self) -> &GenericCounter<P> {
-        &self.inner
-    }
-}
+/// A [`GenericCounter`] wrapper that deletes its labels from the vec when it is dropped.
+pub type DeleteOnDropCounter<'a, P, L> = DeleteOnDropMetric<'a, GenericCounterVec<P>, L>;
 
 impl<'a, P, L> Borrow<GenericCounter<P>> for DeleteOnDropCounter<'a, P, L>
 where
@@ -267,110 +247,8 @@ where
     }
 }
 
-impl<'a, P, L> Drop for DeleteOnDropCounter<'a, P, L>
-where
-    P: Atomic,
-    L: PromLabelsExt<'a>,
-{
-    fn drop(&mut self) {
-        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
-            // ignore.
-        }
-    }
-}
-
-/// Extension trait for all gauge metrics vectors.
-///
-/// It adds a method to create a concrete metric from the vector that gets removed from the vector
-/// when the concrete metric is dropped.
-pub trait CounterVecExt {
-    /// The type of value that the counter should count.
-    type CounterType: Atomic;
-
-    /// Returns a counter that deletes its labels from this metrics vector when dropped.
-    /// See [`DeleteOnDropCounter`] for a detailed description.
-    fn get_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropCounter<'a, Self::CounterType, L>;
-}
-
-impl<P: Atomic> CounterVecExt for GenericCounterVec<P> {
-    type CounterType = P;
-
-    fn get_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropCounter<'a, Self::CounterType, L> {
-        DeleteOnDropCounter::from_metric_vector(self.clone(), labels)
-    }
-}
-
-/// Extension trait for all gauge metrics vectors.
-///
-/// It adds a method to create a concrete metric from the vector that gets removed from the vector
-/// when the concrete metric is dropped.
-pub trait HistogramVecExt {
-    /// Returns a counter that deletes its labels from this metrics vector when dropped.
-    /// See [`DeleteOnDropCounter`] for a detailed description.
-    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropHistogram<'a, L>;
-}
-
-impl HistogramVecExt for HistogramVec {
-    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropHistogram<'a, L> {
-        DeleteOnDropHistogram::from_metric_vector(self.clone(), labels)
-    }
-}
-
-/// A [`GenericGauge`] wrapper that deletes its labels from the vec when it is dropped
-///
-/// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
-/// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
-/// type.
-#[derive(Debug)]
-pub struct DeleteOnDropGauge<'a, P, L>
-where
-    P: Atomic,
-    L: PromLabelsExt<'a>,
-{
-    inner: GenericGauge<P>,
-    labels: L,
-    vec: GenericGaugeVec<P>,
-    _phantom: &'a PhantomData<()>,
-}
-
-impl<'a, P, L> DeleteOnDropGauge<'a, P, L>
-where
-    P: Atomic,
-    L: PromLabelsExt<'a>,
-{
-    fn from_metric_vector(vec: GenericGaugeVec<P>, labels: L) -> Self {
-        let inner = labels.get_from_metric_vec(&vec);
-        Self {
-            inner,
-            labels,
-            vec,
-            _phantom: &PhantomData,
-        }
-    }
-}
-
-impl<'a, P, L> Deref for DeleteOnDropGauge<'a, P, L>
-where
-    P: Atomic,
-    L: PromLabelsExt<'a>,
-{
-    type Target = GenericGauge<P>;
-    fn deref(&self) -> &GenericGauge<P> {
-        &self.inner
-    }
-}
+/// A [`GenericGauge`] wrapper that deletes its labels from the vec when it is dropped.
+pub type DeleteOnDropGauge<'a, P, L> = DeleteOnDropMetric<'a, GenericGaugeVec<P>, L>;
 
 impl<'a, P, L> Borrow<GenericGauge<P>> for DeleteOnDropGauge<'a, P, L>
 where
@@ -382,39 +260,15 @@ where
     }
 }
 
-impl<'a, P, L> Drop for DeleteOnDropGauge<'a, P, L>
+/// A [`Histogram`] wrapper that deletes its labels from the vec when it is dropped.
+pub type DeleteOnDropHistogram<'a, L> = DeleteOnDropMetric<'a, HistogramVec, L>;
+
+impl<'a, L> Borrow<Histogram> for DeleteOnDropHistogram<'a, L>
 where
-    P: Atomic,
     L: PromLabelsExt<'a>,
 {
-    fn drop(&mut self) {
-        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
-            // ignore.
-        }
-    }
-}
-
-/// Extension trait for all metrics vectors.
-pub trait GaugeVecExt {
-    /// The type of value that the gauge should count.
-    type GaugeType: Atomic;
-
-    /// Returns a gauge that deletes its labels from this metrics vector when dropped.
-    /// See [`DeleteOnDropGauge`] for a detailed description.
-    fn get_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropGauge<'a, Self::GaugeType, L>;
-}
-
-impl<P: Atomic> GaugeVecExt for GenericGaugeVec<P> {
-    type GaugeType = P;
-
-    fn get_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropGauge<'a, Self::GaugeType, L> {
-        DeleteOnDropGauge::from_metric_vector(self.clone(), labels)
+    fn borrow(&self) -> &Histogram {
+        &self.inner
     }
 }
 
@@ -437,7 +291,7 @@ mod test {
             var_labels: ["dimension"]));
 
         let dims: &[&str] = &["one"];
-        let metric_1 = vec.get_delete_on_drop_counter(dims);
+        let metric_1 = vec.get_delete_on_drop_metric(dims);
         metric_1.inc();
 
         let metrics = reg.gather();
@@ -457,7 +311,7 @@ mod test {
             counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
         }
         let metric_owned = Ownership {
-            counter: vec.get_delete_on_drop_counter(string_labels),
+            counter: vec.get_delete_on_drop_metric(string_labels),
         };
         metric_owned.counter.inc();
 
@@ -483,7 +337,7 @@ mod test {
             var_labels: ["dimension"]));
 
         let dims: &[&str] = &["one"];
-        let metric_1 = vec.get_delete_on_drop_gauge(dims);
+        let metric_1 = vec.get_delete_on_drop_metric(dims);
         metric_1.set(666);
 
         let metrics = reg.gather();
@@ -503,7 +357,7 @@ mod test {
             gauge: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
         }
         let metric_owned = Ownership {
-            gauge: vec.get_delete_on_drop_gauge(string_labels),
+            gauge: vec.get_delete_on_drop_metric(string_labels),
         };
         metric_owned.gauge.set(666);
 

@@ -28,9 +28,7 @@ use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_ore::{instrument, soft_panic_or_log};
-use mz_persist::indexed::columnar::{
-    ColumnarRecords, ColumnarRecordsBuilder, ColumnarRecordsStructuredExt,
-};
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
@@ -221,7 +219,7 @@ where
         // don't bother.
         let mut parts = Vec::new();
         for part in self.batch.parts.drain(..) {
-            let (updates, ts_rewrite) = match part {
+            let (updates, ts_rewrite, schema_id) = match part {
                 BatchPart::Hollow(x) => {
                     parts.push(BatchPart::Hollow(x));
                     continue;
@@ -229,7 +227,8 @@ where
                 BatchPart::Inline {
                     updates,
                     ts_rewrite,
-                } => (updates, ts_rewrite),
+                    schema_id,
+                } => (updates, ts_rewrite, schema_id),
             };
             let updates = updates
                 .decode::<T>(&self.metrics.columnar)
@@ -237,6 +236,8 @@ where
             let key_lower = updates.key_lower().to_vec();
             let diffs_sum =
                 diffs_sum::<D>(updates.updates.records()).expect("inline parts are not empty");
+            let mut stats_schemas = stats_schemas.clone();
+            stats_schemas.id = schema_id;
 
             let write_span =
                 debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
@@ -254,7 +255,7 @@ where
                     key_lower,
                     ts_rewrite,
                     D::encode(&diffs_sum),
-                    stats_schemas.clone(),
+                    stats_schemas,
                 )
                 .instrument(write_span),
             );
@@ -897,6 +898,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let batch_metrics = self.batch_metrics.clone();
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let ts_rewrite = None;
+        let schema_id = schemas.id;
 
         let handle = if updates.goodbytes() < self.cfg.inline_writes_single_max_bytes {
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
@@ -915,6 +917,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     BatchPart::Inline {
                         updates,
                         ts_rewrite,
+                        schema_id,
                     }
                 }
                 .instrument(span),
@@ -978,6 +981,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let key = partial_key.complete(&shard_metrics.shard_id);
         let goodbytes = updates.updates.records().goodbytes();
         let metrics_ = Arc::clone(&metrics);
+        let schema_id = schemas.id;
 
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
@@ -989,7 +993,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         });
 
                         // We can't collect stats if we failed to encode in a columnar format.
-                        let Ok(((key_col, val_col), stats)) = result else {
+                        let Ok((extended_cols, stats)) = result else {
                             tracing::error!(?result, "failed to encode in columnar format!");
                             break 'collect_stats None;
                         };
@@ -997,14 +1001,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         // Write a structured batch if the dyncfg is enabled and we're the stats
                         // override is not set.
                         if let BlobTraceUpdates::Row(record) = &updates.updates {
-                            if cfg.batch_columnar_format.is_structured()
-                                && !cfg.batch_columnar_stats_only_override
-                            {
-                                let record_ext = ColumnarRecordsStructuredExt {
-                                    key: key_col,
-                                    val: val_col,
-                                };
-                                updates.updates = BlobTraceUpdates::Both(record.clone(), record_ext)
+                            if let Some(record_ext) = extended_cols {
+                                if !cfg.batch_columnar_stats_only_override {
+                                    updates.updates =
+                                        BlobTraceUpdates::Both(record.clone(), record_ext);
+                                }
                             }
                         }
 
@@ -1085,6 +1086,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
             format,
+            schema_id,
         })
     }
 

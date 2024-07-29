@@ -23,6 +23,7 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import get_published_minor_mz_versions
 
 # late initialization
@@ -59,18 +60,16 @@ def start_mz_read_only(
     deploy_generation: int,
     mz_service: str = "materialized",
     tag: MzVersion | None = None,
+    system_parameter_version: MzVersion | None = None,
 ) -> StartMz:
     return StartMz(
         scenario,
         tag=tag,
         mz_service=mz_service,
         deploy_generation=deploy_generation,
-        healthcheck=[
-            "CMD",
-            "curl",
-            "-f",
-            "localhost:6878/api/leader/status",
-        ],
+        healthcheck=LEADER_STATUS_HEALTHCHECK,
+        restart="unless-stopped",
+        system_parameter_version=system_parameter_version,
     )
 
 
@@ -187,7 +186,7 @@ class UpgradeClusterdComputeLast(Scenario):
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(self, tag=None, system_parameter_version=self.base_version()),
             # No useful work can be done while clusterd is old-version
             # and environmentd is new-version. So we proceed
             # to upgrade clusterd as well.
@@ -295,7 +294,12 @@ class PreflightCheckRollback(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            start_mz_read_only(self, tag=None, deploy_generation=1),
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=1,
+                system_parameter_version=self.base_version(),
+            ),
             WaitReadyMz(),
             KillMz(capture_logs=True),
             StartMz(self, tag=self.base_version()),

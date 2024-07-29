@@ -13,13 +13,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::DerefMut;
 
 use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
+use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
     ExternalReferences, Ident, IdentError, MySqlConfigOptionName, WithOptionValue,
 };
-use mz_storage_types::sources::SourceReferenceResolver;
+use mz_sql_parser::ast::{UnresolvedItemName, Value};
+use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
+use prost::Message;
 
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
@@ -62,9 +64,14 @@ pub fn generate_create_subsource_statements(
     let mut subsources = Vec::with_capacity(requested_subsources.len());
 
     for (subsource_name, purified_export) in requested_subsources {
-        let table = match &purified_export.details {
-            PurifiedExportDetails::MySql { table } => table,
-            _ => unreachable!("purified export details must be mysql"),
+        let PurifiedExportDetails::MySql {
+            table,
+            text_columns,
+            ignore_columns,
+            initial_gtid_set,
+        } = purified_export.details
+        else {
+            unreachable!("purified export details must be mysql")
         };
 
         // Figure out the schema of the subsource
@@ -117,6 +124,50 @@ pub fn generate_create_subsource_statements(
             }
         }
 
+        let details = SourceExportStatementDetails::MySql {
+            table,
+            initial_gtid_set,
+        };
+
+        let mut with_options = vec![
+            CreateSubsourceOption {
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(
+                    purified_export.external_reference,
+                )),
+            },
+            CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            },
+        ];
+
+        if let Some(text_columns) = text_columns {
+            with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::TextColumns,
+                value: Some(WithOptionValue::Sequence(
+                    text_columns
+                        .into_iter()
+                        .map(WithOptionValue::Ident::<Aug>)
+                        .collect::<Vec<_>>(),
+                )),
+            });
+        }
+
+        if let Some(ignore_columns) = ignore_columns {
+            with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::IgnoreColumns,
+                value: Some(WithOptionValue::Sequence(
+                    ignore_columns
+                        .into_iter()
+                        .map(WithOptionValue::Ident::<Aug>)
+                        .collect::<Vec<_>>(),
+                )),
+            });
+        }
+
         // Create the subsource statement
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
@@ -124,12 +175,7 @@ pub fn generate_create_subsource_statements(
             of_source: Some(source_name.clone()),
             constraints,
             if_not_exists: false,
-            with_options: vec![CreateSubsourceOption {
-                name: CreateSubsourceOptionName::ExternalReference,
-                value: Some(WithOptionValue::UnresolvedItemName(
-                    purified_export.external_reference,
-                )),
-            }],
+            with_options,
         };
         subsources.push(subsource);
     }
@@ -253,6 +299,7 @@ pub(super) async fn purify_source_exports(
     text_columns: Vec<UnresolvedItemName>,
     ignore_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
+    initial_gtid_set: String,
 ) -> Result<PurifiedSourceExports, PlanError> {
     // Determine which table schemas to request from mysql. Note that in mysql
     // a 'schema' is the same as a 'database', and a fully qualified table
@@ -396,12 +443,27 @@ pub(super) async fn purify_source_exports(
     let source_exports = validated_source_exports
         .into_iter()
         .map(|r| {
+            let table_ref = mz_mysql_util::QualifiedTableRef {
+                schema_name: r.table.schema_name.as_str(),
+                table_name: r.table.name.as_str(),
+            };
             (
                 r.name,
                 PurifiedSourceExport {
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::MySql {
                         table: r.table.clone(),
+                        text_columns: text_cols_map.get(&table_ref).map(|cols| {
+                            cols.iter()
+                                .map(|c| Ident::new(*c).expect("validated above"))
+                                .collect()
+                        }),
+                        ignore_columns: ignore_cols_map.get(&table_ref).map(|cols| {
+                            cols.iter()
+                                .map(|c| Ident::new(*c).expect("validated above"))
+                                .collect()
+                        }),
+                        initial_gtid_set: initial_gtid_set.clone(),
                     },
                 },
             )

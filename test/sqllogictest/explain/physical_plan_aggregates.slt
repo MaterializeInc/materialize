@@ -1,0 +1,464 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (
+  a INT NOT NULL,
+  b TEXT NOT NULL,
+  c TEXT
+);
+
+statement ok
+INSERT INTO t VALUES (1, '10', 'x'), (2, '20', NULL), (3, '30', NULL), (4, '40', 'x'), (5, '50a', 'x'), (5, '50b', 'y'), (5, '50c', 'z');
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce::Basic
+    aggr=(0, array_agg[order_by=[]](row(array[#1])))
+    val_plan
+      project=(#2)
+      map=(row(array[#1]))
+    key_plan
+      project=(#0)
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce::Basic
+    aggrs[0]=(0, array_agg[order_by=[]](row(array[#1])))
+    aggrs[1]=(1, array_agg[order_by=[]](row(array[#2])))
+    val_plan
+      project=(#3, #4)
+      map=(row(array[#1]), row(array[#2]))
+    key_plan
+      project=(#0)
+    Get::PassArrangements materialize.public.t
+      raw=true
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce::Basic
+    aggrs[0]=(0, array_agg[order_by=[]](row(array[#1])))
+    aggrs[1]=(1, string_agg[order_by=[]](row(row(#2, ","))))
+    val_plan
+      project=(#3, #4)
+      map=(row(array[#1]), row(row(#2, ",")))
+    key_plan
+      project=(#0)
+    Get::PassArrangements materialize.public.t
+      raw=true
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce::Basic
+    aggrs[0]=(0, array_agg[order_by=[]](row(array[#1])))
+    aggrs[1]=(1, string_agg[order_by=[#0 desc nulls_first]](row(row(#2, ","), #1)))
+    val_plan
+      project=(#3, #4)
+      map=(row(array[#1]), row(row(#2, ","), #1))
+    key_plan
+      project=(#0)
+    Get::PassArrangements materialize.public.t
+      raw=true
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
+----
+Explained Query:
+  Reduce::Collation
+    aggregate_types=[b, h]
+    hierarchical
+      aggr_funcs=[max]
+      skips=[1]
+      monotonic
+      must_consolidate
+    basic
+      aggr=(0, array_agg[order_by=[]](row(array[#1])))
+    val_plan
+      project=(#3, #2)
+      map=(row(array[#1]))
+    key_plan
+      project=(#0)
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  filter=((#2 != "x"))
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
+----
+Explained Query:
+  Reduce::Collation
+    aggregate_types=[b, h, a]
+    accumulable
+      simple_aggrs[0]=(0, 2, count(*))
+    hierarchical
+      aggr_funcs=[max]
+      skips=[1]
+      monotonic
+      must_consolidate
+    basic
+      aggr=(0, array_agg[order_by=[]](row(array[#1])))
+    val_plan
+      project=(#2, #1, #3)
+      map=(row(array[#1]), true)
+    key_plan
+      project=(#0)
+    mfp_after
+      project=(#0..=#2)
+      filter=((#3 > 1))
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, min(b), max(b) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce::Hierarchical
+    aggr_funcs=[min, max]
+    skips=[0, 0]
+    monotonic
+    must_consolidate
+    val_plan
+      project=(#1, #1)
+    key_plan
+      project=(#0)
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce::Basic
+    aggrs[0]=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)))
+    aggrs[1]=(1, array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1)))
+    val_plan
+      project=(#2, #2)
+      map=(row(array[#1], #1))
+    key_plan
+      project=(#0)
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
+----
+Explained Query:
+  Return
+    Mfp
+      project=(#0, #1, #3)
+      map=((#2 > 0))
+      Union
+        ArrangeBy
+          input_key=[]
+          raw=true
+          Get::PassArrangements l0
+            raw=false
+            arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+        Mfp
+          project=(#0..=#2)
+          map=(null, null, null)
+          Union consolidate_output=true
+            Negate
+              Get::Arrangement l0
+                project=()
+                key=
+                raw=false
+                arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+            Constant
+              - ()
+  With
+    cte l0 =
+      Reduce::Collation
+        aggregate_types=[b, b, a]
+        accumulable
+          simple_aggrs[0]=(0, 2, sum(1))
+        basic
+          aggrs[0]=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#0], #0)))
+          aggrs[1]=(1, array_agg[order_by=[#0 desc nulls_first]](row(array[#0], #0)))
+        val_plan
+          project=(#1, #1, #2)
+          map=(row(array[#0], #0), 1)
+        key_plan
+          project=()
+        Get::Collection materialize.public.t
+          raw=true
+
+Source materialize.public.t
+  project=(#1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
+----
+Explained Query:
+  Return
+    Mfp
+      project=(#0, #1, #1)
+      input_key=#0
+      Reduce::Basic
+        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        val_plan
+          project=(#2)
+          map=(row(array[#1]))
+        key_plan
+          project=(#0)
+        Join::Linear
+          linear_stage[0]
+            closure
+              project=(#1, #0)
+            lookup={ relation=1, key=[#0] }
+            stream={ key=[#1], thinning=(#0) }
+          source={ relation=0, key=[#1] }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            types=[integer, text]
+            Get::Collection l0
+              project=(#0, #2)
+              raw=true
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            types=[text]
+            Get::Collection l0
+              project=(#2)
+              raw=true
+  With
+    cte l0 =
+      Get::Collection materialize.public.t
+        raw=true
+
+Source materialize.public.t
+  filter=((#2) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
+----
+Explained Query:
+  Return
+    Mfp
+      project=(#0..=#2, #2)
+      Union
+        ArrangeBy
+          input_key=[]
+          raw=true
+          Get::PassArrangements l0
+            raw=false
+            arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+        Mfp
+          project=(#0..=#2)
+          map=(null, null, null)
+          Union consolidate_output=true
+            Negate
+              Get::Arrangement l0
+                project=()
+                key=
+                raw=false
+                arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+            Constant
+              - ()
+  With
+    cte l0 =
+      Reduce::Collation
+        aggregate_types=[a, b, b]
+        accumulable
+          simple_aggrs[0]=(0, 0, sum(#0))
+        basic
+          aggrs[0]=(1, jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#1))))
+          aggrs[1]=(2, array_agg[order_by=[]](row(array[#1])))
+        val_plan
+          project=(#0, #2, #3)
+          map=(row(jsonbable_to_jsonb(#1)), row(array[#1]))
+        key_plan
+          project=()
+        Get::Collection materialize.public.t
+          raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
+----
+Explained Query:
+  Reduce::Basic
+    aggrs[0]=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)))
+    aggrs[1]=(1, array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1)))
+    val_plan
+      project=(#2, #2)
+      map=(row(array[#1], #1))
+    key_plan
+      project=(#0)
+    mfp_after
+      project=(#0, #1)
+      filter=((#1 = #2))
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
+
+----
+Explained Query:
+  Reduce::Basic
+    aggrs[0]=(0, array_agg[order_by=[]](row(array[#1])))
+    aggrs[1]=(1, array_agg[order_by=[]](row(array[digest(text_to_bytea(#1), "sha256")])))
+    val_plan
+      project=(#2, #3)
+      map=(row(array[#1]), row(array[digest(text_to_bytea(#1), "sha256")]))
+    key_plan
+      project=(#0)
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
+----
+Explained Query:
+  Reduce::Basic
+    aggrs[0]=(0, array_agg[order_by=[]](row(array[#1])))
+    aggrs[1]=(1, array_agg[order_by=[]](row(array[case when (#0 = 1) then "ooo" else #1 end])))
+    val_plan
+      project=(#2, #3)
+      map=(row(array[#1]), row(array[case when (#0 = 1) then "ooo" else #1 end]))
+    key_plan
+      project=(#0)
+    Get::Collection materialize.public.t
+      raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
+----
+Explained Query:
+  FlatMap unnest_list(#0)
+    mfp_after
+      project=(#3, #5, #4)
+      map=(record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1))
+    input_key=
+    Reduce::Basic
+      aggr=(0, dense_rank[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)))
+      val_plan
+        project=(#2)
+        map=(row(list[row(#0, #1)], #0))
+      key_plan
+        project=()
+      input_key=#0
+      Reduce::Basic
+        aggr=(0, array_agg[order_by=[]](row(array[#1])))
+        val_plan
+          project=(#2)
+          map=(row(array[#1]))
+        key_plan
+          project=(#0)
+        Get::Collection materialize.public.t
+          raw=true
+
+Source materialize.public.t
+  project=(#0, #1)
+
+Target cluster: quickstart
+
+EOF

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_repr::{RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 use std::collections::BTreeSet;
 use std::fs;
@@ -56,6 +57,7 @@ fn test_proto_serialization_stability() {
     }
 
     let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
+    let relation_desc = RelationDesc::empty().with_column("a", ScalarType::Jsonb.nullable(false));
     for snapshot_file in snapshot_files {
         let encoded_bytes = fs::read(format!("{}/{}.txt", *SNAPSHOT_DIRECTORY, snapshot_file))
             .expect("unable to read encoded file");
@@ -63,7 +65,7 @@ fn test_proto_serialization_stability() {
         let decoded = encoded_str
             .lines()
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
-            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .map(|b| SourceData::decode(&b, &relation_desc).expect("valid proto"))
             .map(StateUpdateKindRaw::from)
             .map(|raw| {
                 AllVersionsStateUpdateKind::try_from_raw(&snapshot_file, raw)

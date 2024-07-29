@@ -2721,6 +2721,99 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     ), f"index sinces did not match {index_since1} vs {index_since2})"
 
 
+RE_WORKLOAD_CLASS_LABEL = re.compile(r'workload_class="(?P<value>\w+)"')
+
+
+def workflow_test_workload_class_in_metrics(c: Composition) -> None:
+    """
+    Test that setting the cluster workload class correctly reflects in metrics
+    exposed by envd and clusterd.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    def check_workload_class(expected: str | None):
+        """
+        Assert that metrics on both envd and clusterd are labeled with the
+        given expected workload class.
+        """
+
+        # Sleep a bit to give workload class changes time to propagate.
+        time.sleep(1)
+
+        envd_metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        clusterd_metrics = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+
+        envd_classes = {
+            m.group("value") for m in RE_WORKLOAD_CLASS_LABEL.finditer(envd_metrics)
+        }
+        clusterd_classes = {
+            m.group("value") for m in RE_WORKLOAD_CLASS_LABEL.finditer(clusterd_metrics)
+        }
+
+        if expected is None:
+            assert (
+                not envd_classes
+            ), f"envd: expected no workload classes, found {envd_classes}"
+            assert (
+                not clusterd_classes
+            ), f"clusterd: expected no workload classes, found {clusterd_classes}"
+        else:
+            assert envd_classes == {
+                expected
+            }, f"envd: expected workload class '{expected}', found {envd_classes}"
+            assert clusterd_classes == {
+                expected
+            }, f"clusterd: expected workload class '{expected}', found {clusterd_classes}"
+
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+        CREATE CLUSTER test REPLICAS (r1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    check_workload_class(None)
+
+    c.sql(
+        "ALTER CLUSTER test SET (WORKLOAD CLASS 'production')",
+        port=6877,
+        user="mz_system",
+    )
+
+    check_workload_class("production")
+
+    c.sql(
+        "ALTER CLUSTER test SET (WORKLOAD CLASS 'staging')",
+        port=6877,
+        user="mz_system",
+    )
+
+    check_workload_class("staging")
+
+    c.sql(
+        "ALTER CLUSTER test RESET (WORKLOAD CLASS)",
+        port=6877,
+        user="mz_system",
+    )
+
+    check_workload_class(None)
+
+
 def workflow_test_concurrent_connections(c: Composition) -> None:
     """
     Run many concurrent connections, measure their p50 and p99 latency, make

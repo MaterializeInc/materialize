@@ -12,7 +12,13 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+    State,
+)
 from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import source_capable_clusters
@@ -85,7 +91,7 @@ class CreateSource(Action):
         self.source = source
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         envelope = str(self.source.topic.envelope).split(".")[1]
         kafka_connection_name = f"{self.source.name}_kafka_conn"
         c.testdrive(
@@ -104,7 +110,8 @@ class CreateSource(Action):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
                   ENVELOPE {envelope}
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
     def provides(self) -> list[Capability]:
@@ -116,15 +123,17 @@ class AlterSourceConnection(Action):
         self.source = source
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         # This flips the usage of the SSH tunnel.
         self.flip_usage_of_ssh_tunnel(
-            c, new_use_ssh_status=not self.source.uses_ssh_tunnel
+            c,
+            new_use_ssh_status=not self.source.uses_ssh_tunnel,
+            mz_service=state.mz_service,
         )
         self.source.uses_ssh_tunnel = not self.source.uses_ssh_tunnel
 
     def flip_usage_of_ssh_tunnel(
-        self, c: Composition, new_use_ssh_status: bool
+        self, c: Composition, new_use_ssh_status: bool, mz_service: str
     ) -> None:
         kafka_connection_name = f"{self.source.name}_kafka_conn"
 
@@ -134,7 +143,8 @@ class AlterSourceConnection(Action):
                 > ALTER CONNECTION {kafka_connection_name} SET (BROKER '${{testdrive.kafka-addr}}'
                   {'USING SSH TUNNEL zippy_ssh' if new_use_ssh_status else ''});
                 """
-            )
+            ),
+            mz_service=mz_service,
         )
 
     def provides(self) -> list[Capability]:

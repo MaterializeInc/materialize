@@ -45,10 +45,11 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use derivative::Derivative;
 use pin_project::pin_project;
 use prometheus::core::{
     Atomic, AtomicF64, AtomicI64, AtomicU64, Collector, Desc, GenericCounter, GenericCounterVec,
@@ -108,9 +109,12 @@ pub struct MakeCollectorOpts {
 }
 
 /// The materialize metrics registry.
-#[derive(Debug, Clone)]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub struct MetricsRegistry {
     inner: Registry,
+    #[derivative(Debug = "ignore")]
+    postprocessors: Arc<Mutex<Vec<Box<dyn FnMut(&mut Vec<MetricFamily>) + Send + Sync>>>>,
 }
 
 /// A wrapper for metrics to require delete on drop semantics
@@ -149,34 +153,13 @@ impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
     }
 }
 
-impl<M: GaugeVecExt> GaugeVecExt for DeleteOnDropWrapper<M> {
-    type GaugeType = M::GaugeType;
-
-    fn get_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
+impl<M: MetricVecExt> DeleteOnDropWrapper<M> {
+    /// Returns a metric that deletes its labels from this metrics vector when dropped.
+    pub fn get_delete_on_drop_metric<'a, L: PromLabelsExt<'a>>(
         &self,
         labels: L,
-    ) -> DeleteOnDropGauge<'a, Self::GaugeType, L> {
-        self.inner.get_delete_on_drop_gauge(labels)
-    }
-}
-
-impl<M: CounterVecExt> CounterVecExt for DeleteOnDropWrapper<M> {
-    type CounterType = M::CounterType;
-
-    fn get_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropCounter<'a, Self::CounterType, L> {
-        self.inner.get_delete_on_drop_counter(labels)
-    }
-}
-
-impl<M: HistogramVecExt> HistogramVecExt for DeleteOnDropWrapper<M> {
-    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
-        &self,
-        labels: L,
-    ) -> DeleteOnDropHistogram<'a, L> {
-        self.inner.get_delete_on_drop_histogram(labels)
+    ) -> DeleteOnDropMetric<'a, M, L> {
+        self.inner.get_delete_on_drop_metric(labels)
     }
 }
 
@@ -219,6 +202,7 @@ impl MetricsRegistry {
     pub fn new() -> Self {
         MetricsRegistry {
             inner: Registry::new(),
+            postprocessors: Arc::new(Mutex::new(vec![])),
         }
     }
 
@@ -257,11 +241,32 @@ impl MetricsRegistry {
             .expect("registering pre-defined metrics collector");
     }
 
+    /// Registers a metric postprocessor.
+    ///
+    /// Postprocessors are invoked on every call to [`MetricsRegistry::gather`]
+    /// in the order that they are registered.
+    pub fn register_postprocessor<F>(&self, f: F)
+    where
+        F: FnMut(&mut Vec<MetricFamily>) + Send + Sync + 'static,
+    {
+        let mut postprocessors = self.postprocessors.lock().expect("lock poisoned");
+        postprocessors.push(Box::new(f));
+    }
+
     /// Gather all the metrics from the metrics registry for reporting.
+    ///
+    /// This function invokes the postprocessors on all gathered metrics (see
+    /// [`MetricsRegistry::register_postprocessor`]) in the order the
+    /// postprocessors were registered.
     ///
     /// See also [`prometheus::Registry::gather`].
     pub fn gather(&self) -> Vec<MetricFamily> {
-        self.inner.gather()
+        let mut metrics = self.inner.gather();
+        let mut postprocessors = self.postprocessors.lock().expect("lock poisoned");
+        for postprocessor in &mut *postprocessors {
+            postprocessor(&mut metrics);
+        }
+        metrics
     }
 }
 

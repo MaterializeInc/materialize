@@ -10,14 +10,14 @@
 //! Traits and types for reusable expression analysis
 
 pub mod equivalences;
+pub mod monotonic;
 
 use mz_expr::MirRelationExpr;
-
-pub use common::{Derived, DerivedBuilder, DerivedView};
 
 pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
+pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
@@ -438,10 +438,20 @@ pub mod common {
                     return Err(());
                 }
 
+                // Track if repetitions may be required, to avoid iteration if they are not.
+                let mut is_recursive = false;
                 // Update each derived value and track if any have changed.
                 for index in lower..upper {
                     let value = self.derive(exprs[index], index, depends);
                     changed = lattice.meet_assign(&mut self.results[index], value) || changed;
+                    if let MirRelationExpr::LetRec { .. } = &exprs[index] {
+                        is_recursive = true;
+                    }
+                }
+
+                // Un-set the potential loop if there was no recursion.
+                if !is_recursive {
+                    changed = false;
                 }
             }
             Ok(true)
@@ -690,6 +700,7 @@ mod unique_keys {
 mod non_negative {
 
     use super::{Analysis, Derived, Lattice};
+    use crate::analysis::common_lattice::BoolLattice;
     use mz_expr::{Id, MirRelationExpr};
 
     /// Analysis that determines if all accumulations at all times are non-negative.
@@ -714,11 +725,13 @@ mod non_negative {
                     .map(|r| r.iter().all(|(_, diff)| diff >= &0))
                     .unwrap_or(true),
                 MirRelationExpr::Get { id, .. } => match id {
-                    Id::Local(id) => depends
-                        .bindings()
-                        .get(id)
-                        .map(|off| results[*off])
-                        .unwrap_or(false),
+                    Id::Local(id) => {
+                        let index = *depends
+                            .bindings()
+                            .get(id)
+                            .expect("Dependency info not found");
+                        *results.get(index).unwrap_or(&false)
+                    }
                     Id::Global(_) => true,
                 },
                 // Negate must be false unless input is "non-positive".
@@ -765,20 +778,7 @@ mod non_negative {
         }
 
         fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
-            Some(Box::new(NNLattice))
-        }
-    }
-
-    struct NNLattice;
-
-    impl Lattice<bool> for NNLattice {
-        fn top(&self) -> bool {
-            true
-        }
-        fn meet_assign(&self, into: &mut bool, item: bool) -> bool {
-            let changed = *into && !item;
-            *into = *into && item;
-            changed
+            Some(Box::new(BoolLattice))
         }
     }
 
@@ -1826,6 +1826,25 @@ mod cardinality {
                 CardinalityEstimate::Estimate(OrderedFloat(estimate)) => write!(f, "{estimate}"),
                 CardinalityEstimate::Unknown => write!(f, "<UNKNOWN>"),
             }
+        }
+    }
+}
+
+mod common_lattice {
+    use crate::analysis::Lattice;
+
+    pub struct BoolLattice;
+
+    impl Lattice<bool> for BoolLattice {
+        // `true` > `false`.
+        fn top(&self) -> bool {
+            true
+        }
+        // `false` is the greatest lower bound. `into` changes if it's true and `item` is false.
+        fn meet_assign(&self, into: &mut bool, item: bool) -> bool {
+            let changed = *into && !item;
+            *into = *into && item;
+            changed
         }
     }
 }

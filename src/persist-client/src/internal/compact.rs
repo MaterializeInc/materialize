@@ -829,7 +829,6 @@ mod tests {
     use timely::progress::Antichain;
 
     use crate::batch::BLOB_TARGET_SIZE;
-
     use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
     use crate::PersistLocation;
 
@@ -874,6 +873,7 @@ mod tests {
             inputs: vec![b0, b1],
         };
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(StringSchema),
         };
@@ -884,7 +884,7 @@ mod tests {
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas,
+            schemas.clone(),
         )
         .await
         .expect("compaction failed");
@@ -900,6 +900,7 @@ mod tests {
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
             &write.metrics,
+            &schemas,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
@@ -952,6 +953,7 @@ mod tests {
             inputs: vec![b0, b1],
         };
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(StringSchema),
         };
@@ -962,7 +964,7 @@ mod tests {
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas,
+            schemas.clone(),
         )
         .await
         .expect("compaction failed");
@@ -978,6 +980,7 @@ mod tests {
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
             &write.metrics,
+            &schemas,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);

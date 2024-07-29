@@ -20,5 +20,5 @@ CREATE TABLE build_job (
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
     aws_instance_type TEXT NOT NULL,
-    remarks TEXT
+    remarks TEXT -- not in use, remove eventually
 );

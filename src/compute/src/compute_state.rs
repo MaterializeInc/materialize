@@ -357,12 +357,16 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         info!("Applying configuration update: {params:?}");
 
         let ComputeParameters {
+            workload_class,
             max_result_size,
             tracing,
             grpc_client: _grpc_client,
             dyncfg_updates,
         } = params;
 
+        if let Some(v) = workload_class {
+            self.compute_state.metrics.set_workload_class(v);
+        }
         if let Some(v) = max_result_size {
             self.compute_state.max_result_size = v;
         }
