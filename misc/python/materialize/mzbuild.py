@@ -174,16 +174,22 @@ class PreImage:
         self.path = path
 
     @classmethod
-    def prepare_batch(cls, instances: list["PreImage"]) -> None:
+    def prepare_batch(cls, instances: list["PreImage"]) -> Any:
         """Prepare a batch of actions.
 
         This is useful for `PreImage` actions that are more efficient when
         their actions are applied to several images in bulk.
+
+        Returns an arbitrary output that is passed to `PreImage.run`.
         """
         pass
 
-    def run(self) -> None:
-        """Perform the action."""
+    def run(self, prep: Any) -> None:
+        """Perform the action.
+
+        Args:
+            prep: Any prep work returned by `prepare_batch`.
+        """
         pass
 
     def inputs(self) -> set[str]:
@@ -215,8 +221,8 @@ class Copy(PreImage):
 
         self.matching = config.pop("matching", "*")
 
-    def run(self) -> None:
-        super().run()
+    def run(self, prep: Any) -> None:
+        super().run(prep)
         for src in self.inputs():
             dst = self.path / self.destination / src
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -343,11 +349,11 @@ class CargoBuild(CargoPreImage):
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> None:
+    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> str:
         super().prepare_batch(cargo_builds)
 
         if not cargo_builds:
-            return
+            return ""
 
         # Building all binaries and examples in the same `cargo build` command
         # allows Cargo to link in parallel with other work, which can
@@ -368,7 +374,19 @@ class CargoBuild(CargoPreImage):
         cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
         spawn.runv(cargo_build, cwd=rd.root)
 
-    def build(self) -> None:
+        # Re-run with JSON-formatted messages and capture the output so we can
+        # later analyze the build artifacts in `run`. This should be nearly
+        # instantaneous since we just compiled above with the same crates and
+        # features. (We don't want to do the compile above with JSON-formatted
+        # messages because it wouldn't be human readable.)
+        json_output = spawn.capture(
+            cargo_build + ["--message-format=json"],
+            cwd=rd.root,
+        )
+
+        return json_output
+
+    def build(self, cargo_build_json_output: str) -> None:
         cargo_profile = "release" if self.rd.release_mode else "debug"
 
         def copy(exe: Path) -> None:
@@ -411,20 +429,8 @@ class CargoBuild(CargoPreImage):
             copy(Path("examples") / example)
 
         if self.extract:
-            cargo_build = self.generate_cargo_build_command(
-                self.rd, self.bins, self.examples
-            )
-
-            try:
-                output = spawn.capture(
-                    cargo_build + ["--message-format=json"],
-                    cwd=self.rd.root,
-                )
-            except subprocess.CalledProcessError as e:
-                print(e.stdout)
-                raise
             target_dir = self.rd.cargo_target_dir()
-            for line in output.split("\n"):
+            for line in cargo_build_json_output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
                     continue
                 message = json.loads(line)
@@ -452,9 +458,9 @@ class CargoBuild(CargoPreImage):
 
         self.acquired = True
 
-    def run(self) -> None:
-        super().run()
-        self.build()
+    def run(self, prep: str) -> None:
+        super().run(prep)
+        self.build(prep)
 
     def inputs(self) -> set[str]:
         deps = set()
@@ -616,7 +622,7 @@ class ResolvedImage:
         f.seek(0)
         return f
 
-    def build(self) -> None:
+    def build(self, prep: dict[type[PreImage], Any]) -> None:
         """Build the image from source.
 
         Requires that the caller has already acquired all dependencies and
@@ -626,7 +632,7 @@ class ResolvedImage:
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
 
         for pre_image in self.image.pre_images:
-            pre_image.run()
+            pre_image.run(prep[type(pre_image)])
         build_args = {
             **self.image.build_args,
             "ARCH_GCC": str(self.image.rd.arch),
@@ -803,13 +809,16 @@ class DependencySet:
             image.acquired = image.spec() in known_images
             self._dependencies[d.name] = image
 
-    def _prepare_batch(self, images: list[ResolvedImage]) -> None:
+    def _prepare_batch(self, images: list[ResolvedImage]) -> dict[type[PreImage], Any]:
         pre_images = collections.defaultdict(list)
         for image in images:
             for pre_image in image.image.pre_images:
                 pre_images[type(pre_image)].append(pre_image)
+        pre_image_prep = {}
         for cls, instances in pre_images.items():
-            cast(PreImage, cls).prepare_batch(instances)
+            pre_image = cast(PreImage, cls)
+            pre_image_prep[cls] = pre_image.prepare_batch(instances)
+        return pre_image_prep
 
     def acquire(self, max_retries: int | None = None) -> None:
         """Download or build all of the images in the dependency set that do not
@@ -825,9 +834,9 @@ class DependencySet:
         assert max_retries > 0
 
         deps_to_build = [dep for dep in self if not dep.try_pull(max_retries)]
-        self._prepare_batch(deps_to_build)
+        prep = self._prepare_batch(deps_to_build)
         for dep in deps_to_build:
-            dep.build()
+            dep.build(prep)
 
     def ensure(self, post_build: Callable[[ResolvedImage], None] | None = None):
         """Ensure all publishable images in this dependency set exist on Docker
@@ -840,11 +849,11 @@ class DependencySet:
                 locally.
         """
         deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
-        self._prepare_batch(deps_to_build)
+        prep = self._prepare_batch(deps_to_build)
 
         images_to_push = []
         for dep in deps_to_build:
-            dep.build()
+            dep.build(prep)
             if post_build:
                 post_build(dep)
             if dep.publish:
