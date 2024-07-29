@@ -468,7 +468,7 @@ class DockerComposeCommand(Command):
             return
 
         composition = load_composition(args)
-        ui.header("Collecting mzbuild images")
+        ui.section("Collecting mzbuild images")
         for d in composition.dependencies:
             ui.say(d.spec())
 

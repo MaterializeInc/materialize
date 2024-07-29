@@ -370,7 +370,7 @@ class CargoBuild(CargoPreImage):
             examples.update(build.examples)
         assert rd
 
-        ui.say(f"Common cargo build for: {', '.join(bins | examples)}")
+        ui.section(f"Common cargo build for: {', '.join(bins | examples)}")
         cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
         spawn.runv(cargo_build, cwd=rd.root)
 
@@ -628,7 +628,7 @@ class ResolvedImage:
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
-        ui.header(f"Building {self.spec()}")
+        ui.section(f"Building {self.spec()}")
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
 
         for pre_image in self.image.pre_images:
@@ -654,7 +654,7 @@ class ResolvedImage:
 
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
-        ui.header(f"Acquiring {self.spec()}")
+        ui.section(f"Acquiring {self.spec()}")
         if not self.acquired:
             for retry in range(1, max_retries + 1):
                 try:
@@ -860,7 +860,7 @@ class DependencySet:
                 images_to_push.append(dep.spec())
 
         # Push all Docker images in parallel to minimize build time.
-        ui.header("Pushing images")
+        ui.section("Pushing images")
         pushes: list[subprocess.Popen] = []
         for image in images_to_push:
             # Piping through `cat` disables terminal control codes, and so the
