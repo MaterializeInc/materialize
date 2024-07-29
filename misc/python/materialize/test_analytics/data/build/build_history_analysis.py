@@ -64,10 +64,6 @@ class BuildHistoryAnalysis(BaseDataStorage):
             if not include_retries:
                 retry_filter = "AND predecessor_is_latest_retry = TRUE"
 
-            assert (
-                pipeline == "main"
-            ), "mv_recent_build_job_success_on_main only operates on main branch"
-
             rows = self.query_data(
                 f"""
                     SELECT
