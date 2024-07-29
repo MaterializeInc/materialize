@@ -71,7 +71,18 @@ class TestAnalyticsDb:
         self._communication_failed(f"Loading data failed! {e}")
 
     def _communication_failed(self, message: str) -> None:
-        if not buildkite.is_on_default_branch():
+        if not self.shall_notify_qa_team():
             return
 
         buildkite.notify_qa_team_about_failure(message)
+
+    def shall_notify_qa_team(self) -> bool:
+        if buildkite.is_on_default_branch():
+            return True
+
+        settings = self.database_connector.try_get_or_query_settings()
+
+        if settings is None:
+            return True
+
+        return not settings.only_notify_about_communication_failures_on_main
