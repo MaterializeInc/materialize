@@ -15,7 +15,7 @@ from enum import Enum, auto
 
 class WallclockUnit(Enum):
     SECONDS = auto()
-    TRIPLE_NANOSECONDS = auto()
+    NANOSECONDS = auto()
 
 
 @dataclass
