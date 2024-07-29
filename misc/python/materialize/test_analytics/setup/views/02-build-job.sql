@@ -160,7 +160,8 @@ SELECT
     predecessor_is_latest_retry
 FROM v_build_job_success
 WHERE branch = 'main'
-AND date + INTERVAL '30' DAY > mz_now();
+AND date + INTERVAL '30' DAY > mz_now()
+AND predecessor_index <= 10;
 
 CREATE OR REPLACE VIEW v_most_recent_build_job AS
 WITH most_recent_build_with_completed_build_step AS (
