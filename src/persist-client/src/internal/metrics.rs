@@ -1188,6 +1188,8 @@ pub struct ShardsMetrics {
     hollow_batch_count: mz_ore::metrics::UIntGaugeVec,
     spine_batch_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_count: mz_ore::metrics::UIntGaugeVec,
+    batch_part_version_count: mz_ore::metrics::UIntGaugeVec,
+    batch_part_version_bytes: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
     rollup_count: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
@@ -1276,6 +1278,16 @@ impl ShardsMetrics {
                 name: "mz_persist_shard_batch_part_count",
                 help: "count of batch parts by shard",
                 var_labels: ["shard", "name"],
+            )),
+            batch_part_version_count: registry.register(metric!(
+                name: "mz_persist_shard_batch_part_version_count",
+                help: "count of batch parts by shard and version",
+                var_labels: ["shard", "name", "version"],
+            )),
+            batch_part_version_bytes: registry.register(metric!(
+                name: "mz_persist_shard_batch_part_version_bytes",
+                help: "total bytes in batch parts by shard and version",
+                var_labels: ["shard", "name", "version"],
             )),
             update_count: registry.register(metric!(
                 name: "mz_persist_shard_update_count",
@@ -1481,6 +1493,7 @@ impl ShardsMetrics {
 #[derive(Debug)]
 pub struct ShardMetrics {
     pub shard_id: ShardId,
+    pub name: String,
     pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1489,6 +1502,9 @@ pub struct ShardMetrics {
     pub hollow_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub spine_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    batch_part_version_count: mz_ore::metrics::UIntGaugeVec,
+    batch_part_version_bytes: mz_ore::metrics::UIntGaugeVec,
+    batch_part_version_map: Mutex<BTreeMap<String, BatchPartVersionMetrics>>,
     pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1530,6 +1546,7 @@ impl ShardMetrics {
         let shard = shard_id.to_string();
         ShardMetrics {
             shard_id: *shard_id,
+            name: name.to_string(),
             since: shards_metrics
                 .since
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
@@ -1551,6 +1568,9 @@ impl ShardMetrics {
             batch_part_count: shards_metrics
                 .batch_part_count
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
+            batch_part_version_count: shards_metrics.batch_part_version_count.clone(),
+            batch_part_version_bytes: shards_metrics.batch_part_version_bytes.clone(),
+            batch_part_version_map: Mutex::new(BTreeMap::new()),
             update_count: shards_metrics
                 .update_count
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
@@ -1663,6 +1683,61 @@ impl ShardMetrics {
     pub fn set_upper<T: Codec64>(&self, upper: &Antichain<T>) {
         self.upper.set(encode_ts_metric(upper))
     }
+
+    pub(crate) fn set_batch_part_versions<'a>(
+        &self,
+        batch_parts_by_version: impl Iterator<Item = (&'a str, usize)>,
+    ) {
+        let mut map = self
+            .batch_part_version_map
+            .lock()
+            .expect("mutex should not be poisoned");
+        // NB: It's a bit sus that the below assumes that no one else is
+        // concurrently modifying the atomics in the gauges, but we're holding
+        // the mutex this whole time, so it should be true.
+
+        // We want to do this in a way that avoids allocating (e.g. summing up a
+        // map). First reset everything.
+        for x in map.values() {
+            x.batch_part_version_count.set(0);
+            x.batch_part_version_bytes.set(0);
+        }
+
+        // Then go through the iterator, creating new entries as necessary and
+        // adding.
+        for (key, bytes) in batch_parts_by_version {
+            if !map.contains_key(key) {
+                map.insert(
+                    key.to_owned(),
+                    BatchPartVersionMetrics {
+                        batch_part_version_count: self
+                            .batch_part_version_count
+                            .get_delete_on_drop_metric(vec![
+                                self.shard_id.to_string(),
+                                self.name.clone(),
+                                key.to_owned(),
+                            ]),
+                        batch_part_version_bytes: self
+                            .batch_part_version_bytes
+                            .get_delete_on_drop_metric(vec![
+                                self.shard_id.to_string(),
+                                self.name.clone(),
+                                key.to_owned(),
+                            ]),
+                    },
+                );
+            }
+            let value = map.get(key).expect("inserted above");
+            value.batch_part_version_count.inc();
+            value.batch_part_version_bytes.add(u64::cast_from(bytes));
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BatchPartVersionMetrics {
+    pub batch_part_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub batch_part_version_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 /// Metrics recorded by audits of persist usage
