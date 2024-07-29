@@ -507,7 +507,7 @@ mod persist_schema {
         fn encode<B: BufMut>(&self, buf: &mut B) {
             buf.put(self.to_string().as_bytes())
         }
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &TableKeySchema) -> Result<Self, String> {
             let table_key = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
             table_key.parse()
         }

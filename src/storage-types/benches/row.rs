@@ -33,11 +33,11 @@ fn encode_legacy(data: &[SourceData]) -> ColumnarRecords {
     buf.finish(&ColumnarMetrics::disconnected())
 }
 
-fn decode_legacy(part: &ColumnarRecords) -> SourceData {
+fn decode_legacy(part: &ColumnarRecords, schema: &RelationDesc) -> SourceData {
     let mut storage = Some(ProtoRow::default());
     let mut data = SourceData(Ok(Row::default()));
     for ((key, _val), _ts, _diff) in part.iter() {
-        SourceData::decode_from(&mut data, key, &mut storage).unwrap();
+        SourceData::decode_from(&mut data, key, &mut storage, schema).unwrap();
         black_box(&data);
     }
     data
@@ -71,7 +71,7 @@ fn bench_roundtrip(c: &mut Criterion, name: &str, schema: &RelationDesc, data: &
     let legacy = encode_legacy(data);
     let structured = encode_structured(schema, data);
     c.bench_function(&format!("roundtrip_{}_decode_legacy", name), |b| {
-        b.iter(|| std::hint::black_box(decode_legacy(&legacy)));
+        b.iter(|| std::hint::black_box(decode_legacy(&legacy, schema)));
     });
     c.bench_function(&format!("roundtrip_{}_decode_structured", name), |b| {
         b.iter(|| std::hint::black_box(decode_structured(schema, &structured, data.len())));

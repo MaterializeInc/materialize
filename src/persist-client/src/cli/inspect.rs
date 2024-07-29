@@ -712,7 +712,7 @@ impl Codec for K {
     {
     }
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode(_buf: &[u8], _schema: &TodoSchema<K>) -> Result<Self, String> {
         Ok(Self)
     }
 }
@@ -731,7 +731,7 @@ impl Codec for V {
     {
     }
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode(_buf: &[u8], _schema: &TodoSchema<V>) -> Result<Self, String> {
         Ok(Self)
     }
 }
@@ -750,7 +750,7 @@ impl Codec for T {
     {
     }
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode(_buf: &[u8], _schema: &TodoSchema<T>) -> Result<Self, String> {
         Ok(Self)
     }
 }

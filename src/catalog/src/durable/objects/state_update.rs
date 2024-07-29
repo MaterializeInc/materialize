@@ -857,6 +857,7 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
 #[cfg(test)]
 mod tests {
     use mz_persist_types::Codec;
+    use mz_repr::{RelationDesc, ScalarType};
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
 
@@ -869,12 +870,13 @@ mod tests {
             // Verify that we can map encode into the "raw" json format. This
             // validates things like contained integers fitting in f64.
             let raw = StateUpdateKindRaw::from(kind.clone());
+            let desc = RelationDesc::empty().with_column("a", ScalarType::Jsonb.nullable(false));
 
             // Verify that the raw roundtrips through the SourceData Codec impl.
             let source_data = SourceData::from(raw.clone());
             let mut encoded = Vec::new();
             source_data.encode(&mut encoded);
-            let decoded = SourceData::decode(&encoded).expect("should be valid SourceData");
+            let decoded = SourceData::decode(&encoded, &desc).expect("should be valid SourceData");
             prop_assert_eq!(&source_data, &decoded);
             let decoded = StateUpdateKindRaw::from(decoded);
             prop_assert_eq!(&raw, &decoded);

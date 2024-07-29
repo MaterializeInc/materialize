@@ -97,7 +97,7 @@ impl Codec for () {
         // No-op.
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &UnitSchema) -> Result<Self, String> {
         if !buf.is_empty() {
             return Err(format!("decode expected empty buf got {} bytes", buf.len()));
         }
@@ -433,7 +433,7 @@ impl Codec for String {
         buf.put(self.as_bytes())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &StringSchema) -> Result<Self, String> {
         String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())
     }
 }
@@ -491,7 +491,7 @@ impl Codec for Vec<u8> {
         buf.put(self.as_slice())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &VecU8Schema) -> Result<Self, String> {
         Ok(buf.to_owned())
     }
 }
@@ -505,7 +505,7 @@ impl Codec for ShardId {
     fn encode<B: BufMut>(&self, buf: &mut B) {
         buf.put(self.to_string().as_bytes())
     }
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &ShardIdSchema) -> Result<Self, String> {
         let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
         shard_id.parse()
     }

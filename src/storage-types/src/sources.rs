@@ -1170,15 +1170,17 @@ impl Codec for SourceData {
             .expect("no required fields means no initialization errors");
     }
 
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
+    fn decode(buf: &[u8], schema: &RelationDesc) -> Result<Self, String> {
+        let mut val = SourceData::default();
+        <Self as Codec>::decode_from(&mut val, buf, &mut None, schema)?;
+        Ok(val)
     }
 
     fn decode_from<'a>(
         &mut self,
         buf: &'a [u8],
         storage: &mut Option<ProtoRow>,
+        schema: &RelationDesc,
     ) -> Result<(), String> {
         // Optimize for common case of `Ok` by leaving a (cleared) `ProtoRow` in
         // the `Ok` variant of `ProtoSourceData`. prost's `Message::merge` impl
@@ -1192,7 +1194,7 @@ impl Codec for SourceData {
         match (proto.kind, &mut self.0) {
             // Again, optimize for the common case...
             (Some(proto_source_data::Kind::Ok(proto)), Ok(row)) => {
-                let ret = row.decode_from_proto(&proto);
+                let ret = row.decode_from_proto(&proto, schema);
                 storage.replace(proto);
                 ret
             }
@@ -1745,7 +1747,7 @@ impl SourceDataRowColumnarEncoder {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
             SourceDataRowColumnarEncoder::EmptyRow => {
-                // TODO(parkmcar): Re-enable this check.
+                // TODO(#28146): Re-enable this check.
                 if false {
                     assert_eq!(row.iter().count(), 0)
                 }
@@ -1886,7 +1888,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
-    use mz_repr::{arb_datum_for_scalar, ScalarType};
+    use mz_repr::{arb_datum_for_scalar, ProtoRelationDesc, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
 
@@ -2059,16 +2061,29 @@ mod tests {
         let encoded = include_str!("snapshots/source-datas.txt");
 
         // Decode the pre-generated source datas
-        let mut decoded: Vec<SourceData> = encoded
+        let mut decoded: Vec<(RelationDesc, SourceData)> = encoded
             .lines()
-            .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
-            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .map(|s| {
+                let (desc, data) = s.split_once(',').expect("comma separated data");
+                let desc = base64::decode_config(desc, base64_config).expect("valid base64");
+                let data = base64::decode_config(data, base64_config).expect("valid base64");
+                (desc, data)
+            })
+            .map(|(desc, data)| {
+                let desc = ProtoRelationDesc::decode(&desc[..]).expect("valid proto");
+                let desc = desc.into_rust().expect("valid proto");
+                let data = SourceData::decode(&data, &desc).expect("valid proto");
+                (desc, data)
+            })
             .collect();
 
         // If there are fewer than the minimum examples, generate some new ones arbitrarily
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let strategy = RelationDesc::arbitrary().prop_flat_map(|desc| {
+            arb_source_data_for_relation_desc(&desc).prop_map(move |data| (desc.clone(), data))
+        });
         while decoded.len() < min_protos {
-            let mut runner = proptest::test_runner::TestRunner::deterministic();
-            let arbitrary_data: SourceData = SourceData::arbitrary()
+            let arbitrary_data = strategy
                 .new_tree(&mut runner)
                 .expect("source data")
                 .current();
@@ -2078,9 +2093,14 @@ mod tests {
         // Reencode and compare the strings
         let mut reencoded = String::new();
         let mut buf = vec![];
-        for s in decoded {
+        for (desc, data) in decoded {
             buf.clear();
-            s.encode(&mut buf);
+            desc.into_proto().encode(&mut buf).expect("success");
+            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            reencoded.push(',');
+
+            buf.clear();
+            data.encode(&mut buf);
             base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
             reencoded.push('\n');
         }

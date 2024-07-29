@@ -164,8 +164,8 @@ where
     } else {
         let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
         for ((k, v), t, d) in records.iter() {
-            let k = K::decode(k)?;
-            let v = V::decode(v)?;
+            let k = K::decode(k, &schemas.key)?;
+            let v = V::decode(v, &schemas.val)?;
             let t = i64::from_le_bytes(t);
             let d = i64::from_le_bytes(d);
 

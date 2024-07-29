@@ -747,6 +747,7 @@ mod tests {
         blob: &dyn Blob,
         key: &BlobKey,
         metrics: &Metrics,
+        schemas: &Schemas<K, V>,
     ) -> (
         BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -766,7 +767,11 @@ mod tests {
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
         let mut updates = Vec::new();
         for ((k, v), t, d) in part.updates.records().iter() {
-            updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
+            updates.push((
+                (K::decode(k, &schemas.key), V::decode(v, &schemas.val)),
+                T::decode(t),
+                D::decode(d),
+            ));
         }
         (part, updates)
     }

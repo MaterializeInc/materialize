@@ -884,7 +884,7 @@ mod tests {
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas,
+            schemas.clone(),
         )
         .await
         .expect("compaction failed");
@@ -900,6 +900,7 @@ mod tests {
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
             &write.metrics,
+            &schemas,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
@@ -962,7 +963,7 @@ mod tests {
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas,
+            schemas.clone(),
         )
         .await
         .expect("compaction failed");
@@ -978,6 +979,7 @@ mod tests {
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
             &write.metrics,
+            &schemas,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
