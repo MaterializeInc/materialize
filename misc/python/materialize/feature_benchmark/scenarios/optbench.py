@@ -75,13 +75,13 @@ class OptbenchRun(MeasurementSource):
         explain_output = materialize.optbench.sql.ExplainOutput(
             e._composition.sql_query(explain_query)[0][0]  # type: ignore
         )
-        # Optimization time is in microseconds, divide by 3 to get a more readable number (still in wrong unit)
+        # Optimization time is in nanoseconds, divide by 3 to get a more readable number (still in wrong unit)
         optimization_duration = float(explain_output.optimization_time()) / 3  # type: ignore
         timestamps = [
-            WallclockMeasurement(0, WallclockUnit.ONE_THIRD_MICROSECONDS),
+            WallclockMeasurement(0, WallclockUnit.ONE_THIRD_NANOSECONDS),
             WallclockMeasurement(
                 optimization_duration,
-                WallclockUnit.ONE_THIRD_MICROSECONDS,
+                WallclockUnit.ONE_THIRD_NANOSECONDS,
             ),
         ]
         return timestamps
