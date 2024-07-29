@@ -697,7 +697,7 @@ def _regressions_to_failure_details(
         failure_details.append(
             TestFailureDetails(
                 test_case_name_override=f"Scenario '{scenario_name}'",
-                message=f"New regression against {regression_against_tag}",
+                message=f"New regression against {regression_against_tag} (conducted {report.cycle_number} cycles)",
                 details=report.as_string(use_colors=False),
             )
         )
