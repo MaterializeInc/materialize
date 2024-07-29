@@ -93,6 +93,7 @@ class BuildDataStorage(BaseDataStorage):
         )
 
         start_time_with_tz = os.getenv("STEP_START_TIMESTAMP_WITH_TZ")
+        assert start_time_with_tz is not None, "STEP_START_TIMESTAMP_WITH_TZ is not set"
 
         sql_statements = []
         sql_statements.append(
