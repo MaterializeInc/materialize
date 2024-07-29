@@ -652,6 +652,7 @@ async fn handle_roles_request(State(context): State<Arc<Context>>) -> Json<UserR
     Json(response)
 }
 
+// https://docs.frontegg.com/reference/ssoconfigurationcontrollerv1_getssoconfigurations
 async fn handle_list_sso_configs(
     State(context): State<Arc<Context>>,
 ) -> Result<Json<Vec<SSOConfigResponse>>, StatusCode> {
@@ -664,6 +665,7 @@ async fn handle_list_sso_configs(
     Ok(Json(config_list))
 }
 
+// https://docs.frontegg.com/reference/ssoconfigurationcontrollerv1_createssoconfiguration
 async fn handle_create_sso_config(
     State(context): State<Arc<Context>>,
     Json(new_config): Json<SSOConfigCreateRequest>,
@@ -761,6 +763,7 @@ async fn handle_update_sso_config(
     }
 }
 
+// https://docs.frontegg.com/reference/ssoconfigurationcontrollerv1_deletessoconfiguration
 async fn handle_delete_sso_config(
     State(context): State<Arc<Context>>,
     Path(id): Path<String>,
@@ -791,6 +794,7 @@ async fn handle_list_domains(
     }
 }
 
+// https://docs.frontegg.com/reference/ssodomaincontrollerv1_createssodomain
 async fn handle_create_domain(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -808,6 +812,7 @@ async fn handle_create_domain(
     }
 }
 
+// https://docs.frontegg.com/reference/ssorolescontrollerv1_getssodefaultroles
 async fn handle_get_default_roles(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -820,6 +825,7 @@ async fn handle_get_default_roles(
     }
 }
 
+// https://docs.frontegg.com/reference/ssorolescontrollerv1_setssodefaultroles
 async fn handle_set_default_roles(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -881,6 +887,7 @@ async fn handle_update_domain(
     }
 }
 
+// https://docs.frontegg.com/reference/ssodomaincontrollerv1_deletessodomain
 async fn handle_delete_domain(
     State(context): State<Arc<Context>>,
     Path((config_id, domain_id)): Path<(String, String)>,
@@ -899,6 +906,7 @@ async fn handle_delete_domain(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_getssogroup
 async fn handle_list_group_mappings(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -917,6 +925,7 @@ async fn handle_list_group_mappings(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_createssogroup
 async fn handle_create_group_mapping(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -938,6 +947,7 @@ async fn handle_create_group_mapping(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_getssogroup
 async fn handle_get_group_mapping(
     State(context): State<Arc<Context>>,
     Path((config_id, group_id)): Path<(String, String)>,
@@ -957,6 +967,7 @@ async fn handle_get_group_mapping(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_updatessogroup
 async fn handle_update_group_mapping(
     State(context): State<Arc<Context>>,
     Path((config_id, group_id)): Path<(String, String)>,
@@ -983,6 +994,7 @@ async fn handle_update_group_mapping(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_deletessogroup
 async fn handle_delete_group_mapping(
     State(context): State<Arc<Context>>,
     Path((config_id, group_id)): Path<(String, String)>,
@@ -1001,6 +1013,7 @@ async fn handle_delete_group_mapping(
     }
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_getallgroups
 async fn handle_list_scim_groups(
     State(context): State<Arc<Context>>,
 ) -> Result<Json<SCIMGroupsResponse>, StatusCode> {
@@ -1030,6 +1043,7 @@ async fn handle_create_scim_group(
     Ok((StatusCode::CREATED, Json(new_group)))
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_getgroupbyid
 async fn handle_get_scim_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
@@ -1042,6 +1056,7 @@ async fn handle_get_scim_group(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_updategroup
 async fn handle_update_scim_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
@@ -1067,6 +1082,7 @@ async fn handle_update_scim_group(
     }
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_deletegroup
 async fn handle_delete_scim_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
@@ -1079,6 +1095,7 @@ async fn handle_delete_scim_group(
     }
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_addrolestogroup
 async fn handle_add_roles_to_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
@@ -1109,6 +1126,7 @@ async fn handle_add_roles_to_group(
     }
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_removerolesfromgroup
 async fn handle_remove_roles_from_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
@@ -1132,6 +1150,7 @@ struct AddRolesToGroupParams {
     role_ids: Vec<String>,
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_adduserstogroup
 async fn handle_add_users_to_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
@@ -1154,6 +1173,7 @@ async fn handle_add_users_to_group(
     }
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_removeusersfromgroup
 async fn handle_remove_users_from_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
