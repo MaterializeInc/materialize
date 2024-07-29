@@ -38,6 +38,7 @@ class TestAnalyticsSettings:
 
     uploads_enabled: bool
     min_required_data_version_for_uploads: int
+    only_notify_about_communication_failures_on_main: bool
 
 
 class DatabaseConnector:
@@ -121,7 +122,8 @@ class DatabaseConnector:
             """
             SELECT
                 uploads_enabled,
-                min_required_data_version_for_uploads
+                min_required_data_version_for_uploads,
+                only_notify_about_communication_failures_on_main
             FROM config;
             """
         )
@@ -129,10 +131,12 @@ class DatabaseConnector:
         rows = cursor.fetchall()
         assert len(rows) == 1, f"Expected exactly one row, got {len(rows)}"
 
-        row = rows[0]
+        column_values = rows[0]
 
         settings = TestAnalyticsSettings(
-            uploads_enabled=row[0], min_required_data_version_for_uploads=row[1]
+            uploads_enabled=column_values[0],
+            min_required_data_version_for_uploads=column_values[1],
+            only_notify_about_communication_failures_on_main=column_values[2],
         )
 
         self.cached_settings = settings
