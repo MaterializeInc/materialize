@@ -780,3 +780,58 @@ def workflow_basic(c: Composition) -> None:
             """
             )
         )
+
+
+def workflow_builtin_item_migrations(c: Composition) -> None:
+    """Verify builtin item migrations"""
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "mz_old")
+    c.up("testdrive", persistent=True)
+
+    # Make sure cluster is owned by the system so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE '2-1';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+        ALTER SYSTEM SET enable_0dt_deployment = true;
+        ALTER SYSTEM SET with_0dt_deployment_max_wait = '3s'
+        
+        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    # TODO(jkosh44) Get GID and shard ID of mv and mz_tables.
+    # SELECT id FROM mz_tables WHERE name = 'mz_tables'
+    # SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '_'
+
+    with c.override(
+            # TODO(jkosh44) Override builtin migration flag.
+            Materialized(name="mz_old", deploy_generation=1, external_cockroach=True)
+    ):
+        c.up("mz_old")
+
+        # TODO(jkosh44) Assert that the GIDs haven't changed.
+
+        c.up("mz_old")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
+        c.promote_mz("mz_old")
+
+    with c.override(
+            Materialized(
+                name="mz_old",
+                healthcheck=[
+                    "CMD-SHELL",
+                    """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
+                ],
+                deploy_generation=1,
+                external_cockroach=True,
+            )
+    ):
+        c.up("mz_old")
+
+    #     TODO(jkosh44) Check that mz_tables shard ID changed but not mv.
