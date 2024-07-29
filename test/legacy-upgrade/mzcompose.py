@@ -18,6 +18,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -37,6 +38,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Postgres(),
+    MySql(),
     Cockroach(setup_materialize=True),
     Materialized(
         options=list(mz_options.values()),
@@ -141,7 +143,7 @@ def test_upgrade_from_version(
     print(">>> Version glob pattern: " + version_glob)
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "postgres")
+    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql")
 
     if from_version != "current_source":
         mz_from = Materialized(
@@ -171,6 +173,8 @@ def test_upgrade_from_version(
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         f"--var=created-cluster={created_cluster}",
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        "--var=mysql-user-password=us3rp4ssw0rd",
         temp_dir,
         seed,
         f"create-in-{version_glob}-{filter}.td",

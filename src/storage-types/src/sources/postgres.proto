@@ -41,8 +41,17 @@ message ProtoPostgresSourceConnection {
 }
 
 message ProtoPostgresSourcePublicationDetails {
-    repeated mz_postgres_util.desc.ProtoPostgresTableDesc tables = 1;
+    // NOTE(roshan): This field is planned for deprecation, since relevant table descriptions
+    // are now stored on source export statements directly.
+    repeated mz_postgres_util.desc.ProtoPostgresTableDesc deprecated_tables = 1;
     string slot = 2;
     optional uint64 timeline_id = 3;
     string database = 4;
+}
+
+// NOTE: this message is encoded and stored as part of a source export
+// statement option (currently only `CREATE SUBSOURCE` statements)
+// Be extra careful about changes, ensuring that all changes are backwards compatible
+message ProtoPostgresSourceExportStatementDetails {
+    mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
 }

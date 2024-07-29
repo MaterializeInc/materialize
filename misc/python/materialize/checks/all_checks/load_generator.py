@@ -23,6 +23,8 @@ class LoadGeneratorAsOfUpTo(Check):
             dedent(
                 """
             > CREATE SOURCE counter1 FROM LOAD GENERATOR COUNTER (AS OF 100, UP TO 200);
+
+            > CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200) FOR ALL TABLES;
         """
             )
         )
@@ -50,6 +52,8 @@ class LoadGeneratorAsOfUpTo(Check):
                 1200
                 > SELECT COUNT(*) FROM counter3;
                 11200
+                > SELECT COUNT(*) FROM users;
+                4076
             """
             )
         )

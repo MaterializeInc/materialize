@@ -2701,27 +2701,49 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Parse the name of a CREATE SUBSOURCE optional parameter
-    fn parse_create_subsource_option_name(
-        &mut self,
-    ) -> Result<CreateSubsourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS])? {
-            EXTERNAL => {
-                self.expect_keyword(REFERENCE)?;
-                CreateSubsourceOptionName::ExternalReference
-            }
-            PROGRESS => CreateSubsourceOptionName::Progress,
-            _ => unreachable!(),
-        };
-        Ok(name)
-    }
-
-    /// Parse a NAME = VALUE parameter for CREATE SUBSOURCE
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
-        Ok(CreateSubsourceOption {
-            name: self.parse_create_subsource_option_name()?,
-            value: self.parse_optional_option_value()?,
-        })
+        let option =
+            match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS, TEXT, IGNORE, DETAILS])? {
+                EXTERNAL => {
+                    self.expect_keyword(REFERENCE)?;
+                    CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::ExternalReference,
+                        value: self.parse_optional_option_value()?,
+                    }
+                }
+                PROGRESS => CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::Progress,
+                    value: self.parse_optional_option_value()?,
+                },
+                ref keyword @ (TEXT | IGNORE) => {
+                    self.expect_keyword(COLUMNS)?;
+
+                    let _ = self.consume_token(&Token::Eq);
+
+                    let value =
+                        self.parse_option_sequence(Parser::parse_identifier)?
+                            .map(|inner| {
+                                WithOptionValue::Sequence(
+                                    inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                                )
+                            });
+
+                    CreateSubsourceOption {
+                        name: match *keyword {
+                            TEXT => CreateSubsourceOptionName::TextColumns,
+                            IGNORE => CreateSubsourceOptionName::IgnoreColumns,
+                            _ => unreachable!(),
+                        },
+                        value,
+                    }
+                }
+                DETAILS => CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::Details,
+                    value: self.parse_optional_option_value()?,
+                },
+                _ => unreachable!(),
+            };
+        Ok(option)
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
