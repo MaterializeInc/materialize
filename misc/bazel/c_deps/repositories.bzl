@@ -86,14 +86,16 @@ def c_repositories():
         http_archive,
         name = "protobuf",
         integrity = PROTOC_INTEGRITY,
+        patch_args = ["-p1"],
+        patches = ["//misc/bazel/c_deps:patches/protobuf_zlib_1.3.1.patch"],
         strip_prefix = "protobuf-{}".format(PROTOC_VERSION),
         urls = [
             "https://github.com/protocolbuffers/protobuf/archive/v{}.tar.gz".format(PROTOC_VERSION),
         ],
     )
 
-    ZLIB_VERSION = "1.2.13"
-    ZLIB_INTEGRITY = "sha256-s6JN6XqP28g1uYMxaVAQMLiXcDG8tUs7OsE3QPhGqzA="
+    ZLIB_VERSION = "1.3.1"
+    ZLIB_INTEGRITY = "sha256-OO+WuN/lENQnB9nHgYd5FHklQRM+GHCEFGO/pz+IPjI="
     maybe(
         http_archive,
         name = "zlib",
@@ -101,7 +103,7 @@ def c_repositories():
         integrity = ZLIB_INTEGRITY,
         strip_prefix = "zlib-{0}".format(ZLIB_VERSION),
         urls = [
-            "https://github.com/madler/zlib/releases/download/v{0}/zlib-{0}.tar.gz".format(ZLIB_VERSION),
+            "https://github.com/madler/zlib/releases/download/v{0}/zlib-{0}.tar.xz".format(ZLIB_VERSION),
         ],
     )
 
