@@ -22,7 +22,7 @@ use axum::http::{Request, StatusCode};
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
-use axum::routing::{get, post, delete};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router, TypedHeader};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
@@ -40,9 +40,9 @@ const AUTH_USER_PATH: &str = "/identity/resources/auth/v1/user";
 const AUTH_API_TOKEN_REFRESH_PATH: &str = "/identity/resources/auth/v1/api-token/token/refresh";
 const GROUPS_PATH: &str = "/frontegg/identity/resources/groups/v1";
 const GROUP_PATH: &str = "/frontegg/identity/resources/groups/v1/:id";
-const GROUP_PATH_WITH_SLASH: &str = "/frontegg/identity/resources/groups/v1/:id/";
 const GROUP_ROLES_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/roles";
 const GROUP_USERS_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/users";
+const GROUP_PATH_WITH_SLASH: &str = "/frontegg/identity/resources/groups/v1/:id/";
 const USERS_ME_PATH: &str = "/identity/resources/users/v2/me";
 const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
 const USER_PATH: &str = "/identity/resources/users/v1/:id";
@@ -207,8 +207,14 @@ impl FronteggMockServer {
                     .delete(handle_delete_scim_group),
             )
             .route(GROUP_PATH_WITH_SLASH, get(handle_get_scim_group))
-            .route(GROUP_ROLES_PATH, post(handle_add_roles_to_group))
-            .route(GROUP_USERS_PATH, post(handle_add_users_to_group))
+            .route(
+                GROUP_ROLES_PATH,
+                post(handle_add_roles_to_group).delete(handle_remove_roles_from_group),
+            )
+            .route(
+                GROUP_USERS_PATH,
+                post(handle_add_users_to_group).delete(handle_remove_users_from_group),
+            )
             .route(
                 SCIM_CONFIGURATIONS_PATH,
                 get(handle_list_scim_configurations).post(handle_create_scim_configuration),
@@ -1079,19 +1085,42 @@ async fn handle_add_roles_to_group(
     Json(payload): Json<AddRolesToGroupParams>,
 ) -> Result<StatusCode, StatusCode> {
     let mut groups = context.groups.lock().unwrap();
+    let roles = Arc::clone(&context.roles);
+
     if let Some(group) = groups.get_mut(&group_id) {
         for role_id in payload.role_ids {
             if !group.roles.iter().any(|r| r.id == role_id) {
-                group.roles.push(ScimRole {
-                    id: role_id,
-                    key: "".to_string(),
-                    name: "".to_string(),
-                    description: "".to_string(),
-                    is_default: false,
-                });
+                if let Some(role) = roles.iter().find(|r| r.id == role_id) {
+                    group.roles.push(ScimRole {
+                        id: role.id.clone(),
+                        key: role.key.clone(),
+                        name: role.name.clone(),
+                        description: format!("Description for {}", role.name),
+                        is_default: false,
+                    });
+                } else {
+                    return Err(StatusCode::NOT_FOUND);
+                }
             }
         }
         Ok(StatusCode::CREATED)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn handle_remove_roles_from_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<AddRolesToGroupParams>,
+) -> Result<StatusCode, StatusCode> {
+    let mut groups = context.groups.lock().unwrap();
+
+    if let Some(group) = groups.get_mut(&group_id) {
+        group
+            .roles
+            .retain(|role| !payload.role_ids.contains(&role.id));
+        Ok(StatusCode::OK)
     } else {
         Err(StatusCode::NOT_FOUND)
     }
@@ -1110,12 +1139,14 @@ async fn handle_add_users_to_group(
 ) -> Result<StatusCode, StatusCode> {
     let mut groups = context.groups.lock().unwrap();
     if let Some(group) = groups.get_mut(&group_id) {
-        if !group.users.iter().any(|u| u.id == payload.user_id) {
-            group.users.push(ScimUser {
-                id: payload.user_id,
-                name: "".to_string(),
-                email: "".to_string(),
-            });
+        for user_id in payload.user_ids {
+            if !group.users.iter().any(|u| u.id == user_id) {
+                group.users.push(ScimUser {
+                    id: user_id,
+                    name: "".to_string(),
+                    email: "".to_string(),
+                });
+            }
         }
         Ok(StatusCode::CREATED)
     } else {
@@ -1123,10 +1154,33 @@ async fn handle_add_users_to_group(
     }
 }
 
+async fn handle_remove_users_from_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<RemoveUsersFromGroupParams>,
+) -> StatusCode {
+    let mut groups = context.groups.lock().unwrap();
+
+    if let Some(group) = groups.get_mut(&group_id) {
+        group
+            .users
+            .retain(|user| !payload.user_ids.contains(&user.id));
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
 #[derive(Deserialize)]
 struct AddUsersToGroupParams {
-    #[serde(rename = "userId")]
-    user_id: String,
+    #[serde(rename = "userIds")]
+    user_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RemoveUsersFromGroupParams {
+    #[serde(rename = "userIds")]
+    user_ids: Vec<String>,
 }
 
 async fn handle_list_scim_configurations(
