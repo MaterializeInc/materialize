@@ -926,12 +926,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             encode_updates(&schemas, &updates, &cfg.batch_columnar_format)
                         });
                         match result {
-                            Ok(((key_col, val_col), _stats)) => {
-                                Some(ColumnarRecordsStructuredExt {
-                                    key: key_col,
-                                    val: val_col,
-                                })
-                            }
+                            Ok((struct_ext, _stats)) => struct_ext,
                             Err(err) => {
                                 tracing::error!(?err, "failed to encode in columnar format!");
                                 None

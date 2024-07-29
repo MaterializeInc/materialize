@@ -428,7 +428,7 @@ impl ColumnarRecords {
     ) -> ProtoColumnarRecords {
         let (k_struct, v_struct) = match structured_ext.map(|x| x.into_proto()) {
             None => (None, None),
-            Some((k, v)) => (k, v),
+            Some((k, v)) => (Some(k), Some(v)),
         };
 
         ProtoColumnarRecords {
@@ -471,15 +471,8 @@ impl ColumnarRecords {
             .borrow()
             .validate()
             .map_err(TryFromProtoError::InvalidPersistState)?;
-
-        // If both key and val are none, don't return a structured extension.
-        let ext = match (proto.key_structured, proto.val_structured) {
-            (None, None) => None,
-            (key, val) => {
-                let ext = ColumnarRecordsStructuredExt::from_proto(key, val)?;
-                Some(ext)
-            }
-        };
+        let ext =
+            ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
 
         Ok((ret, ext))
     }
@@ -517,9 +510,9 @@ impl PartialEq for ColumnarRecordsStructuredExt {
 
 impl ColumnarRecordsStructuredExt {
     /// See [`RustType::into_proto`].
-    pub fn into_proto(&self) -> (Option<ProtoArrayData>, Option<ProtoArrayData>) {
-        let key = self.key.clone().map(|a| a.to_data().into_proto());
-        let val = self.val.clone().map(|a| a.to_data().into_proto());
+    pub fn into_proto(&self) -> (ProtoArrayData, ProtoArrayData) {
+        let key = self.key.to_data().into_proto();
+        let val = self.val.to_data().into_proto();
 
         (key, val)
     }
@@ -528,11 +521,19 @@ impl ColumnarRecordsStructuredExt {
     fn from_proto(
         key: Option<ProtoArrayData>,
         val: Option<ProtoArrayData>,
-    ) -> Result<Self, TryFromProtoError> {
+    ) -> Result<Option<Self>, TryFromProtoError> {
         let key = key.map(|d| d.into_rust()).transpose()?.map(make_array);
         let val = val.map(|d| d.into_rust()).transpose()?.map(make_array);
 
-        Ok(ColumnarRecordsStructuredExt { key, val })
+        let ext = match (key, val) {
+            (Some(key), Some(val)) => Some(ColumnarRecordsStructuredExt { key, val }),
+            x @ (Some(_), None) | x @ (None, Some(_)) => {
+                mz_ore::soft_panic_or_log!("found only one of key or val, {x:?}");
+                None
+            }
+            (None, None) => None,
+        };
+        Ok(ext)
     }
 }
 
