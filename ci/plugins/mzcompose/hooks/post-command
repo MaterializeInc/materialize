@@ -75,7 +75,8 @@ echo "Uploading log artifacts"
 mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
-bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}" > ci-annotate-errors.log
+# Continue even if ci-annotate-errors fails
+bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}" > ci-annotate-errors.log || true
 buildkite-agent artifact upload "$artifacts_str;ci-annotate-errors.log"
 
 if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ]; then
