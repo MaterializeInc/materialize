@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """Test analytics database."""
+from materialize import buildkite
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.connector.test_analytics_connector import (
     DatabaseConnector,
@@ -62,3 +63,12 @@ class TestAnalyticsDb:
         Make sure that this method is always invoked within a try-catch block.
         """
         self.database_connector.submit_update_statements()
+
+    def on_upload_failed(self, e: Exception) -> None:
+        self._communication_failed(f"Uploading results failed! {e}")
+
+    def on_data_retrieval_failed(self, e: Exception) -> None:
+        self._communication_failed(f"Loading data failed! {e}")
+
+    def _communication_failed(self, message: str) -> None:
+        buildkite.notify_qa_team_about_failure(message)

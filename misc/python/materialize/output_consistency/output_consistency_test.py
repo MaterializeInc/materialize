@@ -283,7 +283,7 @@ def upload_output_consistency_results_to_test_analytics(
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail
-        buildkite.notify_qa_team_about_failure(f"Uploading results failed! {e}")
+        test_analytics.on_upload_failed(e)
 
 
 def connect(host: str, port: int, user: str, password: str | None = None) -> Connection:
