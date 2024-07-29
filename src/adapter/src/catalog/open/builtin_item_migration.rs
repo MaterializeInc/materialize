@@ -373,13 +373,9 @@ async fn migrate_builtin_items_0dt(
                 // Ignore any errors, these shards will get cleaned up in the next upgrade.
                 // It's important to use `upper` here. If there was another concurrent write at
                 // `upper`, then `updates` are no longer valid.
-                let res = write_to_migration_shard(
-                    updates,
-                    upper,
-                    &mut write_handle,
-                    &mut since_handle,
-                )
-                .await;
+                let res =
+                    write_to_migration_shard(updates, upper, &mut write_handle, &mut since_handle)
+                        .await;
                 if let Err(e) = res {
                     error!("Unable to remove old entries from migration shard: {e:?}");
                 }
