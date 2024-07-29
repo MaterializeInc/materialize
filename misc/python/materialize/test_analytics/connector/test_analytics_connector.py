@@ -217,9 +217,10 @@ class DatabaseConnector:
                 print(
                     f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected, {duration_in_sec}s)"
                 )
-        except:
+        except Exception as e:
             if print_status:
                 print("-- FAILED!")
+                print(f"Error is: {e}")
             raise
 
     def _disable_if_uploads_not_allowed(
