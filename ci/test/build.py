@@ -72,7 +72,7 @@ def maybe_upload_debuginfo(
     if not bins:
         return
 
-    print(f"Uploading debuginfo for {', '.join(bins)}...")
+    ui.section(f"Uploading debuginfo for {', '.join(bins)}...")
 
     s3 = boto3.client("s3")
     is_tag_build = ui.env_is_truthy("BUILDKITE_TAG")
@@ -122,7 +122,7 @@ def maybe_upload_debuginfo(
         # expensive, so we don't want to upload development or unstable builds
         # that won't ever be profiled by Polar Signals.
         if is_tag_build:
-            print(f"Uploading debuginfo for {bin} to Polar Signals...")
+            ui.section(f"Uploading debuginfo for {bin} to Polar Signals...")
             spawn.runv(
                 [
                     "parca-debuginfo",
