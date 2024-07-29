@@ -198,8 +198,9 @@ llvm_toolchain(
         "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_x86_64.tar.zst".format(LLVM_VERSION_LINUX)],
     },
     sha256 = {
-        "linux-aarch64": "b1195efac9f8d3d42421d77bd1aa43d8205f6800cf0d1e9880186caa2cf626a5",
-        "linux-x86_64": "315c0b96d04e035d2de536a04341817108a2303ba5bc25c7c891242b75e61a3",
+        "darwin-aarch64": "",
+        "linux-aarch64": "",
+        "linux-x86_64": "",
     },
 )
 
