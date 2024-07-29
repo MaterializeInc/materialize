@@ -59,9 +59,7 @@ class TestCleanupSchema:
         project.run_sql(f"CREATE TABLE {project.test_schema}.test_table (id INT)")
 
         # Run the macro in dry run mode
-        run_dbt(
-            ["run-operation", "cleanup_schema", "--args", "{dry_run: True}"]
-        )
+        run_dbt(["run-operation", "cleanup_schema", "--args", "{dry_run: True}"])
 
         # Verify the schema and table still exist
         schema_exists = project.run_sql(
