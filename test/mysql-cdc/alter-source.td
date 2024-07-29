@@ -57,7 +57,7 @@ contains:Invalid MySQL table reference: table_a
 
 # We are not aware that the new table_a is different
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_a;
-contains:another subsource already refers to public.table_a
+contains:catalog item 'table_a' already exists
 
 # TODO: #27585 (expected table was dropped)
 $ skip-end
@@ -225,7 +225,7 @@ mz_source_progress    progress
 > ALTER SOURCE mz_source ADD SUBSOURCE public.table_g;
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_g;
-contains:another subsource already refers to public.table_g
+contains:catalog item 'table_g' already exists
 
 > ALTER SOURCE mz_source ADD SUBSOURCE public.table_a, public.table_b AS tb;
 
@@ -234,7 +234,7 @@ contains:another subsource already refers to public.table_g
 2 two
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_a;
-contains:another subsource already refers to public.table_a
+contains:catalog item 'table_a' already exists
 
 > SELECT * FROM tb;
 1 one
