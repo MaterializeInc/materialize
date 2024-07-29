@@ -47,14 +47,23 @@ impl SystemParameterBackend {
                 Ok(()) => {
                     info!(name = param.name, value = param.value, "sync parameter");
                 }
-                Err(error) => {
-                    error!(
-                        name = param.name,
-                        value = param.value,
-                        "cannot update system variable: {}",
-                        error
-                    );
-                }
+                Err(error) => match error {
+                    AdapterError::ReadOnly => {
+                        info!(
+                            name = param.name,
+                            value = param.value,
+                            "cannot update system variable in read-only mode",
+                        );
+                    }
+                    error => {
+                        error!(
+                            name = param.name,
+                            value = param.value,
+                            "cannot update system variable: {}",
+                            error
+                        );
+                    }
+                },
             }
         }
     }
