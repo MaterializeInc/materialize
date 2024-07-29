@@ -798,7 +798,7 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
         ALTER SYSTEM SET cluster = cluster;
         ALTER SYSTEM SET enable_0dt_deployment = true;
         ALTER SYSTEM SET with_0dt_deployment_max_wait = '3s';
-        
+
         CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
     """,
         service="mz_old",
