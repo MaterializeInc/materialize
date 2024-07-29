@@ -9,16 +9,19 @@
 
 CREATE TABLE config (
    uploads_enabled BOOL NOT NULL,
-   min_required_data_version_for_uploads INT NOT NULL
+   min_required_data_version_for_uploads INT NOT NULL,
+   only_notify_about_communication_failures_on_main BOOL NOT NULL
 );
 
 INSERT INTO config
 (
     uploads_enabled,
-    min_required_data_version_for_uploads
+    min_required_data_version_for_uploads,
+    only_notify_about_communication_failures_on_main
 )
 VALUES
 (
     TRUE,
-    6
+    6,
+    FALSE
 );
