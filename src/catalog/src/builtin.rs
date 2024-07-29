@@ -3295,6 +3295,51 @@ GROUP BY object_id, collection_timestamp",
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_RECENT_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
+    name: "mz_recent_storage_usage",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECENT_STORAGE_USAGE_OID,
+    column_defs: Some("object_id, size_bytes"),
+    sql: "
+WITH
+
+recent_storage_usage_by_shard AS (
+    SELECT shard_id, size_bytes, collection_timestamp
+    FROM mz_internal.mz_storage_usage_by_shard
+    -- Restricting to the last 6 hours makes it feasible to index the view.
+    WHERE collection_timestamp + '6 hours' >= mz_now()
+),
+
+most_recent_collection_timestamp_by_shard AS (
+    SELECT shard_id, max(collection_timestamp) AS collection_timestamp
+    FROM recent_storage_usage_by_shard
+    GROUP BY shard_id
+)
+
+SELECT
+    object_id,
+    sum(size_bytes)::uint8
+FROM
+    mz_internal.mz_storage_shards
+    LEFT JOIN most_recent_collection_timestamp_by_shard
+        ON mz_storage_shards.shard_id = most_recent_collection_timestamp_by_shard.shard_id
+    LEFT JOIN recent_storage_usage_by_shard
+        ON mz_storage_shards.shard_id = recent_storage_usage_by_shard.shard_id
+        AND most_recent_collection_timestamp_by_shard.collection_timestamp = recent_storage_usage_by_shard.collection_timestamp
+GROUP BY object_id",
+    access: vec![PUBLIC_SELECT],
+}
+});
+
+pub static MZ_RECENT_STORAGE_USAGE_IND: Lazy<BuiltinIndex> = Lazy::new(|| BuiltinIndex {
+    name: "mz_recent_storage_usage_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_RECENT_STORAGE_USAGE_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_recent_storage_usage (object_id)",
+    is_retained_metrics_object: false,
+});
+
 pub static MZ_RELATIONS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
         name: "mz_relations",
@@ -7643,6 +7688,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_FRONTIERS_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
+        Builtin::View(&MZ_RECENT_STORAGE_USAGE),
+        Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
     ]);
 
     builtins.extend(notice::builtins());

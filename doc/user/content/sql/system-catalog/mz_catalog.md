@@ -479,9 +479,20 @@ Field            | Type                 | Meaning
 
 ### `mz_storage_usage`
 
-The `mz_storage_usage` table describes the storage utilization of each table,
-source, and materialized view in the system. Storage utilization is assessed
-approximately every hour.
+{{< warning >}}
+This view is not indexed in the `mz_catalog_server` cluster. Querying this view
+can be slow due to the amount of unindexed data that must be scaned.
+{{< /warning >}}
+
+The `mz_storage_usage` table describes the historical storage utilization of
+each table, source, and materialized view in the system. Storage utilization is
+assessed approximately every hour.
+
+{{< if-released "v0.111" >}}
+Consider querying
+[`mz_internal.mz_recent_storage_usage`](../mz_internal#mz_recent_storage_usage)
+instead if you are interested in only the most recent storage usage information.
+{{< /if-released >}}
 
 <!-- RELATION_SPEC mz_catalog.mz_storage_usage -->
 Field                  | Type                         | Meaning
