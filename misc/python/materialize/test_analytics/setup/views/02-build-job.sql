@@ -157,7 +157,8 @@ SELECT
     predecessor_build_job_id,
     predecessor_build_step_success,
     predecessor_index,
-    predecessor_is_latest_retry
+    predecessor_is_latest_retry,
+    pipeline -- no longer in use, remove eventually
 FROM v_build_job_success
 WHERE branch = 'main'
 AND date + INTERVAL '5' DAY > mz_now()
