@@ -494,12 +494,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     discarded_reports_by_scenario_name: dict[str, list[Report]] = dict()
 
     scenarios_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
-    for cycle in range(0, args.max_retries):
+    for cycle_index in range(0, args.max_retries):
+        cycle_number = cycle_index + 1
         print(
-            f"Cycle {cycle + 1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
+            f"Cycle {cycle_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
         )
 
-        report = Report(cycle=cycle + 1)
+        report = Report(cycle_number=cycle_number)
 
         scenarios_with_regressions = []
         for scenario in scenarios_to_run:
@@ -512,10 +513,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
-            if _shall_retry_scenario(scenario, comparators, cycle):
+            if _shall_retry_scenario(scenario, comparators, cycle_index):
                 scenarios_with_regressions.append(scenario)
 
-            if cycle > 0:
+            if cycle_index > 0:
                 discarded_reports_of_scenario = discarded_reports_by_scenario_name.get(
                     scenario_name, []
                 )
@@ -528,7 +529,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             latest_report_by_scenario_name[scenario_name] = report
 
-            print(f"+++ Benchmark Report for cycle {cycle + 1}:")
+            print(f"+++ Benchmark Report for cycle {cycle_number}:")
             print(report)
 
         scenarios_to_run = scenarios_with_regressions
@@ -599,11 +600,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def _shall_retry_scenario(
-    scenario: type[Scenario], comparators: list[Comparator], cycle: int
+    scenario: type[Scenario], comparators: list[Comparator], cycle_index: int
 ) -> bool:
     return any(
         [
-            c.is_regression() and not (c.is_strong_regression() and cycle >= 2)
+            c.is_regression() and not (c.is_strong_regression() and cycle_index >= 2)
             for c in comparators
         ]
     )
@@ -696,7 +697,7 @@ def _regressions_to_failure_details(
         failure_details.append(
             TestFailureDetails(
                 test_case_name_override=f"Scenario '{scenario_name}'",
-                message=f"New regression against {regression_against_tag}",
+                message=f"New regression against {regression_against_tag} (conducted {report.cycle_number} cycles)",
                 details=report.as_string(use_colors=False),
             )
         )
@@ -738,7 +739,7 @@ def upload_results_to_test_analytics(
                 scenario_name=scenario_name,
                 scenario_group=scenario_group,
                 scenario_version=str(scenario_version),
-                cycle=report.cycle,
+                cycle=report.cycle_number,
                 scale=scale or "default",
                 wallclock=report_measurements[MeasurementType.WALLCLOCK],
                 messages=report_measurements[MeasurementType.MESSAGES],
@@ -758,7 +759,7 @@ def upload_results_to_test_analytics(
                     scenario_name=scenario_name,
                     scenario_group=scenario_group,
                     scenario_version=str(scenario_version),
-                    cycle=discarded_report.cycle,
+                    cycle=discarded_report.cycle_number,
                     scale=scale or "default",
                     wallclock=discarded_measurements[MeasurementType.WALLCLOCK],
                     messages=discarded_measurements[MeasurementType.MESSAGES],
