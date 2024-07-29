@@ -13,14 +13,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
+use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
-    WithOptionValue,
+    Value, WithOptionValue,
 };
 use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
 use mz_storage_types::connections::PostgresConnection;
-use mz_storage_types::sources::SourceReferenceResolver;
+use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
+use prost::Message;
 use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
 
@@ -138,7 +140,7 @@ pub fn generate_create_subsource_statements(
     let mut subsources = Vec::with_capacity(requested_subsources.len());
 
     for (subsource_name, purified_export) in requested_subsources {
-        let (text_columns, table) = match &purified_export.details {
+        let (text_columns, table) = match purified_export.details {
             PurifiedExportDetails::Postgres {
                 text_columns,
                 table,
@@ -146,13 +148,17 @@ pub fn generate_create_subsource_statements(
             _ => unreachable!("purified export details must be postgres"),
         };
 
+        let text_column_set = text_columns
+            .as_ref()
+            .map(|v| BTreeSet::from_iter(v.iter().map(Ident::as_str)));
+
         // Figure out the schema of the subsource
         let mut columns = vec![];
         for c in table.columns.iter() {
             let name = Ident::new(c.name.clone())?;
 
-            let ty = match text_columns {
-                Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
+            let ty = match text_column_set {
+                Some(ref names) if names.contains(c.name.as_str()) => mz_pgrepr::Type::Text,
                 _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
                     Ok(t) => t,
                     Err(_) => {
@@ -217,6 +223,35 @@ pub fn generate_create_subsource_statements(
             }
         }
 
+        let details = SourceExportStatementDetails::Postgres { table };
+
+        let mut with_options = vec![
+            CreateSubsourceOption {
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(
+                    purified_export.external_reference,
+                )),
+            },
+            CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            },
+        ];
+
+        if let Some(text_columns) = text_columns {
+            with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::TextColumns,
+                value: Some(WithOptionValue::Sequence(
+                    text_columns
+                        .into_iter()
+                        .map(WithOptionValue::Ident::<Aug>)
+                        .collect::<Vec<_>>(),
+                )),
+            });
+        }
+
         // Create the subsource statement
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
@@ -234,12 +269,7 @@ pub fn generate_create_subsource_statements(
             // one without and now we're producing garbage data.
             constraints,
             if_not_exists: false,
-            with_options: vec![CreateSubsourceOption {
-                name: CreateSubsourceOptionName::ExternalReference,
-                value: Some(WithOptionValue::UnresolvedItemName(
-                    purified_export.external_reference,
-                )),
-            }],
+            with_options,
         };
         subsources.push(subsource);
     }
@@ -393,7 +423,11 @@ pub(super) async fn purify_source_exports(
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::Postgres {
                         table: r.table.clone(),
-                        text_columns: text_column_map.remove(&r.table.oid),
+                        text_columns: text_column_map.remove(&r.table.oid).map(|v| {
+                            v.into_iter()
+                                .map(|s| Ident::new(s).expect("validated above"))
+                                .collect()
+                        }),
                     },
                 },
             )

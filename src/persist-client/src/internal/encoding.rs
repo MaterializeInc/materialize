@@ -40,14 +40,15 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    proto_hollow_batch_part, BatchPart, CriticalReaderState, HandleDebugState, HollowBatch,
-    HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
-    ProtoCompaction, ProtoCriticalReaderState, ProtoHandleDebugState, ProtoHollowBatch,
-    ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
-    ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
-    ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData,
-    ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    proto_hollow_batch_part, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
+    HollowBatch, HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
+    ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState,
+    ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge,
+    ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
+    ProtoRollup, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
+    WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -56,10 +57,14 @@ use crate::internal::trace::{
     ActiveCompaction, FlatTrace, SpineId, ThinMerge, ThinSpineBatch, Trace,
 };
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
+use crate::schema::SchemaId;
 use crate::{cfg, PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
+    // TODO: Remove the Option once this finishes rolling out and all shards
+    // have a registered schema.
+    pub id: Option<SchemaId>,
     pub key: Arc<K::Schema>,
     pub val: Arc<V::Schema>,
 }
@@ -67,6 +72,7 @@ pub struct Schemas<K: Codec, V: Codec> {
 impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
     fn clone(&self) -> Self {
         Self {
+            id: self.id,
             key: Arc::clone(&self.key),
             val: Arc::clone(&self.val),
         }
@@ -238,6 +244,36 @@ impl RustType<String> for WriterId {
     }
 }
 
+impl RustType<u64> for SchemaId {
+    fn into_proto(&self) -> u64 {
+        self.0.into_proto()
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
+        Ok(SchemaId(proto.into_rust()?))
+    }
+}
+
+impl RustType<ProtoEncodedSchemas> for EncodedSchemas {
+    fn into_proto(&self) -> ProtoEncodedSchemas {
+        ProtoEncodedSchemas {
+            key: self.key.clone(),
+            key_data_type: self.key_data_type.clone(),
+            val: self.val.clone(),
+            val_data_type: self.val_data_type.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoEncodedSchemas) -> Result<Self, TryFromProtoError> {
+        Ok(EncodedSchemas {
+            key: proto.key,
+            key_data_type: proto.key_data_type,
+            val: proto.val,
+            val_data_type: proto.val_data_type,
+        })
+    }
+}
+
 impl RustType<String> for IdempotencyToken {
     fn into_proto(&self) -> String {
         self.to_string()
@@ -309,6 +345,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             leased_readers,
             critical_readers,
             writers,
+            schemas,
             since,
             legacy_batches,
             hollow_batches,
@@ -331,6 +368,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             &mut writer,
         );
         field_diffs_into_proto(ProtoStateField::Writers, writers, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Schemas, schemas, &mut writer);
         field_diffs_into_proto(ProtoStateField::Since, since, &mut writer);
         field_diffs_into_proto(ProtoStateField::LegacyBatches, legacy_batches, &mut writer);
         field_diffs_into_proto(ProtoStateField::HollowBatches, hollow_batches, &mut writer);
@@ -433,6 +471,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         field_diff_into_rust::<String, ProtoWriterState, _, _, _, _>(
                             diff,
                             &mut state_diff.writers,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::Schemas => {
+                        field_diff_into_rust::<u64, ProtoEncodedSchemas, _, _, _, _>(
+                            diff,
+                            &mut state_diff.schemas,
                             |k| k.into_rust(),
                             |v| v.into_rust(),
                         )?
@@ -842,6 +888,14 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
                 .iter()
                 .map(|(id, state)| (id.into_proto(), state.into_proto()))
                 .collect(),
+            schemas: self
+                .state
+                .state
+                .collections
+                .schemas
+                .iter()
+                .map(|(id, schema)| (id.into_proto(), schema.into_proto()))
+                .collect(),
             trace: Some(self.state.state.collections.trace.into_proto()),
             diffs: self.diffs.as_ref().map(|x| x.into_proto()),
         }
@@ -887,12 +941,17 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
         for (id, state) in x.writers {
             writers.insert(id.into_rust()?, state.into_rust()?);
         }
+        let mut schemas = BTreeMap::new();
+        for (id, x) in x.schemas {
+            schemas.insert(id.into_rust()?, x.into_rust()?);
+        }
         let collections = StateCollections {
             rollups,
             last_gc_req: x.last_gc_req.into_rust()?,
             leased_readers,
             critical_readers,
             writers,
+            schemas,
             trace: x.trace.into_rust_if_some("trace")?,
         };
         let state = State {
@@ -1260,6 +1319,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 ts_rewrite: None,
                 diffs_sum: None,
                 format: None,
+                schema_id: None,
             })
         }));
         Ok(HollowBatch {
@@ -1282,10 +1342,12 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
                 format: x.format.map(|f| f.into_proto()),
+                schema_id: x.schema_id.into_proto(),
             },
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                schema_id,
             } => ProtoHollowBatchPart {
                 kind: Some(proto_hollow_batch_part::Kind::Inline(updates.into_proto())),
                 encoded_size_bytes: 0,
@@ -1294,6 +1356,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 ts_rewrite: ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: None,
                 format: None,
+                schema_id: schema_id.into_proto(),
             },
         }
     }
@@ -1303,6 +1366,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             Some(ts_rewrite) => Some(ts_rewrite.into_rust()?),
             None => None,
         };
+        let schema_id = proto.schema_id.into_rust()?;
         match proto.kind {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
                 Ok(BatchPart::Hollow(HollowBatchPart {
@@ -1313,6 +1377,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     ts_rewrite,
                     diffs_sum: proto.diffs_sum.map(i64::to_le_bytes),
                     format: proto.format.map(|f| f.into_rust()).transpose()?,
+                    schema_id,
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
@@ -1324,6 +1389,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 Ok(BatchPart::Inline {
                     updates,
                     ts_rewrite,
+                    schema_id,
                 })
             }
             None => Err(TryFromProtoError::unknown_enum_variant(
@@ -1639,6 +1705,7 @@ mod tests {
                 ts_rewrite: None,
                 diffs_sum: None,
                 format: None,
+                schema_id: None,
             })],
             4,
             vec![],
@@ -1662,6 +1729,7 @@ mod tests {
             ts_rewrite: None,
             diffs_sum: None,
             format: None,
+            schema_id: None,
         }));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }

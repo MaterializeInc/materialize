@@ -150,10 +150,19 @@ WHERE d.predecessor_index <> 0
 ;
 
 CREATE OR REPLACE MATERIALIZED VIEW mv_recent_build_job_success_on_main IN CLUSTER test_analytics AS
-SELECT *
+SELECT
+    build_job_id,
+    predecessor_build_number,
+    predecessor_build_id,
+    predecessor_build_job_id,
+    predecessor_build_step_success,
+    predecessor_index,
+    predecessor_is_latest_retry,
+    pipeline -- no longer in use, remove eventually
 FROM v_build_job_success
 WHERE branch = 'main'
-AND date + INTERVAL '30' DAY > mz_now();
+AND date + INTERVAL '5' DAY > mz_now()
+AND predecessor_index <= 10;
 
 CREATE OR REPLACE VIEW v_most_recent_build_job AS
 WITH most_recent_build_with_completed_build_step AS (

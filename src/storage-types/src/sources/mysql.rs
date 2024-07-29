@@ -274,6 +274,8 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlSourceDetails {
+    // NOTE(roshan): These fields are planned for deprecation, since relevant table descriptions
+    // and initial_gtid_sets are now stored on source export statements directly.
     #[proptest(
         strategy = "proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 0..4)"
     )]
@@ -306,15 +308,18 @@ fn any_gtidset() -> impl Strategy<Value = String> {
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
     fn into_proto(&self) -> ProtoMySqlSourceDetails {
         ProtoMySqlSourceDetails {
-            tables: self.tables.iter().map(|t| t.into_proto()).collect(),
-            initial_gtid_set: self.initial_gtid_set.clone(),
-            legacy_initial_gtid_set: "".to_string(),
+            deprecated_tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+            deprecated_initial_gtid_set: self.initial_gtid_set.clone(),
+            deprecated_legacy_initial_gtid_set: "".to_string(),
         }
     }
 
     fn from_proto(proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
         // Handle the migration of the legacy_initial_gtid_set field to the initial_gtid_set field
-        let gtid_set = match (proto.initial_gtid_set, proto.legacy_initial_gtid_set) {
+        let gtid_set = match (
+            proto.deprecated_initial_gtid_set,
+            proto.deprecated_legacy_initial_gtid_set,
+        ) {
             (gtid_set, legacy_gtid_set) if legacy_gtid_set.is_empty() => gtid_set,
             (gtid_set, legacy_gtid_set) if gtid_set.is_empty() => vec![legacy_gtid_set],
             (gtid_set, legacy_gtid_set) => {
@@ -328,7 +333,7 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
 
         Ok(MySqlSourceDetails {
             tables: proto
-                .tables
+                .deprecated_tables
                 .into_iter()
                 .map(mz_mysql_util::MySqlTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,

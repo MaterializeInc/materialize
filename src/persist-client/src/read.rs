@@ -904,7 +904,7 @@ pub(crate) struct UnexpiredReadHandleState {
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
     consolidator: Consolidator<T, D>,
     _lease: Lease,
-    _schemas: Schemas<K, V>,
+    schemas: Schemas<K, V>,
 }
 
 impl<K, V, T, D> Cursor<K, V, T, D>
@@ -923,7 +923,11 @@ where
             .next()
             .await
             .expect("fetching a leased part")?;
-        let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
+        let iter = iter.map(|(k, v, t, d)| {
+            let key = K::decode(k, &self.schemas.key);
+            let val = V::decode(v, &self.schemas.val);
+            ((key, val), t, d)
+        });
         Some(iter)
     }
 }
@@ -1016,7 +1020,7 @@ where
         Ok(Cursor {
             consolidator,
             _lease: lease,
-            _schemas: self.schemas.clone(),
+            schemas: self.schemas.clone(),
         })
     }
 

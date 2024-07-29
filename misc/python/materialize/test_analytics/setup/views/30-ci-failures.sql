@@ -7,7 +7,7 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-CREATE OR REPLACE MATERIALIZED VIEW mv_ci_failures AS
+CREATE OR REPLACE MATERIALIZED VIEW mv_ci_failures
 IN CLUSTER test_analytics AS
     SELECT
         pipeline || '#' || build_number AS build_identifier,

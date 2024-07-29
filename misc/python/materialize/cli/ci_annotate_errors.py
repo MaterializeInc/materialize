@@ -29,7 +29,6 @@ from materialize import ci_util, ui
 from materialize.buildkite import (
     add_annotation_raw,
     get_artifact_url,
-    notify_qa_team_about_failure,
 )
 from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
@@ -140,8 +139,8 @@ IGNORE_RE = re.compile(
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # Fencing warnings are OK in fencing/0dt tests
-    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-data-ingest-).* \| .*unexpected\ fence\ epoch
-    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-).* \| .*fenced\ by\ new\ catalog
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-).* \| .*unexpected\ fence\ epoch
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-).* \| .*fenced\ by\ new\ catalog
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
     # For platform-checks upgrade tests
     | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future
@@ -340,12 +339,12 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    try:
-        test_analytics_config = create_test_analytics_config_with_hostname(
-            args.cloud_hostname
-        )
-        test_analytics = TestAnalyticsDb(test_analytics_config)
+    test_analytics_config = create_test_analytics_config_with_hostname(
+        args.cloud_hostname
+    )
+    test_analytics = TestAnalyticsDb(test_analytics_config)
 
+    try:
         # always insert a build job regardless whether it has annotations or not
         test_analytics.builds.add_build_job(
             was_successful=has_successful_buildkite_status()
@@ -353,7 +352,7 @@ and finds associated open GitHub issues in Materialize repository.""",
 
         return_code = annotate_logged_errors(args.log_files, test_analytics)
     except Exception as e:
-        notify_qa_team_about_failure(f"ci_annotate_errors failed! {e}")
+        test_analytics.on_upload_failed(e)
         raise
 
     try:
@@ -363,7 +362,7 @@ and finds associated open GitHub issues in Materialize repository.""",
             print(traceback.format_exc())
 
         # An error during an upload must never cause the build to fail
-        notify_qa_team_about_failure(f"Uploading results failed! {e}")
+        test_analytics.on_upload_failed(e)
 
     return return_code
 
@@ -759,9 +758,7 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         else:
             return build_history
     except Exception as e:
-        notify_qa_team_about_failure(
-            f"Loading build history from test analytics failed: {e}"
-        )
+        test_analytics.on_data_retrieval_failed(e)
 
     print("Loading build history from buildkite instead")
     return _get_failures_on_main_from_buildkite(

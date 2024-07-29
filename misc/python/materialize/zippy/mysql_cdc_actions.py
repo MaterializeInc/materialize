@@ -14,7 +14,7 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.mysql_capabilities import MySqlRunning, MySqlTableExists
 from materialize.zippy.mysql_cdc_capabilities import MySqlCdcTableExists
 from materialize.zippy.mz_capabilities import MzIsRunning
@@ -62,7 +62,7 @@ class CreateMySqlCdcTable(Action):
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_mysql_cdc_table:
             assert self.mysql_cdc_table is not None
             assert self.mysql_cdc_table.mysql_table is not None
@@ -82,7 +82,8 @@ class CreateMySqlCdcTable(Action):
                       FROM MYSQL CONNECTION {name}_conn
                       FOR TABLES (public.{self.mysql_cdc_table.mysql_table.name} AS {name})
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
     def provides(self) -> list[Capability]:

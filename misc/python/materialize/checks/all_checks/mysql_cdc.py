@@ -51,13 +51,13 @@ class MySqlCdcBase:
                 DROP TABLE IF EXISTS mysql_source_table{self.suffix};
 
                 # uniqueness constraint not possible for length of 1024 characters upwards (max key length is 3072 bytes)
-                CREATE TABLE mysql_source_table{self.suffix} (f1 VARCHAR(32), f2 INTEGER, f3 TEXT NOT NULL, PRIMARY KEY(f1, f2));
+                CREATE TABLE mysql_source_table{self.suffix} (f1 VARCHAR(32), f2 INTEGER, f3 TEXT NOT NULL, f4 JSON, PRIMARY KEY(f1, f2));
 
                 SET @i:=0;
                 CREATE TABLE sequence{self.suffix} (i INT);
                 INSERT INTO sequence{self.suffix} SELECT (@i:=@i+1) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 100;
 
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
 
                 $[version<9300] mysql-execute name=mysql
                 GRANT SELECT ON performance_schema.replication_connection_configuration TO mysql1{self.suffix};
@@ -80,6 +80,7 @@ class MySqlCdcBase:
                 f"""
                 > CREATE SOURCE mysql_source1{self.suffix}
                   FROM MYSQL CONNECTION mysql1{self.suffix}
+                  (TEXT COLUMNS = (public.mysql_source_table{self.suffix}.f4))
                   FOR TABLES (public.mysql_source_table{self.suffix} AS mysql_source_tableA{self.suffix});
 
                 > CREATE DEFAULT INDEX ON mysql_source_tableA{self.suffix};
@@ -89,7 +90,7 @@ class MySqlCdcBase:
                 $ mysql-execute name=mysql
                 USE public;
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'B', i, REPEAT('B', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'B', i, REPEAT('B', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SECRET mysqlpass2{self.suffix} AS 'mysql';
@@ -102,7 +103,7 @@ class MySqlCdcBase:
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
                 """
                 + (
@@ -123,7 +124,7 @@ class MySqlCdcBase:
                 $ mysql-execute name=mysql
                 USE public;
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SOURCE mysql_source2{self.suffix}
@@ -132,12 +133,12 @@ class MySqlCdcBase:
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SECRET mysqlpass3{self.suffix} AS 'mysql';
@@ -154,13 +155,13 @@ class MySqlCdcBase:
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
                 """
                 + (
@@ -214,6 +215,10 @@ class MySqlCdcBase:
             F 400 {self.expects}
             G 300 {self.expects}
             H 200 {self.expects}
+
+            # TODO: Figure out the quoting here -- it returns "f4" when done using the SQL shell
+            # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \\((.*?)\\)')[1] FROM (SHOW CREATE SOURCE mysql_source_tableA{self.suffix});
+            # "\"f4\""
             """
         )
 

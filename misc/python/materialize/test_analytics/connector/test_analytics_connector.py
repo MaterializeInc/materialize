@@ -38,6 +38,7 @@ class TestAnalyticsSettings:
 
     uploads_enabled: bool
     min_required_data_version_for_uploads: int
+    only_notify_about_communication_failures_on_main: bool
 
 
 class DatabaseConnector:
@@ -50,6 +51,7 @@ class DatabaseConnector:
         # Note that transactions in mz do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...)
         self._use_transaction = False
         self.open_connection: Connection | None = None
+        self.cached_settings: TestAnalyticsSettings | None = None
 
     def get_or_create_connection(self, autocommit: bool = False) -> Connection:
         if self.open_connection is None:
@@ -108,12 +110,20 @@ class DatabaseConnector:
     def set_read_only(self) -> None:
         self._read_only = True
 
+    def _get_or_query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
+        if self.cached_settings is None:
+            self._query_settings(cursor)
+
+        assert self.cached_settings is not None
+        return self.cached_settings
+
     def _query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
         cursor.execute(
             """
             SELECT
                 uploads_enabled,
-                min_required_data_version_for_uploads
+                min_required_data_version_for_uploads,
+                only_notify_about_communication_failures_on_main
             FROM config;
             """
         )
@@ -121,11 +131,22 @@ class DatabaseConnector:
         rows = cursor.fetchall()
         assert len(rows) == 1, f"Expected exactly one row, got {len(rows)}"
 
-        row = rows[0]
+        column_values = rows[0]
 
-        return TestAnalyticsSettings(
-            uploads_enabled=row[0], min_required_data_version_for_uploads=row[1]
+        settings = TestAnalyticsSettings(
+            uploads_enabled=column_values[0],
+            min_required_data_version_for_uploads=column_values[1],
+            only_notify_about_communication_failures_on_main=column_values[2],
         )
+
+        self.cached_settings = settings
+        return settings
+
+    def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
+        try:
+            return self._get_or_query_settings(self.create_cursor())
+        except:
+            return None
 
     def add_update_statements(self, sql_statements: list[str]) -> None:
         self.update_statements.extend(sql_statements)

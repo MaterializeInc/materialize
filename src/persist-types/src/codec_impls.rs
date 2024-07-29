@@ -23,7 +23,7 @@ use arrow::datatypes::{
     Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use mz_ore::assert_none;
 use timely::order::Product;
 
@@ -40,7 +40,7 @@ use crate::stats::{BytesStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, 
 use crate::{Codec, Codec64, Opaque, ShardId};
 
 /// An implementation of [Schema] for [()].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
 
 /// [`PartEncoder`] for [`UnitSchema`].
@@ -97,11 +97,20 @@ impl Codec for () {
         // No-op.
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &UnitSchema) -> Result<Self, String> {
         if !buf.is_empty() {
             return Err(format!("decode expected empty buf got {} bytes", buf.len()));
         }
         Ok(())
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        UnitSchema
     }
 }
 
@@ -381,7 +390,7 @@ impl<X, T: Data> SimpleSchema<X, T> {
 }
 
 /// An implementation of [Schema] for [String].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StringSchema;
 
 impl Schema<String> for StringSchema {
@@ -433,13 +442,22 @@ impl Codec for String {
         buf.put(self.as_bytes())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &StringSchema) -> Result<Self, String> {
         String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        StringSchema
     }
 }
 
 /// An implementation of [Schema] for [`Vec<u8>`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct VecU8Schema;
 
 impl Schema<Vec<u8>> for VecU8Schema {
@@ -491,8 +509,17 @@ impl Codec for Vec<u8> {
         buf.put(self.as_slice())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &VecU8Schema) -> Result<Self, String> {
         Ok(buf.to_owned())
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        VecU8Schema
     }
 }
 
@@ -505,14 +532,21 @@ impl Codec for ShardId {
     fn encode<B: BufMut>(&self, buf: &mut B) {
         buf.put(self.to_string().as_bytes())
     }
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+    fn decode<'a>(buf: &'a [u8], _schema: &ShardIdSchema) -> Result<Self, String> {
         let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
         shard_id.parse()
+    }
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        ShardIdSchema
     }
 }
 
 /// An implementation of [Schema] for [ShardId].
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ShardIdSchema;
 
 impl Schema<ShardId> for ShardIdSchema {
@@ -1225,6 +1259,12 @@ pub struct TodoSchema<T>(PhantomData<T>);
 impl<T> Default for TodoSchema<T> {
     fn default() -> Self {
         Self(Default::default())
+    }
+}
+
+impl<T> PartialEq for TodoSchema<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
     }
 }
 

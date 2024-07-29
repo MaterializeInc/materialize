@@ -35,6 +35,7 @@ from materialize.zippy.mysql_actions import (
 from materialize.zippy.mysql_cdc_actions import CreateMySqlCdcTable
 from materialize.zippy.mz_actions import (
     KillClusterd,
+    Mz0dtDeploy,
     MzRestart,
     MzStart,
     MzStop,
@@ -98,9 +99,11 @@ class KafkaSources(Scenario):
         return {
             MzStart: 5,
             MzStop: 1,
+            Mz0dtDeploy: 5,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedKill: 5,
+            # StoragedStart: 5,
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
@@ -118,9 +121,11 @@ class AlterConnectionWithKafkaSources(Scenario):
         return {
             MzStart: 5,
             MzStop: 1,
+            Mz0dtDeploy: 1,
             KillClusterd: 5,
-            StoragedKill: 5,
-            StoragedStart: 5,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedKill: 5,
+            # StoragedStart: 5,
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
@@ -140,11 +145,13 @@ class UserTables(Scenario):
             MzStart: 5,
             BalancerdStart: 1,
             MzStop: 10,
+            Mz0dtDeploy: 10,
             BalancerdStop: 1,
             BalancerdRestart: 1,
             BackupAndRestore: 1,
             KillClusterd: 10,
-            StoragedRestart: 5,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedRestart: 5,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
             CreateSinkParameterized(): 10,
@@ -274,8 +281,10 @@ class CrdbMinioRestart(Scenario):
             DML: 50,
             ValidateView: 15,
             MzRestart: 5,
+            Mz0dtDeploy: 5,
             KillClusterd: 5,
-            StoragedRestart: 10,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedRestart: 10,
             CockroachRestart: 15,
             MinioRestart: 15,
         }
@@ -295,8 +304,10 @@ class CrdbRestart(Scenario):
             DML: 50,
             ValidateView: 15,
             MzRestart: 5,
+            Mz0dtDeploy: 5,
             KillClusterd: 5,
-            StoragedRestart: 10,
+            # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
+            # StoragedRestart: 10,
             CockroachRestart: 15,
         }
 

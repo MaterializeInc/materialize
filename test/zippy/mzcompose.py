@@ -32,6 +32,7 @@ from materialize.mzcompose.services.ssh_bastion_host import (
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
+from materialize.zippy.mz_actions import Mz0dtDeploy
 from materialize.zippy.scenarios import *  # noqa: F401 F403
 
 SERVICES = [
@@ -43,8 +44,13 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Balancerd(),
-    # Those two are overriden below
-    Materialized(),
+    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
+    Materialized(
+        name="materialized2",
+        external_minio=True,
+        external_cockroach=True,
+        sanity_restart=False,
+    ),
     Clusterd(name="storaged"),
     Testdrive(),
     Grafana(),
@@ -155,11 +161,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "transaction_isolation": f"'{args.transaction_isolation}'",
             },
         ),
-        Materialized(
-            external_minio="minio",
-            external_cockroach="cockroach",
-            sanity_restart=False,
-        ),
     ):
         c.up("materialized")
 
@@ -169,17 +170,27 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             user="mz_system",
         )
 
-        c.sql(
+        scenario = scenario_class()
+
+        # Separate clusterd not supported by Mz0dtDeploy yet
+        if Mz0dtDeploy in scenario.actions_with_weight():
+            c.sql(
+                """
+                CREATE CLUSTER storage (SIZE = '2-2');
             """
-            CREATE CLUSTER storage REPLICAS (r2 (
-                STORAGECTL ADDRESSES ['storaged:2100'],
-                STORAGE ADDRESSES ['storaged:2103'],
-                COMPUTECTL ADDRESSES ['storaged:2101'],
-                COMPUTE ADDRESSES ['storaged:2102'],
-                WORKERS 4
-            ))
-        """
-        )
+            )
+        else:
+            c.sql(
+                """
+                CREATE CLUSTER storage REPLICAS (r2 (
+                    STORAGECTL ADDRESSES ['storaged:2100'],
+                    STORAGE ADDRESSES ['storaged:2103'],
+                    COMPUTECTL ADDRESSES ['storaged:2101'],
+                    COMPUTE ADDRESSES ['storaged:2102'],
+                    WORKERS 4
+                ))
+            """
+            )
 
         setup_default_ssh_test_connection(c, "zippy_ssh")
 
@@ -189,7 +200,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         print("Generating test...")
         test = Test(
-            scenario=scenario_class(),
+            scenario=scenario,
             actions=args.actions,
             max_execution_time=args.max_execution_time,
         )

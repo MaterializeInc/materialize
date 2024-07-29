@@ -55,6 +55,7 @@ use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
+use crate::schema::SchemaId;
 use crate::write::WriterId;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
@@ -227,6 +228,20 @@ where
         let (_seqno, state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
+            })
+            .await;
+        (state, maintenance)
+    }
+
+    pub async fn register_schema(
+        &mut self,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> (Option<SchemaId>, RoutineMaintenance) {
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, state, maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, _cfg, state| {
+                state.register_schema::<K, V>(key_schema, val_schema)
             })
             .await;
         (state, maintenance)
@@ -690,6 +705,16 @@ where
 
     pub fn is_finalized(&self) -> bool {
         self.applier.is_finalized()
+    }
+
+    /// See [crate::PersistClient::get_schema].
+    pub fn get_schema(&self, schema_id: SchemaId) -> Option<(K::Schema, V::Schema)> {
+        self.applier.get_schema(schema_id)
+    }
+
+    /// See [crate::PersistClient::latest_schema].
+    pub fn latest_schema(&self) -> Option<(SchemaId, K::Schema, V::Schema)> {
+        self.applier.latest_schema()
     }
 
     async fn tombstone_step(&mut self) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
@@ -1528,6 +1553,10 @@ pub mod datadriven {
                             let val = val.parse().map_err(anyhow::Error::new)?;
                             updates.add_dynamic(name, ConfigVal::Usize(val));
                         }
+                        ConfigVal::Bool(_) => {
+                            let val = val.parse().map_err(anyhow::Error::new)?;
+                            updates.add_dynamic(name, ConfigVal::Bool(val));
+                        }
                         x => unimplemented!("dyncfg type: {:?}", x),
                     }
                 }
@@ -1636,6 +1665,7 @@ pub mod datadriven {
             cfg.blob_target_size = target_size;
         };
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
@@ -1750,7 +1780,7 @@ pub mod datadriven {
             .expect("invalid batch part");
             let mut cursor = Cursor::default();
             while let Some(((k, _v, t, d), _)) = cursor.pop(&part) {
-                let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
+                let (k, d) = (String::decode(k, &StringSchema).unwrap(), i64::decode(d));
                 write!(s, "{k} {t} {d}\n");
             }
         }
@@ -1848,6 +1878,7 @@ pub mod datadriven {
         };
         let writer_id = writer_id.unwrap_or_else(WriterId::new);
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
@@ -1998,7 +2029,11 @@ pub mod datadriven {
                     let mut cursor = Cursor::default();
                     while let Some(((k, _v, mut t, d), _)) = cursor.pop(&part) {
                         t.advance_by(as_of.borrow());
-                        updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
+                        updates.push((
+                            String::decode(k, &StringSchema).unwrap(),
+                            t,
+                            i64::decode(d),
+                        ));
                     }
 
                     consolidate_updates(&mut updates);
@@ -2247,6 +2282,7 @@ pub mod datadriven {
                     let mut b = datadriven.to_batch(batch.clone());
                     let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &writer_id);
                     let schemas = Schemas::<String, ()> {
+                        id: None,
                         key: Arc::new(StringSchema),
                         val: Arc::new(UnitSchema),
                     };

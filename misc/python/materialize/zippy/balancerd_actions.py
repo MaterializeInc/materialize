@@ -9,8 +9,9 @@
 
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, Capability
+from materialize.zippy.framework import Action, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 
 
@@ -25,8 +26,14 @@ class BalancerdStart(Action):
     def incompatible_with(cls) -> set[type[Capability]]:
         return {BalancerdIsRunning}
 
-    def run(self, c: Composition) -> None:
-        c.up("balancerd")
+    def run(self, c: Composition, state: State) -> None:
+        with c.override(
+            Balancerd(
+                https_resolver_template=f"{state.mz_service}:6876",
+                static_resolver_addr=f"{state.mz_service}:6875",
+            )
+        ):
+            c.up("balancerd")
 
     def provides(self) -> list[Capability]:
         return [BalancerdIsRunning()]
@@ -43,7 +50,7 @@ class BalancerdStop(Action):
         # other and no other useful work can be performed in the meantime.
         return {BalancerdIsRunning, MzIsRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("balancerd")
 
     def withholds(self) -> set[type[Capability]]:
@@ -57,6 +64,12 @@ class BalancerdRestart(Action):
     def requires(cls) -> set[type[Capability]]:
         return {BalancerdIsRunning, MzIsRunning}
 
-    def run(self, c: Composition) -> None:
-        c.kill("balancerd")
-        c.up("balancerd")
+    def run(self, c: Composition, state: State) -> None:
+        with c.override(
+            Balancerd(
+                https_resolver_template=f"{state.mz_service}:6876",
+                static_resolver_addr=f"{state.mz_service}:6875",
+            )
+        ):
+            c.kill("balancerd")
+            c.up("balancerd")

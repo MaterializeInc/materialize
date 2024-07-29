@@ -53,7 +53,8 @@ use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    ExternalCatalogReference, GenericSourceConnection, SourceConnection, SourceReferenceResolver,
+    ExternalCatalogReference, GenericSourceConnection, SourceConnection,
+    SourceExportStatementDetails, SourceReferenceResolver,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -251,13 +252,13 @@ pub struct PurifiedSourceExport {
 pub enum PurifiedExportDetails {
     MySql {
         table: MySqlTableDesc,
+        text_columns: Option<Vec<Ident>>,
+        ignore_columns: Option<Vec<Ident>>,
+        initial_gtid_set: String,
     },
     Postgres {
         table: PostgresTableDesc,
-        // Text Columns are needed in Postgres to generate cast expressions
-        // when (re)-planning the primary source
-        // TODO: Refactor this when we move casts to the source exports themselves
-        text_columns: Option<BTreeSet<String>>,
+        text_columns: Option<Vec<Ident>>,
     },
     Kafka {},
     LoadGenerator {
@@ -914,6 +915,7 @@ async fn purify_create_source(
                 text_columns,
                 ignore_columns,
                 source_name,
+                initial_gtid_set.clone(),
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -1272,6 +1274,11 @@ async fn purify_alter_source(
 
             let mut references = Some(ExternalReferences::SubsetTables(external_references));
 
+            // Retrieve the current @gtid_executed value of the server to mark as the effective
+            // initial snapshot point for these subsources.
+            let initial_gtid_set =
+                mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
+
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
                 tables,
@@ -1283,14 +1290,10 @@ async fn purify_alter_source(
                 text_columns,
                 ignore_columns,
                 &unresolved_source_name,
+                initial_gtid_set.clone(),
             )
             .await?;
             requested_subsource_map.extend(subsources);
-
-            // Retrieve the current @gtid_executed value of the server to mark as the effective
-            // initial snapshot point for these subsources.
-            let initial_gtid_set =
-                mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
             // These new details need to be merged with the existing details and cannot
             // simply overwrite the existing details. This suggests they should be their
@@ -1451,7 +1454,7 @@ pub fn generate_subsource_statements(
                 };
 
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
-
+                let details = SourceExportStatementDetails::LoadGenerator {};
                 // Create the subsource statement
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
@@ -1463,12 +1466,20 @@ pub fn generate_subsource_statements(
                     // worried about introducing junk data.
                     constraints: table_constraints,
                     if_not_exists: false,
-                    with_options: vec![CreateSubsourceOption {
-                        name: CreateSubsourceOptionName::ExternalReference,
-                        value: Some(WithOptionValue::UnresolvedItemName(
-                            purified_export.external_reference,
-                        )),
-                    }],
+                    with_options: vec![
+                        CreateSubsourceOption {
+                            name: CreateSubsourceOptionName::ExternalReference,
+                            value: Some(WithOptionValue::UnresolvedItemName(
+                                purified_export.external_reference,
+                            )),
+                        },
+                        CreateSubsourceOption {
+                            name: CreateSubsourceOptionName::Details,
+                            value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                                details.into_proto().encode_to_vec(),
+                            )))),
+                        },
+                    ],
                 };
                 subsource_stmts.push(subsource);
             }

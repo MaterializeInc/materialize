@@ -14,7 +14,6 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::sync::Arc;
 
 use futures::future::LocalBoxFuture;
@@ -57,7 +56,6 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::BuiltinTableUpdate;
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
@@ -336,7 +334,7 @@ impl Coordinator {
                 // Note: Do NOT await the notify here, we pass this back to
                 // whatever requested the startup to prevent blocking the
                 // Coordinator on a builtin table update.
-                let notify = self.buffer_or_write_table_update(update);
+                let notify = self.builtin_table_update().defer(vec![update]);
 
                 let resp = Ok(StartupResponse {
                     role_id,
@@ -1255,32 +1253,7 @@ impl Coordinator {
         let update = self.catalog().state().pack_session_update(&conn, -1);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
-        let _builtin_update_notify = self.buffer_or_write_table_update(update);
-    }
-
-    /// Buffers the given update when in read-only mode or puts in a deferred
-    /// write when in read-write mode.
-    ///
-    /// Returns a `Future` that can be await'ed to be notified when the write is
-    /// complete.
-    fn buffer_or_write_table_update(
-        &mut self,
-        update: BuiltinTableUpdate,
-    ) -> impl Future<Output = ()> + Send {
-        let notify = if self.controller.read_only() {
-            self.buffered_builtin_table_updates
-                .as_mut()
-                .expect("in read-only mode")
-                .push(update);
-
-            futures::future::ready(()).boxed()
-        } else {
-            let notify = self.builtin_table_update().defer(vec![update]);
-
-            notify
-        };
-
-        notify
+        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send

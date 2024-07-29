@@ -9,7 +9,12 @@
 
 
 from materialize.zippy.balancerd_actions import BalancerdIsRunning
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+)
 from materialize.zippy.mz_actions import MzIsRunning
 from materialize.zippy.table_actions import ValidateTable
 from materialize.zippy.table_capabilities import TableExists

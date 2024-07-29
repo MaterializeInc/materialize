@@ -389,19 +389,9 @@ impl Catalog {
 
         // Migrate item ASTs.
         let item_updates = if !config.skip_migrations {
-            let migration_item_updates = item_updates
-                .iter()
-                .cloned()
-                .map(|(kind, ts, diff)| StateUpdate {
-                    kind: kind.into(),
-                    ts,
-                    diff: diff.try_into().expect("valid diff"),
-                })
-                .collect();
             migrate::migrate(
                 &state,
                 &mut txn,
-                migration_item_updates,
                 config.now,
                 config.boot_ts,
                 &state.config.connection_context,

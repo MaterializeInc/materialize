@@ -179,6 +179,7 @@ where
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                ..
             } => {
                 let buf = FetchedBlobBuf::Inline {
                     desc: part.desc.clone(),
@@ -861,18 +862,24 @@ where
                 return Some(((Ok(key), Ok(val)), t, d));
             } else {
                 let k = self.metrics.codecs.key.decode(|| match key.take() {
-                    Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
-                        Ok(()) => Ok(key),
-                        Err(err) => Err(err),
-                    },
-                    None => K::decode(k),
+                    Some(mut key) => {
+                        match K::decode_from(&mut key, k, &mut self.key_storage, &self.schemas.key)
+                        {
+                            Ok(()) => Ok(key),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    None => K::decode(k, &self.schemas.key),
                 });
                 let v = self.metrics.codecs.val.decode(|| match val.take() {
-                    Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
-                        Ok(()) => Ok(val),
-                        Err(err) => Err(err),
-                    },
-                    None => V::decode(v),
+                    Some(mut val) => {
+                        match V::decode_from(&mut val, v, &mut self.val_storage, &self.schemas.val)
+                        {
+                            Ok(()) => Ok(val),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    None => V::decode(v, &self.schemas.val),
                 });
 
                 // Note: We only provide structured columns, if they were originally written, and a
@@ -959,6 +966,7 @@ where
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                ..
             } => Ok(EncodedPart::from_inline(
                 metrics,
                 read_metrics.clone(),

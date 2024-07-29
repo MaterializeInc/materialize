@@ -15,6 +15,8 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
+use arrow::array::Array;
+use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
@@ -23,7 +25,9 @@ use mz_ore::now::EpochMillis;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
+use mz_persist_types::columnar::{ColumnEncoder, Schema2};
 use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::ser::SerializeStruct;
@@ -43,6 +47,7 @@ use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
 use crate::read::LeasedReaderId;
+use crate::schema::SchemaId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -188,6 +193,7 @@ pub enum BatchPart<T> {
     Inline {
         updates: LazyInlineBatchPart,
         ts_rewrite: Option<Antichain<T>>,
+        schema_id: Option<SchemaId>,
     },
 }
 
@@ -275,13 +281,23 @@ impl<T: Ord> Ord for BatchPart<T> {
                 BatchPart::Inline {
                     updates: s_updates,
                     ts_rewrite: s_ts_rewrite,
+                    schema_id: s_schema_id,
                 },
                 BatchPart::Inline {
                     updates: o_updates,
                     ts_rewrite: o_ts_rewrite,
+                    schema_id: o_schema_id,
                 },
-            ) => (s_updates, s_ts_rewrite.as_ref().map(|x| x.elements()))
-                .cmp(&(o_updates, o_ts_rewrite.as_ref().map(|x| x.elements()))),
+            ) => (
+                s_updates,
+                s_ts_rewrite.as_ref().map(|x| x.elements()),
+                s_schema_id,
+            )
+                .cmp(&(
+                    o_updates,
+                    o_ts_rewrite.as_ref().map(|x| x.elements()),
+                    o_schema_id,
+                )),
             (BatchPart::Hollow(_), BatchPart::Inline { .. }) => Ordering::Less,
             (BatchPart::Inline { .. }, BatchPart::Hollow(_)) => Ordering::Greater,
         }
@@ -326,6 +342,11 @@ pub struct HollowBatchPart<T> {
     ///
     /// [`BATCH_RECORD_PART_FORMAT`]: crate::batch::BATCH_RECORD_PART_FORMAT
     pub format: Option<BatchColumnarFormat>,
+    /// The schemas used to encode the data in this batch part.
+    ///
+    /// Or None for historical data written before the schema registry was
+    /// added.
+    pub schema_id: Option<SchemaId>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -593,6 +614,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             ts_rewrite: self_ts_rewrite,
             diffs_sum: self_diffs_sum,
             format: self_format,
+            schema_id: self_schema_id,
         } = self;
         let HollowBatchPart {
             key: other_key,
@@ -602,6 +624,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             ts_rewrite: other_ts_rewrite,
             diffs_sum: other_diffs_sum,
             format: other_format,
+            schema_id: other_schema_id,
         } = other;
         (
             self_key,
@@ -611,6 +634,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_ts_rewrite.as_ref().map(|x| x.elements()),
             self_diffs_sum,
             self_format,
+            self_schema_id,
         )
             .cmp(&(
                 other_key,
@@ -620,6 +644,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_ts_rewrite.as_ref().map(|x| x.elements()),
                 other_diffs_sum,
                 other_format,
+                other_schema_id,
             ))
     }
 }
@@ -662,12 +687,42 @@ pub struct StateCollections<T> {
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
     pub(crate) writers: BTreeMap<WriterId, WriterState<T>>,
+    pub(crate) schemas: BTreeMap<SchemaId, EncodedSchemas>,
 
     // - Invariant: `trace.since == meet(all reader.since)`
     // - Invariant: `trace.since` doesn't regress across state versions.
     // - Invariant: `trace.upper` doesn't regress across state versions.
     // - Invariant: `trace` upholds its own invariants.
     pub(crate) trace: Trace<T>,
+}
+
+/// A key and val [Codec::Schema] encoded via [Codec::encode_schema].
+///
+/// This strategy of directly serializing the schema objects requires that
+/// persist users do the right thing. Specifically, that an encoded schema
+/// doesn't in some later version of mz decode to an in-mem object that acts
+/// differently. In a sense, the current system (before the introduction of the
+/// schema registry) where schemas are passed in unchecked to reader and writer
+/// registration calls also has the same defect, so seems fine.
+///
+/// An alternative is to write down here some persist-specific representation of
+/// the schema (e.g. the arrow DataType). This is a lot more work and also has
+/// the potential to lead down a similar failure mode to the mz_persist_types
+/// `Data` trait, where the boilerplate isn't worth the safety. Given that we
+/// can always migrate later by rehydrating these, seems fine to start with the
+/// easy thing.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct EncodedSchemas {
+    /// A full in-mem `K::Schema` impl encoded via [Codec::encode_schema].
+    pub key: Bytes,
+    /// The arrow `DataType` produced by this `K::Schema` at the time it was
+    /// registered, encoded as a `ProtoDataType`.
+    pub key_data_type: Bytes,
+    /// A full in-mem `K::Schema` impl encoded via [Codec::encode_schema].
+    pub val: Bytes,
+    /// The arrow `DataType` produced by this `V::Schema` at the time it was
+    /// registered, encoded as a `ProtoDataType`.
+    pub val_data_type: Bytes,
 }
 
 #[derive(Debug)]
@@ -817,6 +872,79 @@ where
             }
         };
         Continue(state)
+    }
+
+    pub fn register_schema<K: Codec, V: Codec>(
+        &mut self,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
+        fn data_type<T>(schema: &impl Schema2<T>) -> Bytes {
+            // To be defensive, create an empty batch and inspect the resulting
+            // data type (as opposed to something like allowing the `Schema2` to
+            // declare the DataType).
+            let (array, _stats) = Schema2::encoder(schema).expect("valid schema").finish();
+            let proto = Array::data_type(&array).into_proto();
+            prost::Message::encode_to_vec(&proto).into()
+        }
+
+        // Look for an existing registered SchemaId for these schemas.
+        //
+        // The common case is that this should be a recent one, so as a minor
+        // optimization, do this search in reverse order.
+        //
+        // TODO: Note that this impl is `O(schemas)`. Combined with the
+        // possibility of cmd retries, it's possible but unlikely for this to
+        // get expensive. We could maintain a reverse map to speed this up in
+        // necessary. This would either need to work on the encoded
+        // representation (which, we'd have to fall back to the linear scan) or
+        // we'd need to add a Hash/Ord bound to Schema.
+        let existing_id = self.schemas.iter().rev().find(|(_, x)| {
+            K::decode_schema(&x.key) == *key_schema && V::decode_schema(&x.val) == *val_schema
+        });
+        match existing_id {
+            Some((schema_id, _)) => {
+                // TODO: Validate that the decoded schemas still produce records
+                // of the recorded DataType, to detect shenanigans. Probably
+                // best to wait until we've turned on Schema2 in prod and thus
+                // committed to the current mappings.
+                Break(NoOpStateTransition(Some(*schema_id)))
+            }
+            None if self.is_tombstone() => {
+                // TODO: Is this right?
+                Break(NoOpStateTransition(None))
+            }
+            None if self.schemas.is_empty() => {
+                // We'll have to do something more sophisticated here to
+                // generate the next id if/when we start supporting the removal
+                // of schemas.
+                let id = SchemaId(self.schemas.len());
+                let prev = self.schemas.insert(
+                    id,
+                    EncodedSchemas {
+                        key: K::encode_schema(key_schema),
+                        key_data_type: data_type(key_schema),
+                        val: V::encode_schema(val_schema),
+                        val_data_type: data_type(val_schema),
+                    },
+                );
+                assert_eq!(prev, None);
+                Continue(Some(id))
+            }
+            None => {
+                info!(
+                    "register_schemas got {:?} expected {:?}",
+                    key_schema,
+                    self.schemas
+                        .iter()
+                        .map(|(id, x)| (id, K::decode_schema(&x.key)))
+                        .collect::<Vec<_>>()
+                );
+                // Until we implement persist schema changes, only allow at most
+                // one registered schema.
+                Break(NoOpStateTransition(None))
+            }
+        }
     }
 
     pub fn compare_and_append(
@@ -1483,6 +1611,7 @@ where
                 leased_readers: BTreeMap::new(),
                 critical_readers: BTreeMap::new(),
                 writers: BTreeMap::new(),
+                schemas: BTreeMap::new(),
                 trace: Trace::default(),
             },
         };
@@ -1802,6 +1931,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
                     leased_readers,
                     critical_readers,
                     writers,
+                    schemas,
                     trace,
                 },
         } = self;
@@ -1816,6 +1946,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("leased_readers", leased_readers)?;
         let () = s.serialize_field("critical_readers", critical_readers)?;
         let () = s.serialize_field("writers", writers)?;
+        let () = s.serialize_field("schemas", schemas)?;
         let () = s.serialize_field("since", &trace.since().elements())?;
         let () = s.serialize_field("upper", &trace.upper().elements())?;
         let trace = trace.flatten();
@@ -1916,8 +2047,13 @@ pub(crate) mod tests {
 
     pub fn any_batch_part<T: Arbitrary + Timestamp>() -> impl Strategy<Value = BatchPart<T>> {
         Strategy::prop_map(
-            (any::<bool>(), any_hollow_batch_part(), any::<Option<T>>()),
-            |(is_hollow, hollow, ts_rewrite)| {
+            (
+                any::<bool>(),
+                any_hollow_batch_part(),
+                any::<Option<T>>(),
+                any::<Option<SchemaId>>(),
+            ),
+            |(is_hollow, hollow, ts_rewrite, schema_id)| {
                 if is_hollow {
                     BatchPart::Hollow(hollow)
                 } else {
@@ -1926,6 +2062,7 @@ pub(crate) mod tests {
                     BatchPart::Inline {
                         updates,
                         ts_rewrite,
+                        schema_id,
                     }
                 }
             },
@@ -1943,8 +2080,18 @@ pub(crate) mod tests {
                 any::<Option<T>>(),
                 any::<[u8; 8]>(),
                 any::<Option<BatchColumnarFormat>>(),
+                any::<Option<SchemaId>>(),
             ),
-            |(key, encoded_size_bytes, key_lower, stats, ts_rewrite, diffs_sum, format)| {
+            |(
+                key,
+                encoded_size_bytes,
+                key_lower,
+                stats,
+                ts_rewrite,
+                diffs_sum,
+                format,
+                schema_id,
+            )| {
                 HollowBatchPart {
                     key,
                     encoded_size_bytes,
@@ -1953,6 +2100,7 @@ pub(crate) mod tests {
                     ts_rewrite: ts_rewrite.map(Antichain::from_elem),
                     diffs_sum: Some(diffs_sum),
                     format,
+                    schema_id,
                 }
             },
         )
@@ -2029,6 +2177,23 @@ pub(crate) mod tests {
         )
     }
 
+    pub fn any_encoded_schemas() -> impl Strategy<Value = EncodedSchemas> {
+        Strategy::prop_map(
+            (
+                any::<Vec<u8>>(),
+                any::<Vec<u8>>(),
+                any::<Vec<u8>>(),
+                any::<Vec<u8>>(),
+            ),
+            |(key, key_data_type, val, val_data_type)| EncodedSchemas {
+                key: Bytes::from(key),
+                key_data_type: Bytes::from(key_data_type),
+                val: Bytes::from(val),
+                val_data_type: Bytes::from(val_data_type),
+            },
+        )
+    }
+
     pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
         num_trace_batches: Range<usize>,
     ) -> impl Strategy<Value = State<T>> {
@@ -2051,6 +2216,7 @@ pub(crate) mod tests {
                     1..3,
                 ),
                 proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
+                proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
                 any_trace::<T>(num_trace_batches),
             ),
             |(
@@ -2063,6 +2229,7 @@ pub(crate) mod tests {
                 leased_readers,
                 critical_readers,
                 writers,
+                schemas,
                 trace,
             )| State {
                 applier_version: semver::Version::new(1, 2, 3),
@@ -2077,6 +2244,7 @@ pub(crate) mod tests {
                     critical_readers,
                     writers,
                     trace,
+                    schemas,
                 },
             },
         )
@@ -2104,6 +2272,7 @@ pub(crate) mod tests {
                         ts_rewrite: None,
                         diffs_sum: None,
                         format: None,
+                        schema_id: None,
                     })
                 })
                 .collect(),

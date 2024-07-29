@@ -662,6 +662,7 @@ where
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),
+            &config.metrics_registry,
             config.now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,

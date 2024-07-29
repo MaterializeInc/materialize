@@ -288,6 +288,9 @@ impl StateVersions {
                     .set(u64::cast_from(new_state.spine_batch_count()));
                 let size_metrics = new_state.size_metrics();
                 shard_metrics
+                    .schema_registry_version_count
+                    .set(u64::cast_from(new_state.collections.schemas.len()));
+                shard_metrics
                     .hollow_batch_count
                     .set(u64::cast_from(size_metrics.hollow_batch_count));
                 shard_metrics
@@ -1155,6 +1158,7 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
                 BatchPart::Inline {
                     updates,
                     ts_rewrite,
+                    ..
                 } => {
                     let mut h = DefaultHasher::new();
                     updates.hash(&mut h);

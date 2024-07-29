@@ -717,6 +717,7 @@ impl Service for TransactorService {
 
 mod codec_impls {
     use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
+    use bytes::Bytes;
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
         SimpleEncoder, SimpleSchema,
@@ -744,10 +745,19 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &MaelstromKeySchema) -> Result<Self, String> {
             Ok(MaelstromKey(
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
+        }
+
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            MaelstromKeySchema
         }
     }
 
@@ -767,7 +777,7 @@ mod codec_impls {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub struct MaelstromKeySchema;
 
     impl Schema<MaelstromKey> for MaelstromKeySchema {
@@ -819,10 +829,19 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &MaelstromValSchema) -> Result<Self, String> {
             Ok(MaelstromVal(
                 serde_json::from_slice(buf).map_err(|err| err.to_string())?,
             ))
+        }
+
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            MaelstromValSchema
         }
     }
 
@@ -838,11 +857,12 @@ mod codec_impls {
         }
 
         fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
-            *self = MaelstromVal::decode(column.value(idx)).expect("should be valid MaelstromVal");
+            *self = MaelstromVal::decode(column.value(idx), &MaelstromValSchema)
+                .expect("should be valid MaelstromVal");
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub struct MaelstromValSchema;
 
     impl Schema<MaelstromVal> for MaelstromValSchema {
@@ -855,7 +875,8 @@ mod codec_impls {
 
         fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
             SimpleSchema::<MaelstromVal, Vec<u8>>::decoder(cols, |val, ret| {
-                *ret = MaelstromVal::decode(val).expect("should be valid MaelstromVal")
+                *ret = MaelstromVal::decode(val, &MaelstromValSchema)
+                    .expect("should be valid MaelstromVal")
             })
         }
 

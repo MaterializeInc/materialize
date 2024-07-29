@@ -67,7 +67,6 @@ class BuildHistoryAnalysis(BaseDataStorage):
             rows = self.query_data(
                 f"""
                     SELECT
-                        pipeline,
                         predecessor_build_number,
                         predecessor_build_id,
                         predecessor_build_job_id,
@@ -85,7 +84,6 @@ class BuildHistoryAnalysis(BaseDataStorage):
 
             for row in rows:
                 (
-                    pipeline,
                     predecessor_build_number,
                     predecessor_build_id,
                     predecessor_build_job_id,

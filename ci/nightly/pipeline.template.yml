@@ -814,8 +814,8 @@ steps:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-0dt-upgrade-entire-mz-three-versions
-        label: "Checks 0dt upgrade across three versions"
+      - id: checks-0dt-upgrade-entire-mz-four-versions
+        label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
@@ -823,7 +823,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=ZeroDowntimeUpgradeEntireMzThreeVersions, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"

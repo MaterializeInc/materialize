@@ -316,13 +316,17 @@ async fn migrate_builtin_items_0dt(
 
     // It's very important that we use the same `upper` that was used to read in a snapshot of the
     // shard. If someone updated the shard after we read then this write will fail.
-    let next_upper = write_to_migration_shard(
-        migrated_shard_updates,
-        upper,
-        &mut write_handle,
-        &mut since_handle,
-    )
-    .await?;
+    let upper = if !migrated_shard_updates.is_empty() {
+        write_to_migration_shard(
+            migrated_shard_updates,
+            upper,
+            &mut write_handle,
+            &mut since_handle,
+        )
+        .await?
+    } else {
+        upper
+    };
 
     // 6. Update `GlobalId` to `ShardId` mapping and register old `ShardId`s for finalization. We don't do the finalization here and instead rely on the background finalization task.
     let migrated_storage_collections_0dt = {
@@ -367,16 +371,18 @@ async fn migrate_builtin_items_0dt(
         if !read_only {
             let updates: Vec<_> = migration_shards_to_finalize
                 .into_iter()
-                .map(|(table_key, shard_id)| ((table_key, shard_id), next_upper, -1))
+                .map(|(table_key, shard_id)| ((table_key, shard_id), upper, -1))
                 .collect();
-            // Ignore any errors, these shards will get cleaned up in the next upgrade.
-            // It's important to use `next_upper` here. If there was another concurrent write at
-            // `next_upper`, then `updates` are no longer valid.
-            let res =
-                write_to_migration_shard(updates, next_upper, &mut write_handle, &mut since_handle)
-                    .await;
-            if let Err(e) = res {
-                error!("Unable to remove old entries from migration shard: {e:?}");
+            if !updates.is_empty() {
+                // Ignore any errors, these shards will get cleaned up in the next upgrade.
+                // It's important to use `upper` here. If there was another concurrent write at
+                // `upper`, then `updates` are no longer valid.
+                let res =
+                    write_to_migration_shard(updates, upper, &mut write_handle, &mut since_handle)
+                        .await;
+                if let Err(e) = res {
+                    error!("Unable to remove old entries from migration shard: {e:?}");
+                }
             }
         }
     }
@@ -446,7 +452,7 @@ mod persist_schema {
     use std::num::ParseIntError;
 
     use arrow::array::{StringArray, StringBuilder};
-    use bytes::BufMut;
+    use bytes::{BufMut, Bytes};
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
         SimpleEncoder, SimpleSchema,
@@ -512,9 +518,16 @@ mod persist_schema {
         fn encode<B: BufMut>(&self, buf: &mut B) {
             buf.put(self.to_string().as_bytes())
         }
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<'a>(buf: &'a [u8], _schema: &TableKeySchema) -> Result<Self, String> {
             let table_key = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
             table_key.parse()
+        }
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            TableKeySchema
         }
     }
 
@@ -534,7 +547,7 @@ mod persist_schema {
     }
 
     /// An implementation of [Schema] for [TableKey].
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub(super) struct TableKeySchema;
 
     impl Schema<TableKey> for TableKeySchema {
