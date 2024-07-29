@@ -7,4 +7,11 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-CREATE TABLE issue (issue_id TEXT NOT NULL, title TEXT NOT NULL, ci_regexp TEXT NOT NULL, state TEXT NOT NULL);
+CREATE TABLE issue (
+    issue_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    ci_regexp TEXT NOT NULL,
+    state TEXT NOT NULL
+);
+
+GRANT SELECT, INSERT, UPDATE ON TABLE issue TO "hetzner-ci";

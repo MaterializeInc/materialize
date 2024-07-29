@@ -11,6 +11,17 @@ steps:
   - group: Builds
     key: builds
     steps:
+      - id: build-x86_64
+        label: Build x86_64
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 60
+        priority: 1
+        agents:
+          queue: builder-linux-x86_64
+
       - id: build-aarch64
         label: Build aarch64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -30,7 +41,7 @@ steps:
         command: bin/ci-builder run stable bin/ci-closed-issues-detect
         depends_on: []
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         branches: "!v*.*"
         sanitizer: skip
 
@@ -40,7 +51,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
 
   - id: miri-test
@@ -48,12 +59,11 @@ steps:
     depends_on: []
     timeout_in_minutes: 600
     plugins:
-      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: cargo-test
           args: [--miri-full]
     agents:
-      queue: builder-linux-aarch64
+      queue: hetzner-x86-64-32cpu-128gb
     sanitizer: skip
 
   - group: Benchmarks
@@ -65,7 +75,7 @@ steps:
         timeout_in_minutes: 720
         parallelism: 8
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -78,7 +88,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -98,7 +108,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 1200
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -122,7 +132,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -148,7 +158,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-matrix
@@ -158,7 +168,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-multi-broker
@@ -172,7 +182,7 @@ steps:
               composition: kafka-resumption
               args: [--redpanda]
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
 
 
   - group: Testdrive
@@ -183,9 +193,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--redpanda]
@@ -195,9 +204,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--redpanda]
@@ -208,9 +216,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--kafka-default-partitions=5]
@@ -220,9 +227,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--replicas=4]
@@ -232,9 +238,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 360
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--default-size=1]
@@ -244,9 +249,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--default-size=8]
@@ -256,9 +260,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [
@@ -273,9 +276,8 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_full_testdrive.py]
         sanitizer: skip
@@ -285,9 +287,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--persistent-user-tables]
@@ -300,7 +301,7 @@ steps:
         label: "Product limits"
         depends_on: build-aarch64
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
@@ -313,7 +314,7 @@ steps:
         agents:
           # A larger instance is needed due to the
           # many containers that are being created
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
@@ -326,7 +327,7 @@ steps:
         timeout_in_minutes: 90
         parallelism: 2
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
@@ -342,7 +343,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: upsert
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: upsert-compaction-disabled
         label: Upsert (compaction disabled)
@@ -353,7 +354,7 @@ steps:
               composition: upsert
               args: [--compaction-disabled]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
   - id: ssh-connection-extended
     label: Extended SSH connection tests
@@ -364,7 +365,7 @@ steps:
           composition: ssh-connection
           args: [--extended]
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - group: Zippy
     key: zippy
@@ -374,7 +375,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -385,7 +386,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -396,7 +397,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -407,7 +408,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -418,7 +419,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -429,7 +430,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -440,7 +441,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -451,7 +452,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -462,7 +463,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -480,6 +481,7 @@ steps:
             - exit_status: 1
               limit: 1
         agents:
+          # Because of scratch-aws-access
           queue: linux-aarch64-small
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -491,7 +493,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: aws-localstack
@@ -501,7 +503,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: secrets-local-file
@@ -515,7 +517,7 @@ steps:
         timeout_in_minutes: 90
         agents:
           # A larger instance is needed due to frequent OOMs, same in all other platform-checks
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -526,7 +528,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -537,7 +539,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -548,7 +550,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -559,7 +561,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -570,7 +572,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -582,7 +584,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -594,7 +596,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -606,7 +608,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -618,7 +620,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -630,7 +632,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -642,7 +644,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -653,7 +655,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -664,7 +666,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -675,7 +677,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -686,7 +688,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -697,7 +699,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -708,7 +710,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -719,7 +721,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -730,7 +732,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -741,7 +743,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -752,7 +754,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -764,7 +766,7 @@ steps:
         timeout_in_minutes: 90
         agents:
           # Seems to require more memory on aarch64
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -775,7 +777,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -783,10 +785,10 @@ steps:
 
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -794,10 +796,10 @@ steps:
 
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -805,10 +807,10 @@ steps:
 
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -816,10 +818,10 @@ steps:
 
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -832,9 +834,8 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
         sanitizer: skip
@@ -854,6 +855,8 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
+          # TODO: #25108 flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -862,9 +865,8 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_unreplicated_storage_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_unreplicated_storage_cluster_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
       - id: k8s-node-recovery-compute-on-failing
@@ -879,6 +881,8 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
+          # TODO: #25108 flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -887,9 +891,8 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_unreplicated_compute_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_unreplicated_compute_cluster_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
       - id: k8s-node-recovery-replicated-compute-on-failing
@@ -904,6 +907,8 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
+          # TODO: #25108 flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -912,9 +917,8 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_replicated_compute_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_replicated_compute_cluster_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
       - id: k8s-node-recovery-envd-on-failing
@@ -929,6 +933,8 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
+          # TODO: #25108 flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
           - test/cloudtest
@@ -937,9 +943,8 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
         plugins:
-          - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
-              args: [--exitfirst, -k=test_envd_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+              args: [--exitfirst, -k=test_envd_on_failing_node, --apply-node-selectors, test/cloudtest]
         sanitizer: skip
 
   - group: Persist
@@ -955,14 +960,14 @@ steps:
               composition: persist
               args: [--consensus=mem, --blob=mem]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
         depends_on: build-aarch64
         timeout_in_minutes: 20
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -974,7 +979,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 20
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -986,7 +991,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -998,7 +1003,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: persistence
@@ -1013,7 +1018,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sql-feature-flags
@@ -1023,6 +1028,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
+          # Requires LAUNCHDARKLY_API_TOKEN
           queue: linux-aarch64-small
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1035,7 +1041,7 @@ steps:
     concurrency: 1
     concurrency_group: 'cloud-canary'
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
@@ -1048,6 +1054,7 @@ steps:
     concurrency: 1
     concurrency_group: 'mz-e2e'
     agents:
+      # Requires real Mz access, CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME, etc.
       queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
@@ -1061,7 +1068,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: output-consistency
@@ -1072,7 +1079,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: postgres-consistency
@@ -1083,7 +1090,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
@@ -1094,7 +1101,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
@@ -1120,7 +1127,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
@@ -1132,7 +1139,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
@@ -1147,7 +1154,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1158,7 +1165,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1169,7 +1176,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1180,7 +1187,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -1194,7 +1201,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1206,7 +1213,7 @@ steps:
         timeout_in_minutes: 45
         agents:
           # Runs into timeout on small agents
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1218,7 +1225,7 @@ steps:
         skip: "flaky until #25865 is fixed"
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1229,7 +1236,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1240,7 +1247,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1252,7 +1259,7 @@ steps:
         skip: "flaky until #24904 is fixed"
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1265,7 +1272,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1276,7 +1283,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1287,7 +1294,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: crdb-restarts
@@ -1297,7 +1304,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 15
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
@@ -1308,7 +1315,7 @@ steps:
     skip: "#24479"
     timeout_in_minutes: 15
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: retain-history
@@ -1322,7 +1329,7 @@ steps:
         - exit_status: 75
           limit: 1
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
@@ -1336,7 +1343,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1348,7 +1355,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1360,7 +1367,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1373,7 +1380,7 @@ steps:
         timeout_in_minutes: 90
         agents:
           # Sporadic OoM otherwise
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1386,7 +1393,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1398,7 +1405,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1411,7 +1418,7 @@ steps:
         timeout_in_minutes: 90
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1423,7 +1430,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1436,7 +1443,7 @@ steps:
         timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1444,11 +1451,11 @@ steps:
 
       - id: parallel-workload-0dt
         label: "Parallel Workload (0dt deploy)"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1460,7 +1467,7 @@ steps:
     timeout_in_minutes: 15
     skip: "Affected by incidents-and-escalations#72"
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -1471,7 +1478,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 15
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: balancerd
@@ -1484,7 +1491,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from git)
@@ -1495,7 +1502,7 @@ steps:
           composition: legacy-upgrade
           args: ["--versions-source=git"]
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: cloudtest-slow
     label: "Slow Cloudtest"
@@ -1504,9 +1511,8 @@ steps:
     env:
       CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
-      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
           args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
     sanitizer: skip
@@ -1519,7 +1525,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Copy To S3"
     key: copy-to-s3
@@ -1533,7 +1539,7 @@ steps:
             composition: copy-to-s3
             run: nightly
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
 
     - id: copy-to-s3-2-replicas
       label: "Copy To S3 (2 replicas)"
@@ -1545,7 +1551,7 @@ steps:
             run: nightly
             args: [--default-size=2]
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
 
   - group: "Language tests"
     key: language-tests
@@ -1558,7 +1564,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: csharp
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-js
         label: ":js: tests"
@@ -1568,7 +1574,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: js
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-java
         label: ":java: tests"
@@ -1578,7 +1584,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: java
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-python
         label: ":python: tests"
@@ -1588,7 +1594,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: python
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: lang-ruby
         label: ":ruby: tests"
@@ -1598,4 +1604,4 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ruby
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb

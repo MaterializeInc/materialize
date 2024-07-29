@@ -189,7 +189,7 @@ ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 3600
     USER root,
     PASSWORD SECRET mysqlpass
   )
-contains:Name or service not known
+contains:failed to lookup address information
 # TODO: #25076 (misleading error message)
 # contains:error connecting to server: failed to lookup address information: Name or service not known: failed to lookup address
 

@@ -24,3 +24,5 @@ CREATE TABLE build_job (
     aws_instance_type TEXT NOT NULL,
     remarks TEXT -- not in use, will eventually be removed
 );
+
+GRANT SELECT, INSERT, UPDATE ON TABLE build_job TO "hetzner-ci";

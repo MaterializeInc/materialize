@@ -23,3 +23,6 @@ CREATE TABLE build_annotation_error (
    issue TEXT,
    occurrence_count UINT4 NOT NULL
 );
+
+GRANT SELECT, INSERT, UPDATE ON TABLE build_annotation TO "hetzner-ci";
+GRANT SELECT, INSERT, UPDATE ON TABLE build_annotation_error TO "hetzner-ci";

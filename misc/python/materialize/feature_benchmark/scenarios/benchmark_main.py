@@ -231,7 +231,8 @@ class Insert(DML):
 class ManySmallInserts(DML):
     """Measure the time it takes for several small INSERT statements to return."""
 
-    SCALE = 4
+    # Sometimes goes OoM
+    SCALE = 3
 
     def init(self) -> Action:
         return self.table_ten()

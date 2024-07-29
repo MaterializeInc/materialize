@@ -17,7 +17,9 @@ from materialize.test_analytics.config.mz_db_config import MzDbConfig
 
 def create_test_analytics_config(c: Composition) -> MzDbConfig:
     """This requires the "mz" service in the composition."""
-    app_password = os.getenv("PRODUCTION_ANALYTICS_APP_PASSWORD", None)
+    app_password = os.getenv("PRODUCTION_ANALYTICS_MZ_CLI_APP_PASSWORD") or os.getenv(
+        "PRODUCTION_ANALYTICS_APP_PASSWORD"
+    )
 
     if app_password is not None:
         hostname = get_cloud_hostname(c, app_password=app_password)
@@ -29,7 +31,7 @@ def create_test_analytics_config(c: Composition) -> MzDbConfig:
 
 def create_test_analytics_config_with_hostname(hostname: str) -> MzDbConfig:
     username = os.getenv("PRODUCTION_ANALYTICS_USERNAME", "infra+bot@materialize.com")
-    app_password = os.getenv("PRODUCTION_ANALYTICS_APP_PASSWORD", None)
+    app_password = os.getenv("PRODUCTION_ANALYTICS_APP_PASSWORD")
     config = create_test_analytics_config_with_credentials(
         hostname, username, app_password
     )

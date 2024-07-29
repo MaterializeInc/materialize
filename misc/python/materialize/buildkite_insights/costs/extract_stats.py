@@ -17,7 +17,7 @@ from materialize.buildkite_insights.util.data_io import (
 )
 
 # https://instances.vantage.sh/aws/ec2
-instance_cost = {
+aws_instance_cost = {
     "c5.2xlarge": 0.340,
     "c5.12xlarge": 2.040,
     "c5a.2xlarge": 0.308,
@@ -51,6 +51,22 @@ instance_cost = {
     "m6i.4xlarge": 0.768,
     "m6i.12xlarge": 2.304,
     "m7i.8xlarge": 1.613,
+}
+
+# https://www.hetzner.com/cloud/
+hetzner_instance_cost = {
+    "aarch64-2cpu-4gb": 0.0059,
+    "aarch64-4cpu-8gb": 0.0101,
+    "aarch64-8cpu-16gb": 0.0202,
+    "aarch64-16cpu-32gb": 0.0395,
+    "x86-64-2cpu-4gb": 0.0060,
+    "x86-64-4cpu-8gb": 0.0113,
+    "x86-64-8cpu-16gb": 0.0273,
+    "x86-64-16cpu-32gb": 0.0540,
+    "x86-64-16cpu-64gb": 0.1546,
+    "x86-64-32cpu-128gb": 0.3085,
+    "x86-64-48cpu-192gb": 0.4623,
+    "x86-64": 0,  # local experiments
 }
 
 
@@ -93,7 +109,14 @@ def main() -> None:
 
             for metadata in job["agent"]["meta_data"]:
                 if metadata.startswith("aws:instance-type="):
-                    cost = instance_cost[metadata.removeprefix("aws:instance-type=")]
+                    cost = aws_instance_cost[
+                        metadata.removeprefix("aws:instance-type=")
+                    ]
+                    break
+                if metadata.startswith("queue=hetzner-"):
+                    cost = hetzner_instance_cost[
+                        metadata.removeprefix("queue=hetzner-")
+                    ]
                     break
             else:
                 # Can't calculate cost for mac-aarch64

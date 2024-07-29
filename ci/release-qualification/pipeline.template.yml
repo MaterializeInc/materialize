@@ -24,7 +24,6 @@ steps:
         # sure we use the exact same version for testing here as was tagged and
         # will be released, and don't build our own version just for the tests.
         if: build.source == "ui" || build.source == "schedule" || build.source == "api"
-      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
       - id: build-x86_64
         label: Build x86_64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -43,7 +42,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -56,7 +55,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -67,7 +66,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -78,7 +77,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -89,7 +88,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -101,7 +100,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -112,7 +111,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -123,7 +122,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64
+        queue: hetzner-aarch64-8cpu-16gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -135,7 +134,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -147,7 +146,7 @@ steps:
     timeout_in_minutes: 2880
     parallelism: 8
     agents:
-      queue: linux-aarch64-medium
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -161,7 +160,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 120
       agents:
-        queue: linux-aarch64
+        queue: hetzner-aarch64-8cpu-16gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
@@ -173,7 +172,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 120
       agents:
-        queue: linux-aarch64
+        queue: hetzner-aarch64-8cpu-16gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
@@ -211,7 +210,7 @@ steps:
         timeout_in_minutes: 30
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
-          queue: linux-x86_64-small
+          queue: hetzner-x86-64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
@@ -221,7 +220,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
@@ -240,7 +239,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=15.6" ]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-14_11
         label: "Postgres CDC w/ 14.11"
         depends_on: build-aarch64
@@ -251,7 +250,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=14.11" ]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-13_14
         label: "Postgres CDC w/ 13.14"
         depends_on: build-aarch64
@@ -262,7 +261,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=13.14" ]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-12_18
         label: "Postgres CDC w/ 12.18"
         depends_on: build-aarch64
@@ -273,7 +272,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=12.18" ]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-11_22
         label: "Postgres CDC w/ 11.22"
         depends_on: build-aarch64
@@ -284,4 +283,4 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=11.22" ]
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
