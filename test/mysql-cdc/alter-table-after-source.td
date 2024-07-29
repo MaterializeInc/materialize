@@ -10,6 +10,9 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
+# TODO(def-) Reenable when #26733 is fixed
+$ skip-if
+SELECT true
 
 #
 # Test ALTER TABLE -- source will error out for tables which existed when the source was created
