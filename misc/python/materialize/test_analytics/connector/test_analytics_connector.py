@@ -138,6 +138,12 @@ class DatabaseConnector:
         self.cached_settings = settings
         return settings
 
+    def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
+        try:
+            return self._get_or_query_settings(self.create_cursor())
+        except:
+            return None
+
     def add_update_statements(self, sql_statements: list[str]) -> None:
         self.update_statements.extend(sql_statements)
 
