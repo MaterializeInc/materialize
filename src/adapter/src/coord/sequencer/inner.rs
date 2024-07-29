@@ -110,6 +110,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
+use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
@@ -2494,7 +2495,7 @@ impl Coordinator {
             id,
             kind,
             selection,
-            assignments,
+            mut assignments,
             finishing,
             returning,
         } = plan;
@@ -2627,6 +2628,7 @@ impl Coordinator {
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
+        let catalog = self.owned_catalog();
         let max_result_size = self.catalog().system_config().max_result_size();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
@@ -2658,6 +2660,15 @@ impl Coordinator {
             // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
             if timeout_dur == Duration::ZERO {
                 timeout_dur = Duration::MAX;
+            }
+
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::NotAvailable,
+                session: ctx.session(),
+                catalog_state: catalog.state(),
+            };
+            for expr in assignments.values_mut() {
+                return_if_err!(prep_scalar_expr(expr, style.clone()), ctx);
             }
 
             let make_diffs =

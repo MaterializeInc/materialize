@@ -202,3 +202,16 @@ COMPLETE 0
 
 statement error db error: ERROR: result exceeds max size of 1048.6 KB
 INSERT INTO t SELECT * FROM t_big
+
+# Test unmat fns in the SET clause.
+statement ok
+CREATE TABLE dt (t TIMESTAMP)
+
+statement count 1
+INSERT INTO dt VALUES (now())
+
+statement count 1
+UPDATE dt SET t = now()
+
+statement error db error: ERROR: calls to mz_now in write statements are not supported
+UPDATE dt SET t = mz_now()
