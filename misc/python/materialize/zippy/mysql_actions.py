@@ -13,7 +13,7 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.mysql_capabilities import MySqlRunning, MySqlTableExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 
@@ -24,7 +24,7 @@ class MySqlStart(Action):
     def provides(self) -> list[Capability]:
         return [MySqlRunning()]
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.up("mysql")
 
         c.testdrive(
@@ -37,7 +37,8 @@ class MySqlStart(Action):
                 CREATE DATABASE public;
                 USE public;
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
 
@@ -51,14 +52,14 @@ class MySqlStop(Action):
     def withholds(self) -> set[type[Capability]]:
         return {MySqlRunning}
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("mysql")
 
 
 class MySqlRestart(Action):
     """Restart the MySql instance."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         c.kill("mysql")
         c.up("mysql")
 
@@ -93,7 +94,7 @@ class CreateMySqlTable(Action):
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_mysql_table:
             primary_key = "PRIMARY KEY" if self.mysql_table.has_pk else ""
             c.testdrive(
@@ -106,7 +107,8 @@ class CreateMySqlTable(Action):
                     CREATE TABLE {self.mysql_table.name} (f1 INTEGER {primary_key});
                     INSERT INTO {self.mysql_table.name} VALUES ({self.mysql_table.watermarks.max});
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
     def provides(self) -> list[Capability]:
@@ -136,7 +138,7 @@ class MySqlDML(Action):
 class MySqlInsert(MySqlDML):
     """Inserts rows into a MySQL table."""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         prev_max = self.mysql_table.watermarks.max
         self.mysql_table.watermarks.max = prev_max + self.delta
         c.testdrive(
@@ -149,14 +151,15 @@ class MySqlInsert(MySqlDML):
                 SET @i:={prev_max};
                 INSERT INTO {self.mysql_table.name} SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.mysql_table.watermarks.max - prev_max};
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
 
 class MySqlShiftForward(MySqlDML):
     """Update all rows from a MySQL table by incrementing their values by a constant (tables without a PK only)"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if not self.mysql_table.has_pk:
             self.mysql_table.watermarks.shift(self.delta)
             c.testdrive(
@@ -168,14 +171,15 @@ class MySqlShiftForward(MySqlDML):
                     USE public;
                     UPDATE {self.mysql_table.name} SET f1 = f1 + {self.delta};
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
 class MySqlShiftBackward(MySqlDML):
     """Update all rows from a MySQL table by decrementing their values by a constant (tables without a PK only)"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if not self.mysql_table.has_pk:
             self.mysql_table.watermarks.shift(-self.delta)
             c.testdrive(
@@ -187,14 +191,15 @@ class MySqlShiftBackward(MySqlDML):
                     USE public;
                     UPDATE {self.mysql_table.name} SET f1 = f1 - {self.delta};
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
 
 class MySqlDeleteFromHead(MySqlDML):
     """Delete the largest values from a MySQL table"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.mysql_table.watermarks.max = max(
             self.mysql_table.watermarks.max - self.delta,
             self.mysql_table.watermarks.min,
@@ -208,14 +213,15 @@ class MySqlDeleteFromHead(MySqlDML):
                 USE public;
                 DELETE FROM {self.mysql_table.name} WHERE f1 > {self.mysql_table.watermarks.max};
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )
 
 
 class MySqlDeleteFromTail(MySqlDML):
     """Delete the smallest values from a MySQL table"""
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         self.mysql_table.watermarks.min = min(
             self.mysql_table.watermarks.min + self.delta,
             self.mysql_table.watermarks.max,
@@ -229,5 +235,6 @@ class MySqlDeleteFromTail(MySqlDML):
                 USE public;
                 DELETE FROM {self.mysql_table.name} WHERE f1 < {self.mysql_table.watermarks.min};
                 """
-            )
+            ),
+            mz_service=state.mz_service,
         )

@@ -12,7 +12,13 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.framework import (
+    Action,
+    ActionFactory,
+    Capabilities,
+    Capability,
+    State,
+)
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.sink_capabilities import SinkExists
@@ -74,7 +80,7 @@ class CreateSink(Action):
         self.sink = sink
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         # The sink-derived source has upsert semantics, so produce a "normal" ViewExists output
         # from the 'before' and the 'after'
 
@@ -127,7 +133,8 @@ class CreateSink(Action):
                   ENVELOPE NONE
             """
             )
-            + dest_view_sql
+            + dest_view_sql,
+            mz_service=state.mz_service,
         )
 
     def provides(self) -> list[Capability]:

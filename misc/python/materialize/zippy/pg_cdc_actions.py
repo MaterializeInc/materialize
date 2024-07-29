@@ -13,7 +13,7 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
-from materialize.zippy.framework import Action, Capabilities, Capability
+from materialize.zippy.framework import Action, Capabilities, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTableExists
@@ -61,7 +61,7 @@ class CreatePostgresCdcTable(Action):
 
         super().__init__(capabilities)
 
-    def run(self, c: Composition) -> None:
+    def run(self, c: Composition, state: State) -> None:
         if self.new_postgres_cdc_table:
             assert self.postgres_cdc_table is not None
             assert self.postgres_cdc_table.postgres_table is not None
@@ -87,7 +87,8 @@ class CreatePostgresCdcTable(Action):
                       FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication')
                       FOR TABLES ({self.postgres_cdc_table.postgres_table.name} AS {name})
                     """
-                )
+                ),
+                mz_service=state.mz_service,
             )
 
     def provides(self) -> list[Capability]:
