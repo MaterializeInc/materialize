@@ -32,7 +32,7 @@ def rust_toolchains(version, targets):
 
         integrity = {}
         for (resource, sha256) in resources.items():
-            key = "{0}-{1}-{2}.tar.xz".format(resource, version, target)
+            key = "{0}-{1}-{2}".format(resource, version, target)
             integrity[key] = sha256
 
         rust_repository_set(
@@ -42,4 +42,7 @@ def rust_toolchains(version, targets):
             extra_target_triples = extra_targets,
             versions = [version],
             sha256s = integrity,
+            urls = [
+                "https://github.com/MaterializeInc/toolchains/releases/download/rust-{VERSION}/{{}}.tar.zst".format(VERSION=version)
+            ],
         )

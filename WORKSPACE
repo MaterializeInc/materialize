@@ -237,25 +237,25 @@ rust_toolchains(
     RUST_VERSION,
     {
         "aarch64-apple-darwin": {
-            "rustc": "0d7890d57a879fdde1866049beb5d47319d9d7acc1968ec0b92d719917c137b3",
-            "clippy": "33e8feb81e31b991ad0e934c83ccd2b1acdafd944a3203e4afb7c7cbacbe41fc",
-            "cargo": "2cc674f17c18b0c01e0e5a8e5caedc26b0f499d2cc10605cf1a838e2cad9ef7d",
-            "llvm-tools": "326166f8862d2ecc10198f9c8bba89dfe64028187ddf417e916dc08c5d3deac7",
-            "rust-std": "89f16f3a6e8705c314c2f59186e0f8695ba43a58805c8450825888371fceaa25",
+            "rustc": "3bfbdd308ceb34f0c617985f9ca21f230e6f0327dba08ae37b170c8320c6b5d6",
+            "clippy": "9c52c99bda497c88e75f0f8c119f4e5e3538674ed0f01d70147bff7bcc458511",
+            "cargo": "32402355a6dbb9f687607eef716464c88c951cfc6e728405bf802f8e90343f1c",
+            "llvm-tools": "7e1cd8cb8b22693cabc42d915f57d3b1e14d0e2d258befa2a322d201021e2a26",
+            "rust-std": "48704ddce25c6974bb6453286911c175f2e2318364722550d5559de65060bc99",
         },
         "aarch64-unknown-linux-gnu": {
-            "rustc": "9c847b42b81325d25a9240e33bf03fa8652f5dd321ae90a9a7a58b46bf124b17",
-            "clippy": "77803cfff2ea0342f26b59eabec353bc43a1791012aa70855ecfea0fb7ae76ac",
-            "cargo": "4ca5e9bd141b0111387ea1aa0355f87eb8d0da52fbc616cefa4ecde4997aa65b",
-            "llvm-tools": "3eabfa407fdcb894a79eb3980979d8525f7d4524896d53673ec7811629702dd6",
-            "rust-std": "519abf4757fbd8d7e3bb4e4cfdc362ded972c1d95f04675684df2d31e8c0899b"
+            "rustc": "cc574b5be028a807df0a67a0b2ce5147da6ef05561bfecedd0ef669ce79bd38c",
+            "clippy": "043048052a56ba584f5a25d8dcda95d813be56852a4d7ebcf605014b7033e1aa",
+            "cargo": "3dba223c7045d48320c2c0ae56763ac0950c0d95830f221e62d61415746ef3b1",
+            "llvm-tools": "e1abb228ed0c885b7560dbac22cf837406c9dcc7ad50727af3d2aa0a9de6702a",
+            "rust-std": "9c0d638d365c677e521b86eb1f8e91e4bc4da8d207a064ec8f69973e14f43aeb"
         },
         "x86_64-unknown-linux-gnu": {
-            "rustc": "a04cf42022d0a5faf01c31082bfb1dde9c38409f0ca6da90a3e40faa03e797ae",
-            "clippy": "3fb282ee97626e4f25c4f6faac3997859b89f13983dd6fa111e25182dfcb91fa",
-            "cargo": "07fcadd27b645ad58ff4dae5ef166fd730311bbae8f25f6640fe1bfd2a1f3c3c",
-            "llvm-tools": "3e4a9815d882bfb0cf4d4ec1e14181c44324bb3d04e851b9b5377b6a42b75eba",
-            "rust-std": "2c914483c0882d44af2e50a181cbd2c953d672d50b31aa669ee2346cade1f108"
+            "rustc": "0dbd3db9fcfbb299fc5f7bbba89f2b66533d58b72393e49d2d8a6d9679f00c53",
+            "clippy": "137f49984eb0bf3c0e62a40139bea472263b7a4576af63ef1127a8016373f14b",
+            "cargo": "c217ef38127d6a240df2bde412db6b297291246f150d461b1e986dc68f07b1e4",
+            "llvm-tools": "af07b0109f266a1765d16a1c906b33aec7c9745aa675f07a63548ef44b4beb41",
+            "rust-std": "de698a263aede4938659724a2c119539b7483e42035174b61bc3102140a100df"
         },
         "x86_64-apple-darwin": {},
     }
