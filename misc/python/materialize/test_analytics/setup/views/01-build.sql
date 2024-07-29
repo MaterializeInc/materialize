@@ -8,7 +8,6 @@
 -- by the Apache License, Version 2.0.
 
 CREATE OR REPLACE VIEW v_count_builds_per_week AS
-IN CLUSTER test_analytics AS
 SELECT
     EXTRACT(YEAR FROM date) AS year,
     EXTRACT(WEEK FROM date) AS week,
