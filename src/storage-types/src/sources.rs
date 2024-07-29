@@ -1747,7 +1747,7 @@ impl SourceDataRowColumnarEncoder {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
             SourceDataRowColumnarEncoder::EmptyRow => {
-                // TODO(parkmcar): Re-enable this check.
+                // TODO(#28146): Re-enable this check.
                 if false {
                     assert_eq!(row.iter().count(), 0)
                 }

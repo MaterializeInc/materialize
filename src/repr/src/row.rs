@@ -136,8 +136,10 @@ impl Row {
         // HACK(parkmycar): Only validate that the decoded Row matches the RelationDesc if it was
         // non-empty. We have an optimization for queries like COUNT(*) that returns a fake empty
         // Part instead of decoding the data, which this assertion will fail on.
-        if col_idx != 0 {
-            let num_columns = desc.typ().column_types.len();
+        //
+        // TODO(#28146): Remove the check for if the num_columns is 0.
+        let num_columns = desc.typ().column_types.len();
+        if num_columns != 0 && col_idx != 0 {
             mz_ore::soft_assert_eq_or_log!(
                 col_idx,
                 num_columns,
