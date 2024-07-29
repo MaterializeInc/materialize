@@ -77,7 +77,7 @@ message ProtoSourceExportStatementDetails {
     oneof kind {
         mz_storage_types.sources.postgres.ProtoPostgresSourceExportStatementDetails postgres = 1;
         mz_storage_types.sources.mysql.ProtoMySqlSourceExportStatementDetails mysql = 2;
-        mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportStatementDetails loadgen = 3;
+        google.protobuf.Empty loadgen = 3;
     }
 }
 

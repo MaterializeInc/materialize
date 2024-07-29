@@ -1124,7 +1124,7 @@ pub enum SourceExportStatementDetails {
         table: mz_mysql_util::MySqlTableDesc,
         initial_gtid_set: String,
     },
-    LoadGenerator {},
+    LoadGenerator,
 }
 
 impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
@@ -1148,10 +1148,8 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     },
                 )),
             },
-            SourceExportStatementDetails::LoadGenerator {} => ProtoSourceExportStatementDetails {
-                kind: Some(proto_source_export_statement_details::Kind::Loadgen(
-                    load_generator::ProtoLoadGeneratorSourceExportStatementDetails {},
-                )),
+            SourceExportStatementDetails::LoadGenerator => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Loadgen(())),
             },
         }
     }
@@ -1178,7 +1176,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                 )?)?,
                 initial_gtid_set: details.initial_gtid_set,
             },
-            Some(Kind::Loadgen(_details)) => SourceExportStatementDetails::LoadGenerator {},
+            Some(Kind::Loadgen(_)) => SourceExportStatementDetails::LoadGenerator,
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoSourceExportStatementDetails::kind",

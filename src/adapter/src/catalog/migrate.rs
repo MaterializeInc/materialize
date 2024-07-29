@@ -187,7 +187,6 @@ fn ast_rewrite_create_subsource_options(
         CreateSubsourceStatement, MySqlConfigOptionName, PgConfigOptionName, RawItemName, Value,
         WithOptionValue,
     };
-    use mz_storage_types::sources::load_generator::ProtoLoadGeneratorSourceExportStatementDetails;
     use mz_storage_types::sources::mysql::{
         ProtoMySqlSourceDetails, ProtoMySqlSourceExportStatementDetails,
     };
@@ -227,6 +226,11 @@ fn ast_rewrite_create_subsource_options(
                         .iter()
                         .find(|o| o.name == CreateSubsourceOptionName::ExternalReference)
                         .expect("subsources must have external reference");
+                    // For mysql subsources the `external_reference` only contains the schema and table name
+                    // and for postgres sources the `external_reference` does include the database name but
+                    // when matching to the `deprecated_tables` vec in `details` below there is no database
+                    // name on the `ProtoPostgresTableDesc` structs. Since all tables in a given postgres
+                    // publication must belong to the same database it doesn't matter anyways.
                     let (external_schema, external_table) = match &external_reference.value {
                         Some(WithOptionValue::UnresolvedItemName(name)) => {
                             let name_len = name.0.len();
@@ -420,9 +424,7 @@ fn ast_rewrite_create_subsource_options(
                                 // which is used as a stub to ensure conformity with other source-export subsources
                                 let subsource_details = ProtoSourceExportStatementDetails {
                                     kind: Some(
-                                        proto_source_export_statement_details::Kind::Loadgen(
-                                            ProtoLoadGeneratorSourceExportStatementDetails {},
-                                        ),
+                                        proto_source_export_statement_details::Kind::Loadgen(()),
                                     ),
                                 };
                                 node.with_options.push(CreateSubsourceOption {
@@ -450,20 +452,18 @@ fn ast_rewrite_create_subsource_options(
             all_columns: &Option<WithOptionValue<Raw>>,
         ) -> Vec<WithOptionValue<Raw>> {
             let all_table_columns = match all_columns {
-                Some(WithOptionValue::Sequence(columns)) => columns
-                    .into_iter()
-                    .map(|column| match column {
+                Some(WithOptionValue::Sequence(columns)) => {
+                    columns.into_iter().map(|column| match column {
                         WithOptionValue::UnresolvedItemName(name) => name,
                         _ => unreachable!("text columns must be UnresolvedItemName"),
                     })
-                    .collect::<Vec<_>>(),
+                }
                 _ => {
                     unreachable!("Source columns value must be a sequence")
                 }
             };
 
             all_table_columns
-                .into_iter()
                 .filter_map(|name| {
                     // source text columns are an UnresolvedItemName with (schema, table, column) tuples
                     // and we only need to copy the column name for the subsource option
