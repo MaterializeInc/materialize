@@ -50,6 +50,7 @@ class DatabaseConnector:
         # Note that transactions in mz do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...)
         self._use_transaction = False
         self.open_connection: Connection | None = None
+        self.cached_settings: TestAnalyticsSettings | None = None
 
     def get_or_create_connection(self, autocommit: bool = False) -> Connection:
         if self.open_connection is None:
@@ -108,6 +109,13 @@ class DatabaseConnector:
     def set_read_only(self) -> None:
         self._read_only = True
 
+    def _get_or_query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
+        if self.cached_settings is None:
+            self._query_settings(cursor)
+
+        assert self.cached_settings is not None
+        return self.cached_settings
+
     def _query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
         cursor.execute(
             """
@@ -123,9 +131,12 @@ class DatabaseConnector:
 
         row = rows[0]
 
-        return TestAnalyticsSettings(
+        settings = TestAnalyticsSettings(
             uploads_enabled=row[0], min_required_data_version_for_uploads=row[1]
         )
+
+        self.cached_settings = settings
+        return settings
 
     def add_update_statements(self, sql_statements: list[str]) -> None:
         self.update_statements.extend(sql_statements)
