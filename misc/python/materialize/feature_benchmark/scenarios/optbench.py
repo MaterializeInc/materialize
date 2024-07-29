@@ -31,6 +31,8 @@ from materialize.feature_benchmark.scenario import Scenario
 # for pdoc ignores
 __pdoc__ = {}
 
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
+
 
 class OptbenchInit(Action):
     def __init__(self, scenario: str, no_indexes: bool = False) -> None:
@@ -119,3 +121,6 @@ class OptbenchTPCH(Scenario):
 
     def benchmark(self) -> MeasurementSource:
         return OptbenchRun("tpch", self.QUERY)
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
