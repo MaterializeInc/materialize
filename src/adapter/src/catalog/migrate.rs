@@ -113,7 +113,6 @@ pub(crate) async fn migrate(
 
     // Load up a temporary catalog.
     let mut state = state.clone();
-    // The catalog is temporary, so we can throw out the builtin updates.
     let item_updates = tx
         .get_items()
         .map(|item| {
@@ -125,6 +124,7 @@ pub(crate) async fn migrate(
             }
         })
         .collect();
+    // The catalog is temporary, so we can throw out the builtin updates.
     let _ = state.apply_updates_for_bootstrap(item_updates).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
