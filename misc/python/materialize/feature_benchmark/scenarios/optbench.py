@@ -76,11 +76,14 @@ class OptbenchRun(MeasurementSource):
             e._composition.sql_query(explain_query)[0][0]  # type: ignore
         )
         # Optimization time is in nanoseconds, divide by 3 to get a more readable number (still in wrong unit)
-        optimization_duration = float(explain_output.optimization_time()) / 3  # type: ignore
+        optimization_time = explain_output.optimization_time()
+        assert optimization_time is not None
+        optimization_time_in_ns = optimization_time.astype("timedelta64[ns]")
+        optimization_duration_in_third_ns = float(optimization_time_in_ns) / 3
         timestamps = [
             WallclockMeasurement(0, WallclockUnit.ONE_THIRD_NANOSECONDS),
             WallclockMeasurement(
-                optimization_duration,
+                optimization_duration_in_third_ns,
                 WallclockUnit.ONE_THIRD_NANOSECONDS,
             ),
         ]
