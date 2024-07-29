@@ -441,7 +441,7 @@ mod persist_schema {
     use std::num::ParseIntError;
 
     use arrow::array::{StringArray, StringBuilder};
-    use bytes::BufMut;
+    use bytes::{BufMut, Bytes};
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
         SimpleEncoder, SimpleSchema,
@@ -511,6 +511,13 @@ mod persist_schema {
             let table_key = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
             table_key.parse()
         }
+        fn encode_schema(_schema: &Self::Schema) -> Bytes {
+            Bytes::new()
+        }
+        fn decode_schema(buf: &Bytes) -> Self::Schema {
+            assert_eq!(*buf, Bytes::new());
+            TableKeySchema
+        }
     }
 
     impl SimpleColumnarData for TableKey {
@@ -529,7 +536,7 @@ mod persist_schema {
     }
 
     /// An implementation of [Schema] for [TableKey].
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub(super) struct TableKeySchema;
 
     impl Schema<TableKey> for TableKeySchema {

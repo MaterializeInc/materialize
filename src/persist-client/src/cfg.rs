@@ -360,6 +360,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)
+        .add(&crate::schema::SCHEMA_REGISTER)
+        .add(&crate::schema::SCHEMA_REQUIRE)
         .add(&crate::stats::STATS_AUDIT_PERCENT)
         .add(&crate::stats::STATS_BUDGET_BYTES)
         .add(&crate::stats::STATS_COLLECTION_ENABLED)

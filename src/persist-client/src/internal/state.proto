@@ -44,6 +44,7 @@ message ProtoHollowBatchPart {
         google.protobuf.Empty row = 7;
         uint64 row_and_columnar = 8;
     }
+    optional uint64 schema_id = 9;
 
     optional bytes key_stats = 536870906;
 
@@ -155,6 +156,13 @@ message ProtoInlinedDiffs {
     repeated ProtoVersionedData diffs = 3;
 }
 
+message ProtoEncodedSchemas {
+    bytes key = 1;
+    bytes key_data_type = 3;
+    bytes val = 2;
+    bytes val_data_type = 4;
+}
+
 message ProtoRollup {
     string applier_version = 11;
 
@@ -173,6 +181,7 @@ message ProtoRollup {
     map<string, ProtoLeasedReaderState> leased_readers = 8;
     map<string, ProtoCriticalReaderState> critical_readers = 13;
     map<string, ProtoWriterState> writers = 9;
+    map<uint64, ProtoEncodedSchemas> schemas = 18;
 
     ProtoInlinedDiffs diffs = 17;
 

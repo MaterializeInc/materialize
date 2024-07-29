@@ -16,7 +16,7 @@
     clippy::cast_sign_loss
 )]
 
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
     /// This is a separate type because Row is not self-describing. For Row, you
     /// need a RelationDesc to determine the types of any columns that are
     /// Datum::Null.
-    type Schema: Schema<Self> + Schema2<Self>;
+    type Schema: Schema<Self> + Schema2<Self> + PartialEq;
 
     /// Name of the codec.
     ///
@@ -109,6 +109,24 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
         *self = Self::decode(buf, schema)?;
         Ok(())
     }
+
+    /// Encode a schema for permanent storage.
+    ///
+    /// This must perfectly round-trip the schema through [Self::decode_schema].
+    /// If the encode_schema function ever changes, decode_schema must be able
+    /// to handle bytes output by all previous versions of encode_schema.
+    ///
+    /// TODO: Move this to instead be a new trait that is required by
+    /// Self::Schema?
+    fn encode_schema(schema: &Self::Schema) -> Bytes;
+
+    /// Decode a schema previous encoded with this codec's
+    /// [Self::encode_schema].
+    ///
+    /// This must perfectly round-trip the schema through [Self::encode_schema].
+    /// If the encode_schema function ever changes, decode_schema must be able
+    /// to handle bytes output by all previous versions of encode_schema.
+    fn decode_schema(buf: &Bytes) -> Self::Schema;
 }
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp

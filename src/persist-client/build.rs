@@ -49,6 +49,7 @@ fn main() {
             ".mz_persist_client.internal.diff.ProtoStateFieldDiffs",
             ".mz_persist_client.internal.state.ProtoHollowBatchPart",
             ".mz_persist_client.internal.state.ProtoVersionedData",
+            ".mz_persist_client.internal.state.ProtoEncodedSchemas",
             ".mz_persist_client.internal.service.ProtoPushDiff",
         ]);
 

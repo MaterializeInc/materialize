@@ -38,6 +38,7 @@ use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
+use crate::schema::SchemaId;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
 /// An applier of persist commands.
@@ -207,6 +208,24 @@ where
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
                 state.collections.is_tombstone() && state.collections.is_single_empty_batch()
+            })
+    }
+
+    /// See [crate::PersistClient::get_schema].
+    pub fn get_schema(&self, schema_id: SchemaId) -> Option<(K::Schema, V::Schema)> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                let x = state.collections.schemas.get(&schema_id)?;
+                Some((K::decode_schema(&x.key), V::decode_schema(&x.val)))
+            })
+    }
+
+    /// See [crate::PersistClient::latest_schema].
+    pub fn latest_schema(&self) -> Option<(SchemaId, K::Schema, V::Schema)> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                let (id, x) = state.collections.schemas.last_key_value()?;
+                Some((*id, K::decode_schema(&x.key), V::decode_schema(&x.val)))
             })
     }
 

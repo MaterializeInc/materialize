@@ -179,6 +179,7 @@ where
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                ..
             } => {
                 let buf = FetchedBlobBuf::Inline {
                     desc: part.desc.clone(),
@@ -965,6 +966,7 @@ where
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
+                ..
             } => Ok(EncodedPart::from_inline(
                 metrics,
                 read_metrics.clone(),

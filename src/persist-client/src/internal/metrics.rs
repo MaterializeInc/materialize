@@ -1219,6 +1219,7 @@ pub struct ShardsMetrics {
     compact_batches: UIntGaugeVec,
     compacting_batches: UIntGaugeVec,
     noncompact_batches: UIntGaugeVec,
+    schema_registry_version_count: UIntGaugeVec,
     inline_backpressure_count: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
@@ -1434,6 +1435,11 @@ impl ShardsMetrics {
                 help: "number of batches in the shard that aren't compact and have no ongoing compaction",
                 var_labels: ["shard", "name"],
             )),
+            schema_registry_version_count: registry.register(metric!(
+                name: "mz_persist_shard_schema_registry_version_count",
+                help: "count of versions in the schema registry",
+                var_labels: ["shard", "name"],
+            )),
             inline_backpressure_count: registry.register(metric!(
                 name: "mz_persist_shard_inline_backpressure_count",
                 help: "count of CaA attempts retried because of inline backpressure",
@@ -1481,6 +1487,7 @@ impl ShardsMetrics {
 #[derive(Debug)]
 pub struct ShardMetrics {
     pub shard_id: ShardId,
+    pub name: String,
     pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1522,6 +1529,7 @@ pub struct ShardMetrics {
     pub compact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub compacting_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub noncompact_batches: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub schema_registry_version_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub inline_backpressure_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
@@ -1530,6 +1538,7 @@ impl ShardMetrics {
         let shard = shard_id.to_string();
         ShardMetrics {
             shard_id: *shard_id,
+            name: name.to_string(),
             since: shards_metrics
                 .since
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
@@ -1649,6 +1658,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             noncompact_batches: shards_metrics
                 .noncompact_batches
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
+            schema_registry_version_count: shards_metrics
+                .schema_registry_version_count
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             inline_backpressure_count: shards_metrics
                 .inline_backpressure_count

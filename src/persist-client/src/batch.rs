@@ -219,7 +219,7 @@ where
         // don't bother.
         let mut parts = Vec::new();
         for part in self.batch.parts.drain(..) {
-            let (updates, ts_rewrite) = match part {
+            let (updates, ts_rewrite, schema_id) = match part {
                 BatchPart::Hollow(x) => {
                     parts.push(BatchPart::Hollow(x));
                     continue;
@@ -227,7 +227,8 @@ where
                 BatchPart::Inline {
                     updates,
                     ts_rewrite,
-                } => (updates, ts_rewrite),
+                    schema_id,
+                } => (updates, ts_rewrite, schema_id),
             };
             let updates = updates
                 .decode::<T>(&self.metrics.columnar)
@@ -235,6 +236,8 @@ where
             let key_lower = updates.key_lower().to_vec();
             let diffs_sum =
                 diffs_sum::<D>(updates.updates.records()).expect("inline parts are not empty");
+            let mut stats_schemas = stats_schemas.clone();
+            stats_schemas.id = schema_id;
 
             let write_span =
                 debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
@@ -252,7 +255,7 @@ where
                     key_lower,
                     ts_rewrite,
                     D::encode(&diffs_sum),
-                    stats_schemas.clone(),
+                    stats_schemas,
                 )
                 .instrument(write_span),
             );
@@ -895,6 +898,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let batch_metrics = self.batch_metrics.clone();
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let ts_rewrite = None;
+        let schema_id = schemas.id;
 
         let handle = if updates.goodbytes() < self.cfg.inline_writes_single_max_bytes {
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
@@ -913,6 +917,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     BatchPart::Inline {
                         updates,
                         ts_rewrite,
+                        schema_id,
                     }
                 }
                 .instrument(span),
@@ -976,6 +981,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let key = partial_key.complete(&shard_metrics.shard_id);
         let goodbytes = updates.updates.records().goodbytes();
         let metrics_ = Arc::clone(&metrics);
+        let schema_id = schemas.id;
 
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
@@ -1080,6 +1086,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
             format,
+            schema_id,
         })
     }
 

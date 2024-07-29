@@ -38,6 +38,7 @@ class StartMz(MzcomposeAction):
         environment_extra: list[str] = [],
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] = {},
+        system_parameter_version: MzVersion | None = None,
         mz_service: str | None = None,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
@@ -50,6 +51,7 @@ class StartMz(MzcomposeAction):
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
+        self.system_parameter_version = system_parameter_version or tag
         self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
@@ -70,6 +72,7 @@ class StartMz(MzcomposeAction):
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            system_parameter_version=self.system_parameter_version,
             sanity_restart=False,
             platform=self.platform,
             healthcheck=self.healthcheck,

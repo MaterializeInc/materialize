@@ -305,6 +305,7 @@ where
                     BatchPart::Inline {
                         updates,
                         ts_rewrite,
+                        ..
                     } => {
                         let part = EncodedPart::from_inline(
                             &*self.metrics,
@@ -1052,6 +1053,7 @@ mod tests {
                             ts_rewrite: None,
                             diffs_sum: None,
                             format: None,
+                            schema_id: None,
                         })
                     })
                     .collect();

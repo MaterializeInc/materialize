@@ -60,11 +60,23 @@ class ZeroDowntimeUpgradeEntireMz(Scenario):
         return [
             StartMz(self, tag=self.base_version(), mz_service="mz_1"),
             Initialize(self, mz_service="mz_1"),
-            start_mz_read_only(self, tag=None, deploy_generation=1, mz_service="mz_2"),
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=1,
+                mz_service="mz_2",
+                system_parameter_version=self.base_version(),
+            ),
             Manipulate(self, phase=1, mz_service="mz_1"),
             *wait_ready_and_promote("mz_2"),
             Manipulate(self, phase=2, mz_service="mz_2"),
-            start_mz_read_only(self, tag=None, deploy_generation=2, mz_service="mz_3"),
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=2,
+                mz_service="mz_3",
+                system_parameter_version=self.base_version(),
+            ),
             Validate(self, mz_service="mz_2"),
             *wait_ready_and_promote("mz_3"),
             Validate(self, mz_service="mz_3"),
@@ -86,15 +98,31 @@ class ZeroDowntimeUpgradeEntireMzTwoVersions(Scenario):
             Initialize(self, mz_service="mz_1"),
             # Upgrade to last_version
             start_mz_read_only(
-                self, tag=get_last_version(), deploy_generation=1, mz_service="mz_2"
+                self,
+                tag=get_last_version(),
+                deploy_generation=1,
+                mz_service="mz_2",
+                system_parameter_version=self.base_version(),
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
             *wait_ready_and_promote("mz_2"),
             # Upgrade to current source
-            start_mz_read_only(self, tag=None, deploy_generation=2, mz_service="mz_3"),
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=2,
+                mz_service="mz_3",
+                system_parameter_version=self.base_version(),
+            ),
             Manipulate(self, phase=2, mz_service="mz_2"),
             *wait_ready_and_promote("mz_3"),
-            start_mz_read_only(self, tag=None, deploy_generation=3, mz_service="mz_4"),
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=3,
+                mz_service="mz_4",
+                system_parameter_version=self.base_version(),
+            ),
             Validate(self, mz_service="mz_3"),
             *wait_ready_and_promote("mz_4"),
             Validate(self, mz_service="mz_4"),
@@ -121,17 +149,29 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
             StartMz(self, tag=self.minor_versions[3], mz_service="mz_1"),
             Initialize(self, mz_service="mz_1"),
             start_mz_read_only(
-                self, tag=self.minor_versions[2], deploy_generation=1, mz_service="mz_2"
+                self,
+                tag=self.minor_versions[2],
+                deploy_generation=1,
+                mz_service="mz_2",
+                system_parameter_version=self.base_version(),
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
             *wait_ready_and_promote("mz_2"),
             start_mz_read_only(
-                self, tag=get_previous_version(), deploy_generation=2, mz_service="mz_3"
+                self,
+                tag=get_previous_version(),
+                deploy_generation=2,
+                mz_service="mz_3",
+                system_parameter_version=self.base_version(),
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
             *wait_ready_and_promote("mz_3"),
             start_mz_read_only(
-                self, tag=get_last_version(), deploy_generation=3, mz_service="mz_4"
+                self,
+                tag=get_last_version(),
+                deploy_generation=3,
+                mz_service="mz_4",
+                system_parameter_version=self.base_version(),
             ),
             Validate(self, mz_service="mz_3"),
             *wait_ready_and_promote("mz_4"),

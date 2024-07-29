@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use arrow::array::{Array, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
@@ -37,8 +37,9 @@ use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    arb_row_for_relation, ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow,
-    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
+    arb_row_for_relation, ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId,
+    ProtoRelationDesc, ProtoRow, RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder,
+    RowDecoder, RowEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::collection::vec;
@@ -1207,6 +1208,15 @@ impl Codec for SourceData {
             }
         }
     }
+
+    fn encode_schema(schema: &Self::Schema) -> Bytes {
+        schema.into_proto().encode_to_vec().into()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        let proto = ProtoRelationDesc::decode(buf.as_ref()).expect("valid schema");
+        proto.into_rust().expect("valid schema")
+    }
 }
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
@@ -2013,6 +2023,12 @@ mod tests {
             decoder.decode(idx, &mut rnd_data);
             assert_eq!(og_data, rnd_data);
         }
+
+        // Verify that the RelationDesc itself roundtrips through
+        // {encode,decode}_schema.
+        let encoded_schema = SourceData::encode_schema(&desc);
+        let roundtrip_desc = SourceData::decode_schema(&encoded_schema);
+        assert_eq!(desc, roundtrip_desc);
     }
 
     #[mz_ore::test]

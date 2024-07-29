@@ -829,7 +829,6 @@ mod tests {
     use timely::progress::Antichain;
 
     use crate::batch::BLOB_TARGET_SIZE;
-
     use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
     use crate::PersistLocation;
 
@@ -874,6 +873,7 @@ mod tests {
             inputs: vec![b0, b1],
         };
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(StringSchema),
         };
@@ -953,6 +953,7 @@ mod tests {
             inputs: vec![b0, b1],
         };
         let schemas = Schemas {
+            id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(StringSchema),
         };
