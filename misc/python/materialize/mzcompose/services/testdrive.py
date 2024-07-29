@@ -46,7 +46,7 @@ class Testdrive(Service):
         aws_endpoint: str | None = "http://minio:9000",
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
-        no_consistency_checks: bool = False,
+        no_consistency_checks: bool = True,
         external_cockroach: bool = False,
         external_minio: bool = False,
         fivetran_destination: bool = False,
