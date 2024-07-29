@@ -33,7 +33,7 @@ from materialize.test_analytics.data.scalability_framework.scalability_framework
     ScalabilityFrameworkResultStorage,
 )
 
-TEST_ANALYTICS_DATA_VERSION: int = 16
+TEST_ANALYTICS_DATA_VERSION: int = 17
 
 
 class TestAnalyticsDb:
