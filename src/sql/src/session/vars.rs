@@ -1112,7 +1112,7 @@ pub struct SystemVars {
 
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
     /// NB: This is intentionally disconnected from the one that is plumbed around to persist and
-    /// the controllers. This is so we can explictly control and reason about when changes to config
+    /// the controllers. This is so we can explicitly control and reason about when changes to config
     /// values are propagated to the rest of the system.
     dyncfgs: ConfigSet,
 }

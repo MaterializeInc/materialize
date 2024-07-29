@@ -3826,6 +3826,8 @@ pub fn serve(
             pg_timestamp_oracle_params.apply(config);
         }
 
+        let dyncfgs = catalog.system_config().dyncfgs().clone();
+
         let coord_thread_start = Instant::now();
         info!("startup: coordinator init: start coordinator thread beginning");
         let parent_span = tracing::Span::current();
@@ -3958,6 +3960,7 @@ pub fn serve(
                     now,
                     environment_id,
                     segment_client_clone,
+                    dyncfgs,
                 );
                 Ok((handle, client))
             }

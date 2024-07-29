@@ -28,7 +28,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::{IntervalStream, TcpListenerStream};
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
 /// The number of retries matches the Linux default.
@@ -38,6 +38,8 @@ const KEEPALIVE: TcpKeepalive = TcpKeepalive::new()
     .with_time(Duration::from_secs(60))
     .with_interval(Duration::from_secs(60))
     .with_retries(9);
+
+pub const CONN_UUID_KEY: &str = "CONNECTION_UUID";
 
 /// A future that handles a connection.
 pub type ConnectionHandler = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send>>;
@@ -136,7 +138,7 @@ where
                 let fut = server.handle_connection(conn);
                 set.spawn_named(|| &task_name, async {
                     if let Err(e) = fut.await {
-                        debug!(
+                        warn!(
                             "error handling connection in {}: {}",
                             S::NAME,
                             e.display_with_causes()
@@ -148,7 +150,7 @@ where
             // method is cancel safe.
             res = set.join_next(), if set.len() > 0 => {
                 if let Some(Err(e)) = res {
-                    debug!(
+                    warn!(
                         "error joining connection in {}: {}",
                         S::NAME,
                         e.display_with_causes()
@@ -169,7 +171,7 @@ where
         let timedout = tokio::time::timeout(wait, async {
             while let Some(res) = set.join_next().await {
                 if let Err(e) = res {
-                    debug!(
+                    warn!(
                         "error joining connection in {}: {}",
                         S::NAME,
                         e.display_with_causes()

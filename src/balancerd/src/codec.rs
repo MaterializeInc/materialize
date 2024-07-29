@@ -20,6 +20,7 @@ use mz_pgwire_common::{
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};
+use uuid::Uuid;
 
 /// Internal representation of a backend [message].
 ///
@@ -38,6 +39,7 @@ impl From<ErrorResponse> for BackendMessage {
 
 /// A connection that manages the encoding and decoding of pgwire frames.
 pub struct FramedConn<A> {
+    pub uuid: Uuid,
     inner: sink::Buffer<Framed<Conn<A>, Codec>, BackendMessage>,
 }
 
@@ -50,11 +52,9 @@ where
     /// The underlying connection, `inner`, is expected to be something like a
     /// TCP stream. Anything that implements [`AsyncRead`] and [`AsyncWrite`]
     /// will do.
-    ///
-    /// The supplied `conn_id` is used to identify the connection in logging
-    /// messages.
     pub fn new(inner: Conn<A>) -> FramedConn<A> {
         FramedConn {
+            uuid: Uuid::new_v4(),
             inner: Framed::new(inner, Codec::new()).buffer(32),
         }
     }

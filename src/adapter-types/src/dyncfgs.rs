@@ -84,6 +84,13 @@ pub const DEFAULT_SINK_PARTITION_STRATEGY: Config<&str> = Config::new(
     "The default sink partitioning strategy for an environment. It defaults to 'v0'.",
 );
 
+/// Whether to log the status of pgwire connections.
+pub const LOG_PGWIRE_CONNECTION_STATUS: Config<bool> = Config::new(
+    "log_pgwire_connection_status",
+    false,
+    "Whether to log the status of pgwire connections.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -97,4 +104,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
+        .add(&LOG_PGWIRE_CONNECTION_STATUS)
 }

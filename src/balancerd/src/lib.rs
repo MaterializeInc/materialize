@@ -46,14 +46,14 @@ use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::task::{spawn, JoinSetExt};
-use mz_ore::{metric, netio};
+use mz_ore::{assert_none, metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::{
     listen, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
-    ReloadingTlsConfig, TlsCertConfig, TlsMode,
+    ReloadingTlsConfig, TlsCertConfig, TlsMode, CONN_UUID_KEY,
 };
 use openssl::ssl::{NameType, Ssl};
 use prometheus::{IntCounterVec, IntGaugeVec};
@@ -65,11 +65,11 @@ use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tower::Service;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
-use crate::dyncfgs::SIGTERM_WAIT;
+use crate::dyncfgs::{LOG_PGWIRE_CONNECTION_STATUS, SIGTERM_WAIT};
 
 /// Balancer build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -265,6 +265,7 @@ impl BalancerService {
                 cancellation_resolver,
                 tls: pgwire_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
+                configs: self.configs.clone(),
             };
             let (handle, stream) = self.pgwire;
             server_handles.push(handle);
@@ -511,6 +512,7 @@ struct PgwireBalancer {
     cancellation_resolver: Option<Arc<PathBuf>>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
+    configs: ConfigSet,
 }
 
 impl PgwireBalancer {
@@ -518,10 +520,11 @@ impl PgwireBalancer {
     async fn run<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
-        params: BTreeMap<String, String>,
+        mut params: BTreeMap<String, String>,
         resolver: &Resolver,
         tls_mode: Option<TlsMode>,
         metrics: &ServerMetrics,
+        configs: ConfigSet,
     ) -> Result<(), io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -567,6 +570,12 @@ impl PgwireBalancer {
             let has_sni = ssl_stream.ssl().servername(NameType::HOST_NAME).is_some();
             metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
         }
+
+        if LOG_PGWIRE_CONNECTION_STATUS.get(&configs) {
+            info!(%conn.uuid, "starting new pgwire connection in balancer");
+        }
+        let prev = params.insert(CONN_UUID_KEY.to_string(), conn.uuid.to_string());
+        assert_none!(prev);
 
         let _active_guard = resolved
             .tenant
@@ -661,6 +670,8 @@ impl mz_server_core::Server for PgwireBalancer {
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
         let cancellation_resolver = self.cancellation_resolver.clone();
+        let configs = self.configs.clone();
+
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
@@ -677,6 +688,7 @@ impl mz_server_core::Server for PgwireBalancer {
 
                         Some(FrontendStartupMessage::Startup { version, params }) => {
                             let mut conn = FramedConn::new(conn);
+
                             Self::run(
                                 &mut conn,
                                 version,
@@ -684,6 +696,7 @@ impl mz_server_core::Server for PgwireBalancer {
                                 &resolver,
                                 tls.map(|tls| tls.mode),
                                 &inner_metrics,
+                                configs,
                             )
                             .await?;
                             conn.flush().await?;
