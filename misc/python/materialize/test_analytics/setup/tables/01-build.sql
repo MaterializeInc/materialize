@@ -21,3 +21,5 @@ CREATE TABLE build (
    data_version UINT4 NOT NULL,
    remarks TEXT -- not in use, remove eventually
 );
+
+CREATE INDEX IN CLUSTER test_analytics ON build (build_id);
