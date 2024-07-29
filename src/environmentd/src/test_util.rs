@@ -577,19 +577,6 @@ impl TestServer {
         ))
         .unwrap()
     }
-
-    pub async fn promote(&self) -> reqwest::Response {
-        let http_url = Url::parse(&format!(
-            "http://{}/api/leader/promote",
-            self.inner.internal_http_local_addr()
-        ))
-        .unwrap();
-        reqwest::Client::new()
-            .post(http_url)
-            .send()
-            .await
-            .expect("promote failed")
-    }
 }
 
 /// A builder struct to configure a pgwire connection to a running [`TestServer`].
