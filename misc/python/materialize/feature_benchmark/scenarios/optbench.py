@@ -57,7 +57,7 @@ class OptbenchInit(Action):
 
 class OptbenchRun(MeasurementSource):
     def __init__(self, optbench_scenario: str, query: int):
-        self._executor: Executor | None = None
+        super().__init__()
         self._optbench_scenario = optbench_scenario
         self._query = query
 
