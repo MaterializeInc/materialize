@@ -333,7 +333,7 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) batch_columnar_format: BatchColumnarFormat,
-    pub(crate) batch_columnar_stats_only_override: bool,
+    pub(crate) batch_write_columnar_data: bool,
     pub(crate) batch_record_part_format: bool,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
@@ -398,6 +398,12 @@ impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
     pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
+
+        let batch_columnar_format =
+            BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
+        let batch_write_columnar_data =
+            batch_columnar_format.is_structured() && !BATCH_COLUMNAR_STATS_ONLY_OVERRIDE.get(value);
+
         BatchBuilderConfig {
             writer_key,
             blob_target_size: BLOB_TARGET_SIZE.get(value),
@@ -405,8 +411,8 @@ impl BatchBuilderConfig {
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
-            batch_columnar_format: BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value)),
-            batch_columnar_stats_only_override: BATCH_COLUMNAR_STATS_ONLY_OVERRIDE.get(value),
+            batch_columnar_format,
+            batch_write_columnar_data,
             batch_record_part_format: BATCH_RECORD_PART_FORMAT.get(value),
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
@@ -896,12 +902,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let ts_rewrite = None;
 
-        let should_columnar_encode = self.cfg.batch_columnar_format.is_structured()
-            && !self.cfg.batch_columnar_stats_only_override;
-
         // If we're going to encode structured data then halve our limit since we're storing
         // it twice, once as binary encoded and once as structured.
-        let inline_threshold = if should_columnar_encode {
+        let inline_threshold = if self.cfg.batch_write_columnar_data {
             self.cfg.inline_writes_single_max_bytes.saturating_div(2)
         } else {
             self.cfg.inline_writes_single_max_bytes
@@ -918,7 +921,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 async move {
                     // Wrap our updates just so the types match.
                     let updates = BlobTraceUpdates::Row(updates);
-                    let structured_ext = if should_columnar_encode {
+                    let structured_ext = if cfg.batch_write_columnar_data {
                         let result = metrics.columnar.arrow().measure_part_build(|| {
                             encode_updates(&schemas, &updates, &cfg.batch_columnar_format)
                         });
@@ -1038,7 +1041,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         // override is not set.
                         if let BlobTraceUpdates::Row(record) = &updates.updates {
                             if let Some(record_ext) = extended_cols {
-                                if !cfg.batch_columnar_stats_only_override {
+                                if cfg.batch_write_columnar_data {
                                     updates.updates =
                                         BlobTraceUpdates::Both(record.clone(), record_ext);
                                 }
