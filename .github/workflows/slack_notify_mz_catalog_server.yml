@@ -20,19 +20,19 @@
 #     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
 
 # Send a notification to the #rnd-mz-introspection-council Slack channel when a change
-# is made that adds or modifies an index on the mz_introspection cluster, or
+# is made that adds or modifies an index on the mz_catalog_server cluster, or
 # adds or modifies an object on which those indices depend.
 # Also detects changes to catalog object retention.
 #
 # A notification is sent when all of these conditions are true:
 #   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
 #     to ready-to-review.
-#   * The PR modifies the file 'test/sqllogictest/mz_introspection_index_accounting.slt',
-#     which is designed to detect new or modified mz_introspection indexes, OR
+#   * The PR modifies the file 'test/sqllogictest/mz_catalog_server_index_accounting.slt',
+#     which is designed to detect new or modified mz_catalog_server indexes, OR
 #   * The PR changes the "is_retained_metrics..." field of any catalog object,
 #     as detected in the file 'src/catalog/src/builtin.rs'.
 
-name: Slack Mz Introspection Council Notifications
+name: Slack Mz Catalog Server Council Notifications
 
 on:
   pull_request_target:
@@ -42,11 +42,11 @@ on:
       - ready_for_review
     paths:
       - src/catalog/src/builtin.rs
-      - test/sqllogictest/mz_introspection_index_accounting.slt
+      - test/sqllogictest/mz_catalog_server_index_accounting.slt
 
 jobs:
   notify:
-    name: "Notify on mz_introspection index changes"
+    name: "Notify on mz_catalog_server index changes"
     runs-on: ubuntu-latest
     if: ${{ !github.event.pull_request.draft }}
     steps:
@@ -58,7 +58,7 @@ jobs:
             builtin-rs:
               - 'src/catalog/src/builtin.rs'
             index-slt:
-              - 'test/sqllogictest/mz_introspection_index_accounting.slt'
+              - 'test/sqllogictest/mz_catalog_server_index_accounting.slt'
       - name: Checkout
         uses: actions/checkout@v4
       - name: "Check Retained Metric Changes"
