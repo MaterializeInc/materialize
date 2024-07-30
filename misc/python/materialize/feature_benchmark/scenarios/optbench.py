@@ -20,7 +20,7 @@ from materialize.feature_benchmark.action import Action
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.measurement import (
     MeasurementType,
-    WallclockMeasurement,
+    WallclockDuration,
     WallclockUnit,
 )
 from materialize.feature_benchmark.measurement_source import (
@@ -61,7 +61,7 @@ class OptbenchRun(MeasurementSource):
         self._optbench_scenario = optbench_scenario
         self._query = query
 
-    def run(self, executor: Executor | None = None) -> list[WallclockMeasurement]:
+    def run(self, executor: Executor | None = None) -> list[WallclockDuration]:
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
         e = executor or self._executor
@@ -83,8 +83,8 @@ class OptbenchRun(MeasurementSource):
         optimization_time_in_ns = optimization_time.astype("timedelta64[ns]")
         optimization_duration_in_ns = float(optimization_time_in_ns)
         timestamps = [
-            WallclockMeasurement(0, WallclockUnit.NANOSECONDS),
-            WallclockMeasurement(
+            WallclockDuration(0, WallclockUnit.NANOSECONDS),
+            WallclockDuration(
                 optimization_duration_in_ns,
                 WallclockUnit.NANOSECONDS,
             ),

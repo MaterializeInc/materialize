@@ -19,11 +19,11 @@ class WallclockUnit(Enum):
 
 
 @dataclass
-class WallclockMeasurement:
+class WallclockDuration:
     duration: float
     unit: WallclockUnit
 
-    def is_equal_or_after(self, other: WallclockMeasurement) -> bool:
+    def is_equal_or_after(self, other: WallclockDuration) -> bool:
         assert self.unit == other.unit
         return self.duration >= other.duration
 

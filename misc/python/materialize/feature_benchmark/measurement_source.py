@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.measurement import (
-    WallclockMeasurement,
+    WallclockDuration,
     WallclockUnit,
 )
 
@@ -26,7 +26,7 @@ class MeasurementSource:
     def run(
         self,
         executor: Executor | None = None,
-    ) -> list[WallclockMeasurement]:
+    ) -> list[WallclockDuration]:
         raise NotImplementedError
 
 
@@ -51,7 +51,7 @@ class Td(MeasurementSource):
     def run(
         self,
         executor: Executor | None = None,
-    ) -> list[WallclockMeasurement]:
+    ) -> list[WallclockDuration]:
         assert not (executor is not None and self._executor is not None)
         executor = executor or self._executor
         assert executor
@@ -70,9 +70,7 @@ class Td(MeasurementSource):
         for marker in ["A", "B"]:
             timestamp = self._get_time_for_marker(lines, marker)
             if timestamp is not None:
-                timestamps.append(
-                    WallclockMeasurement(timestamp, WallclockUnit.SECONDS)
-                )
+                timestamps.append(WallclockDuration(timestamp, WallclockUnit.SECONDS))
 
         return timestamps
 
@@ -106,8 +104,8 @@ class Lambda(MeasurementSource):
     def run(
         self,
         executor: Executor | None = None,
-    ) -> list[WallclockMeasurement]:
+    ) -> list[WallclockDuration]:
         e = executor or self._executor
         assert e is not None
         e.Lambda(self._lambda)
-        return [WallclockMeasurement(time.time(), WallclockUnit.SECONDS)]
+        return [WallclockDuration(time.time(), WallclockUnit.SECONDS)]

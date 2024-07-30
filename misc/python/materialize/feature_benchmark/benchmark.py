@@ -19,7 +19,7 @@ from materialize.feature_benchmark.filter import Filter
 from materialize.feature_benchmark.measurement import (
     Measurement,
     MeasurementType,
-    WallclockMeasurement,
+    WallclockDuration,
 )
 from materialize.feature_benchmark.measurement_source import MeasurementSource
 from materialize.feature_benchmark.scenario import Scenario
@@ -124,7 +124,7 @@ class Benchmark:
                 f"Running the benchmark for scenario {name} with {self._mz_version} ..."
             )
             # Collect timestamps from any part of the workload being benchmarked
-            timestamps: list[WallclockMeasurement] = []
+            timestamps: list[WallclockDuration] = []
             benchmark = scenario.benchmark()
             for benchmark_item in (
                 benchmark if isinstance(benchmark, list) else [benchmark]
