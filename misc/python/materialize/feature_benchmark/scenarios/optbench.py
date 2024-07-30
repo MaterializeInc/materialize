@@ -81,12 +81,12 @@ class OptbenchRun(MeasurementSource):
         optimization_time = explain_output.optimization_time()
         assert optimization_time is not None
         optimization_time_in_ns = optimization_time.astype("timedelta64[ns]")
-        optimization_duration_in_triple_ns = float(optimization_time_in_ns) / 3
+        optimization_duration_in_ns = float(optimization_time_in_ns)
         timestamps = [
-            WallclockMeasurement(0, WallclockUnit.TRIPLE_NANOSECONDS),
+            WallclockMeasurement(0, WallclockUnit.NANOSECONDS),
             WallclockMeasurement(
-                optimization_duration_in_triple_ns,
-                WallclockUnit.TRIPLE_NANOSECONDS,
+                optimization_duration_in_ns,
+                WallclockUnit.NANOSECONDS,
             ),
         ]
         return timestamps
