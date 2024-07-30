@@ -35,7 +35,7 @@ _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you wan
 | Field      | Value     | Description                                                                                                                                                       |
 | ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **ASSERT NOT NULL** _col_ident_ | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
-| **RETAIN HISTORY FOR** _retention_period_ | `interval` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+| **RETAIN HISTORY FOR** _retention_period_ | `interval` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
 | **REFRESH _refresh_strategy_** | | ***Private preview.** This option has known performance or stability issues and is under active development.* The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. <br>Default: `ON COMMIT`. |
 
 ## Details

@@ -122,7 +122,7 @@ with several additional columns that describe the nature of the update:
 
 ### `AS OF`
 
-When a [history rentention period](/transform-data/patterns/time-travel-queries/#history-retention-period)
+When a [history rentention period](/releases/v0.99/#sql)
 is configured for the object(s) powering the subscription, the `AS OF` clause
 allows specifying a timestamp at which the `SUBSCRIBE` command should begin
 returning results. If `AS OF` is specified, no rows whose timestamp is earlier
@@ -131,7 +131,7 @@ earlier than the earliest historical state retained by the underlying objects,
 an error is thrown.
 
 To configure the history retention period for objects used in a subscription,
-see [Time travel queries](/transform-data/patterns/time-travel-queries)). If
+see [release notes](/releases/v0.99/#sql). If
 `AS OF` is unspecified, the system automatically chooses an `AS OF` timestamp.
 
 ### `UP TO`
@@ -526,12 +526,12 @@ DROP SOURCE counter;
 
 Because `SUBSCRIBE` requests happen over the network, these connections might
 get disrupted for both expected and unexpected reasons. You can adjust the
-[history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period) for
+[history retention period](/releases/v0.99/#sql) for
 the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
 up where you left off on connection drops—this ensures that no data is lost
 in the subscription process, and avoids the need for re-snapshotting the data.
 
-To learn more about durable subscriptions, see [Time travel queries](/transform-data/patterns/time-travel-queries/#durable-subscriptions).
+To learn more about durable subscriptions, see [release notes](/releases/v0.99/#sql).
 
 ## Privileges
 
