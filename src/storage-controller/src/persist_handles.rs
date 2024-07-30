@@ -50,7 +50,16 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
         tokio::sync::oneshot::Sender<()>,
     ),
-    Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
+    Update {
+        /// Table to update.
+        table_id: GlobalId,
+        /// Timestamp to apply the update at.
+        update_ts: T,
+        /// New write handle to register.
+        handle: WriteHandle<SourceData, (), T, Diff>,
+        /// Notifies us when the handle has been updated.
+        tx: oneshot::Sender<()>,
+    },
     DropHandles {
         forget_ts: T,
         /// Tables that we want to drop our handle for.
@@ -71,7 +80,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
     fn name(&self) -> &'static str {
         match self {
             PersistTableWriteCmd::Register(_, _, _) => "PersistTableWriteCmd::Register",
-            PersistTableWriteCmd::Update(_, _) => "PersistTableWriteCmd::Update",
+            PersistTableWriteCmd::Update { .. } => "PersistTableWriteCmd::Update",
             PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
@@ -180,8 +189,20 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     /// # Panics
     /// - If `id` is not currently associated with any write handle.
     #[allow(dead_code)]
-    pub(crate) fn update(&self, id: GlobalId, write_handle: WriteHandle<SourceData, (), T, Diff>) {
-        self.send(PersistTableWriteCmd::Update(id, write_handle))
+    pub(crate) fn update(
+        &self,
+        table_id: GlobalId,
+        update_ts: T,
+        handle: WriteHandle<SourceData, (), T, Diff>,
+    ) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        self.send(PersistTableWriteCmd::Update {
+            table_id,
+            update_ts,
+            handle,
+            tx,
+        });
+        rx
     }
 
     pub(crate) fn append(
@@ -241,8 +262,23 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     // We don't care if our waiter has gone away.
                     let _ = tx.send(());
                 }
-                PersistTableWriteCmd::Update(_id, _write_handle) => {
-                    unimplemented!("TODO: Support migrations on txn-wal backed collections")
+                PersistTableWriteCmd::Update {
+                    table_id,
+                    update_ts,
+                    handle,
+                    tx,
+                } => {
+                    async {
+                        let forget_ts = update_ts;
+                        let register_ts = mz_persist_types::StepForward::step_forward(&forget_ts);
+
+                        self.drop_handles(vec![table_id], forget_ts).await;
+                        self.register(register_ts, vec![(table_id, handle)]).await;
+                    }
+                    .instrument(span)
+                    .await;
+                    // We don't care if our waiter has gone away.
+                    let _ = tx.send(());
                 }
                 PersistTableWriteCmd::DropHandles { forget_ts, ids, tx } => {
                     self.drop_handles(ids, forget_ts).instrument(span).await;

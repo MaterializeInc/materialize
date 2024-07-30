@@ -467,6 +467,13 @@ pub trait StorageController: Debug {
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    async fn alter_table_desc(
+        &mut self,
+        table_id: GlobalId,
+        new_desc: RelationDesc,
+        update_ts: Self::Timestamp,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(
         &self,
