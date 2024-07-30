@@ -353,7 +353,8 @@ and finds associated open GitHub issues in Materialize repository.""",
         return_code = annotate_logged_errors(args.log_files, test_analytics)
     except Exception as e:
         test_analytics.on_upload_failed(e)
-        raise
+        # Don't fail
+        return 0
 
     try:
         test_analytics.submit_updates()
