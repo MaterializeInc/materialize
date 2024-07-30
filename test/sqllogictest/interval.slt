@@ -1566,3 +1566,15 @@ query T
 SELECT sum(f1) FROM A;
 ----
 11:22:33.1111
+
+query error operator does not exist
+SELECT var_pop(f1) FROM A;
+
+query error operator does not exist
+SELECT var_samp(f1) FROM A;
+
+query error operator does not exist
+SELECT stddev_pop(f1) FROM A;
+
+query error operator does not exist
+SELECT stddev_samp(f1) FROM A;
