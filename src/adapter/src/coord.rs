@@ -93,7 +93,9 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
+use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Source,
 };
@@ -108,17 +110,19 @@ use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
+use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::vec::VecExt;
 use mz_ore::{instrument, soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -127,12 +131,16 @@ use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen}
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
+use mz_storage_client::client::TimestamplessUpdate;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use once_cell::sync::Lazy;
@@ -149,7 +157,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::{BuiltinTableUpdate, Catalog};
+use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -178,12 +186,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycle
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
-use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC};
-use mz_catalog::durable::OpenableDurableCatalogState;
-use mz_ore::future::TimeoutError;
-use mz_timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
@@ -1725,6 +1727,8 @@ impl Coordinator {
     #[instrument(name = "coord::bootstrap")]
     pub(crate) async fn bootstrap(
         &mut self,
+        boot_ts: Timestamp,
+        migrated_storage_collections_0dt: BTreeSet<GlobalId>,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
@@ -1816,7 +1820,8 @@ impl Coordinator {
         }
 
         debug!("coordinator init: initializing storage collections");
-        self.bootstrap_storage_collections().await;
+        self.bootstrap_storage_collections(&migrated_storage_collections_0dt)
+            .await;
 
         let entries: Vec<_> = self.catalog().entries().cloned().collect();
 
@@ -2104,6 +2109,70 @@ impl Coordinator {
             ),
         );
 
+        debug!("coordinator init: initializing migrated builtin tables");
+        // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
+        // In read-only mode, the migrated builtin tables (which are a subset of migrated builtin
+        // storage collections) need to be back-filled so that any dependent dataflow can be
+        // hydrated. Additionally, these shards are not registered with the txn-shard, and cannot
+        // be registered while in read-only, so they are written to directly.
+        let migrated_updates_fut = if self.controller.read_only() {
+            let min_timestamp = Timestamp::minimum();
+            let migrated_builtin_table_updates: Vec<_> = builtin_table_updates
+                .drain_filter_swapping(|update| {
+                    migrated_storage_collections_0dt.contains(&update.id)
+                        && self
+                            .controller
+                            .storage_collections
+                            .collection_frontiers(update.id)
+                            .expect("all tables are registered")
+                            .write_frontier
+                            .elements()
+                            == &[min_timestamp]
+                })
+                .collect();
+            if migrated_builtin_table_updates.is_empty() {
+                futures::future::ready(()).boxed()
+            } else {
+                let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
+                for update in migrated_builtin_table_updates {
+                    appends
+                        .entry(update.id)
+                        .or_default()
+                        .push((update.row, update.diff));
+                }
+                for (_, updates) in &mut appends {
+                    differential_dataflow::consolidation::consolidate(updates);
+                }
+                info!(
+                    "coordinator init: rehydrating migrated builtin tables in read-only mode: {:?}",
+                    appends.keys().collect::<Vec<_>>()
+                );
+                let appends = appends
+                    .into_iter()
+                    .map(|(id, updates)| {
+                        let updates = updates
+                            .into_iter()
+                            .map(|(row, diff)| TimestamplessUpdate { row, diff })
+                            .collect();
+                        (id, updates)
+                    })
+                    .collect();
+                let fut = self
+                    .controller
+                    .storage
+                    .append_table(min_timestamp, boot_ts.step_forward(), appends)
+                    .expect("cannot fail to append");
+                async {
+                    fut.await
+                        .expect("One-shot shouldn't be dropped during bootstrap")
+                        .unwrap_or_terminate("cannot fail to append")
+                }
+                .boxed()
+            }
+        } else {
+            futures::future::ready(()).boxed()
+        };
+
         let builtin_updates_fut = if self.controller.read_only() {
             info!("coordinator init: stashing builtin table updates while in read-only mode");
 
@@ -2152,9 +2221,13 @@ impl Coordinator {
         };
 
         // Run all of our final steps concurrently.
-        futures::future::join_all([builtin_updates_fut, Box::pin(secrets_cleanup_fut)])
-            .instrument(info_span!("coord::bootstrap::final"))
-            .await;
+        futures::future::join_all([
+            migrated_updates_fut,
+            builtin_updates_fut,
+            Box::pin(secrets_cleanup_fut),
+        ])
+        .instrument(info_span!("coord::bootstrap::final"))
+        .await;
 
         info!("coordinator init: bootstrap complete");
         Ok(())
@@ -2235,8 +2308,14 @@ impl Coordinator {
     /// demand, is more efficient as it reduces the number of writes to durable storage. It also
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
+    ///
+    /// `migrated_storage_collections` is a set of builtin storage collections that have been
+    /// migrated and should be handled specially.
     #[instrument]
-    async fn bootstrap_storage_collections(&mut self) {
+    async fn bootstrap_storage_collections(
+        &mut self,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
+    ) {
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
@@ -2329,7 +2408,12 @@ impl Coordinator {
 
         self.controller
             .storage
-            .create_collections(storage_metadata, Some(register_ts), collections)
+            .create_collections_for_bootstrap(
+                storage_metadata,
+                Some(register_ts),
+                collections,
+                migrated_storage_collections,
+            )
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
@@ -3421,12 +3505,12 @@ pub fn serve(
         } else {
             BuiltinItemMigrationConfig::Legacy
         };
-        let (
+        let OpenCatalogResult {
             mut catalog,
             storage_collections_to_drop,
+            migrated_storage_collections_0dt,
             builtin_table_updates,
-            _last_catalog_version,
-        ) = Catalog::open(
+        } = Catalog::open(
             mz_catalog::config::Config {
                 storage,
                 metrics_registry: &metrics_registry,
@@ -3586,7 +3670,13 @@ pub fn serve(
                     buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {
-                    coord.bootstrap(builtin_table_updates).await?;
+                    coord
+                        .bootstrap(
+                            boot_ts,
+                            migrated_storage_collections_0dt,
+                            builtin_table_updates,
+                        )
+                        .await?;
                     coord
                         .controller
                         .remove_orphaned_replicas(

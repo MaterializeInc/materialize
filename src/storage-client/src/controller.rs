@@ -402,7 +402,7 @@ pub trait StorageController: Debug {
     /// Each command carries the source id, the source description, and any associated metadata
     /// needed to ingest the particular source.
     ///
-    /// This command installs collection state for the indicated sources, and the are
+    /// This command installs collection state for the indicated sources, and they are
     /// now valid to use in queries at times beyond the initial `since` frontiers. Each
     /// collection also acquires a read capability at this frontier, which will need to
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
@@ -420,6 +420,26 @@ pub trait StorageController: Debug {
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        self.create_collections_for_bootstrap(
+            storage_metadata,
+            register_ts,
+            collections,
+            &BTreeSet::new(),
+        )
+        .await
+    }
+
+    /// Like [`Self::create_collections`], except used specifically for bootstrap.
+    ///
+    /// `migrated_storage_collections` is a set of migrated storage collections to be excluded
+    /// from the txn-wal sub-system.
+    async fn create_collections_for_bootstrap(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        register_ts: Option<Self::Timestamp>,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Check that the ingestion associated with `id` can use the provided

@@ -40,6 +40,8 @@ pub(crate) struct BuiltinItemMigrationResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     /// A set of storage collections to drop (only used by legacy migration).
     pub(crate) storage_collections_to_drop: BTreeSet<GlobalId>,
+    /// A set of new shards that may need to be initialized (only used by 0dt migration).
+    pub(crate) migrated_storage_collections_0dt: BTreeSet<GlobalId>,
     /// Some cleanup action to take once the migration has been made durable.
     pub(crate) cleanup_action: BoxFuture<'static, ()>,
 }
@@ -100,6 +102,7 @@ async fn migrate_builtin_items_legacy(
     Ok(BuiltinItemMigrationResult {
         builtin_table_updates,
         storage_collections_to_drop: builtin_migration_metadata.previous_storage_collection_ids,
+        migrated_storage_collections_0dt: BTreeSet::new(),
         cleanup_action,
     })
 }
@@ -216,8 +219,8 @@ async fn migrate_builtin_items_0dt(
         debug!("migration shard already initialized: {e:?}");
     }
 
-    // 2. Get the `GlobalId` of all migrated tables.
-    let migrated_tables: BTreeSet<_> = migrated_builtins
+    // 2. Get the `GlobalId` of all migrated storage collections.
+    let migrated_storage_collections: BTreeSet<_> = migrated_builtins
         .into_iter()
         .filter_map(|id| {
             if state.get_entry(&id).item().is_storage_collection() {
@@ -280,7 +283,7 @@ async fn migrate_builtin_items_0dt(
             );
         }
 
-        if !migrated_tables.contains(&table_key.global_id)
+        if !migrated_storage_collections.contains(&table_key.global_id)
             || table_key.deploy_generation < deploy_generation
         {
             global_id_shards.remove(&table_key);
@@ -299,7 +302,7 @@ async fn migrate_builtin_items_0dt(
         .into_iter()
         .map(|(table_key, shard_id)| (table_key.global_id, shard_id))
         .collect();
-    for global_id in migrated_tables {
+    for global_id in migrated_storage_collections {
         if !global_id_shards.contains_key(&global_id) {
             let shard_id = ShardId::new();
             global_id_shards.insert(global_id, shard_id);
@@ -326,7 +329,7 @@ async fn migrate_builtin_items_0dt(
     };
 
     // 6. Update `GlobalId` to `ShardId` mapping and register old `ShardId`s for finalization. We don't do the finalization here and instead rely on the background finalization task.
-    {
+    let migrated_storage_collections_0dt = {
         let txn: &mut dyn StorageTxn<Timestamp> = txn;
         let storage_collection_metadata = txn.get_collection_metadata();
         let global_id_shards: BTreeMap<_, _> = global_id_shards
@@ -338,7 +341,7 @@ async fn migrate_builtin_items_0dt(
             .collect();
         let global_ids: BTreeSet<_> = global_id_shards.keys().cloned().collect();
         let mut old_shard_ids: BTreeSet<_> = txn
-            .delete_collection_metadata(global_ids)
+            .delete_collection_metadata(global_ids.clone())
             .into_iter()
             .map(|(_, shard_id)| shard_id)
             .collect();
@@ -358,7 +361,8 @@ async fn migrate_builtin_items_0dt(
                     "builtin migration failed: {e}"
                 )))
             })?;
-    }
+        global_ids
+    };
 
     let updates = txn.get_and_commit_op_updates();
     let builtin_table_updates = state.apply_updates_for_bootstrap(updates).await;
@@ -387,6 +391,7 @@ async fn migrate_builtin_items_0dt(
     Ok(BuiltinItemMigrationResult {
         builtin_table_updates,
         storage_collections_to_drop: BTreeSet::new(),
+        migrated_storage_collections_0dt,
         cleanup_action,
     })
 }

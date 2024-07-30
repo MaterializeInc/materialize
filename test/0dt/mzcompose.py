@@ -780,3 +780,108 @@ def workflow_basic(c: Composition) -> None:
             """
             )
         )
+
+
+def workflow_builtin_item_migrations(c: Composition) -> None:
+    """Verify builtin item migrations"""
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "mz_old")
+    c.up("testdrive", persistent=True)
+
+    # Make sure cluster is owned by the system, so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE '2-1';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+        ALTER SYSTEM SET enable_0dt_deployment = true;
+        ALTER SYSTEM SET with_0dt_deployment_max_wait = '3s';
+
+        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    mz_tables_gid = c.sql_query(
+        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        service="mz_old",
+    )[0][0]
+    mv_gid = c.sql_query(
+        "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
+        service="mz_old",
+    )[0][0]
+    mz_tables_shard_id = c.sql_query(
+        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
+        service="mz_old",
+    )[0][0]
+    mv_shard_id = c.sql_query(
+        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
+        service="mz_old",
+    )[0][0]
+
+    # Restart in a new deploy generation with forced migrations, which will cause Materialize to
+    # boot in read-only mode and prepare builtin item migrations.
+    with c.override(
+        Materialized(
+            name="mz_old",
+            deploy_generation=1,
+            external_cockroach=True,
+            force_migrations="all",
+        )
+    ):
+        c.up("mz_old")
+
+        new_mz_tables_gid = c.sql_query(
+            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            service="mz_old",
+        )[0][0]
+        new_mv_gid = c.sql_query(
+            "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
+            service="mz_old",
+        )[0][0]
+        assert new_mz_tables_gid == mz_tables_gid
+        assert new_mv_gid == mv_gid
+        # mz_internal.mz_storage_shards won't update until this instance becomes the leader
+
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
+        c.promote_mz("mz_old")
+
+    # After promotion, the deployment should boot with a new shard ID for mz_tables.
+    with c.override(
+        Materialized(
+            name="mz_old",
+            healthcheck=[
+                "CMD-SHELL",
+                """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
+            ],
+            deploy_generation=1,
+            external_cockroach=True,
+            force_migrations="all",
+        )
+    ):
+        c.up("mz_old")
+
+        new_mz_tables_gid = c.sql_query(
+            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            service="mz_old",
+        )[0][0]
+        new_mv_gid = c.sql_query(
+            "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
+            service="mz_old",
+        )[0][0]
+        assert new_mz_tables_gid == mz_tables_gid
+        assert new_mv_gid == mv_gid
+        new_mz_tables_shard_id = c.sql_query(
+            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
+            service="mz_old",
+        )[0][0]
+        new_mv_shard_id = c.sql_query(
+            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
+            service="mz_old",
+        )[0][0]
+        assert new_mz_tables_shard_id != mz_tables_shard_id
+        assert new_mv_shard_id == mv_shard_id

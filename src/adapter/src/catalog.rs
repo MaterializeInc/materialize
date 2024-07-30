@@ -76,7 +76,9 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::open::BuiltinMigrationMetadata;
+pub use crate::catalog::open::{
+    BuiltinMigrationMetadata, InitializeStateResult, OpenCatalogResult,
+};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
     DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult,
@@ -513,7 +515,12 @@ impl Catalog {
         // Used as a lower boundary of the boot_ts, but it's ok to use now() for
         // debugging/testing.
         let previous_ts = now().into();
-        let (catalog, _, _, _) = Catalog::open(
+        let OpenCatalogResult {
+            catalog,
+            storage_collections_to_drop: _,
+            migrated_storage_collections_0dt: _,
+            builtin_table_updates: _,
+        } = Catalog::open(
             Config {
                 storage,
                 metrics_registry,
