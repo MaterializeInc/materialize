@@ -18,6 +18,7 @@ class MzDbConfig:
 
     database: str
     search_path: str
+    cluster: str
 
     port: int = 6875
 

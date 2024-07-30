@@ -85,7 +85,7 @@ class DatabaseConnector:
         connection.autocommit = autocommit
         connection.run(f"SET database = {self.config.database}")
         connection.run(f"SET search_path = {self.config.search_path}")
-        connection.run("SET cluster = 'test_analytics'")
+        connection.run(f"SET cluster = '{self.config.cluster}'")
         connection.run("SET transaction_isolation = serializable")
 
         return connection

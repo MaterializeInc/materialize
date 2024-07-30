@@ -40,6 +40,7 @@ def create_test_analytics_config_with_credentials(
 ) -> MzDbConfig:
     database = "raw"
     search_path = "test_analytics"
+    cluster = "test_analytics"
 
     # disable test_analytics access when running locally
     enabled = buildkite.is_in_buildkite()
@@ -50,6 +51,7 @@ def create_test_analytics_config_with_credentials(
         app_password=app_password,
         database=database,
         search_path=search_path,
+        cluster=cluster,
         enabled=enabled,
         application_name="test-analytics",
     )
