@@ -78,7 +78,7 @@ class DatabaseConnector:
             )
         except Exception:
             print(
-                f"Failed to connect to {self.config.hostname} on port {self.config.port}"
+                f"Failed to connect to host '{self.config.hostname}' on port {self.config.port}"
             )
             raise
 
