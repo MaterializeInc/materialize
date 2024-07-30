@@ -24,7 +24,7 @@ use crate::internal::metrics::Metrics;
 // In-memory cache for [Blob].
 #[derive(Debug)]
 pub struct BlobMemCache {
-    cfg: ConfigSet,
+    cfg: Arc<ConfigSet>,
     metrics: Arc<Metrics>,
     cache: Mutex<lru::Lru<String, SegmentedBytes>>,
     blob: Arc<dyn Blob>,
@@ -48,7 +48,7 @@ impl BlobMemCache {
             eviction_metrics.blob_cache_mem.evictions.inc()
         });
         let blob = BlobMemCache {
-            cfg: cfg.configs.clone(),
+            cfg: Arc::clone(&cfg.configs),
             metrics,
             cache: Mutex::new(cache),
             blob,

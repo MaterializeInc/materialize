@@ -106,7 +106,7 @@ pub struct PersistConfig {
     /// of a process.
     ///
     /// TODO(cfg): Entirely replace dynamic with this.
-    pub configs: ConfigSet,
+    pub configs: Arc<ConfigSet>,
     /// Indicates whether `configs` has been synced at least once with an
     /// upstream source.
     configs_synced_once: Arc<watch::Sender<bool>>,
@@ -183,7 +183,7 @@ impl PersistConfig {
             is_cc_active: false,
             announce_memory_limit: None,
             now,
-            configs,
+            configs: Arc::new(configs),
             configs_synced_once: Arc::new(configs_synced_once),
             dynamic: Arc::new(DynamicConfig {
                 batch_builder_max_outstanding_parts: AtomicUsize::new(2),

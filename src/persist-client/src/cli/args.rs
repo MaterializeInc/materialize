@@ -152,7 +152,7 @@ pub(super) async fn make_blob(
         blob_uri,
         Box::new(cfg.clone()),
         metrics.s3_blob.clone(),
-        cfg.configs.clone(),
+        Arc::clone(&cfg.configs),
     )
     .await?;
     let blob = blob.clone().open().await?;

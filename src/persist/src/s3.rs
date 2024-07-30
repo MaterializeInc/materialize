@@ -51,7 +51,7 @@ pub struct S3BlobConfig {
     client: S3Client,
     bucket: String,
     prefix: String,
-    cfg: ConfigSet,
+    cfg: Arc<ConfigSet>,
     is_cc_active: bool,
 }
 
@@ -122,7 +122,7 @@ impl S3BlobConfig {
         credentials: Option<(String, String)>,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
-        cfg: ConfigSet,
+        cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         let is_cc_active = knobs.is_cc_active();
         let mut loader = mz_aws_util::defaults();
@@ -272,9 +272,11 @@ impl S3BlobConfig {
             None,
             Box::new(TestBlobKnobs),
             metrics,
-            ConfigSet::default()
-                .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
+            Arc::new(
+                ConfigSet::default()
+                    .add(&ENABLE_S3_LGALLOC_CC_SIZES)
+                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
+            ),
         )
         .await?;
         Ok(Some(config))
@@ -300,7 +302,7 @@ pub struct S3Blob {
     // Defaults to 1000 which is the current AWS max.
     max_keys: i32,
     multipart_config: MultipartConfig,
-    cfg: ConfigSet,
+    cfg: Arc<ConfigSet>,
     is_cc_active: bool,
 }
 
@@ -1051,9 +1053,11 @@ mod tests {
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),
-                    cfg: ConfigSet::default()
-                        .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                        .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
+                    cfg: Arc::new(
+                        ConfigSet::default()
+                            .add(&ENABLE_S3_LGALLOC_CC_SIZES)
+                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
+                    ),
                     is_cc_active: true,
                 };
                 let mut blob = S3Blob::open(config).await?;

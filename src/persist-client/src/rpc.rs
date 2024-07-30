@@ -1011,7 +1011,7 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
         let (tx, rx) = tokio::sync::mpsc::channel(self.cfg.pubsub_server_connection_channel_size);
 
         let caller = caller_id.clone();
-        let cfg = self.cfg.configs.clone();
+        let cfg = Arc::clone(&self.cfg.configs);
         let server_state = Arc::clone(&self.state);
         // this spawn here to cleanup after connection error / disconnect, otherwise the stream
         // would not be polled after the connection drops. in our case, we want to clear the

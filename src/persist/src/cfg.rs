@@ -80,7 +80,7 @@ impl BlobConfig {
         value: &str,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
-        cfg: ConfigSet,
+        cfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value)
             .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;

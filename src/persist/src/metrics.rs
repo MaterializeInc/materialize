@@ -9,6 +9,7 @@
 
 //! Implementation-specific metrics for persist blobs and consensus
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use mz_dyncfg::ConfigSet;
@@ -257,7 +258,7 @@ pub struct ColumnarMetrics {
     pub(crate) arrow: ArrowMetrics,
     // TODO: Having these two here isn't quite the right thing to do, but it
     // saves a LOT of plumbing.
-    pub(crate) cfg: ConfigSet,
+    pub(crate) cfg: Arc<ConfigSet>,
     pub(crate) is_cc_active: bool,
 }
 
@@ -266,7 +267,7 @@ impl ColumnarMetrics {
     pub fn new(
         registry: &MetricsRegistry,
         lgbytes: &LgBytesMetrics,
-        cfg: ConfigSet,
+        cfg: Arc<ConfigSet>,
         is_cc_active: bool,
     ) -> Self {
         ColumnarMetrics {
@@ -296,6 +297,6 @@ impl ColumnarMetrics {
         let lgbytes = LgBytesMetrics::new(&registry);
         let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
 
-        Self::new(&registry, &lgbytes, cfg, false)
+        Self::new(&registry, &lgbytes, Arc::new(cfg), false)
     }
 }
