@@ -90,16 +90,25 @@ class RelativeThresholdComparator(Comparator[float | None]):
             return False
 
     def human_readable(self, use_colors: bool) -> str:
+        assert self.type.is_lower_value_better(), "unexpected metric"
+
+        if self.type.is_amount():
+            improvement = "less"
+            deterioration = "more"
+        else:
+            improvement = "faster"
+            deterioration = "slower"
+
         ratio = self.ratio()
         if ratio is None:
             return "N/A"
         if ratio >= 2:
             return with_conditional_formatting(
-                f"{ratio:3.1f} TIMES more/slower", COLOR_BAD, condition=use_colors
+                f"{ratio:4.1f} TIMES {deterioration}", COLOR_BAD, condition=use_colors
             )
         elif ratio > 1:
             return with_conditional_formatting(
-                f"{-(1-ratio)*100:3.1f} pct   more/slower",
+                f"{-(1-ratio)*100:4.1f} pct   {deterioration}",
                 COLOR_BAD,
                 condition=use_colors,
             )
@@ -107,11 +116,13 @@ class RelativeThresholdComparator(Comparator[float | None]):
             return "          same"
         elif ratio > 0.5:
             return with_conditional_formatting(
-                f"{(1-ratio)*100:3.1f} pct   less/faster",
+                f"{(1-ratio)*100:4.1f} pct   {improvement}",
                 COLOR_GOOD,
                 condition=use_colors,
             )
         else:
             return with_conditional_formatting(
-                f"{(1/ratio):3.1f} times less/faster", COLOR_GOOD, condition=use_colors
+                f"{(1/ratio):4.1f} times {improvement}",
+                COLOR_GOOD,
+                condition=use_colors,
             )

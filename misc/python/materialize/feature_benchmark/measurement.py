@@ -37,6 +37,16 @@ class MeasurementType(Enum):
     def __str__(self) -> str:
         return self.name.lower()
 
+    def is_amount(self) -> bool:
+        return self in {
+            MeasurementType.MEMORY_MZ,
+            MeasurementType.MEMORY_CLUSTERD,
+            MeasurementType.MESSAGES,
+        }
+
+    def is_lower_value_better(self) -> bool:
+        return True
+
 
 @dataclass
 class Measurement:
