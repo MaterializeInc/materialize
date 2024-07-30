@@ -874,7 +874,9 @@ class SwapSchemaAction(Action):
             ]
             if len(schemas) < 2:
                 return False
-            schema1, schema2 = self.rng.sample(schemas, 2)
+            schema_ids = sorted(self.rng.sample(range(0, len(schemas)), 2))
+            schema1 = schemas[schema_ids[0]]
+            schema2 = schemas[schema_ids[1]]
         with schema1.lock, schema2.lock:
             if schema1 not in exe.db.schemas:
                 return False
@@ -1175,7 +1177,9 @@ class SwapClusterAction(Action):
         with exe.db.lock:
             if len(exe.db.clusters) < 2:
                 return False
-            cluster1, cluster2 = self.rng.sample(exe.db.clusters, 2)
+            cluster_ids = sorted(self.rng.sample(range(0, len(exe.db.clusters)), 2))
+            cluster1 = exe.db.clusters[cluster_ids[0]]
+            cluster2 = exe.db.clusters[cluster_ids[1]]
         with cluster1.lock, cluster2.lock:
             if cluster1 not in exe.db.clusters:
                 return False
