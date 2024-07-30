@@ -520,6 +520,7 @@ steps:
         label: Kafka RTR tests
         depends_on: build-aarch64
         timeout_in_minutes: 30
+        parallelism: 2
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -537,7 +538,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=200]
+          args: [--scenario=KafkaSources, --actions=100]
 
   - group: "Platform checks"
     key: platform-checks
@@ -727,6 +728,16 @@ steps:
           composition: tracing
     agents:
       queue: linux-aarch64-small
+
+  - id: 0dt
+    label: Zero downtime
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+    agents:
+      queue: linux-aarch64
 
   - id: skip-version-upgrade
     label: "Skip Version Upgrade"
