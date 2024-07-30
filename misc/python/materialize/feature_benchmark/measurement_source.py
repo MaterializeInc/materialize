@@ -14,8 +14,8 @@ from collections.abc import Callable
 
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.measurement import (
+    MeasurementUnit,
     WallclockDuration,
-    WallclockUnit,
 )
 
 
@@ -70,7 +70,7 @@ class Td(MeasurementSource):
         for marker in ["A", "B"]:
             timestamp = self._get_time_for_marker(lines, marker)
             if timestamp is not None:
-                timestamps.append(WallclockDuration(timestamp, WallclockUnit.SECONDS))
+                timestamps.append(WallclockDuration(timestamp, MeasurementUnit.SECONDS))
 
         return timestamps
 
@@ -108,4 +108,4 @@ class Lambda(MeasurementSource):
         e = executor or self._executor
         assert e is not None
         e.Lambda(self._lambda)
-        return [WallclockDuration(time.time(), WallclockUnit.SECONDS)]
+        return [WallclockDuration(time.time(), MeasurementUnit.SECONDS)]

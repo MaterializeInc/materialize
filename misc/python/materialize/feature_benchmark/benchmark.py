@@ -19,6 +19,7 @@ from materialize.feature_benchmark.filter import Filter
 from materialize.feature_benchmark.measurement import (
     Measurement,
     MeasurementType,
+    MeasurementUnit,
     WallclockDuration,
 )
 from materialize.feature_benchmark.measurement_source import MeasurementSource
@@ -148,6 +149,7 @@ class Benchmark:
             performance_measurement = Measurement(
                 type=MeasurementType.WALLCLOCK,
                 value=timestamps[1].duration - timestamps[0].duration,
+                unit=timestamps[0].unit,
                 notes=f"Unit: {timestamps[0].unit}",
             )
 
@@ -158,7 +160,9 @@ class Benchmark:
             messages = self._executor.Messages()
             if messages is not None:
                 messages_measurement = Measurement(
-                    type=MeasurementType.MESSAGES, value=messages
+                    type=MeasurementType.MESSAGES,
+                    value=messages,
+                    unit=MeasurementUnit.COUNT,
                 )
                 print(f"{i}: {messages_measurement}")
                 self._messages_aggregation.append(messages_measurement)
@@ -167,6 +171,7 @@ class Benchmark:
                 memory_mz_measurement = Measurement(
                     type=MeasurementType.MEMORY_MZ,
                     value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
+                    unit=MeasurementUnit.MEGABYTE,
                 )
 
                 if memory_mz_measurement.value > 0:
@@ -180,6 +185,7 @@ class Benchmark:
                 memory_clusterd_measurement = Measurement(
                     type=MeasurementType.MEMORY_CLUSTERD,
                     value=self._executor.DockerMemClusterd() / 2**20,  # Convert to Mb
+                    unit=MeasurementUnit.MEGABYTE,
                 )
 
                 if memory_clusterd_measurement.value > 0:

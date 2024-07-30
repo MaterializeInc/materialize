@@ -13,15 +13,18 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 
-class WallclockUnit(Enum):
+class MeasurementUnit(Enum):
+    UNKNOWN = auto()
     SECONDS = auto()
     NANOSECONDS = auto()
+    COUNT = auto()
+    MEGABYTE = auto()
 
 
 @dataclass
 class WallclockDuration:
     duration: float
-    unit: WallclockUnit
+    unit: MeasurementUnit
 
     def is_equal_or_after(self, other: WallclockDuration) -> bool:
         assert self.unit == other.unit
@@ -52,6 +55,7 @@ class MeasurementType(Enum):
 class Measurement:
     type: MeasurementType
     value: float
+    unit: MeasurementUnit
     notes: str | None = None
 
     def __str__(self) -> str:

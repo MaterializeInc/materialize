@@ -20,8 +20,8 @@ from materialize.feature_benchmark.action import Action
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.measurement import (
     MeasurementType,
+    MeasurementUnit,
     WallclockDuration,
-    WallclockUnit,
 )
 from materialize.feature_benchmark.measurement_source import (
     MeasurementSource,
@@ -83,10 +83,10 @@ class OptbenchRun(MeasurementSource):
         optimization_time_in_ns = optimization_time.astype("timedelta64[ns]")
         optimization_duration_in_ns = float(optimization_time_in_ns)
         timestamps = [
-            WallclockDuration(0, WallclockUnit.NANOSECONDS),
+            WallclockDuration(0, MeasurementUnit.NANOSECONDS),
             WallclockDuration(
                 optimization_duration_in_ns,
-                WallclockUnit.NANOSECONDS,
+                MeasurementUnit.NANOSECONDS,
             ),
         ]
         return timestamps
