@@ -219,7 +219,7 @@ class Report:
         output_lines = []
 
         output_lines.append(
-            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'Regression?':^13} | 'THIS' is:"
+            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is:"
         )
         output_lines.append("-" * 100)
 
@@ -229,7 +229,7 @@ class Report:
 
             regression = "!!YES!!" if comparison.is_regression() else "no"
             output_lines.append(
-                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable(use_colors)}"
+                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.threshold * 100:^10.0f}% | {regression:^13} | {comparison.human_readable(use_colors)}"
             )
 
         return "\n".join(output_lines)
