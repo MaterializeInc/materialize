@@ -19,8 +19,8 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # Run the majority of this test on its own cluster to ensure it doesn't
 # interfere with any other tests.
-> CREATE CLUSTER arrangement_sharing REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
-> SET cluster TO arrangement_sharing
+> CREATE CLUSTER distinct_arrangements REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
+> SET cluster TO distinct_arrangements
 > SET cluster_replica = r1
 
 # from attributes/mir_unique_keys.slt
@@ -575,7 +575,7 @@ ArrangeBy[[]]
 ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
-> SET cluster=arrangement_sharing
+> SET cluster=distinct_arrangements
 > DROP CLUSTER linear_join CASCADE
 
 # from negative-multiplicities.td
@@ -764,11 +764,11 @@ ArrangeBy[[Column(13)]]                       1
 "ReduceMinsMaxes"                             2
 "Threshold local"                             4
 
-> SET cluster TO arrangement_sharing
+> SET cluster TO distinct_arrangements
 
 # Check dataflows of our logging infrastructure with log_logging
-> ALTER CLUSTER arrangement_sharing SET (MANAGED = false);
-> CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+> ALTER CLUSTER distinct_arrangements SET (MANAGED = false);
+> CREATE CLUSTER REPLICA distinct_arrangements.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;
 
@@ -809,10 +809,10 @@ ALTER SYSTEM SET enable_introspection_subscribes = true
 
 # Flipping `enable_introspection_subscribes` affects new replicas, so force a
 # restart.
-> DROP CLUSTER REPLICA arrangement_sharing.replica
-> ALTER CLUSTER arrangement_sharing SET (MANAGED = true)
-> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 0)
-> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 1)
+> DROP CLUSTER REPLICA distinct_arrangements.replica
+> ALTER CLUSTER distinct_arrangements SET (MANAGED = true)
+> ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 0)
+> ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 1)
 > RESET cluster_replica
 
 > SELECT mdod.name, count(*)
