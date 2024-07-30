@@ -198,7 +198,7 @@ p+p {
         background: var(--brand);
         border-radius: 3px;
         padding: 1px;
-        border-radius: 1.2rem;
+        border-radius: rem(1.2);
         box-shadow: var(--shadow-default);
 
         &:not(.bottom) {
