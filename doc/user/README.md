@@ -86,11 +86,11 @@ If necessary, you can use `if-released` and `if-unreleased` to render
 different content depending on whether a given release:
 
 ```
-{{< if-released v0.86 >}}
+{{< if-released "v0.86" >}}
 This block is shown only if v0.86 is released.
 {{< /if-released >}}
 
-{{< if-unreleased v0.86 >}}
+{{< if-unreleased "v0.86" >}}
 This block is shown only if v0.86 is *not* released.
 {{< /if-unreleased >}}
 ```
