@@ -32,7 +32,7 @@ Field   | Use
 --------|-----
 _name_  | The identifier of the source you want to alter.
 **ADD SUBSOURCE** ... | Add the identified tables from the upstream database (`table_name`) to the named PostgreSQL or MySQL source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. See also [durable subscription](/transform-data/patterns/durable-subscriptions/#history-retention-period).
 
 ### **ADD SUBSOURCE** `with_options`
 

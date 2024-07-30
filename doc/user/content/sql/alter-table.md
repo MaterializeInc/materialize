@@ -16,6 +16,6 @@ menu:
 Field | Use
 ------|-----
 _name_ | The identifier of the table you want to alter.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. See also [durable subscription](/transform-data/patterns/durable-subscriptions/#history-retention-period).
 
 ## Details
