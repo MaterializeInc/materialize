@@ -37,8 +37,6 @@ Unlike PostgreSQL, Materialize does not use role attributes to determine a role'
 top level objects such as databases and other roles. Instead, Materialize uses system level
 privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
 
-When RBAC is enabled a role must have the `CREATEROLE` system privilege to create another role.
-
 ## Examples
 
 ```mzsql
