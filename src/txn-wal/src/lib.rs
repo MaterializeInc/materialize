@@ -121,13 +121,15 @@
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! # let client = PersistClient::new_for_tests().await;
+//! # let dyncfgs = mz_txn_wal::all_dyncfgs(client.dyncfgs().clone());
 //! # let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), metrics, txns_id, StringSchema.into(), UnitSchema.into()
+//!     0u64, client.clone(), dyncfgs, metrics, txns_id, StringSchema.into(), UnitSchema.into()
 //! ).await;
+//!
 //!
 //! // Register data shards to the txn set.
 //! let (d0, d1) = (ShardId::new(), ShardId::new());
@@ -203,18 +205,16 @@
 
 use std::fmt::Debug;
 use std::fmt::Write;
-use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use itertools::Itertools;
-use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
+use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
@@ -224,6 +224,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
 
 use crate::proto::ProtoIdBatch;
+use crate::txns::DataWriteAppend;
 
 pub mod metrics;
 pub mod operator;
@@ -267,17 +268,11 @@ mod proto {
 /// Adds the full set of all txn-wal `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&crate::APPLY_ENSURE_SCHEMA_MATCH)
         .add(&crate::operator::DATA_SHARD_RETRYER_CLAMP)
         .add(&crate::operator::DATA_SHARD_RETRYER_INITIAL_BACKOFF)
         .add(&crate::operator::DATA_SHARD_RETRYER_MULTIPLIER)
+        .add(&crate::txns::APPLY_ENSURE_SCHEMA_MATCH)
 }
-
-pub(crate) const APPLY_ENSURE_SCHEMA_MATCH: Config<bool> = Config::new(
-    "txn_wal_apply_ensure_schema_match",
-    true,
-    "CYA to skip updating write handle to batch schema in apply",
-);
 
 /// A reasonable default implementation of [TxnsCodec].
 ///
@@ -441,9 +436,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// to get the same answer.)
 #[instrument(level = "debug", fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
-    apply_ensure_schema_match: &ConfigValHandle<bool>,
-    client: &PersistClient,
-    data_write: &mut WriteHandle<K, V, T, D>,
+    data_write: &mut DataWriteAppend<K, V, T, D>,
     batch_raws: &Vec<&[u8]>,
     commit_ts: T,
 ) where
@@ -481,39 +474,7 @@ async fn apply_caa<K, V, T, D>(
 
         // Make sure we're using the same schema to CaA these batches as what
         // they were written with.
-        if apply_ensure_schema_match.get() {
-            let schema_id = batches.iter().flat_map(|x| x.schemas()).at_most_one();
-            let schema_id = schema_id
-                .unwrap_or_else(|_| panic!("txn-wal uses at most one schema to commit batches"));
-            match (schema_id, data_write.schema_id()) {
-                (Some(batch_schema), Some(handle_schema)) if batch_schema != handle_schema => {
-                    let data_id = data_write.shard_id();
-                    let diagnostics = Diagnostics::from_purpose("txn data");
-                    let (key_schema, val_schema) = client
-                        .get_schema::<K, V, T, D>(data_id, batch_schema, diagnostics.clone())
-                        .await
-                        .expect("codecs shouldn't change")
-                        .expect("id must have been registered to create this batch");
-                    let new_data_write = client
-                        .open_writer(
-                            data_write.shard_id(),
-                            Arc::new(key_schema),
-                            Arc::new(val_schema),
-                            diagnostics,
-                        )
-                        .await
-                        .expect("codecs shouldn't change");
-                    tracing::info!(
-                        "updated {} write handle from {} to {} to apply batches",
-                        data_id,
-                        handle_schema,
-                        batch_schema
-                    );
-                    *data_write = new_data_write
-                }
-                _ => {}
-            }
-        }
+        data_write.maybe_replace_with_batch_schema(&batches).await;
 
         debug!(
             "CaA data {:.9} apply b={:?} t={:?} [{:?},{:?})",

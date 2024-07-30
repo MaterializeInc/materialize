@@ -1130,8 +1130,7 @@ mod tests {
             init_ts: u64,
             txns: &TxnsHandle<String, (), u64, i64>,
         ) -> Self {
-            let mut ret =
-                TxnsCache::open(&txns.data_write_apply.client, txns.txns_id(), None).await;
+            let mut ret = TxnsCache::open(&txns.datas.client, txns.txns_id(), None).await;
             let _ = ret.update_gt(&init_ts).await;
             ret
         }

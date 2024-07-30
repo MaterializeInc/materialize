@@ -157,16 +157,16 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let mut data_write =
-                        handle
-                            .data_write_commit
-                            .remove(&data_id)
-                            .unwrap_or_else(|| {
-                                panic!(
+                    let mut data_write = handle
+                        .datas
+                        .data_write_for_commit
+                        .remove(&data_id)
+                        .unwrap_or_else(|| {
+                            panic!(
                                 "data shard {} must be registered with this Txn handle to commit",
                                 data_id
                             )
-                            });
+                        });
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches = updates
@@ -285,7 +285,8 @@ where
                                     .inc_by(u64::cast_from(batch.encoded_size_bytes()));
                             }
                             let prev = handle
-                                .data_write_commit
+                                .datas
+                                .data_write_for_commit
                                 .insert(data_write.0.shard_id(), data_write);
                             assert!(prev.is_none());
                         }
@@ -311,7 +312,8 @@ where
                             };
                             self.writes.insert(data_write.0.shard_id(), txn_write);
                             let prev = handle
-                                .data_write_commit
+                                .datas
+                                .data_write_for_commit
                                 .insert(data_write.0.shard_id(), data_write);
                             assert!(prev.is_none());
                         }

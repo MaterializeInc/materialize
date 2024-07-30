@@ -72,6 +72,7 @@ impl Transactor {
         let txns = TxnsHandle::open(
             init_ts,
             client.clone(),
+            client.dyncfgs().clone(),
             Arc::new(TxnMetrics::new(&MetricsRegistry::new())),
             txns_id,
             Arc::new(StringSchema),

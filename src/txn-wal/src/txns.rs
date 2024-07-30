@@ -11,17 +11,20 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
+use mz_persist_client::batch::Batch;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::schema::SchemaId;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
@@ -33,7 +36,7 @@ use tracing::debug;
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
-use crate::{TxnsCodecDefault, APPLY_ENSURE_SCHEMA_MATCH};
+use crate::TxnsCodecDefault;
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -102,13 +105,11 @@ use crate::{TxnsCodecDefault, APPLY_ENSURE_SCHEMA_MATCH};
 /// ```
 #[derive(Debug)]
 pub struct TxnsHandle<K: Codec, V: Codec, T, D, O = u64, C: TxnsCodec = TxnsCodecDefault> {
-    pub(crate) dyncfgs: ConfigSet,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
     pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
-    pub(crate) data_write_apply: DataHandles<K, V, T, D>,
-    pub(crate) data_write_commit: BTreeMap<ShardId, DataWriteCommit<K, V, T, D>>,
+    pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
 impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
@@ -132,6 +133,7 @@ where
     pub async fn open(
         init_ts: T,
         client: PersistClient,
+        dyncfgs: ConfigSet,
         metrics: Arc<Metrics>,
         txns_id: ShardId,
         // TODO(txn): Get rid of these once the persist schema stuff finishes
@@ -169,18 +171,18 @@ where
             .expect("txns schema shouldn't change");
         let txns_cache = TxnsCache::init(init_ts, txns_read, &mut txns_write).await;
         TxnsHandle {
-            dyncfgs: client.dyncfgs().clone(),
             metrics,
             txns_cache,
             txns_write,
             txns_since,
-            data_write_apply: DataHandles {
-                client,
-                data_write: BTreeMap::new(),
+            datas: DataHandles {
+                dyncfgs,
+                client: Arc::new(client),
+                data_write_for_apply: BTreeMap::new(),
+                data_write_for_commit: BTreeMap::new(),
                 key_schema,
                 val_schema,
             },
-            data_write_commit: BTreeMap::new(),
         }
     }
 
@@ -290,7 +292,8 @@ where
                 }
             }
             for data_write in data_writes {
-                self.data_write_commit
+                self.datas
+                    .data_write_for_commit
                     .insert(data_write.shard_id(), DataWriteCommit(data_write));
             }
             let tidy = self.apply_le(&register_ts).await;
@@ -414,7 +417,7 @@ where
 
             let tidy = self.apply_le(&forget_ts).await;
             for data_id in &data_ids {
-                self.data_write_commit.remove(data_id);
+                self.datas.data_write_for_commit.remove(data_id);
             }
 
             Ok(tidy)
@@ -509,7 +512,7 @@ where
             };
 
             for data_id in registered.iter() {
-                self.data_write_commit.remove(data_id);
+                self.datas.data_write_for_commit.remove(data_id);
             }
             let tidy = self.apply_le(&forget_ts).await;
 
@@ -551,9 +554,7 @@ where
 
             let retractions = FuturesUnordered::new();
             for (data_id, unapplied) in unapplied_by_data {
-                let apply_ensure_schema_match = APPLY_ENSURE_SCHEMA_MATCH.handle(&self.dyncfgs);
-                let client = self.data_write_apply.client.clone();
-                let mut data_write = self.data_write_apply.take_write(&data_id).await;
+                let mut data_write = self.datas.take_write(&data_id).await;
                 retractions.push(async move {
                     let mut ret = Vec::new();
                     for (unapplied, unapplied_ts) in unapplied {
@@ -577,8 +578,6 @@ where
                                     .map(|batch_raw| batch_raw.as_slice())
                                     .collect();
                                 crate::apply_caa(
-                                    &apply_ensure_schema_match,
-                                    &client,
                                     &mut data_write,
                                     &batch_raws,
                                     unapplied_ts.clone(),
@@ -603,7 +602,7 @@ where
             let retractions = retractions
                 .into_iter()
                 .flat_map(|(data_write, retractions)| {
-                    self.data_write_apply.put_write(data_write);
+                    self.datas.put_write(data_write);
                     retractions
                 })
                 .collect();
@@ -691,8 +690,11 @@ impl Tidy {
 /// A helper to make a more targeted mutable borrow of self.
 #[derive(Debug)]
 pub(crate) struct DataHandles<K: Codec, V: Codec, T, D> {
-    pub(crate) client: PersistClient,
-    data_write: BTreeMap<ShardId, WriteHandle<K, V, T, D>>,
+    pub(crate) dyncfgs: ConfigSet,
+    pub(crate) client: Arc<PersistClient>,
+    data_write_for_apply: BTreeMap<ShardId, DataWriteAppend<K, V, T, D>>,
+    // WIP no pub(crate)
+    pub(crate) data_write_for_commit: BTreeMap<ShardId, DataWriteCommit<K, V, T, D>>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
 }
@@ -704,27 +706,44 @@ where
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
-    async fn open_data_write(&self, data_id: ShardId) -> WriteHandle<K, V, T, D> {
-        self.client
+    async fn open_data_write(&self, data_id: ShardId) -> DataWriteAppend<K, V, T, D> {
+        let diagnostics = Diagnostics::from_purpose("txn data");
+        let schemas = self
+            .client
+            .latest_schema::<K, V, T, D>(data_id, diagnostics.clone())
+            .await
+            .expect("codecs have not changed");
+        let (key_schema, val_schema) = match schemas {
+            Some((_, key_schema, val_schema)) => (key_schema, val_schema),
+            None => panic!("WIP"),
+        };
+        let wrapped = self
+            .client
             .open_writer(
                 data_id,
-                Arc::clone(&self.key_schema),
-                Arc::clone(&self.val_schema),
-                Diagnostics::from_purpose("txn data"),
+                Arc::new(key_schema),
+                Arc::new(val_schema),
+                diagnostics,
             )
             .await
-            .expect("schema shouldn't change")
+            .expect("schema shouldn't change");
+        DataWriteAppend {
+            apply_ensure_schema_match: APPLY_ENSURE_SCHEMA_MATCH.handle(&self.dyncfgs),
+            client: Arc::clone(&self.client),
+            wrapped,
+        }
     }
 
-    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
-        if let Some(data_write) = self.data_write.remove(data_id) {
+    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> DataWriteAppend<K, V, T, D> {
+        if let Some(data_write) = self.data_write_for_apply.remove(data_id) {
             return data_write;
         }
         self.open_data_write(*data_id).await
     }
 
-    pub(crate) fn put_write(&mut self, data_write: WriteHandle<K, V, T, D>) {
-        self.data_write.insert(data_write.shard_id(), data_write);
+    pub(crate) fn put_write(&mut self, data_write: DataWriteAppend<K, V, T, D>) {
+        self.data_write_for_apply
+            .insert(data_write.shard_id(), data_write);
     }
 }
 
@@ -738,12 +757,119 @@ where
 /// invent for applying the batches (which use a schema matching the one
 /// declared in the batch).
 #[derive(Debug)]
-pub(crate) struct DataWriteCommit<K: Codec, V: Codec, T, D>(pub(crate) WriteHandle<K, V, T, D>)
+pub(crate) struct DataWriteCommit<K: Codec, V: Codec, T, D>(pub(crate) WriteHandle<K, V, T, D>);
+
+impl<K: Codec, V: Codec, T, D> Deref for DataWriteCommit<K, V, T, D> {
+    type Target = WriteHandle<K, V, T, D>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<K: Codec, V: Codec, T, D> DerefMut for DataWriteCommit<K, V, T, D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// WIP
+#[derive(Debug)]
+pub(crate) struct DataWriteAppend<K: Codec, V: Codec, T, D> {
+    client: Arc<PersistClient>,
+    apply_ensure_schema_match: ConfigValHandle<bool>,
+    pub(crate) wrapped: WriteHandle<K, V, T, D>,
+}
+
+impl<K: Codec, V: Codec, T, D> Deref for DataWriteAppend<K, V, T, D> {
+    type Target = WriteHandle<K, V, T, D>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.wrapped
+    }
+}
+
+impl<K: Codec, V: Codec, T, D> DerefMut for DataWriteAppend<K, V, T, D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.wrapped
+    }
+}
+
+pub(crate) const APPLY_ENSURE_SCHEMA_MATCH: Config<bool> = Config::new(
+    "txn_wal_apply_ensure_schema_match",
+    true,
+    "CYA to skip updating write handle to batch schema in apply",
+);
+
+fn at_most_one_schema(
+    schemas: impl Iterator<Item = SchemaId>,
+) -> Result<Option<SchemaId>, (SchemaId, SchemaId)> {
+    let mut schema = None;
+    for s in schemas {
+        match schema {
+            None => schema = Some(s),
+            Some(x) if s != x => return Err((s, x)),
+            Some(_) => continue,
+        }
+    }
+    Ok(schema)
+}
+
+impl<K, V, T, D> DataWriteAppend<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64,
-    D: Semigroup + Codec64 + Send + Sync;
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    pub(crate) async fn maybe_replace_with_batch_schema(&mut self, batches: &[Batch<K, V, T, D>]) {
+        // TODO: Remove this once everything is rolled out and we're sure it's
+        // not going to cause any issues.
+        if !self.apply_ensure_schema_match.get() {
+            return;
+        }
+        let batch_schema = at_most_one_schema(batches.iter().flat_map(|x| x.schemas()));
+        let batch_schema = batch_schema.unwrap_or_else(|_| {
+            panic!(
+                "txn-wal uses at most one schema to commit batches, got: {:?}",
+                batches.iter().flat_map(|x| x.schemas()).collect::<Vec<_>>()
+            )
+        });
+        let (batch_schema, handle_schema) = match (batch_schema, self.wrapped.schema_id()) {
+            (Some(batch_schema), Some(handle_schema)) if batch_schema != handle_schema => {
+                (batch_schema, handle_schema)
+            }
+            _ => return,
+        };
+
+        let data_id = self.shard_id();
+        let diagnostics = Diagnostics::from_purpose("txn data");
+        let (key_schema, val_schema) = self
+            .client
+            .get_schema::<K, V, T, D>(data_id, batch_schema, diagnostics.clone())
+            .await
+            .expect("codecs shouldn't change")
+            .expect("id must have been registered to create this batch");
+        let new_data_write = self
+            .client
+            .open_writer(
+                self.shard_id(),
+                Arc::new(key_schema),
+                Arc::new(val_schema),
+                diagnostics,
+            )
+            .await
+            .expect("codecs shouldn't change");
+        tracing::info!(
+            "updated {} write handle from {} to {} to apply batches",
+            data_id,
+            handle_schema,
+            batch_schema
+        );
+        assert_eq!(new_data_write.schema_id(), Some(batch_schema));
+        self.wrapped = new_data_write;
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -775,21 +901,21 @@ mod tests {
         }
 
         pub(crate) async fn expect_open_id(client: PersistClient, txns_id: ShardId) -> Self {
-            let mut ret = Self::open(
+            let dyncfgs = crate::all_dyncfgs(client.dyncfgs().clone());
+            Self::open(
                 0,
                 client,
+                dyncfgs,
                 Arc::new(Metrics::new(&MetricsRegistry::new())),
                 txns_id,
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
             )
-            .await;
-            ret.dyncfgs = crate::all_dyncfgs(ret.dyncfgs.clone());
-            ret
+            .await
         }
 
         pub(crate) fn new_log(&self) -> CommitLog {
-            CommitLog::new(self.data_write_apply.client.clone(), self.txns_id())
+            CommitLog::new((*self.datas.client).clone(), self.txns_id())
         }
 
         pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
@@ -804,7 +930,7 @@ mod tests {
             let data_ids: Vec<_> = (0..amount).map(|_| ShardId::new()).collect();
             let mut writers = Vec::new();
             for data_id in &data_ids {
-                writers.push(writer(&self.data_write_apply.client, *data_id).await);
+                writers.push(writer(&self.datas.client, *data_id).await);
             }
             self.register(register_ts, writers).await.unwrap();
             data_ids
@@ -1193,6 +1319,18 @@ mod tests {
                 data_id.to_string(),
                 self.ts
             );
+            // HACK: Normally, we'd make sure that this particular handle had
+            // registered the data shard before writing to it, but that would
+            // consume a ts and isn't quite how we want `write_via_txns` to
+            // work. Work around that by setting a write handle (with a schema
+            // that we promise is correct) in the right place.
+            if !self.txns.datas.data_write_for_commit.contains_key(&data_id) {
+                let x = writer(&self.txns.datas.client, data_id).await;
+                self.txns
+                    .datas
+                    .data_write_for_commit
+                    .insert(data_id, DataWriteCommit(x));
+            }
             let mut txn = self.txns.begin_test();
             txn.tidy(std::mem::take(&mut self.tidy));
             txn.write(&data_id, self.key(), (), 1).await;
@@ -1220,7 +1358,7 @@ mod tests {
             // registered at this ts by someone else.
             self.txns.begin().commit_at(&mut self.txns, self.ts).await?;
 
-            let mut write = writer(&self.txns.data_write_apply.client, data_id).await;
+            let mut write = writer(&self.txns.datas.client, data_id).await;
             let mut current = write.shared_upper().into_option().unwrap();
             loop {
                 if !(current <= self.ts) {
@@ -1251,7 +1389,7 @@ mod tests {
             self.retry_ts_err(&mut |w: &mut StressWorker| {
                 debug!("stress register {:.9} at {}", data_id.to_string(), w.ts);
                 Box::pin(async move {
-                    let data_write = writer(&w.txns.data_write_apply.client, data_id).await;
+                    let data_write = writer(&w.txns.datas.client, data_id).await;
                     let _ = w.txns.register(w.ts, [data_write]).await?;
                     Ok(())
                 })
@@ -1273,7 +1411,7 @@ mod tests {
                 data_id.to_string(),
                 self.ts
             );
-            let client = self.txns.data_write_apply.client.clone();
+            let client = (*self.txns.datas.client).clone();
             let txns_id = self.txns.txns_id();
             let as_of = self.ts;
             debug!("start_read {:.9} as_of {}", data_id.to_string(), as_of);
@@ -1465,18 +1603,18 @@ mod tests {
 
         // The register call happened on txns0, which means it has a real schema
         // and can commit batches.
-        assert!(txns0.data_write_commit.get(&d0).is_some());
+        assert!(txns0.datas.data_write_for_commit.get(&d0).is_some());
         let mut txn = txns0.begin_test();
         txn.write(&d0, "foo".into(), (), 1).await;
         let apply = txn.commit_at(&mut txns0, 2).await.unwrap();
         log.record_txn(2, &txn);
 
         // We can use handle without a register call to apply a committed txn.
-        assert!(txns1.data_write_commit.get(&d0).is_none());
+        assert!(txns1.datas.data_write_for_commit.get(&d0).is_none());
         let _tidy = apply.apply(&mut txns1).await;
 
         // However, it cannot commit batches.
-        assert!(txns1.data_write_commit.get(&d0).is_none());
+        assert!(txns1.datas.data_write_for_commit.get(&d0).is_none());
         let res = mz_ore::task::spawn(|| "test", async move {
             let mut txn = txns1.begin();
             txn.write(&d0, "bar".into(), (), 1).await;
@@ -1487,22 +1625,22 @@ mod tests {
 
         // Forgetting the data shard removes it, so we don't leave the schema
         // sitting around.
-        assert!(txns0.data_write_commit.get(&d0).is_some());
+        assert!(txns0.datas.data_write_for_commit.get(&d0).is_some());
         txns0.forget(3, [d0]).await.unwrap();
-        assert!(txns0.data_write_commit.get(&d0).is_none());
+        assert!(txns0.datas.data_write_for_commit.get(&d0).is_none());
 
         // Forget is idempotent.
-        assert!(txns0.data_write_commit.get(&d0).is_none());
+        assert!(txns0.datas.data_write_for_commit.get(&d0).is_none());
         txns0.forget(4, [d0]).await.unwrap();
-        assert!(txns0.data_write_commit.get(&d0).is_none());
+        assert!(txns0.datas.data_write_for_commit.get(&d0).is_none());
 
         // We can register it again and commit again.
-        assert!(txns0.data_write_commit.get(&d0).is_none());
+        assert!(txns0.datas.data_write_for_commit.get(&d0).is_none());
         txns0
             .register(5, [writer(&client, d0).await])
             .await
             .unwrap();
-        assert!(txns0.data_write_commit.get(&d0).is_some());
+        assert!(txns0.datas.data_write_for_commit.get(&d0).is_some());
         txns0.expect_commit_at(6, d0, &["baz"], &log).await;
 
         log.assert_snapshot(d0, 6).await;
