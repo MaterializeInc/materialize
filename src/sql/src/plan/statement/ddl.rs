@@ -91,7 +91,7 @@ use mz_storage_types::sources::envelope::{
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
+    LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
@@ -1400,7 +1400,13 @@ pub fn plan_create_subsource(
                     .map(|c| c.into_string())
                     .collect(),
             }),
-            SourceExportStatementDetails::LoadGenerator {} => SourceExportDetails::LoadGenerator,
+            SourceExportStatementDetails::LoadGenerator => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                    // get the table from the external reference to figure out which output this
+                    // subsource is for
+                    output: external_reference.0[2].as_str().into(),
+                })
+            }
         };
         DataSourceDesc::IngestionExport {
             ingestion_id,
@@ -1501,13 +1507,7 @@ pub(crate) fn load_generator_ast_to_generator(
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
     include_metadata: &[SourceIncludeMetadata],
-) -> Result<
-    (
-        LoadGenerator,
-        Option<BTreeMap<FullItemName, (usize, RelationDesc)>>,
-    ),
-    PlanError,
-> {
+) -> Result<(LoadGenerator, Option<BTreeMap<FullItemName, RelationDesc>>), PlanError> {
     let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
     extracted.ensure_only_valid_options(loadgen)?;
 
@@ -1639,7 +1639,7 @@ pub(crate) fn load_generator_ast_to_generator(
     };
 
     let mut available_subsources = BTreeMap::new();
-    for (i, (name, desc)) in load_generator.views().iter().enumerate() {
+    for (name, desc) in load_generator.views().into_iter() {
         let name = FullItemName {
             database: RawDatabaseSpecifier::Name(
                 mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
@@ -1647,10 +1647,7 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: load_generator.schema_name().into(),
             item: name.to_string(),
         };
-        // The zero-th output is the main output
-        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-        // to handle the main source and the subsources uniformly
-        available_subsources.insert(name, (i + 1, desc.clone()));
+        available_subsources.insert(name, desc);
     }
     let available_subsources = if available_subsources.is_empty() {
         None

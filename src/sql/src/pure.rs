@@ -961,20 +961,18 @@ async fn purify_create_source(
 
             match external_references {
                 Some(ExternalReferences::All) => {
-                    let available_subsources = match &available_subsources {
+                    let available_subsources = match available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => Err(LoadGeneratorSourcePurificationError::ForAllTables)?,
                     };
-                    for (name, (_, desc)) in available_subsources {
-                        let external_reference = UnresolvedItemName::from(name.clone());
+                    for (name, desc) in available_subsources {
                         let subsource_name = source_export_name_gen(source_name, &name.item)?;
+                        let external_reference = UnresolvedItemName::from(name);
                         requested_subsource_map.insert(
                             subsource_name,
                             PurifiedSourceExport {
                                 external_reference,
-                                details: PurifiedExportDetails::LoadGenerator {
-                                    table: desc.clone(),
-                                },
+                                details: PurifiedExportDetails::LoadGenerator { table: desc },
                             },
                         );
                     }
@@ -1381,13 +1379,13 @@ pub fn generate_subsource_statements(
         PurifiedExportDetails::LoadGenerator { .. } => {
             let mut subsource_stmts = Vec::with_capacity(subsources.len());
             for (subsource_name, purified_export) in subsources {
-                let desc = match &purified_export.details {
+                let desc = match purified_export.details {
                     PurifiedExportDetails::LoadGenerator { table } => table,
                     _ => unreachable!("purified export details must be load generator"),
                 };
 
-                let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
-                let details = SourceExportStatementDetails::LoadGenerator {};
+                let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+                let details = SourceExportStatementDetails::LoadGenerator;
                 // Create the subsource statement
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,

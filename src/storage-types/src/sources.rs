@@ -23,6 +23,7 @@ use bytes::{BufMut, Bytes};
 use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
+use load_generator::LoadGeneratorSourceExportDetails;
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use mz_persist_types::columnar::{
@@ -1113,7 +1114,7 @@ pub enum SourceExportDetails {
     Kafka,
     Postgres(PostgresSourceExportDetails),
     MySql(MySqlSourceExportDetails),
-    LoadGenerator,
+    LoadGenerator(LoadGeneratorSourceExportDetails),
 }
 
 impl crate::AlterCompatible for SourceExportDetails {
@@ -1126,7 +1127,7 @@ impl crate::AlterCompatible for SourceExportDetails {
             (Self::Kafka, Self::Kafka) => Ok(()),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
-            (Self::LoadGenerator, Self::LoadGenerator) => Ok(()),
+            (Self::LoadGenerator(s), Self::LoadGenerator(o)) => s.alter_compatible(id, o),
             _ => Err(AlterError { id }),
         };
 
@@ -1153,7 +1154,9 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
                     Some(Kind::Postgres(details.into_proto()))
                 }
                 SourceExportDetails::MySql(details) => Some(Kind::Mysql(details.into_proto())),
-                SourceExportDetails::LoadGenerator => Some(Kind::Loadgen(())),
+                SourceExportDetails::LoadGenerator(details) => {
+                    Some(Kind::Loadgen(details.into_proto()))
+                }
             },
         }
     }
@@ -1165,7 +1168,9 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
             Some(Kind::Kafka(_)) => SourceExportDetails::Kafka,
             Some(Kind::Postgres(details)) => SourceExportDetails::Postgres(details.into_rust()?),
             Some(Kind::Mysql(details)) => SourceExportDetails::MySql(details.into_rust()?),
-            Some(Kind::Loadgen(_)) => SourceExportDetails::LoadGenerator,
+            Some(Kind::Loadgen(details)) => {
+                SourceExportDetails::LoadGenerator(details.into_rust()?)
+            }
         })
     }
 }
@@ -1237,7 +1242,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                 )?)?,
                 initial_gtid_set: details.initial_gtid_set,
             },
-            Some(Kind::Loadgen(_)) => SourceExportStatementDetails::LoadGenerator,
+            Some(Kind::Loadgen(())) => SourceExportStatementDetails::LoadGenerator,
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoSourceExportStatementDetails::kind",

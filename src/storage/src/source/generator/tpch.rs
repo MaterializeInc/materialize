@@ -19,7 +19,7 @@ use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator};
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorView};
 use mz_storage_types::sources::MzOffset;
 use once_cell::sync::Lazy;
 use rand::distributions::{Alphanumeric, DistString};
@@ -37,22 +37,13 @@ pub struct Tpch {
     pub tick: Duration,
 }
 
-const SUPPLIER_OUTPUT: usize = 1;
-const PART_OUTPUT: usize = 2;
-const PARTSUPP_OUTPUT: usize = 3;
-const CUSTOMER_OUTPUT: usize = 4;
-const ORDERS_OUTPUT: usize = 5;
-const LINEITEM_OUTPUT: usize = 6;
-const NATION_OUTPUT: usize = 7;
-const REGION_OUTPUT: usize = 8;
-
 impl Generator for Tpch {
     fn by_seed(
         &self,
         _: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorView, Event<Option<MzOffset>, (Row, i64)>)>)> {
         let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
             tpch: self.clone(),
@@ -68,12 +59,12 @@ impl Generator for Tpch {
         let count_region: i64 = REGIONS.len().try_into().unwrap();
 
         let mut rows = (0..ctx.tpch.count_supplier)
-            .map(|i| (SUPPLIER_OUTPUT, i))
-            .chain((1..=ctx.tpch.count_part).map(|i| (PART_OUTPUT, i)))
-            .chain((1..=ctx.tpch.count_customer).map(|i| (CUSTOMER_OUTPUT, i)))
-            .chain((1..=ctx.tpch.count_orders).map(|i| (ORDERS_OUTPUT, i)))
-            .chain((0..count_nation).map(|i| (NATION_OUTPUT, i)))
-            .chain((0..count_region).map(|i| (REGION_OUTPUT, i)))
+            .map(|i| (LoadGeneratorView::Supplier, i))
+            .chain((1..=ctx.tpch.count_part).map(|i| (LoadGeneratorView::Part, i)))
+            .chain((1..=ctx.tpch.count_customer).map(|i| (LoadGeneratorView::Customer, i)))
+            .chain((1..=ctx.tpch.count_orders).map(|i| (LoadGeneratorView::Orders, i)))
+            .chain((0..count_nation).map(|i| (LoadGeneratorView::Nation, i)))
+            .chain((0..count_region).map(|i| (LoadGeneratorView::Region, i)))
             .peekable();
 
         // Some rows need to generate other rows from their values; hold those
@@ -93,7 +84,7 @@ impl Generator for Tpch {
             if let Some((output, key)) = rows.next() {
                 let key_usize = usize::try_from(key).expect("key known to be non-negative");
                 let row = match output {
-                    SUPPLIER_OUTPUT => {
+                    LoadGeneratorView::Supplier => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
@@ -107,7 +98,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    PART_OUTPUT => {
+                    LoadGeneratorView::Part => {
                         let name: String = PARTNAMES
                             .choose_multiple(&mut rng, 5)
                             .cloned()
@@ -135,7 +126,7 @@ impl Generator for Tpch {
                                 )),
                             ]);
                             pending.push_back((
-                                PARTSUPP_OUTPUT,
+                                LoadGeneratorView::Partsupp,
                                 Event::Message(MzOffset::from(offset), (row.clone(), 1)),
                             ));
                         }
@@ -152,7 +143,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    CUSTOMER_OUTPUT => {
+                    LoadGeneratorView::Customer => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
@@ -166,12 +157,12 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    ORDERS_OUTPUT => {
+                    LoadGeneratorView::Orders => {
                         let seed = rng.gen();
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
-                                LINEITEM_OUTPUT,
+                                LoadGeneratorView::Lineitem,
                                 Event::Message(MzOffset::from(offset), (row, 1)),
                             ));
                         }
@@ -180,7 +171,7 @@ impl Generator for Tpch {
                         }
                         order
                     }
-                    NATION_OUTPUT => {
+                    LoadGeneratorView::Nation => {
                         let (name, region) = NATIONS[key_usize];
                         row.packer().extend([
                             Datum::Int64(key),
@@ -190,7 +181,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    REGION_OUTPUT => {
+                    LoadGeneratorView::Region => {
                         row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(REGIONS[key_usize]),
@@ -198,7 +189,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    _ => unreachable!("{output}"),
+                    _ => unreachable!("{output:?}"),
                 };
 
                 pending.push_back((output, Event::Message(MzOffset::from(offset), (row, 1))));
@@ -218,7 +209,7 @@ impl Generator for Tpch {
                 // order to start the batch.
                 for row in old_lineitems {
                     pending.push_back((
-                        LINEITEM_OUTPUT,
+                        LoadGeneratorView::Lineitem,
                         Event::Message(MzOffset::from(offset), (row, -1)),
                     ));
                 }
@@ -226,20 +217,23 @@ impl Generator for Tpch {
                 let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
                 for row in new_lineitems {
                     pending.push_back((
-                        LINEITEM_OUTPUT,
+                        LoadGeneratorView::Lineitem,
                         Event::Message(MzOffset::from(offset), (row, 1)),
                     ));
                 }
                 pending.push_back((
-                    ORDERS_OUTPUT,
+                    LoadGeneratorView::Orders,
                     Event::Message(MzOffset::from(offset), (old_order, -1)),
                 ));
                 pending.push_back((
-                    ORDERS_OUTPUT,
+                    LoadGeneratorView::Orders,
                     Event::Message(MzOffset::from(offset), (new_order, 1)),
                 ));
                 offset += 1;
-                pending.push_back((ORDERS_OUTPUT, Event::Progress(Some(MzOffset::from(offset)))));
+                pending.push_back((
+                    LoadGeneratorView::Orders,
+                    Event::Progress(Some(MzOffset::from(offset))),
+                ));
                 active_orders.push((key, new_seed));
             }
             pending.pop_front()

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,8 +18,9 @@ use mz_repr::Row;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
     Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
+    LoadGeneratorView,
 };
-use mz_storage_types::sources::{MzOffset, SourceTimestamp};
+use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::dataflow::operators::ToStream;
@@ -51,26 +53,18 @@ enum GeneratorKind {
         tick_micros: Option<u64>,
         as_of: u64,
         up_to: u64,
-        // Load generators cannot be rendered until all of their exports are
-        // present.
-        //
-        // TODO(#26765): can this limitation be removed?
-        required_exports: usize,
     },
     KeyValue(KeyValueLoadGenerator),
 }
 
 impl GeneratorKind {
     fn new(g: &LoadGenerator, tick_micros: Option<u64>, as_of: u64, up_to: u64) -> Self {
-        let required_exports = g.views().len() + 1;
-
         match g {
             LoadGenerator::Auction => GeneratorKind::Simple {
                 generator: Box::new(Auction {}),
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
             LoadGenerator::Counter { max_cardinality } => GeneratorKind::Simple {
                 generator: Box::new(Counter {
@@ -79,21 +73,18 @@ impl GeneratorKind {
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
             LoadGenerator::Datums => GeneratorKind::Simple {
                 generator: Box::new(Datums {}),
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
             LoadGenerator::Marketing => GeneratorKind::Simple {
                 generator: Box::new(Marketing {}),
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
             LoadGenerator::Tpch {
                 count_supplier,
@@ -115,17 +106,8 @@ impl GeneratorKind {
                 tick_micros,
                 as_of,
                 up_to,
-                required_exports,
             },
-            LoadGenerator::KeyValue(kv) => {
-                mz_ore::soft_assert_eq_or_log!(
-                    required_exports,
-                    1,
-                    "KeyValue generators should not have any additional views"
-                );
-
-                GeneratorKind::KeyValue(kv.clone())
-            }
+            LoadGenerator::KeyValue(kv) => GeneratorKind::KeyValue(kv.clone()),
         }
     }
 
@@ -148,7 +130,6 @@ impl GeneratorKind {
                 as_of,
                 up_to,
                 generator,
-                required_exports,
             } => render_simple_generator(
                 generator,
                 tick_micros,
@@ -157,7 +138,6 @@ impl GeneratorKind {
                 scope,
                 config,
                 committed_uppers,
-                required_exports,
             ),
             GeneratorKind::KeyValue(kv) => {
                 key_value::render(kv, scope, config, committed_uppers, start_signal)
@@ -202,7 +182,6 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-    required_exports: usize,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
@@ -210,6 +189,20 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     Stream<G, ProgressStatisticsUpdate>,
     Vec<PressOnDropButton>,
 ) {
+    // figure out which outputs from the generator belong to which output index
+    let output_map: BTreeMap<LoadGeneratorView, usize> = config
+        .source_exports
+        .iter()
+        .map(|(_, output)| {
+            let output_type = match &output.details {
+                SourceExportDetails::LoadGenerator(details) => details.output,
+                SourceExportDetails::None => LoadGeneratorView::Default,
+                _ => panic!("unexpected source export details: {:?}", output.details),
+            };
+            (output_type, output.ingestion_output)
+        })
+        .collect();
+
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
@@ -218,15 +211,6 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            // Do not run the load generator until we have all of our source
-            // exports. Waiting here is fine because we know that their creation and
-            // scheduling of this dataflow is imminent.
-            //
-            // TODO(#26765): can this limitation be removed?
-            if required_exports != config.source_exports.len() {
-                std::future::pending().await
-            }
-
             let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
 
             if !config.responsible_for(()) {
@@ -264,7 +248,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                 None
             };
 
-            while let Some((output, event)) = rows.next() {
+            while let Some((output_type, event)) = rows.next() {
                 match event {
                     Event::Message(mut offset, (value, diff)) => {
                         // Fast forward any data before the requested as of.
@@ -280,6 +264,12 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         if offset >= up_to {
                             continue;
                         }
+
+                        let output = match output_map.get(&output_type) {
+                            Some(output) => *output,
+                            // We don't have an output index for this output type, so drop it
+                            None => continue,
+                        };
 
                         let message = (
                             output,

@@ -53,3 +53,36 @@ message ProtoKeyValueLoadGenerator {
     uint64 seed = 8;
     optional string include_offset = 9;
 }
+
+message ProtoLoadGeneratorSourceExportDetails {
+    ProtoLoadGeneratorOutput output = 1;
+}
+
+enum ProtoLoadGeneratorOutput {
+    Default = 0;
+
+    // Auction tables
+    Organizations = 2;
+    Users = 3;
+    Accounts = 4;
+    Auctions = 5;
+    Bids = 6;
+
+    // Marketing tables
+    Customers = 7;
+    Impressions = 8;
+    Clicks = 9;
+    Leads = 10;
+    Coupons = 11;
+    ConversionPredictions = 12;
+
+    // Tpch tables
+    Supplier = 13;
+    Part = 14;
+    Partsupp = 15;
+    Customer = 16;
+    Orders = 17;
+    Lineitem = 18;
+    Nation = 19;
+    Region = 20;
+}

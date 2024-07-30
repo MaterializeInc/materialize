@@ -12,7 +12,7 @@ use std::iter;
 
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator};
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorView};
 use mz_storage_types::sources::MzOffset;
 use rand::prelude::{Rng, SmallRng};
 use rand::seq::SliceRandom;
@@ -61,12 +61,6 @@ use rand::SeedableRng;
 ///   );
 pub struct Auction {}
 
-const ORGANIZATION_OUTPUT: usize = 1;
-const USERS_OUTPUT: usize = 2;
-const ACCOUNTS_OUTPUT: usize = 3;
-const AUCTIONS_OUTPUT: usize = 4;
-const BIDS_OUTPUT: usize = 5;
-
 // Note that this generator never issues retractions; if you change this,
 // `mz_storage_types::sources::LoadGenerator::is_monotonic`
 // must be updated.
@@ -76,7 +70,7 @@ impl Generator for Auction {
         now: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorView, Event<Option<MzOffset>, (Row, i64)>)>)> {
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
         let organizations = COMPANIES.iter().enumerate().map(|(offset, name)| {
@@ -86,7 +80,7 @@ impl Generator for Auction {
             let id = i64::try_from(offset + 1).expect("demo entries less than i64::MAX");
             packer.push(Datum::Int64(id));
             packer.push(Datum::String(*name));
-            (ORGANIZATION_OUTPUT, company)
+            (LoadGeneratorView::Organizations, company)
         });
 
         let users = CELEBRETIES.iter().enumerate().map(|(offset, name)| {
@@ -99,7 +93,7 @@ impl Generator for Auction {
                 .expect("demo entries less than i64::MAX");
             packer.push(Datum::Int64(org_id));
             packer.push(Datum::String(name));
-            (USERS_OUTPUT, user)
+            (LoadGeneratorView::Users, user)
         });
 
         let accounts = (1..=COMPANIES.len()).map(|org_id| {
@@ -110,11 +104,11 @@ impl Generator for Auction {
             packer.push(Datum::Int64(id));
             packer.push(Datum::Int64(org_id));
             packer.push(Datum::Int64(10000)); // balance
-            (ACCOUNTS_OUTPUT, org)
+            (LoadGeneratorView::Accounts, org)
         });
 
         let mut counter = 0;
-        let mut pending: VecDeque<(usize, Row)> =
+        let mut pending: VecDeque<(LoadGeneratorView, Row)> =
             organizations.chain(users).chain(accounts).collect();
 
         let mut offset = 0;
@@ -136,7 +130,7 @@ impl Generator for Auction {
                                 .try_into()
                                 .expect("timestamp must fit"),
                         )); // end time
-                        pending.push_back((AUCTIONS_OUTPUT, auction));
+                        pending.push_back((LoadGeneratorView::Auctions, auction));
                         const MAX_BIDS: i64 = 10;
                         for i in 0..rng.gen_range(2..MAX_BIDS) {
                             let bid_id = Datum::Int64(counter * MAX_BIDS + i);
@@ -155,7 +149,7 @@ impl Generator for Auction {
                                 )); // bid time
                                 bid
                             };
-                            pending.push_back((BIDS_OUTPUT, bid));
+                            pending.push_back((LoadGeneratorView::Bids, bid));
                         }
                     }
                     // Pop from the front so auctions always appear before bids.

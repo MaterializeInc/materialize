@@ -75,7 +75,7 @@ message ProtoSourceExportDetails {
         google.protobuf.Empty kafka = 1;
         mz_storage_types.sources.postgres.ProtoPostgresSourceExportDetails postgres = 2;
         mz_storage_types.sources.mysql.ProtoMySqlSourceExportDetails mysql = 3;
-        google.protobuf.Empty loadgen = 4;
+        mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportDetails loadgen = 4;
     }
 }
 

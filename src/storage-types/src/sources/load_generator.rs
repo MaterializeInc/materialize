@@ -20,7 +20,9 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+use crate::sources::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
+use crate::AlterCompatible;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -419,6 +421,161 @@ impl LoadGenerator {
     }
 }
 
+// Used to identify a view of a load-generator source
+// such that the source dataflow can output data to the correct
+// data output for a source-export using this view
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+pub enum LoadGeneratorView {
+    // Used for outputting to the primary source output
+    Default,
+
+    // Auction tables
+    Organizations,
+    Users,
+    Accounts,
+    Auctions,
+    Bids,
+
+    // Marketing tables
+    Customers,
+    Impressions,
+    Clicks,
+    Leads,
+    Coupons,
+    ConversionPredictions,
+
+    // Tpch tables
+    Supplier,
+    Part,
+    Partsupp,
+    Customer,
+    Orders,
+    Lineitem,
+    Nation,
+    Region,
+}
+
+/// Map from the table-names output by the `LoadGenerator::views()` method to the
+/// appropriate LoadGeneratorOutput enum variant
+impl From<&str> for LoadGeneratorView {
+    fn from(s: &str) -> Self {
+        match s {
+            "default" => LoadGeneratorView::Default,
+            "organizations" => LoadGeneratorView::Organizations,
+            "users" => LoadGeneratorView::Users,
+            "accounts" => LoadGeneratorView::Accounts,
+            "auctions" => LoadGeneratorView::Auctions,
+            "bids" => LoadGeneratorView::Bids,
+            "customers" => LoadGeneratorView::Customers,
+            "impressions" => LoadGeneratorView::Impressions,
+            "clicks" => LoadGeneratorView::Clicks,
+            "leads" => LoadGeneratorView::Leads,
+            "coupons" => LoadGeneratorView::Coupons,
+            "conversion_predictions" => LoadGeneratorView::ConversionPredictions,
+            "supplier" => LoadGeneratorView::Supplier,
+            "part" => LoadGeneratorView::Part,
+            "partsupp" => LoadGeneratorView::Partsupp,
+            "customer" => LoadGeneratorView::Customer,
+            "orders" => LoadGeneratorView::Orders,
+            "lineitem" => LoadGeneratorView::Lineitem,
+            "nation" => LoadGeneratorView::Nation,
+            "region" => LoadGeneratorView::Region,
+            _ => panic!("unexpected load generator output name: {}", s),
+        }
+    }
+}
+
+impl RustType<ProtoLoadGeneratorOutput> for LoadGeneratorView {
+    fn into_proto(&self) -> ProtoLoadGeneratorOutput {
+        match self {
+            LoadGeneratorView::Default => ProtoLoadGeneratorOutput::Default,
+            LoadGeneratorView::Organizations => ProtoLoadGeneratorOutput::Organizations,
+            LoadGeneratorView::Users => ProtoLoadGeneratorOutput::Users,
+            LoadGeneratorView::Accounts => ProtoLoadGeneratorOutput::Accounts,
+            LoadGeneratorView::Auctions => ProtoLoadGeneratorOutput::Auctions,
+            LoadGeneratorView::Bids => ProtoLoadGeneratorOutput::Bids,
+            LoadGeneratorView::Customers => ProtoLoadGeneratorOutput::Customers,
+            LoadGeneratorView::Impressions => ProtoLoadGeneratorOutput::Impressions,
+            LoadGeneratorView::Clicks => ProtoLoadGeneratorOutput::Clicks,
+            LoadGeneratorView::Leads => ProtoLoadGeneratorOutput::Leads,
+            LoadGeneratorView::Coupons => ProtoLoadGeneratorOutput::Coupons,
+            LoadGeneratorView::ConversionPredictions => {
+                ProtoLoadGeneratorOutput::ConversionPredictions
+            }
+            LoadGeneratorView::Supplier => ProtoLoadGeneratorOutput::Supplier,
+            LoadGeneratorView::Part => ProtoLoadGeneratorOutput::Part,
+            LoadGeneratorView::Partsupp => ProtoLoadGeneratorOutput::Partsupp,
+            LoadGeneratorView::Customer => ProtoLoadGeneratorOutput::Customer,
+            LoadGeneratorView::Orders => ProtoLoadGeneratorOutput::Orders,
+            LoadGeneratorView::Lineitem => ProtoLoadGeneratorOutput::Lineitem,
+            LoadGeneratorView::Nation => ProtoLoadGeneratorOutput::Nation,
+            LoadGeneratorView::Region => ProtoLoadGeneratorOutput::Region,
+        }
+    }
+
+    fn from_proto(proto: ProtoLoadGeneratorOutput) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            ProtoLoadGeneratorOutput::Default => LoadGeneratorView::Default,
+            ProtoLoadGeneratorOutput::Organizations => LoadGeneratorView::Organizations,
+            ProtoLoadGeneratorOutput::Users => LoadGeneratorView::Users,
+            ProtoLoadGeneratorOutput::Accounts => LoadGeneratorView::Accounts,
+            ProtoLoadGeneratorOutput::Auctions => LoadGeneratorView::Auctions,
+            ProtoLoadGeneratorOutput::Bids => LoadGeneratorView::Bids,
+            ProtoLoadGeneratorOutput::Customers => LoadGeneratorView::Customers,
+            ProtoLoadGeneratorOutput::Impressions => LoadGeneratorView::Impressions,
+            ProtoLoadGeneratorOutput::Clicks => LoadGeneratorView::Clicks,
+            ProtoLoadGeneratorOutput::Leads => LoadGeneratorView::Leads,
+            ProtoLoadGeneratorOutput::Coupons => LoadGeneratorView::Coupons,
+            ProtoLoadGeneratorOutput::ConversionPredictions => {
+                LoadGeneratorView::ConversionPredictions
+            }
+            ProtoLoadGeneratorOutput::Supplier => LoadGeneratorView::Supplier,
+            ProtoLoadGeneratorOutput::Part => LoadGeneratorView::Part,
+            ProtoLoadGeneratorOutput::Partsupp => LoadGeneratorView::Partsupp,
+            ProtoLoadGeneratorOutput::Customer => LoadGeneratorView::Customer,
+            ProtoLoadGeneratorOutput::Orders => LoadGeneratorView::Orders,
+            ProtoLoadGeneratorOutput::Lineitem => LoadGeneratorView::Lineitem,
+            ProtoLoadGeneratorOutput::Nation => LoadGeneratorView::Nation,
+            ProtoLoadGeneratorOutput::Region => LoadGeneratorView::Region,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct LoadGeneratorSourceExportDetails {
+    pub output: LoadGeneratorView,
+}
+
+impl RustType<ProtoLoadGeneratorSourceExportDetails> for LoadGeneratorSourceExportDetails {
+    fn into_proto(&self) -> ProtoLoadGeneratorSourceExportDetails {
+        ProtoLoadGeneratorSourceExportDetails {
+            output: self.output.into_proto().into(),
+        }
+    }
+
+    fn from_proto(proto: ProtoLoadGeneratorSourceExportDetails) -> Result<Self, TryFromProtoError> {
+        Ok(LoadGeneratorSourceExportDetails {
+            output: ProtoLoadGeneratorOutput::try_from(proto.output)
+                .map_err(|_| TryFromProtoError::unknown_enum_variant("ProtoLoadGeneratorOutput"))?
+                .into_rust()?,
+        })
+    }
+}
+
+impl AlterCompatible for LoadGeneratorSourceExportDetails {
+    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self.output != other.output {
+            tracing::warn!(
+                "LoadGeneratorSourceExportDetails incompatible at output:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            return Err(AlterError { id });
+        }
+        Ok(())
+    }
+}
+
 pub trait Generator {
     /// Returns a function that produces rows and batch information.
     fn by_seed(
@@ -426,7 +583,7 @@ pub trait Generator {
         now: NowFn,
         seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>>;
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorView, Event<Option<MzOffset>, (Row, i64)>)>>;
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
