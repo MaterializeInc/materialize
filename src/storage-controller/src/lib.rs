@@ -685,6 +685,7 @@ where
                 // as far the dependent's upper.
                 mz_ore::soft_assert_or_log!(
                     write_frontier.elements() == &[T::minimum()]
+                        || write_frontier.is_empty()
                         || PartialOrder::less_than(&dependency_since, write_frontier),
                     "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
