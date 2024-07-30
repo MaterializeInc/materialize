@@ -413,3 +413,67 @@ mv_wmr_stuck hydrated_test_4 false
 mv_wmr       hydrated_test_4 true
 mv_wmr_const hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
+
+> DROP MATERIALIZED VIEW mv_wmr
+> DROP MATERIALIZED VIEW mv_wmr_const
+> DROP MATERIALIZED VIEW mv_wmr_stuck
+
+# Test that incorrectly configured sinks do _not_ show as hydrated.
+
+> CREATE TABLE schema1 (a int)
+> CREATE TABLE schema2 (a text)
+
+> CREATE SINK snk_schema1
+  IN CLUSTER test
+  FROM schema1
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk_schema1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> SELECT s.name, h.hydrated
+  FROM mz_sinks s
+  JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+snk_schema1 true
+
+> CREATE SINK snk_schema2
+  IN CLUSTER test
+  FROM schema2
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk_schema1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+# If we have a bug, the sink's hydration status might toggle between `false`
+# and `true`, rather than always being `true`. Using retries might therefore
+# cause this test to pass even if it shouldn't. We instead disable retries and
+# manually check the hydration status a couple times.
+$ set-max-tries max-tries=1
+
+> SELECT s.name, h.hydrated
+  FROM mz_sinks s
+  JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+snk_schema1 true
+snk_schema2 false
+
+> SELECT s.name, h.hydrated
+  FROM mz_sinks s
+  JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+snk_schema1 true
+snk_schema2 false
+
+> SELECT s.name, h.hydrated
+  FROM mz_sinks s
+  JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+snk_schema1 true
+snk_schema2 false
+
+> SELECT s.name, h.hydrated
+  FROM mz_sinks s
+  JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+snk_schema1 true
+snk_schema2 false
+
+> SELECT s.name, h.hydrated
+  FROM mz_sinks s
+  JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+snk_schema1 true
+snk_schema2 false
