@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 
 from materialize import buildkite, git
 from materialize.buildkite import BuildkiteEnvVar
@@ -91,6 +92,9 @@ class BuildDataStorage(BaseDataStorage):
             BuildkiteEnvVar.BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE
         )
 
+        start_time_with_tz = os.getenv("STEP_START_TIMESTAMP_WITH_TZ")
+        assert start_time_with_tz is not None, "STEP_START_TIMESTAMP_WITH_TZ is not set"
+
         sql_statements = []
         sql_statements.append(
             f"""
@@ -102,6 +106,8 @@ class BuildDataStorage(BaseDataStorage):
                 build_step_key,
                 shard_index,
                 retry_count,
+                start_time,
+                end_time,
                 insert_date,
                 is_latest_retry,
                 success,
@@ -114,6 +120,8 @@ class BuildDataStorage(BaseDataStorage):
               '{step_key}',
               {shard_index},
               {retry_count},
+              '{start_time_with_tz}'::TIMESTAMPTZ,
+              now(),
               now(),
               TRUE,
               {was_successful},

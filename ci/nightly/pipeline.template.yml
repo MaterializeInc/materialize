@@ -1510,16 +1510,6 @@ steps:
     agents:
       queue: linux-aarch64
 
-  - id: 0dt
-    label: Zero downtime
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: 0dt
-    agents:
-      queue: linux-aarch64
-
   - group: "Copy To S3"
     key: copy-to-s3
     steps:

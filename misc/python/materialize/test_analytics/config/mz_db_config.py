@@ -18,8 +18,11 @@ class MzDbConfig:
 
     database: str
     search_path: str
+    cluster: str
 
     port: int = 6875
+
+    default_statement_timeout: str = "60s"
 
     enabled: bool = True
 

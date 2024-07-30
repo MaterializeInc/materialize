@@ -78,14 +78,14 @@ class DatabaseConnector:
             )
         except Exception:
             print(
-                f"Failed to connect to {self.config.hostname} on port {self.config.port}"
+                f"Failed to connect to host '{self.config.hostname}' on port {self.config.port}"
             )
             raise
 
         connection.autocommit = autocommit
         connection.run(f"SET database = {self.config.database}")
         connection.run(f"SET search_path = {self.config.search_path}")
-        connection.run("SET cluster = 'test_analytics'")
+        connection.run(f"SET cluster = '{self.config.cluster}'")
         connection.run("SET transaction_isolation = serializable")
 
         return connection
@@ -95,8 +95,10 @@ class DatabaseConnector:
         connection: Connection | None = None,
         autocommit: bool = False,
         allow_reusing_connection: bool = False,
-        statement_timeout: str = "60s",
+        statement_timeout: str | None = None,
     ) -> Cursor:
+        statement_timeout = statement_timeout or self.config.default_statement_timeout
+
         if connection is None:
             if allow_reusing_connection:
                 connection = self.get_or_create_connection(autocommit=autocommit)

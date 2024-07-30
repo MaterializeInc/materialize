@@ -628,6 +628,7 @@ mz_recent_activity_log_thinned
 mz_recent_activity_log_redacted
 mz_recent_sql_text
 mz_recent_sql_text_redacted
+mz_recent_storage_usage
 mz_show_all_my_privileges
 mz_show_all_privileges
 mz_show_cluster_privileges
@@ -759,7 +760,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-194
+195
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

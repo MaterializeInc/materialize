@@ -90,7 +90,10 @@ rust_doc_test(
 
 filegroup(
 	name = "all_protos",
-	srcs = ["src/persist.proto"],
+	srcs = [
+		"src/persist.proto",
+		"//src/persist-types:all_protos",
+	],
 )
 
 cargo_build_script(

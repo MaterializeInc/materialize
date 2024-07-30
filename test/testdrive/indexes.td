@@ -312,6 +312,7 @@ mz_object_transitive_dependencies_ind                       mz_object_transitive
 mz_notices_ind                                              mz_notices                                   mz_catalog_server    {id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_catalog_server    {worker_id,type,duration_ns}
 mz_recent_activity_log_thinned_ind                          mz_recent_activity_log_thinned               mz_catalog_server    {sql_hash}
+mz_recent_storage_usage_ind                                 mz_recent_storage_usage                      mz_catalog_server    {object_id}
 mz_roles_ind                                                mz_roles                                     mz_catalog_server    {id}
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_catalog_server    {id,worker_id}
 mz_scheduling_parks_histogram_raw_s2_primary_idx            mz_scheduling_parks_histogram_raw            mz_catalog_server    {worker_id,slept_for_ns,requested_ns}

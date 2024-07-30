@@ -59,6 +59,7 @@ def speaker(prefix: str) -> Callable[..., None]:
 
 
 header = speaker("==> ")
+section = speaker("--- ")
 say = speaker("")
 
 

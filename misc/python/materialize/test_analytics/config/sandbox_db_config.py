@@ -22,6 +22,7 @@ def create_local_dev_config_for_sandbox() -> MzDbConfig:
 
     database = "test_analytics_playground"
     search_path = "public"
+    cluster = "test_analytics"
 
     return MzDbConfig(
         hostname=hostname,
@@ -29,6 +30,7 @@ def create_local_dev_config_for_sandbox() -> MzDbConfig:
         app_password=app_password,
         database=database,
         search_path=search_path,
+        cluster=cluster,
         enabled=True,
         application_name="sandbox",
     )

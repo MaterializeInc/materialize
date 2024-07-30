@@ -14,10 +14,16 @@
 
 OUTPUT=$(exec "$(dirname "$0")"/ci-builder run stable "$(dirname "$0")"/mzcompose --mz-quiet --find get-cloud-hostname run default --app-password-env-var "PRODUCTION_ANALYTICS_APP_PASSWORD")
 
-# Discard all but the last two lines, previous content can be retries when docker pull has problems
-OUTPUT=$(echo "$OUTPUT" | tail -n 2)
+# shellcheck disable=SC2181
+if [ $? -eq 0 ]; then
+  # Discard all but the last two lines, previous content can be retries when docker pull has problems
+  OUTPUT=$(echo "$OUTPUT" | tail -n 2)
 
-# keep only the remaining first line because there is a further line containing the mzcompose result summary
-HOSTNAME=$(echo "$OUTPUT" | head -n 1)
+  # keep only the remaining first line because there is a further line containing the mzcompose result summary
+  HOSTNAME=$(echo "$OUTPUT" | head -n 1)
+else
+  echo "Failed to get cloud hostname, using fallback value"
+  HOSTNAME="7vifiksqeftxc6ld3r6zvc8n2.lb.us-east-1.aws.materialize.cloud"
+fi
 
 exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_annotate_errors --cloud-hostname "$HOSTNAME" "$@"

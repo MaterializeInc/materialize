@@ -1687,9 +1687,13 @@ mod tests {
             let bytes = proto.encode_to_vec();
             let proto = mz_persist_types::arrow::ProtoArrayData::decode(&bytes[..]).unwrap();
             let array_data: ArrayData = proto.into_rust().unwrap();
-            let col_rnd = StructArray::from(array_data);
 
+            let col_rnd = StructArray::from(array_data.clone());
             assert_eq!(col, col_rnd);
+
+            let col_dyn = arrow::array::make_array(array_data);
+            let col_dyn = col_dyn.as_any().downcast_ref::<StructArray>().unwrap();
+            assert_eq!(&col, col_dyn);
         }
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col.clone()).unwrap();

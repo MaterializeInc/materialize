@@ -18,6 +18,8 @@ syntax = "proto3";
 
 package mz_persist.gen.persist;
 
+import "persist-types/src/arrow.proto";
+
 message ProtoU64Antichain {
     repeated uint64 elements = 1;
 }
@@ -93,4 +95,7 @@ message ProtoColumnarRecords {
     bytes val_data = 5;
     repeated int64 timestamps = 6;
     repeated int64 diffs = 7;
+
+    mz_persist_types.arrow.ProtoArrayData key_structured = 8;
+    mz_persist_types.arrow.ProtoArrayData val_structured = 9;
 }

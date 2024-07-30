@@ -19,8 +19,8 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # Run the majority of this test on its own cluster to ensure it doesn't
 # interfere with any other tests.
-> CREATE CLUSTER arrangement_sharing REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
-> SET cluster TO arrangement_sharing
+> CREATE CLUSTER distinct_arrangements REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
+> SET cluster TO distinct_arrangements
 > SET cluster_replica = r1
 
 # from attributes/mir_unique_keys.slt
@@ -575,7 +575,7 @@ ArrangeBy[[]]
 ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
-> SET cluster=arrangement_sharing
+> SET cluster=distinct_arrangements
 > DROP CLUSTER linear_join CASCADE
 
 # from negative-multiplicities.td
@@ -710,13 +710,13 @@ ReduceMinsMaxes
   WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
   GROUP BY mdod.name
   ORDER BY mdod.name;
-"AccumulableErrorCheck"                       8
+"AccumulableErrorCheck"                       9
 "Arrange export iterative err"                1
 "Arrange export iterative"                    1
 "Arrange recursive err"                       1
 "Arrange ReduceCollation"                     1
-"Arrange ReduceMinsMaxes"                     1
-"ArrangeAccumulable [val: empty]"             8
+"Arrange ReduceMinsMaxes"                     2
+"ArrangeAccumulable [val: empty]"             9
 "ArrangeBy[[Column(0), CallUnary { func: Lower(Lower), expr: Column(1) }]]" 1
 "ArrangeBy[[Column(0), CallUnary { func: Lower(Lower), expr: Column(2) }]]" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10), Column(11), Column(12), Column(13), Column(14), Column(15), Column(16), Column(17), Column(18), Column(19), Column(20), Column(21), Column(22), Column(23), Column(24), Column(25), Column(26), Column(27)]]" 2
@@ -726,13 +726,14 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5)]]-errors" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]-errors" 1
-"ArrangeBy[[Column(0), Column(2)]]"           1
-"ArrangeBy[[Column(0)]]-errors"              25
-"ArrangeBy[[Column(0)]]"                     80
+"ArrangeBy[[Column(0), Column(2)]]"           2
+"ArrangeBy[[Column(1), Column(2)]]"           1
+"ArrangeBy[[Column(0)]]-errors"              26
+"ArrangeBy[[Column(0)]]"                     81
 "ArrangeBy[[Column(1), Column(3)]]"           1
 "ArrangeBy[[Column(1)]]-errors"               6
 ArrangeBy[[Column(13)]]                       1
-"ArrangeBy[[Column(1)]]"                     16
+"ArrangeBy[[Column(1)]]"                     17
 "ArrangeBy[[Column(2)]]-errors"               9
 "ArrangeBy[[Column(2)]]"                     20
 "ArrangeBy[[Column(3)]]"                      3
@@ -746,28 +747,28 @@ ArrangeBy[[Column(13)]]                       1
 "ArrangeBy[[Column(20)]]-errors"              1
 "ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
 "ArrangeBy[[]]"                               10
-"Arranged DistinctBy"                         21
-"Arranged MinsMaxesHierarchical input"        7
+"Arranged DistinctBy"                         22
+"Arranged MinsMaxesHierarchical input"        14
 "Arranged ReduceInaccumulable"                1
 "Arranged TopK input"                        16
 "Distinct recursive err"                      1
-"DistinctBy"                                  21
-"DistinctByErrorCheck"                        21
-"ReduceAccumulable"                           8
+"DistinctBy"                                  22
+"DistinctByErrorCheck"                        22
+"ReduceAccumulable"                           9
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1
-"Reduced Fallibly MinsMaxesHierarchical"      7
+"Reduced Fallibly MinsMaxesHierarchical"     14
 "Reduced TopK input"                         16
 "ReduceInaccumulable Error Check"             1
 "ReduceInaccumulable"                         1
-"ReduceMinsMaxes"                             1
+"ReduceMinsMaxes"                             2
 "Threshold local"                             4
 
-> SET cluster TO arrangement_sharing
+> SET cluster TO distinct_arrangements
 
 # Check dataflows of our logging infrastructure with log_logging
-> ALTER CLUSTER arrangement_sharing SET (MANAGED = false);
-> CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+> ALTER CLUSTER distinct_arrangements SET (MANAGED = false);
+> CREATE CLUSTER REPLICA distinct_arrangements.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;
 
@@ -808,10 +809,10 @@ ALTER SYSTEM SET enable_introspection_subscribes = true
 
 # Flipping `enable_introspection_subscribes` affects new replicas, so force a
 # restart.
-> DROP CLUSTER REPLICA arrangement_sharing.replica
-> ALTER CLUSTER arrangement_sharing SET (MANAGED = true)
-> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 0)
-> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 1)
+> DROP CLUSTER REPLICA distinct_arrangements.replica
+> ALTER CLUSTER distinct_arrangements SET (MANAGED = true)
+> ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 0)
+> ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 1)
 > RESET cluster_replica
 
 > SELECT mdod.name, count(*)

@@ -1086,3 +1086,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16977  mz_compute_hydration_times_per_worker
 16978  mz_compute_hydration_times
 16979  mz_cluster_workload_classes
+16981  mz_recent_storage_usage
+16982  mz_recent_storage_usage_ind

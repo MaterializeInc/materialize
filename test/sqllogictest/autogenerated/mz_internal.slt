@@ -315,6 +315,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  table_name  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_recent_storage_usage' ORDER BY position
+----
+1  object_id  text
+2  size_bytes  uint8
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
 ----
 1  id  uuid
@@ -601,6 +607,7 @@ mz_recent_activity_log_redacted
 mz_recent_activity_log_thinned
 mz_recent_sql_text
 mz_recent_sql_text_redacted
+mz_recent_storage_usage
 mz_session_history
 mz_sessions
 mz_show_all_my_privileges

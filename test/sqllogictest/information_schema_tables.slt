@@ -429,6 +429,10 @@ mz_recent_sql_text_redacted
 VIEW
 materialize
 mz_internal
+mz_recent_storage_usage
+VIEW
+materialize
+mz_internal
 mz_session_history
 SOURCE
 materialize

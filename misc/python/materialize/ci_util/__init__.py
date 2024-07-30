@@ -47,7 +47,7 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
     """
     if not buildkite.is_in_buildkite():
         return
-    ui.header(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
+    ui.section(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
     suite = suite.upper().replace("-", "_")
     token = os.environ[f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}"]
     try:
@@ -81,7 +81,7 @@ def get_artifacts() -> Any:
     if not buildkite.is_in_buildkite():
         return []
 
-    ui.header("Getting artifact informations from Buildkite")
+    ui.section("Getting artifact informations from Buildkite")
     build = os.environ["BUILDKITE_BUILD_NUMBER"]
     build_id = os.environ["BUILDKITE_BUILD_ID"]
     job = os.environ["BUILDKITE_JOB_ID"]

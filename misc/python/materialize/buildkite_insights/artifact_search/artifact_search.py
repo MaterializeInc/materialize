@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import re
 from typing import Any
 
 from materialize.buildkite_insights.artifact_search.artifact_search_presentation import (
@@ -48,6 +49,7 @@ def main(
     fetch: FetchMode,
     max_results: int,
     use_regex: bool,
+    file_name_regex: str | None,
     include_zst_files: bool,
     search_logs_instead_of_artifacts: bool,
 ) -> None:
@@ -86,6 +88,7 @@ def main(
                 fetch=fetch,
                 max_results=max_results,
                 use_regex=use_regex,
+                file_name_regex=file_name_regex,
                 include_zst_files=include_zst_files,
                 build_step_name_by_job_id=build_step_name_by_job_id,
             )
@@ -113,6 +116,7 @@ def _search_artifacts(
     fetch: FetchMode,
     max_results: int,
     use_regex: bool,
+    file_name_regex: str | None,
     include_zst_files: bool,
     build_step_name_by_job_id: dict[str, str],
 ) -> tuple[int, int, set[str], bool]:
@@ -135,6 +139,7 @@ def _search_artifacts(
     max_search_results_hit = False
 
     for job_id, artifact_list in artifact_list_by_job_id.items():
+        artifact_list = _filter_artifact_list(artifact_list, file_name_regex)
         count_artifacts_of_job = len(artifact_list)
         build_step_name = build_step_name_by_job_id[job_id]
 
@@ -186,6 +191,22 @@ def _search_artifacts(
         ignored_file_names,
         max_search_results_hit,
     )
+
+
+def _filter_artifact_list(
+    artifact_list: list[Any], file_name_regex: str | None
+) -> list[Any]:
+    if file_name_regex is None:
+        return artifact_list
+
+    filtered_list = []
+
+    for artifact in artifact_list:
+        artifact_file_name = artifact["filename"]
+        if re.search(file_name_regex, artifact_file_name):
+            filtered_list.append(artifact)
+
+    return filtered_list
 
 
 def _search_logs(
@@ -330,6 +351,7 @@ if __name__ == "__main__":
         "--use-regex",
         action="store_true",
     )
+    parser.add_argument("--file-name-regex", type=str)
     parser.add_argument(
         "--include-zst-files", action=argparse.BooleanOptionalAction, default=True
     )
@@ -356,6 +378,7 @@ if __name__ == "__main__":
         args.fetch,
         args.max_results,
         args.use_regex,
+        args.file_name_regex,
         args.include_zst_files,
         args.search_logs_instead_of_artifacts,
     )

@@ -1,0 +1,25 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Ensure that querying `mz_recent_storage_usage` by ID is a point lookup.
+query T multiline
+EXPLAIN SELECT * FROM mz_internal.mz_recent_storage_usage WHERE object_id = 'just checking explain plan; this value does not matter'
+----
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=mz_internal.mz_recent_storage_usage mz_recent_storage_usage_ind=[lookup value=("just checking explain plan; this value does not matter")]
+
+Used Indexes:
+  - mz_internal.mz_recent_storage_usage_ind (lookup)
+
+Target cluster: mz_catalog_server
+
+EOF

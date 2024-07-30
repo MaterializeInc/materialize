@@ -13,10 +13,13 @@
 use std::fmt;
 use std::mem::size_of;
 
-use ::arrow::array::{Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array};
+use ::arrow::array::{
+    make_array, Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array,
+};
 use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
 use bytes::Bytes;
+use mz_persist_types::arrow::ProtoArrayData;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::gen::persist::ProtoColumnarRecords;
@@ -419,7 +422,15 @@ impl ColumnarRecordsBuilder {
 
 impl ColumnarRecords {
     /// See [RustType::into_proto].
-    pub fn into_proto(&self) -> ProtoColumnarRecords {
+    pub fn into_proto(
+        &self,
+        structured_ext: Option<ColumnarRecordsStructuredExt>,
+    ) -> ProtoColumnarRecords {
+        let (k_struct, v_struct) = match structured_ext.map(|x| x.into_proto()) {
+            None => (None, None),
+            Some((k, v)) => (Some(k), Some(v)),
+        };
+
         ProtoColumnarRecords {
             len: self.len.into_proto(),
             key_offsets: self.key_data.offsets().to_vec(),
@@ -428,6 +439,8 @@ impl ColumnarRecords {
             val_data: Bytes::copy_from_slice(self.val_data.value_data()),
             timestamps: self.timestamps.values().to_vec(),
             diffs: self.diffs.values().to_vec(),
+            key_structured: k_struct,
+            val_structured: v_struct,
         }
     }
 
@@ -435,7 +448,7 @@ impl ColumnarRecords {
     pub fn from_proto(
         lgbytes: &ColumnarMetrics,
         proto: ProtoColumnarRecords,
-    ) -> Result<Self, TryFromProtoError> {
+    ) -> Result<(Self, Option<ColumnarRecordsStructuredExt>), TryFromProtoError> {
         let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
             OffsetBuffer::new(offsets.into()),
             data.into(),
@@ -458,7 +471,10 @@ impl ColumnarRecords {
             .borrow()
             .validate()
             .map_err(TryFromProtoError::InvalidPersistState)?;
-        Ok(ret)
+        let ext =
+            ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
+
+        Ok((ret, ext))
     }
 }
 
@@ -489,6 +505,35 @@ pub struct ColumnarRecordsStructuredExt {
 impl PartialEq for ColumnarRecordsStructuredExt {
     fn eq(&self, other: &Self) -> bool {
         *self.key == *other.key && *self.val == *other.val
+    }
+}
+
+impl ColumnarRecordsStructuredExt {
+    /// See [`RustType::into_proto`].
+    pub fn into_proto(&self) -> (ProtoArrayData, ProtoArrayData) {
+        let key = self.key.to_data().into_proto();
+        let val = self.val.to_data().into_proto();
+
+        (key, val)
+    }
+
+    /// See [`RustType::from_proto`].
+    fn from_proto(
+        key: Option<ProtoArrayData>,
+        val: Option<ProtoArrayData>,
+    ) -> Result<Option<Self>, TryFromProtoError> {
+        let key = key.map(|d| d.into_rust()).transpose()?.map(make_array);
+        let val = val.map(|d| d.into_rust()).transpose()?.map(make_array);
+
+        let ext = match (key, val) {
+            (Some(key), Some(val)) => Some(ColumnarRecordsStructuredExt { key, val }),
+            x @ (Some(_), None) | x @ (None, Some(_)) => {
+                mz_ore::soft_panic_or_log!("found only one of key or val, {x:?}");
+                None
+            }
+            (None, None) => None,
+        };
+        Ok(ext)
     }
 }
 

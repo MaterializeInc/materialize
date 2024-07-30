@@ -3295,6 +3295,51 @@ GROUP BY object_id, collection_timestamp",
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_RECENT_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
+    name: "mz_recent_storage_usage",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECENT_STORAGE_USAGE_OID,
+    column_defs: Some("object_id, size_bytes"),
+    sql: "
+WITH
+
+recent_storage_usage_by_shard AS (
+    SELECT shard_id, size_bytes, collection_timestamp
+    FROM mz_internal.mz_storage_usage_by_shard
+    -- Restricting to the last 6 hours makes it feasible to index the view.
+    WHERE collection_timestamp + '6 hours' >= mz_now()
+),
+
+most_recent_collection_timestamp_by_shard AS (
+    SELECT shard_id, max(collection_timestamp) AS collection_timestamp
+    FROM recent_storage_usage_by_shard
+    GROUP BY shard_id
+)
+
+SELECT
+    object_id,
+    sum(size_bytes)::uint8
+FROM
+    mz_internal.mz_storage_shards
+    LEFT JOIN most_recent_collection_timestamp_by_shard
+        ON mz_storage_shards.shard_id = most_recent_collection_timestamp_by_shard.shard_id
+    LEFT JOIN recent_storage_usage_by_shard
+        ON mz_storage_shards.shard_id = recent_storage_usage_by_shard.shard_id
+        AND most_recent_collection_timestamp_by_shard.collection_timestamp = recent_storage_usage_by_shard.collection_timestamp
+GROUP BY object_id",
+    access: vec![PUBLIC_SELECT],
+}
+});
+
+pub static MZ_RECENT_STORAGE_USAGE_IND: Lazy<BuiltinIndex> = Lazy::new(|| BuiltinIndex {
+    name: "mz_recent_storage_usage_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_RECENT_STORAGE_USAGE_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_recent_storage_usage (object_id)",
+    is_retained_metrics_object: false,
+});
+
 pub static MZ_RELATIONS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
         name: "mz_relations",
@@ -6561,15 +6606,20 @@ sources AS (
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
+-- We don't yet report sink hydration status (#28459), so we do a best effort attempt here and
+-- define a sink as hydrated when it's both "running" and has a frontier greater than the minimum.
+-- There is likely still a possibility of FPs.
 sinks AS (
     SELECT
         s.id AS object_id,
         r.id AS replica_id,
-        ss.status = 'running' AS hydrated
+        ss.status = 'running' AND COALESCE(f.write_frontier, 0) > 0 AS hydrated
     FROM mz_catalog.mz_sinks s
     LEFT JOIN mz_internal.mz_sink_statuses ss USING (id)
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
+    LEFT JOIN mz_internal.mz_cluster_replica_frontiers f
+        ON (f.object_id = s.id AND f.replica_id = r.id)
 )
 SELECT * FROM indexes
 UNION ALL
@@ -7643,6 +7693,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_FRONTIERS_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
+        Builtin::View(&MZ_RECENT_STORAGE_USAGE),
+        Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
     ]);
 
     builtins.extend(notice::builtins());
