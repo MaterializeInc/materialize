@@ -1486,6 +1486,9 @@ where
         StorageError<Self::Timestamp>,
     > {
         if self.read_only {
+            // While in read only mode, ONLY system tables that are not registered with the
+            // transaction shard can be written to. These are shards that have been migrated and
+            // need to be re-hydrated in read only mode.
             if !commands.iter().all(|(id, _)| {
                 let collection = self
                     .collections

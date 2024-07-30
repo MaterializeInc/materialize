@@ -1408,10 +1408,13 @@ where
                 // shard to dataflow rendering.
                 let txns_shard = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites)
-                    // In read-only mode we cannot register migrated storage collections in the
-                    // txn-shard, so they must be excluded.
-                    if !(self.read_only && migrated_storage_collections.contains(&id)) =>
+                        if self.read_only && migrated_storage_collections.contains(&id) =>
                     {
+                        // In read-only mode we cannot register migrated storage collections in the
+                        // txn-shard, so they must be excluded.
+                        None
+                    }
+                    DataSource::Other(DataSourceOther::TableWrites) => {
                         Some(*self.txns_read.txns_id())
                     }
                     DataSource::Ingestion(_)
@@ -1419,7 +1422,6 @@ where
                     | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
-                    | DataSource::Other(DataSourceOther::TableWrites)
                     | DataSource::Other(DataSourceOther::Compute) => None,
                 };
 
