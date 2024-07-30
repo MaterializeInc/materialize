@@ -14,6 +14,7 @@ from textwrap import dedent
 
 from pg8000 import Cursor
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -34,7 +35,12 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    # Otherwise we are running all workflows
+    sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    for name in sharded_workflows:
         if name == "default":
             continue
 
