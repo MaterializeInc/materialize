@@ -27,26 +27,6 @@ _name_ | The configuration parameter's name.
 [_Superuser_ privileges](/manage/access-control/#account-management) are required to execute
 this statement.
 
-## Examples
-
-### Reset enable RBAC
-
-```mzsql
-SHOW enable_rbac_checks;
-
- enable_rbac_checks
--------------
- on
-
-RESET enable_rbac_checks;
-
-SHOW enable_rbac_checks;
-
- enable_rbac_checks
--------------
- off
-```
-
 ## Related pages
 
 - [`SHOW`](../show)
