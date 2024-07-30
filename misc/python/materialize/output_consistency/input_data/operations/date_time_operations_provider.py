@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from materialize.mz_version import MzVersion
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -171,6 +171,24 @@ DATE_TIME_OPERATION_TYPES.append(
         [ISO8601_TIMESTAMP_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
         is_pg_compatible=False,
+    )
+)
+
+DATE_TIME_OPERATION_TYPES.append(
+    DbFunction(
+        "sum",
+        [TimeIntervalOperationParam()],
+        DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        since_mz_version=MzVersion.parse_mz("v0.112.0"),
+    )
+)
+
+DATE_TIME_OPERATION_TYPES.append(
+    DbFunction(
+        "avg",
+        [TimeIntervalOperationParam()],
+        DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        since_mz_version=MzVersion.parse_mz("v0.112.0"),
     )
 )
 
