@@ -1548,6 +1548,16 @@ SELECT sum(f1) FROM A;
 ----
 11:22:33.1111
 
+query T
+SELECT avg(f1) FROM A;
+----
+02:50:38.277775
+
+query T
+SELECT avg(now() - now());
+----
+00:00:00
+
 # TODO
 # statement ok
 # INSERT INTO A VALUES ('178956970 years 7 months 2147483647 days 2562047788:00:54.775807'::INTERVAL);
