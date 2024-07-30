@@ -38,7 +38,9 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
+use crate::internal::state::{
+    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
+};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -343,6 +345,28 @@ impl StateVersions {
                 shard_metrics
                     .noncompact_batches
                     .set(spine_metrics.noncompact_batches);
+
+                let batch_parts_by_version = new_state
+                    .collections
+                    .trace
+                    .batches()
+                    .flat_map(|x| x.parts.iter())
+                    .flat_map(|x| match x {
+                        BatchPart::Hollow(x) => {
+                            // Carefully avoid any String allocs by splitting.
+                            let writer_key =
+                                x.key.0.split_once('/').map(|(writer_key, _)| writer_key);
+                            writer_key.and_then(|s| match &s[..1] {
+                                "w" => Some(("old", x.encoded_size_bytes)),
+                                "n" => Some((&s[1..], x.encoded_size_bytes)),
+                                _ => None,
+                            })
+                        }
+                        // TODO: Would be nice to include these too, but we lose the
+                        // info atm.
+                        BatchPart::Inline { .. } => None,
+                    });
+                shard_metrics.set_batch_part_versions(batch_parts_by_version);
 
                 Ok((CaSResult::Committed, new))
             }
