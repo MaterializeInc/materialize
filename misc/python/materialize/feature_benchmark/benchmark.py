@@ -19,7 +19,8 @@ from materialize.feature_benchmark.filter import Filter
 from materialize.feature_benchmark.measurement import (
     Measurement,
     MeasurementType,
-    WallclockMeasurement,
+    MeasurementUnit,
+    WallclockDuration,
 )
 from materialize.feature_benchmark.measurement_source import MeasurementSource
 from materialize.feature_benchmark.scenario import Scenario
@@ -124,7 +125,7 @@ class Benchmark:
                 f"Running the benchmark for scenario {name} with {self._mz_version} ..."
             )
             # Collect timestamps from any part of the workload being benchmarked
-            timestamps: list[WallclockMeasurement] = []
+            timestamps: list[WallclockDuration] = []
             benchmark = scenario.benchmark()
             for benchmark_item in (
                 benchmark if isinstance(benchmark, list) else [benchmark]
@@ -148,6 +149,7 @@ class Benchmark:
             performance_measurement = Measurement(
                 type=MeasurementType.WALLCLOCK,
                 value=timestamps[1].duration - timestamps[0].duration,
+                unit=timestamps[0].unit,
                 notes=f"Unit: {timestamps[0].unit}",
             )
 
@@ -158,7 +160,9 @@ class Benchmark:
             messages = self._executor.Messages()
             if messages is not None:
                 messages_measurement = Measurement(
-                    type=MeasurementType.MESSAGES, value=messages
+                    type=MeasurementType.MESSAGES,
+                    value=messages,
+                    unit=MeasurementUnit.COUNT,
                 )
                 print(f"{i}: {messages_measurement}")
                 self._messages_aggregation.append(messages_measurement)
@@ -167,6 +171,7 @@ class Benchmark:
                 memory_mz_measurement = Measurement(
                     type=MeasurementType.MEMORY_MZ,
                     value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
+                    unit=MeasurementUnit.MEGABYTE,
                 )
 
                 if memory_mz_measurement.value > 0:
@@ -180,6 +185,7 @@ class Benchmark:
                 memory_clusterd_measurement = Measurement(
                     type=MeasurementType.MEMORY_CLUSTERD,
                     value=self._executor.DockerMemClusterd() / 2**20,  # Convert to Mb
+                    unit=MeasurementUnit.MEGABYTE,
                 )
 
                 if memory_clusterd_measurement.value > 0:
@@ -219,17 +225,21 @@ class Report:
         output_lines = []
 
         output_lines.append(
-            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'Regression?':^13} | 'THIS' is:"
+            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'UNIT':^6} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is:"
         )
-        output_lines.append("-" * 100)
+        output_lines.append("-" * 150)
 
         for comparison in self._comparisons:
+            if not comparison.has_values():
+                continue
+
             if limit_to_scenario is not None and comparison.name != limit_to_scenario:
                 continue
 
             regression = "!!YES!!" if comparison.is_regression() else "no"
+            threshold = f"{(comparison.threshold * 100):.0f}%"
             output_lines.append(
-                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable(use_colors)}"
+                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.unit():^6} | {threshold:^10} | {regression:^13} | {comparison.human_readable(use_colors)}"
             )
 
         return "\n".join(output_lines)

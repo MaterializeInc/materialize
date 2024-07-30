@@ -13,14 +13,16 @@ from typing import Any
 
 import numpy as np
 
-from materialize.feature_benchmark.measurement import Measurement
+from materialize.feature_benchmark.measurement import Measurement, MeasurementUnit
 
 
 class Aggregation:
     def __init__(self) -> None:
         self._data: list[float] = []
+        self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
 
     def append(self, measurement: Measurement) -> None:
+        self._unit = measurement.unit
         self._data.append(measurement.value)
 
     def aggregate(self) -> Any:
@@ -28,6 +30,9 @@ class Aggregation:
             return None
         else:
             return self.func()([*self._data])
+
+    def unit(self) -> MeasurementUnit:
+        return self._unit
 
     def func(self) -> Callable:
         assert False

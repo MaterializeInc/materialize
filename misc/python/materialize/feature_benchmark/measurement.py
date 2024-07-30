@@ -13,17 +13,23 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 
-class WallclockUnit(Enum):
-    SECONDS = auto()
-    NANOSECONDS = auto()
+class MeasurementUnit(Enum):
+    UNKNOWN = "?"
+    SECONDS = "s"
+    NANOSECONDS = "ns"
+    COUNT = "#"
+    MEGABYTE = "MB"
+
+    def __str__(self):
+        return str(self.value)
 
 
 @dataclass
-class WallclockMeasurement:
+class WallclockDuration:
     duration: float
-    unit: WallclockUnit
+    unit: MeasurementUnit
 
-    def is_equal_or_after(self, other: WallclockMeasurement) -> bool:
+    def is_equal_or_after(self, other: WallclockDuration) -> bool:
         assert self.unit == other.unit
         return self.duration >= other.duration
 
@@ -37,11 +43,22 @@ class MeasurementType(Enum):
     def __str__(self) -> str:
         return self.name.lower()
 
+    def is_amount(self) -> bool:
+        return self in {
+            MeasurementType.MEMORY_MZ,
+            MeasurementType.MEMORY_CLUSTERD,
+            MeasurementType.MESSAGES,
+        }
+
+    def is_lower_value_better(self) -> bool:
+        return True
+
 
 @dataclass
 class Measurement:
     type: MeasurementType
     value: float
+    unit: MeasurementUnit
     notes: str | None = None
 
     def __str__(self) -> str:
