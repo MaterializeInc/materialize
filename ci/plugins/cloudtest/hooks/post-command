@@ -87,8 +87,14 @@ mapfile -t artifacts < <(printf "run.log\nkubectl-get-logs.log\nkubectl-get-logs
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 # Continue even if ci-annotate-errors fails
-bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}" > ci-annotate-errors.log || true
+CI_ANNOTATE_ERRORS_RESULT=0
+bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
 buildkite-agent artifact upload "$artifacts_str;ci-annotate-errors.log"
 
 # File should not be empty, see #25369
 test -s kubectl-get-logs-previous.log
+
+if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
+  echo "+++ ci-annotate-errors failed, which indicates that an unknown error was found"
+  exit "$CI_ANNOTATE_ERRORS_RESULT"
+fi
