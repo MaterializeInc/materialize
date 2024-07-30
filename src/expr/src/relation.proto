@@ -150,6 +150,7 @@ message ProtoAggregateFunc {
         ProtoMapAgg map_agg = 56;
         google.protobuf.Empty min_time = 66;
         google.protobuf.Empty max_time = 67;
+        google.protobuf.Empty sum_interval = 68;
     }
 }
 
