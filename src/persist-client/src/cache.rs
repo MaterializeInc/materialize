@@ -205,7 +205,7 @@ impl PersistClientCache {
                     x.key(),
                     Box::new(self.cfg.clone()),
                     self.metrics.s3_blob.clone(),
-                    self.cfg.configs.clone(),
+                    Arc::clone(&self.cfg.configs),
                 )
                 .await?;
                 let blob = retry_external(&self.metrics.retries.external.blob_open, || {

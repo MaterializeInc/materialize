@@ -138,7 +138,7 @@ impl Metrics {
         let columnar = ColumnarMetrics::new(
             registry,
             &s3_blob.lgbytes,
-            cfg.configs.clone(),
+            Arc::clone(&cfg.configs),
             cfg.is_cc_active,
         );
         Metrics {

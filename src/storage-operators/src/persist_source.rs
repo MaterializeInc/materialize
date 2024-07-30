@@ -193,7 +193,7 @@ where
         // Override the tuning to reduce crdb load. The pubsub fallback
         // responsibility is then replaced by manual "one state" wakeups in the
         // txns_progress operator.
-        let cfg = persist_clients.cfg().configs.clone();
+        let cfg = Arc::clone(&persist_clients.cfg().configs);
         let subscribe_sleep = match metadata.txns_shard {
             Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
             None => None,
