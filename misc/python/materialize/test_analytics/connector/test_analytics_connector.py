@@ -95,8 +95,10 @@ class DatabaseConnector:
         connection: Connection | None = None,
         autocommit: bool = False,
         allow_reusing_connection: bool = False,
-        statement_timeout: str = "60s",
+        statement_timeout: str | None = None,
     ) -> Cursor:
+        statement_timeout = statement_timeout or self.config.default_statement_timeout
+
         if connection is None:
             if allow_reusing_connection:
                 connection = self.get_or_create_connection(autocommit=autocommit)

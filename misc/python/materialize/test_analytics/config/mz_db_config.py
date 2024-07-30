@@ -22,6 +22,8 @@ class MzDbConfig:
 
     port: int = 6875
 
+    default_statement_timeout: str = "60s"
+
     enabled: bool = True
 
     def __post_init__(self):
