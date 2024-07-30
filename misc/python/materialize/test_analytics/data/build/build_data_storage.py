@@ -93,7 +93,13 @@ class BuildDataStorage(BaseDataStorage):
         )
 
         start_time_with_tz = os.getenv("STEP_START_TIMESTAMP_WITH_TZ")
-        assert start_time_with_tz is not None, "STEP_START_TIMESTAMP_WITH_TZ is not set"
+        if buildkite.is_in_buildkite():
+            assert (
+                start_time_with_tz is not None
+            ), "STEP_START_TIMESTAMP_WITH_TZ is not set"
+            start_time_with_tz = f"'{start_time_with_tz}'::TIMESTAMPTZ"
+        else:
+            start_time_with_tz = "NULL::TIMESTAMPTZ"
 
         sql_statements = []
         sql_statements.append(
@@ -120,7 +126,7 @@ class BuildDataStorage(BaseDataStorage):
               '{step_key}',
               {shard_index},
               {retry_count},
-              '{start_time_with_tz}'::TIMESTAMPTZ,
+              {start_time_with_tz},
               now(),
               now(),
               TRUE,
