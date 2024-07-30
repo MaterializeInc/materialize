@@ -872,7 +872,7 @@ where
                     // aware of read-only mode and will not attempt to write before told
                     // to do so.
                     //
-                    self.register_introspection_collection(id, *i)
+                    self.register_introspection_collection(id, *i, migrated_storage_collections)
                         .await?;
 
                 }
@@ -882,7 +882,7 @@ where
                     // NOTE: Maybe this shouldn't be in the collection manager,
                     // and collection manager should only be responsble for
                     // built-in introspection collections?
-                    self.collection_manager.register_append_only_collection(id);
+                    self.collection_manager.register_append_only_collection(id, None);
                 }
                 DataSource::Progress | DataSource::Other(_) => {}
             };
@@ -2730,13 +2730,14 @@ where
     }
 
     /// Registers the given introspection collection and does any preparatory
-    /// work that we have to to do before we start writing to it. This
+    /// work that we have to do before we start writing to it. This
     /// preparatory work will include partial truncation or other cleanup
     /// schemes, depending on introspection type.
     async fn register_introspection_collection(
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
@@ -2807,8 +2808,11 @@ where
             | IntrospectionType::ReplicaFrontiers
             | IntrospectionType::StorageSourceStatistics
             | IntrospectionType::StorageSinkStatistics => {
-                self.collection_manager
-                    .register_differential_collection(id, read_handle_fn);
+                self.collection_manager.register_differential_collection(
+                    id,
+                    read_handle_fn,
+                    migrated_storage_collections,
+                );
 
                 if !self.read_only {
                     self.prepare_introspection_collection(id, introspection_type)
@@ -2831,7 +2835,8 @@ where
                         .await?;
                 }
 
-                self.collection_manager.register_append_only_collection(id);
+                self.collection_manager
+                    .register_append_only_collection(id, Some(migrated_storage_collections));
             }
 
             // Same as our other differential collections, but for these the
@@ -2841,8 +2846,11 @@ where
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
             | IntrospectionType::ComputeHydrationTimes => {
-                self.collection_manager
-                    .register_differential_collection(id, read_handle_fn);
+                self.collection_manager.register_differential_collection(
+                    id,
+                    read_handle_fn,
+                    migrated_storage_collections,
+                );
 
                 if !self.read_only {
                     self.prepare_introspection_collection(id, introspection_type)
@@ -2862,7 +2870,8 @@ where
                         .await?;
                 }
 
-                self.collection_manager.register_append_only_collection(id);
+                self.collection_manager
+                    .register_append_only_collection(id, Some(migrated_storage_collections));
             }
         }
 

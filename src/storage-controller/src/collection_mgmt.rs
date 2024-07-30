@@ -57,7 +57,7 @@
 //! [`MonotonicAppender`] returned from
 //! [`CollectionManager::monotonic_appender`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -201,8 +201,12 @@ where
     ///
     /// Update the `desired` state of a differential collection using
     /// [Self::differential_write].
-    pub(super) fn register_differential_collection<'a, R>(&self, id: GlobalId, read_handle_fn: R)
-    where
+    pub(super) fn register_differential_collection<'a, R>(
+        &self,
+        id: GlobalId,
+        read_handle_fn: R,
+        migrated_storage_collections: &BTreeSet<GlobalId>,
+    ) where
         R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
             + Send
             + 'static,
@@ -222,12 +226,25 @@ where
             }
         }
 
+        let read_only_rx =
+            if *self.read_only_rx.borrow() && migrated_storage_collections.contains(&id) {
+                // In read-only mode we create a new shard for all migrated storage collections. So we
+                // "trick" the write task into thinking that it's not in read-only mode so something is
+                // advancing this new shard.
+                assert!(id.is_system(), "unexpected non-system global id: {id:?}");
+                info!("writing to migrated differential collection {id} in read-only mode");
+                let (_, rx) = watch::channel(false);
+                rx
+            } else {
+                self.read_only_rx.clone()
+            };
+
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = DifferentialWriteTask::spawn(
             id,
             self.write_handle.clone(),
             read_handle_fn,
-            self.read_only_rx.clone(),
+            read_only_rx,
             self.now.clone(),
         );
         let prev = guard.insert(id, writer_and_handle);
@@ -245,7 +262,13 @@ where
     ///
     /// The [CollectionManager] will automatically advance the upper of every
     /// registered collection every second.
-    pub(super) fn register_append_only_collection(&self, id: GlobalId) {
+    ///
+    /// `migrated_storage_collections` should be `Some` for builtin introspection sources.
+    pub(super) fn register_append_only_collection(
+        &self,
+        id: GlobalId,
+        migrated_storage_collections: Option<&BTreeSet<GlobalId>>,
+    ) {
         let mut guard = self
             .append_only_collections
             .lock()
@@ -261,13 +284,30 @@ where
             }
         }
 
+        let read_only_rx = if let Some(migrated_storage_collections) = migrated_storage_collections
+        {
+            if *self.read_only_rx.borrow() && migrated_storage_collections.contains(&id) {
+                // In read-only mode we create a new shard for all migrated storage collections. So we
+                // "trick" the write task into thinking that it's not in read-only mode so something is
+                // advancing this new shard.
+                assert!(id.is_system(), "unexpected non-system global id: {id:?}");
+                info!("writing to migrated append only collection {id} in read-only mode");
+                let (_, rx) = watch::channel(false);
+                rx
+            } else {
+                self.read_only_rx.clone()
+            }
+        } else {
+            self.read_only_rx.clone()
+        };
+
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = append_only_write_task(
             id,
             self.write_handle.clone(),
             Arc::clone(&self.user_batch_duration_ms),
             self.now.clone(),
-            self.read_only_rx.clone(),
+            read_only_rx,
         );
         let prev = guard.insert(id, writer_and_handle);
 
