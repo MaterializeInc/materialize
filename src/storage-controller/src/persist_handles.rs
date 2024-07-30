@@ -53,8 +53,10 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Update {
         /// Table to update.
         table_id: GlobalId,
-        /// Timestamp to apply the update at.
-        update_ts: T,
+        /// Timestamp to forget the original handle at.
+        forget_ts: T,
+        /// Timestamp to register the new handle at.
+        register_ts: T,
         /// New write handle to register.
         handle: WriteHandle<SourceData, (), T, Diff>,
         /// Notifies us when the handle has been updated.
@@ -192,13 +194,15 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     pub(crate) fn update(
         &self,
         table_id: GlobalId,
-        update_ts: T,
+        forget_ts: T,
+        register_ts: T,
         handle: WriteHandle<SourceData, (), T, Diff>,
     ) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
         self.send(PersistTableWriteCmd::Update {
             table_id,
-            update_ts,
+            forget_ts,
+            register_ts,
             handle,
             tx,
         });
@@ -264,14 +268,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 }
                 PersistTableWriteCmd::Update {
                     table_id,
-                    update_ts,
+                    forget_ts,
+                    register_ts,
                     handle,
                     tx,
                 } => {
                     async {
-                        let forget_ts = update_ts;
-                        let register_ts = mz_persist_types::StepForward::step_forward(&forget_ts);
-
                         self.drop_handles(vec![table_id], forget_ts).await;
                         self.register(register_ts, vec![(table_id, handle)]).await;
                     }

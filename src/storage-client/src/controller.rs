@@ -471,7 +471,8 @@ pub trait StorageController: Debug {
         &mut self,
         table_id: GlobalId,
         new_desc: RelationDesc,
-        update_ts: Self::Timestamp,
+        forget_ts: Self::Timestamp,
+        register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.

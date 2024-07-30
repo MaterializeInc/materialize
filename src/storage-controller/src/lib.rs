@@ -1037,7 +1037,8 @@ where
         &mut self,
         table_id: GlobalId,
         new_desc: RelationDesc,
-        update_ts: Self::Timestamp,
+        forget_ts: Self::Timestamp,
+        register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         let shard_id = {
             let Controller {
@@ -1083,7 +1084,7 @@ where
             .await;
 
         self.persist_table_worker
-            .update(table_id, update_ts, write_handle);
+            .update(table_id, forget_ts, register_ts, write_handle);
 
         Ok(())
     }
