@@ -11,6 +11,7 @@ use std::env;
 
 fn main() {
     env::set_var("PROTOC", mz_build_tools::protoc());
+    env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
 
     prost_build::Config::new()
         .btree_map(["."])
@@ -19,6 +20,7 @@ fn main() {
             "#[derive(serde::Serialize)]",
         )
         .bytes([".mz_persist.gen.persist.ProtoColumnarRecords"])
+        .extern_path(".mz_persist_types.arrow", "::mz_persist_types::arrow")
         .compile_protos(&["persist/src/persist.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }
