@@ -2687,7 +2687,24 @@ impl Coordinator {
             panic!("bootstrapping only supports indexes and materialized views");
         };
 
-        let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
+        let as_of = if self.controller.read_only() {
+            // Choose something that is most likely to make dependent dataflows
+            // hydrate. But this will likely make it so that reconciliation
+            // cannot re-use already-running dataflows.
+            //
+            // The latter is fine, though, because in read-only mode we're
+            // likely bringing up new cluster processes anyways.
+            //
+            // NOTE: This is working around a quirk in how we normally select
+            // as_ofs for dataflows: we don't take dependent dataflows into
+            // account when bounding the as_of, so it can happen that we end up
+            // in a situation where a downstream dataflow cannot hydrate even
+            // though it's transitive storage collection dependencies would have
+            // the data at the as_of that is required. This is a band-aid
+            // solution until we have
+            // https://github.com/MaterializeInc/materialize/issues/28440
+            min_as_of.clone()
+        } else if PartialOrder::less_equal(&min_as_of, &max_as_of) {
             // Determine the `as_of` by bounding the candidate from below and above by the
             // correctness constraints `min_as_of` and `max_as_of`, respectively.
             candidate_as_of.join(&min_as_of).meet(&max_as_of)
