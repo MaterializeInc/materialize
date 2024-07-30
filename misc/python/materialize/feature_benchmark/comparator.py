@@ -111,7 +111,7 @@ class RelativeThresholdComparator(Comparator[float | None]):
 
         ratio = self.ratio()
         if ratio is None:
-            return "N/A"
+            return "     N/A"
         if ratio >= 2:
             return with_conditional_formatting(
                 f"{ratio:4.1f} TIMES {deterioration}", COLOR_BAD, condition=use_colors
@@ -123,7 +123,7 @@ class RelativeThresholdComparator(Comparator[float | None]):
                 condition=use_colors,
             )
         elif ratio == 1:
-            return "          same"
+            return "           same"
         elif ratio > 0.5:
             return with_conditional_formatting(
                 f"{(1-ratio)*100:4.1f} pct   {improvement}",

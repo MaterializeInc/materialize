@@ -227,15 +227,16 @@ class Report:
         output_lines.append(
             f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'UNIT':^6} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is:"
         )
-        output_lines.append("-" * 142)
+        output_lines.append("-" * 150)
 
         for comparison in self._comparisons:
             if limit_to_scenario is not None and comparison.name != limit_to_scenario:
                 continue
 
             regression = "!!YES!!" if comparison.is_regression() else "no"
+            threshold = f"{(comparison.threshold * 100):.0f}%"
             output_lines.append(
-                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.unit():^6} | {comparison.threshold * 100:^10.0f}% | {regression:^13} | {comparison.human_readable(use_colors)}"
+                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.unit():^6} | {threshold:^10} | {regression:^13} | {comparison.human_readable(use_colors)}"
             )
 
         return "\n".join(output_lines)
