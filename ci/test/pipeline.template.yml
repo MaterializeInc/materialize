@@ -51,6 +51,11 @@ steps:
       - id: build-x86_64-bazel
         label: ":bazel: Build x86_64"
         command: bin/ci-builder run stable bin/bazel-temp
+        inputs:
+          - "*"
+          - "WORKSPACE"
+          - ".bazelrc"
+          - "**/*.bzl"
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -59,6 +64,11 @@ steps:
       - id: build-aarch64-bazel
         label: ":bazel: Build aarch64"
         command: bin/ci-builder run stable bin/bazel-temp
+        inputs:
+          - "*"
+          - "WORKSPACE"
+          - ".bazelrc"
+          - "**/*.bzl"
         depends_on: []
         timeout_in_minutes: 60
         agents:
