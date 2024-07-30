@@ -507,10 +507,18 @@ async fn read_only_mode_table_worker<T: Timestamp + Lattice + Codec64 + Timestam
                     // We don't care if our waiter has gone away.
                     let _ = tx.send(());
                 }
-                PersistTableWriteCmd::Update(id, write_handle) => {
-                    write_handles.insert(id, write_handle).expect(
+                PersistTableWriteCmd::Update {
+                    table_id,
+                    handle,
+                    forget_ts: _,
+                    register_ts: _,
+                    tx,
+                } => {
+                    write_handles.insert(table_id, handle).expect(
                         "PersistTableWriteCmd::Update only valid for updating extant write handles",
                     );
+                    // We don't care if our waiter has gone away.
+                    let _ = tx.send(());
                 }
                 PersistTableWriteCmd::DropHandles {
                     forget_ts: _,
