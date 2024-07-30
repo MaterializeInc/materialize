@@ -230,6 +230,9 @@ class Report:
         output_lines.append("-" * 150)
 
         for comparison in self._comparisons:
+            if not comparison.has_values():
+                continue
+
             if limit_to_scenario is not None and comparison.name != limit_to_scenario:
                 continue
 

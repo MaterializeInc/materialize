@@ -59,6 +59,9 @@ class Comparator(Generic[T]):
         assert self._unit is not None
         return self._unit
 
+    def has_values(self) -> bool:
+        return self.this() is not None or self.other() is not None
+
     def set_scenario_version(self, version: ScenarioVersion):
         self.version = version
 
