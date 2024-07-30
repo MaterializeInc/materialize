@@ -30,9 +30,10 @@ use mz_compute_types::plan::reduce::{
 use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
 };
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{adt, Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
@@ -1624,6 +1625,10 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
             nans: 0,
             non_nulls: 0,
         },
+        AggregateFunc::SumInterval => Accum::Interval {
+            accum: Interval::default(),
+            non_nulls: 0,
+        },
         _ => Accum::SimpleNumber {
             accum: 0,
             non_nulls: 0,
@@ -1728,6 +1733,17 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 non_nulls: 0,
             },
             x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
+        },
+        AggregateFunc::SumInterval => match datum {
+            Datum::Interval(n) => Accum::Interval {
+                accum: adt::interval::Interval::new(n.months, n.days, n.micros),
+                non_nulls: 1,
+            },
+            Datum::Null => Accum::Interval {
+                accum: Interval::default(),
+                non_nulls: 0,
+            },
+            x => panic!("Invalid argument to AggregateFunc::SumInterval: {x:?}"),
         },
         _ => {
             // Other accumulations need to disentangle the accumulable
@@ -1929,6 +1945,13 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     Datum::from(d)
                 }
             }
+            (
+                AggregateFunc::SumInterval,
+                Accum::Interval {
+                    accum,
+                    non_nulls: _,
+                },
+            ) => Datum::from(*accum),
             _ => panic!(
                 "Unexpected accumulation (aggr={:?}, accum={accum:?})",
                 aggr_func
@@ -1990,6 +2013,13 @@ enum Accum {
         /// Counts non-NULL values
         non_nulls: Diff,
     },
+    /// Accumulates intervals.
+    Interval {
+        /// The accumulation of all non-NULL values observed.
+        accum: Interval,
+        /// Counts non-NULL values
+        non_nulls: Diff,
+    },
 }
 
 impl IsZero for Accum {
@@ -2023,6 +2053,7 @@ impl IsZero for Accum {
                     && nans.is_zero()
                     && non_nulls.is_zero()
             }
+            Accum::Interval { accum, non_nulls } => accum.is_zero() && non_nulls.is_zero(),
         }
     }
 }
@@ -2123,6 +2154,17 @@ impl Semigroup for Accum {
                 *nans += other_nans;
                 *non_nulls += other_non_nulls;
             }
+            (
+                Accum::Interval { accum, non_nulls },
+                Accum::Interval {
+                    accum: other_accum,
+                    non_nulls: other_non_nulls,
+                },
+            ) => {
+                // TODO: raise EvalError::IntervalOutOfRange(format!("{accum} + {other_accum}") instead of unwrap?
+                *accum = accum.checked_add(other_accum).unwrap();
+                *non_nulls += other_non_nulls;
+            }
             (l, r) => unreachable!(
                 "Accumulator::plus_equals called with non-matching variants: {l:?} vs {r:?}"
             ),
@@ -2184,6 +2226,20 @@ impl Multiply<Diff> for Accum {
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
                     nans: nans * factor,
+                    non_nulls: non_nulls * factor,
+                }
+            }
+            Accum::Interval { accum, non_nulls } => {
+                let i32_factor = i32::try_from(factor);
+                assert!(i32_factor.is_ok(), "Accum::Interval multiply overflow");
+                let accum_result = Interval::new(
+                    accum.months * i32_factor.unwrap(),
+                    accum.days * i32_factor.unwrap(),
+                    accum.micros * factor,
+                );
+
+                Accum::Interval {
+                    accum: accum_result,
                     non_nulls: non_nulls * factor,
                 }
             }
@@ -2398,6 +2454,7 @@ mod monoids {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All
