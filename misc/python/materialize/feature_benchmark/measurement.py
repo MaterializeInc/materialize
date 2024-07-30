@@ -14,11 +14,14 @@ from enum import Enum, auto
 
 
 class MeasurementUnit(Enum):
-    UNKNOWN = auto()
-    SECONDS = auto()
-    NANOSECONDS = auto()
-    COUNT = auto()
-    MEGABYTE = auto()
+    UNKNOWN = "?"
+    SECONDS = "s"
+    NANOSECONDS = "ns"
+    COUNT = "#"
+    MEGABYTE = "MB"
+
+    def __str__(self):
+        return str(self.value)
 
 
 @dataclass
