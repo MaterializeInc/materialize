@@ -770,6 +770,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16641  avg_internal_v1
 16642  avg_internal_v1
 16643  avg_internal_v1
+16643  mz_avg_promotion
 16644  constant_time_eq
 16645  constant_time_eq
 16646  timezone_offset

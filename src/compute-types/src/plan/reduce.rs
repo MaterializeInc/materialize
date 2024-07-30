@@ -1000,6 +1000,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
         | AggregateFunc::SumNumeric
+        | AggregateFunc::SumInterval
         | AggregateFunc::Count
         | AggregateFunc::Any
         | AggregateFunc::All

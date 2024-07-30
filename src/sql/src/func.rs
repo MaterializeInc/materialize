@@ -3161,13 +3161,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float32) => AggregateFunc::SumFloat32 => Float32, 2110;
             params!(Float64) => AggregateFunc::SumFloat64 => Float64, 2111;
             params!(Numeric) => AggregateFunc::SumNumeric => Numeric, 2114;
-            params!(Interval) => Operation::unary(|_ecx, _e| {
-                // Explicitly providing this unsupported overload
-                // prevents `sum(NULL)` from choosing the `Float64`
-                // implementation, so that we match PostgreSQL's behavior.
-                // Plus we will one day want to support this overload.
-                bail_unsupported!("sum(interval)");
-            }) => Interval, 2113;
+            params!(Interval) => AggregateFunc::SumInterval => Interval, 2113;
         },
 
         // Scalar window functions.

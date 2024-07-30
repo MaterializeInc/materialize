@@ -164,6 +164,10 @@ impl Interval {
         })
     }
 
+    pub fn is_zero(&self) -> bool {
+        self.months == 0 && self.days == 0 && self.micros == 0
+    }
+
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
         let months = match self.months.checked_add(other.months) {
             Some(m) => m,
