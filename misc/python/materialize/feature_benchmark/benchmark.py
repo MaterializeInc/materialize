@@ -215,7 +215,7 @@ class Report:
     def extend(self, comparisons: Iterable[Comparator]) -> None:
         self._comparisons.extend(comparisons)
 
-    def as_string(self, use_colors: bool) -> str:
+    def as_string(self, use_colors: bool, limit_to_scenario: str | None = None) -> str:
         output_lines = []
 
         output_lines.append(
@@ -224,6 +224,9 @@ class Report:
         output_lines.append("-" * 100)
 
         for comparison in self._comparisons:
+            if limit_to_scenario is not None and comparison.name != limit_to_scenario:
+                continue
+
             regression = "!!YES!!" if comparison.is_regression() else "no"
             output_lines.append(
                 f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable(use_colors)}"
