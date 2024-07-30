@@ -16,9 +16,11 @@ CREATE TABLE build_job (
     build_step_key TEXT NOT NULL,
     shard_index UINT4,
     retry_count UINT4 NOT NULL,
-    insert_date TIMESTAMPTZ NOT NULL,
+    start_time TIMESTAMPTZ, -- will eventually be changed to not null
+    end_time TIMESTAMPTZ, -- will eventually be changed to not null
+    insert_date TIMESTAMPTZ, -- no longer relevant since introduction of end_time, might eventually be removed
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
     aws_instance_type TEXT NOT NULL,
-    remarks TEXT -- not in use, remove eventually
+    remarks TEXT -- not in use, will eventually be removed
 );

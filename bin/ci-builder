@@ -230,6 +230,7 @@ case "$cmd" in
             --env ZOOKEEPER_ADDR
             --env KAFKA_ADDRS
             --env SCHEMA_REGISTRY_URL
+            --env STEP_START_TIMESTAMP_WITH_TZ
             --env POSTGRES_URL
             --env COCKROACH_URL
             # For ci-closed-issues-detect
