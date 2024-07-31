@@ -2220,7 +2220,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             plan::Explainee::MaterializedView(_) => {
-                let result = self.explain_materialized_view(&ctx, plan);
+                let result = self.explain_materialized_view(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::Index(_) => {

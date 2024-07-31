@@ -200,11 +200,7 @@ impl Coordinator {
         let plan::Explainee::Index(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let cluster_id = if let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() {
-            index.cluster_id
-        } else {
-            unreachable!(); // Asserted in `plan_explain_plan`.
-        };
+        let cluster_id = self.catalog().get_entry(&id).item().cluster_id().unwrap(); // Asserted in `sequence_explain_plan`
 
         let cardinality_stats = self.statistics_oracle_for_id(ctx, cluster_id, id).await.unwrap_or_else(|e| {
             eprintln!("MGREE stats_ts error {e}");
