@@ -22,7 +22,7 @@ use axum::http::{Request, StatusCode};
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router, TypedHeader};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
@@ -38,11 +38,18 @@ use uuid::Uuid;
 const AUTH_API_TOKEN_PATH: &str = "/identity/resources/auth/v1/api-token";
 const AUTH_USER_PATH: &str = "/identity/resources/auth/v1/user";
 const AUTH_API_TOKEN_REFRESH_PATH: &str = "/identity/resources/auth/v1/api-token/token/refresh";
+const GROUPS_PATH: &str = "/frontegg/identity/resources/groups/v1";
+const GROUP_PATH: &str = "/frontegg/identity/resources/groups/v1/:id";
+const GROUP_ROLES_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/roles";
+const GROUP_USERS_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/users";
+const GROUP_PATH_WITH_SLASH: &str = "/frontegg/identity/resources/groups/v1/:id/";
 const USERS_ME_PATH: &str = "/identity/resources/users/v2/me";
 const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
 const USER_PATH: &str = "/identity/resources/users/v1/:id";
 const USER_CREATE_PATH: &str = "/identity/resources/users/v2";
 const ROLES_PATH: &str = "/identity/resources/roles/v2";
+const SCIM_CONFIGURATIONS_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2";
+const SCIM_CONFIGURATION_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2/:id";
 const SSO_CONFIGS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations";
 const SSO_CONFIG_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id";
 const SSO_CONFIG_DOMAINS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/domains";
@@ -142,6 +149,8 @@ impl FronteggMockServer {
             auth_requests: Arc::clone(&auth_requests),
             roles: Arc::new(roles),
             sso_configs: Mutex::new(BTreeMap::new()),
+            groups: Mutex::new(BTreeMap::new()),
+            scim_configurations: Mutex::new(BTreeMap::new()),
         });
 
         let router = Router::new()
@@ -186,6 +195,33 @@ impl FronteggMockServer {
             .route(
                 SSO_CONFIG_ROLES_PATH,
                 get(handle_get_default_roles).put(handle_set_default_roles),
+            )
+            .route(
+                GROUPS_PATH,
+                get(handle_list_scim_groups).post(handle_create_scim_group),
+            )
+            .route(
+                GROUP_PATH,
+                get(handle_get_scim_group)
+                    .patch(handle_update_scim_group)
+                    .delete(handle_delete_scim_group),
+            )
+            .route(GROUP_PATH_WITH_SLASH, get(handle_get_scim_group))
+            .route(
+                GROUP_ROLES_PATH,
+                post(handle_add_roles_to_group).delete(handle_remove_roles_from_group),
+            )
+            .route(
+                GROUP_USERS_PATH,
+                post(handle_add_users_to_group).delete(handle_remove_users_from_group),
+            )
+            .route(
+                SCIM_CONFIGURATIONS_PATH,
+                get(handle_list_scim_configurations).post(handle_create_scim_configuration),
+            )
+            .route(
+                SCIM_CONFIGURATION_PATH,
+                delete(handle_delete_scim_configuration),
             )
             .layer(middleware::from_fn_with_state(
                 Arc::clone(&context),
@@ -616,6 +652,7 @@ async fn handle_roles_request(State(context): State<Arc<Context>>) -> Json<UserR
     Json(response)
 }
 
+// https://docs.frontegg.com/reference/ssoconfigurationcontrollerv1_getssoconfigurations
 async fn handle_list_sso_configs(
     State(context): State<Arc<Context>>,
 ) -> Result<Json<Vec<SSOConfigResponse>>, StatusCode> {
@@ -628,6 +665,7 @@ async fn handle_list_sso_configs(
     Ok(Json(config_list))
 }
 
+// https://docs.frontegg.com/reference/ssoconfigurationcontrollerv1_createssoconfiguration
 async fn handle_create_sso_config(
     State(context): State<Arc<Context>>,
     Json(new_config): Json<SSOConfigCreateRequest>,
@@ -725,6 +763,7 @@ async fn handle_update_sso_config(
     }
 }
 
+// https://docs.frontegg.com/reference/ssoconfigurationcontrollerv1_deletessoconfiguration
 async fn handle_delete_sso_config(
     State(context): State<Arc<Context>>,
     Path(id): Path<String>,
@@ -755,6 +794,7 @@ async fn handle_list_domains(
     }
 }
 
+// https://docs.frontegg.com/reference/ssodomaincontrollerv1_createssodomain
 async fn handle_create_domain(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -772,6 +812,7 @@ async fn handle_create_domain(
     }
 }
 
+// https://docs.frontegg.com/reference/ssorolescontrollerv1_getssodefaultroles
 async fn handle_get_default_roles(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -784,6 +825,7 @@ async fn handle_get_default_roles(
     }
 }
 
+// https://docs.frontegg.com/reference/ssorolescontrollerv1_setssodefaultroles
 async fn handle_set_default_roles(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -845,6 +887,7 @@ async fn handle_update_domain(
     }
 }
 
+// https://docs.frontegg.com/reference/ssodomaincontrollerv1_deletessodomain
 async fn handle_delete_domain(
     State(context): State<Arc<Context>>,
     Path((config_id, domain_id)): Path<(String, String)>,
@@ -863,6 +906,7 @@ async fn handle_delete_domain(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_getssogroup
 async fn handle_list_group_mappings(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -881,6 +925,7 @@ async fn handle_list_group_mappings(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_createssogroup
 async fn handle_create_group_mapping(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -902,6 +947,7 @@ async fn handle_create_group_mapping(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_getssogroup
 async fn handle_get_group_mapping(
     State(context): State<Arc<Context>>,
     Path((config_id, group_id)): Path<(String, String)>,
@@ -921,6 +967,7 @@ async fn handle_get_group_mapping(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_updatessogroup
 async fn handle_update_group_mapping(
     State(context): State<Arc<Context>>,
     Path((config_id, group_id)): Path<(String, String)>,
@@ -947,6 +994,7 @@ async fn handle_update_group_mapping(
     }
 }
 
+// https://docs.frontegg.com/reference/ssogroupscontrollerv1_deletessogroup
 async fn handle_delete_group_mapping(
     State(context): State<Arc<Context>>,
     Path((config_id, group_id)): Path<(String, String)>,
@@ -960,6 +1008,256 @@ async fn handle_delete_group_mapping(
         } else {
             StatusCode::NOT_FOUND
         }
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_getallgroups
+async fn handle_list_scim_groups(
+    State(context): State<Arc<Context>>,
+) -> Result<Json<SCIMGroupsResponse>, StatusCode> {
+    let groups = context.groups.lock().unwrap();
+    let groups_vec: Vec<ScimGroup> = groups.values().cloned().collect();
+    Ok(Json(SCIMGroupsResponse { groups: groups_vec }))
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_creategroup
+async fn handle_create_scim_group(
+    State(context): State<Arc<Context>>,
+    Json(params): Json<GroupCreateParams>,
+) -> Result<(StatusCode, Json<ScimGroup>), StatusCode> {
+    let now = Utc::now();
+    let new_group = ScimGroup {
+        id: Uuid::new_v4().to_string(),
+        name: params.name,
+        description: params.description.unwrap_or_default(),
+        metadata: params.metadata.unwrap_or_default(),
+        roles: Vec::new(),
+        users: Vec::new(),
+        managed_by: "".to_string(),
+        color: params.color.unwrap_or_default(),
+        created_at: now,
+        updated_at: now,
+    };
+
+    let mut groups = context.groups.lock().unwrap();
+    groups.insert(new_group.id.clone(), new_group.clone());
+
+    Ok((StatusCode::CREATED, Json(new_group)))
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_getgroupbyid
+async fn handle_get_scim_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+) -> Result<Json<ScimGroup>, StatusCode> {
+    let groups = context.groups.lock().unwrap();
+    groups
+        .get(&group_id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_updategroup
+async fn handle_update_scim_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+    Json(params): Json<GroupUpdateParams>,
+) -> Result<Json<ScimGroup>, StatusCode> {
+    let mut groups = context.groups.lock().unwrap();
+    if let Some(group) = groups.get_mut(&group_id) {
+        if let Some(name) = params.name {
+            group.name = name;
+        }
+        if let Some(description) = params.description {
+            group.description = description;
+        }
+        if let Some(color) = params.color {
+            group.color = color;
+        }
+        if let Some(metadata) = params.metadata {
+            group.metadata = metadata;
+        }
+        group.updated_at = Utc::now();
+        Ok(Json(group.clone()))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_deletegroup
+async fn handle_delete_scim_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+) -> StatusCode {
+    let mut groups = context.groups.lock().unwrap();
+    if groups.remove(&group_id).is_some() {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_addrolestogroup
+async fn handle_add_roles_to_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<AddRolesToGroupParams>,
+) -> Result<StatusCode, StatusCode> {
+    let mut groups = context.groups.lock().unwrap();
+    let roles = Arc::clone(&context.roles);
+
+    if let Some(group) = groups.get_mut(&group_id) {
+        for role_id in payload.role_ids {
+            if !group.roles.iter().any(|r| r.id == role_id) {
+                if let Some(role) = roles.iter().find(|r| r.id == role_id) {
+                    group.roles.push(ScimRole {
+                        id: role.id.clone(),
+                        key: role.key.clone(),
+                        name: role.name.clone(),
+                        description: format!("Description for {}", role.name),
+                        is_default: false,
+                    });
+                } else {
+                    return Err(StatusCode::NOT_FOUND);
+                }
+            }
+        }
+        Ok(StatusCode::CREATED)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_removerolesfromgroup
+async fn handle_remove_roles_from_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<RemoveRolesFromGroupParams>,
+) -> Result<StatusCode, StatusCode> {
+    let mut groups = context.groups.lock().unwrap();
+
+    if let Some(group) = groups.get_mut(&group_id) {
+        group
+            .roles
+            .retain(|role| !payload.role_ids.contains(&role.id));
+        Ok(StatusCode::OK)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+#[derive(Deserialize)]
+struct AddRolesToGroupParams {
+    #[serde(rename = "roleIds")]
+    role_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RemoveRolesFromGroupParams {
+    #[serde(rename = "roleIds")]
+    role_ids: Vec<String>,
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_adduserstogroup
+async fn handle_add_users_to_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<AddUsersToGroupParams>,
+) -> Result<StatusCode, StatusCode> {
+    let mut groups = context.groups.lock().unwrap();
+    if let Some(group) = groups.get_mut(&group_id) {
+        for user_id in payload.user_ids {
+            if !group.users.iter().any(|u| u.id == user_id) {
+                group.users.push(ScimUser {
+                    id: user_id,
+                    name: "".to_string(),
+                    email: "".to_string(),
+                });
+            }
+        }
+        Ok(StatusCode::CREATED)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+// https://docs.frontegg.com/reference/groupscontrollerv1_removeusersfromgroup
+async fn handle_remove_users_from_group(
+    State(context): State<Arc<Context>>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<RemoveUsersFromGroupParams>,
+) -> StatusCode {
+    let mut groups = context.groups.lock().unwrap();
+
+    if let Some(group) = groups.get_mut(&group_id) {
+        group
+            .users
+            .retain(|user| !payload.user_ids.contains(&user.id));
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+async fn handle_list_scim_configurations(
+    State(context): State<Arc<Context>>,
+) -> Json<Vec<SCIM2ConfigurationResponse>> {
+    let configs = context.scim_configurations.lock().unwrap();
+    let responses: Vec<SCIM2ConfigurationResponse> = configs
+        .values()
+        .map(|config| SCIM2ConfigurationResponse {
+            id: config.id.clone(),
+            source: config.source.clone(),
+            tenant_id: config.tenant_id.clone(),
+            connection_name: config.connection_name.clone(),
+            sync_to_user_management: config.sync_to_user_management,
+            created_at: config.created_at,
+            token: config.token.clone(),
+        })
+        .collect();
+    Json(responses)
+}
+
+async fn handle_create_scim_configuration(
+    State(context): State<Arc<Context>>,
+    Json(request): Json<SCIM2ConfigurationCreateRequest>,
+) -> Result<Json<SCIM2ConfigurationResponse>, StatusCode> {
+    let now = Utc::now();
+    let new_config = SCIM2ConfigurationStorage {
+        id: Uuid::new_v4().to_string(),
+        source: request.source,
+        tenant_id: request.tenant_id,
+        connection_name: request.connection_name,
+        sync_to_user_management: request.sync_to_user_management,
+        created_at: now,
+        token: Uuid::new_v4().to_string(),
+    };
+
+    let response = SCIM2ConfigurationResponse {
+        id: new_config.id.clone(),
+        source: new_config.source.clone(),
+        tenant_id: new_config.tenant_id.clone(),
+        connection_name: new_config.connection_name.clone(),
+        sync_to_user_management: new_config.sync_to_user_management,
+        created_at: new_config.created_at,
+        token: new_config.token.clone(),
+    };
+
+    let mut configs = context.scim_configurations.lock().unwrap();
+    configs.insert(new_config.id.clone(), new_config);
+
+    Ok(Json(response))
+}
+async fn handle_delete_scim_configuration(
+    State(context): State<Arc<Context>>,
+    Path(config_id): Path<String>,
+) -> StatusCode {
+    let mut configs = context.scim_configurations.lock().unwrap();
+    if configs.remove(&config_id).is_some() {
+        StatusCode::NO_CONTENT
     } else {
         StatusCode::NOT_FOUND
     }
@@ -1259,6 +1557,110 @@ pub struct DefaultRoles {
     pub role_ids: Vec<String>,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ScimGroup {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub metadata: String,
+    pub roles: Vec<ScimRole>,
+    pub users: Vec<ScimUser>,
+    #[serde(rename = "managedBy")]
+    pub managed_by: String,
+    pub color: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: DateTime<Utc>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ScimRole {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    pub is_default: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ScimUser {
+    pub id: String,
+    pub name: String,
+    pub email: String,
+}
+
+#[derive(Deserialize)]
+pub struct GroupCreateParams {
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub metadata: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct GroupUpdateParams {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub metadata: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SCIM2ConfigurationCreateRequest {
+    pub source: String,
+    #[serde(rename = "tenantId")]
+    pub tenant_id: String,
+    #[serde(rename = "connectionName")]
+    pub connection_name: String,
+    #[serde(rename = "syncToUserManagement")]
+    pub sync_to_user_management: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct SCIM2ConfigurationResponse {
+    pub id: String,
+    pub source: String,
+    #[serde(rename = "tenantId")]
+    pub tenant_id: String,
+    #[serde(rename = "connectionName")]
+    pub connection_name: String,
+    #[serde(rename = "syncToUserManagement")]
+    pub sync_to_user_management: bool,
+    #[serde(rename = "createdAt")]
+    pub created_at: DateTime<Utc>,
+    pub token: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SCIM2ConfigurationStorage {
+    pub id: String,
+    pub source: String,
+    pub tenant_id: String,
+    pub connection_name: String,
+    pub sync_to_user_management: bool,
+    pub created_at: DateTime<Utc>,
+    pub token: String,
+}
+
+#[derive(Serialize)]
+pub struct SCIMGroupsResponse {
+    pub groups: Vec<ScimGroup>,
+}
+
+#[derive(Deserialize)]
+struct AddUsersToGroupParams {
+    #[serde(rename = "userIds")]
+    user_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RemoveUsersFromGroupParams {
+    #[serde(rename = "userIds")]
+    user_ids: Vec<String>,
+}
+
 impl From<SSOConfigStorage> for SSOConfigResponse {
     fn from(storage: SSOConfigStorage) -> Self {
         SSOConfigResponse {
@@ -1348,4 +1750,6 @@ struct Context {
     auth_requests: Arc<Mutex<u64>>,
     roles: Arc<Vec<UserRole>>,
     sso_configs: Mutex<BTreeMap<String, SSOConfigStorage>>,
+    groups: Mutex<BTreeMap<String, ScimGroup>>,
+    scim_configurations: Mutex<BTreeMap<String, SCIM2ConfigurationStorage>>,
 }
