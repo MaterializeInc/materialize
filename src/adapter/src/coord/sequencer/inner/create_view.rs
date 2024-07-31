@@ -463,12 +463,14 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
+        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) wire up
         let rows = optimizer_trace
             .into_rows(
                 format,
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 None,
                 None, // Views don't have a target cluster.
                 Default::default(),

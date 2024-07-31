@@ -206,58 +206,13 @@ impl Coordinator {
             unreachable!(); // Asserted in `plan_explain_plan`.
         };
 
-        // TODO(mgree): calculate statistics (need a timestamp)
-        let timeline_context = self.get_timeline_context(id);
-        let stats_when = &plan::QueryWhen::Immediately;
-
-        let id_bundle = self
-            .dataflow_builder(cluster_id)
-            .sufficient_collections(std::iter::once(&id));
-
-        let stats_ts = self.determine_timestamp_for(
-            &ctx.session,
-            &id_bundle,
-            stats_when,
-            cluster_id,
-            &timeline_context,
-            None,
-            None,
-            &mz_sql::session::vars::IsolationLevel::Serializable,
-        );
+        let cardinality_stats = self.statistics_oracle_for_id(ctx, cluster_id, id).await.unwrap_or_else(|e| {
+            eprintln!("MGREE stats_ts error {e}");
+            StatisticsOracle::default()
+        });
 
         let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
-        };
-        // ??? is this the right way to do this?
-        let source_ids = self.catalog().get_entry(&id).uses();
-
-        let cardinality_stats = match stats_ts {
-            Ok((ts, _read_holds)) => {
-                eprintln!(
-                    "MGREE stats_ts.respond_immediately = {}",
-                    ts.respond_immediately()
-                );
-                let timestamp_context = ts.timestamp_context;
-
-                let stats = self
-                    .statistics_oracle(
-                        &ctx.session,
-                        &source_ids,
-                        &timestamp_context.antichain(),
-                        true,
-                    )
-                    .await
-                    .unwrap_or_else(|e| {
-                        eprintln!("MGREE statistics_oracle = Err({e:?})");
-                        StatisticsOracle::default()
-                    });
-
-                stats
-            }
-            Err(e) => {
-                eprintln!("MGREE stats_ts = Err({e:?})");
-                StatisticsOracle::default()
-            }
         };
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
@@ -625,12 +580,14 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
+        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) wire up
         let rows = optimizer_trace
             .into_rows(
                 format,
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 None,
                 Some(target_cluster),
                 df_meta,

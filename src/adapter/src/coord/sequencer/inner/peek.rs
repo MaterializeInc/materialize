@@ -566,7 +566,7 @@ impl Coordinator {
             }
         };
 
-        let stats = self
+        let cardinality_stats = self
             .statistics_oracle(session, &source_ids, &stats_ts_ctx.antichain(), true)
             .await
             .unwrap_or_else(|e| {
@@ -587,7 +587,7 @@ impl Coordinator {
         }
 
         let span = Span::current();
-        let optimizer_stats = stats.clone();
+        let optimizer_stats = cardinality_stats.clone();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize peek",
             move || {
@@ -664,7 +664,7 @@ impl Coordinator {
                                         validity,
                                         optimizer,
                                         df_meta,
-                                        stats,
+                                        cardinality_stats,
                                         explain_ctx,
                                         insights_ctx,
                                     })
@@ -678,7 +678,7 @@ impl Coordinator {
                                         target_replica,
                                         source_ids,
                                         determination,
-                                        stats,
+                                        cardinality_stats,
                                         optimizer,
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         global_lir_plan,
@@ -694,7 +694,7 @@ impl Coordinator {
                                     target_replica,
                                     source_ids,
                                     determination,
-                                    stats,
+                                    cardinality_stats,
                                     optimizer,
                                     plan_insights_optimizer_trace: None,
                                     global_lir_plan,
@@ -755,7 +755,7 @@ impl Coordinator {
                                     validity,
                                     optimizer,
                                     df_meta: Default::default(),
-                                    stats,
+                                    cardinality_stats,
                                     explain_ctx,
                                     insights_ctx: None,
                             })
@@ -845,7 +845,7 @@ impl Coordinator {
             target_replica,
             source_ids,
             determination,
-            stats,
+            cardinality_stats,
             optimizer,
             plan_insights_optimizer_trace,
             global_lir_plan,
@@ -879,6 +879,7 @@ impl Coordinator {
                 .into_plan_insights(
                     &features,
                     &self.catalog().for_session(session),
+                    &cardinality_stats,
                     Some(plan.finishing),
                     Some(target_cluster),
                     df_meta,
@@ -1045,6 +1046,7 @@ impl Coordinator {
             optimizer,
             insights_ctx,
             df_meta,
+            cardinality_stats,
             explain_ctx:
                 ExplainPlanContext {
                     config,
@@ -1085,6 +1087,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 finishing,
                 Some(target_cluster),
                 df_meta,

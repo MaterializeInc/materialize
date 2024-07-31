@@ -862,12 +862,14 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
+        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) wire up
         let rows = optimizer_trace
             .into_rows(
                 format,
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 None,
                 Some(target_cluster),
                 df_meta,

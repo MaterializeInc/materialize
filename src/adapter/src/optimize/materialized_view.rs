@@ -171,10 +171,10 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
-        let stats = StatisticsOracle::default();
+        let stats = StatisticsOracle::default(); // !!!(mgree) wire in stats
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &stats,  &mut df_meta); // !!!(mgree) wire in stats
+            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &stats,  &mut df_meta);
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();

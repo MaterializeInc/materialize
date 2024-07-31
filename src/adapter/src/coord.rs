@@ -510,7 +510,7 @@ pub struct PeekStageFinish {
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
-    stats: StatisticsOracle,
+    cardinality_stats: StatisticsOracle,
     optimizer: optimize::peek::Optimizer,
     /// When present, an optimizer trace to be used for emitting a plan insights
     /// notice.
@@ -534,7 +534,7 @@ pub struct PeekStageExplainPlan {
     validity: PlanValidity,
     optimizer: optimize::peek::Optimizer,
     df_meta: DataflowMetainfo,
-    stats: StatisticsOracle,
+    cardinality_stats: StatisticsOracle,
     explain_ctx: ExplainPlanContext,
     insights_ctx: Option<PlanInsightsContext>,
 }

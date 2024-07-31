@@ -52,6 +52,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::StatementContext;
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
+use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::mysql::{MySqlSourceDetails, ProtoMySqlSourceDetails};
 use mz_storage_types::sources::postgres::{
@@ -116,7 +117,7 @@ use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
-use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
+use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds, TimestampProvider};
 
 mod cluster;
 mod create_index;
@@ -4577,6 +4578,46 @@ async fn new_statistics_oracle<T: TimelyTimestamp>(
 }
 
 impl Coordinator {
+    pub(super) async fn statistics_oracle_for_id(
+        &mut self,
+        ctx: &ExecuteContext,
+        cluster_id: StorageInstanceId,
+        id: GlobalId,
+    ) -> Result<StatisticsOracle, AdapterError> {
+        let timeline_context = self.get_timeline_context(id);
+        let stats_when = &plan::QueryWhen::Immediately;
+
+        let id_bundle = self
+            .dataflow_builder(cluster_id)
+            .sufficient_collections(std::iter::once(&id));
+
+        let (ts, _read_holds) = self.determine_timestamp_for(
+            &ctx.session,
+            &id_bundle,
+            stats_when,
+            cluster_id,
+            &timeline_context,
+            None,
+            None,
+            &mz_sql::session::vars::IsolationLevel::Serializable,
+        )?;
+
+        let source_ids = self.catalog().get_entry(&id).uses();
+
+        eprintln!(
+            "MGREE stats_ts.respond_immediately = {}",
+            ts.respond_immediately()
+        );
+        let timestamp_context = ts.timestamp_context;
+
+        self.statistics_oracle(
+            &ctx.session,
+            &source_ids,
+            &timestamp_context.antichain(),
+            true,
+        ).await
+    }
+
     pub(super) async fn statistics_oracle(
         &self,
         session: &Session,
