@@ -44,7 +44,7 @@ _col&lowbar;name_ | The name of the column to be created in the table.
 _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 **NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
 *default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. See also [durable subscription](/transform-data/patterns/durable-subscriptions/#history-retention-period).
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ## Details
 

@@ -54,7 +54,7 @@ Field                                         | Value     | Description
 ----------------------------------------------|-----------|-------------------------------------
 **TOPIC**                                     | `text`    | The Kafka topic you want to subscribe to.
 **GROUP ID PREFIX**                           | `text`    | The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. See also [durable subscription](/transform-data/patterns/durable-subscriptions/#history-retention-period).
+**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ## Supported formats
 

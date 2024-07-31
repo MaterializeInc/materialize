@@ -44,7 +44,7 @@ _src_name_  | The name for the source.
 **FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas upstream.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream. Requires fully-qualified table names (`<schema>.<table>`).
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data. Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. See also [durable subscription](/transform-data/patterns/durable-subscriptions/#history-retention-period).
+**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ### `CONNECTION` options
 

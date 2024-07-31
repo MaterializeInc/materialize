@@ -1,6 +1,6 @@
 ---
-title: "Durable subscription (Retain History)"
-description: "How to configure history retention to set up durable subscriptions in Materialize"
+title: "Durable subscriptions"
+description: "How to enable lossless, durable subscriptions to your changing results in Materialize"
 menu:
   main:
     parent: 'sql-patterns'
@@ -9,37 +9,38 @@ aliases:
   - /transform-data/patterns/time-travel-queries/#history-retention-period
 ---
 
-You can configure an object's [history retention
-period](#history-retention-period) for durable subscriptions.
+[Subscriptions](/sql/subscribe/) allow you to stream changing results from
+Materialize to an external application programatically. Like any connection
+over the network, subscriptions might get disrupted for both expected and
+unexpected reasons, in which case it's useful to have a mechanism to gracefully
+recover data processing.
 
-{{< private-preview />}}
 
-## Durable subscriptions
 
-Because [`SUBSCRIBE`](/sql/subscribe/) requests happen over the network, these
-connections might get disrupted for both expected and unexpected reasons. To
-avoid the need for re-snapshotting the data, you can:
+To avoid the need for re-processing data that was already sent to your external
+application following a connection disruption, you can:
 
 - Adjust the [history retention period](#history-retention-period) for the
-  objects that a subscription depends on, and then
+  objects that a subscription depends on, and
 
-- Use [`AS OF`](/sql/subscribe#as-of) to pick up where you left off on
-  connection drops.
+- [Access past versions of this data](#enabling-durable-subscriptions-in-your-application)
+  at specific points in time to pick up data processing where you left off.
 
 ## History retention period
 
 {{< private-preview />}}
 
-The history retention period of an object ([sources](/sql/create-source/),
-[tables](/sql/create-table/), [materialized
-views](/sql/create-materialized-view/), and [indexes](/sql/create-index/))
-determines the duration for which historical versions of the object's underlying
-data are available for querying. By default, history retention period is unset
-for all user-defined sources, tables, materialized views, and indexes; that is,
-these objects keep track only of the most recent version of their underlying
-data. You can modify this retention period using the `RETAIN HISTORY` option.
+By default, all user-defined sources, tables, materialized views, and indexes
+keep track of the most recent version of their underlying data. To gracefully
+recover from connection disruptions and enable lossless, _durable
+subscriptions_, you can configure the objects the subscription depends on
+to **retain history**.
 
-### Behavior
+To configure the history retention period for an object, use the `RETAIN
+HISTORY` option in its `CREATE` statement. This value can also be adjusted at
+any time using the object-specific `ALTER` statement.
+
+### Semantics
 
 #### Increasing the history retention period
 
@@ -177,23 +178,22 @@ object will lead to increased resource utilization in Materialize.
 - Given the additional memory costs associated with increasing the history
   retention period on indexes, if you don't need the performance benefits of an
   index, consider creating a materialized view for your subscription query and
-  configure the history retention period on that materialized view instead.
+  configuring the history retention period on that materialized view instead.
 
 - Similarly, because of the increased storage costs and processing time for the
   additional historical data on whichever object has an increased history
-  retention period, you should consider configuring history retention period on
-  the index or materialized view directly powering the subscription, rather than
-  all the way through the dependency chain from the source to the index or
-  materialized view.
+  retention period, consider configuring history retention period on the index
+  or materialized view directly powering the subscription, rather than all the
+  way through the dependency chain from the source to the index or materialized
+  view.
 
-## Set up durable subscriptions in your application
+## Enabling durable subscriptions in your application
 
 1. In Materialize, configure the history retention period for the object(s)
 queried in the `SUBSCRIBE`. Choose a duration you expect will allow you to
 recover in case of connection drops. One hour (`1h`) is a good place to start,
-though you should be mindful of the [resource utilization impact and other
-considerations](#considerations) of increasing an object's history retention
-period.
+though you should be mindful of the [impact](#considerations) of increasing an
+object's history retention period.
 
 1. In order to restart your application without losing or re-snapshotting data
 after a connection drop, you need to store the latest timestamp processed for
@@ -236,9 +236,9 @@ continuous query against Materialize in your application code:
 
 ### Note about idempotency
 
-The procedure above recommends you buffer data in memory until receiving a
+The guidance above recommends you buffer data in memory until receiving a
 progress message, and then persist the data and progress message `mz_timestamp`
-at the same time. This is to ensure data is processed exactly once.
+at the same time. This is to ensure data is processed **exactly once**.
 
 In the case that your application crashes and you need to resume your subscription using the
 persisted progress message `mz_timestamp`:
@@ -247,7 +247,7 @@ persisted progress message `mz_timestamp`:
 buffered data from before that progress message: you may end up dropping some data.
 
 As a result, to guarantee that the data processing occurs only once after your
-application crashes is to write the progress message `mz_timestamp` and all
+application crashes, you must write the progress message `mz_timestamp` and all
 buffered data **together in a single transaction**.
 
 <!--TODO(chaas): add top-level section on point-in-time queries, similar to Durable
