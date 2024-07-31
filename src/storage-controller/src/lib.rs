@@ -2741,7 +2741,14 @@ where
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
-        let force_writable = migrated_storage_collections.contains(&id);
+        // In read-only mode we create a new shard for all migrated storage collections. So we
+        // "trick" the write task into thinking that it's not in read-only mode so something is
+        // advancing this new shard.
+        let force_writable = self.read_only && migrated_storage_collections.contains(&id);
+        if force_writable {
+            assert!(id.is_system(), "unexpected non-system global id: {id:?}");
+            info!("writing to migrated storage collection {id} in read-only mode");
+        }
 
         let prev = self
             .introspection_ids

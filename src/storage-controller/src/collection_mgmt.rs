@@ -417,12 +417,8 @@ where
     }
 
     fn get_read_only_rx(&self, id: GlobalId, force_writable: bool) -> watch::Receiver<bool> {
-        if *self.read_only_rx.borrow() && force_writable {
-            // In read-only mode we create a new shard for all migrated storage collections. So we
-            // "trick" the write task into thinking that it's not in read-only mode so something is
-            // advancing this new shard.
+        if force_writable {
             assert!(id.is_system(), "unexpected non-system global id: {id:?}");
-            info!("writing to migrated storage collection {id} in read-only mode");
             self.hacky_always_false_watch.1.clone()
         } else {
             self.read_only_rx.clone()
