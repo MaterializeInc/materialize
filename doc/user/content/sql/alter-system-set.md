@@ -28,26 +28,6 @@ _value_                 | The value to assign to the configuration parameter.
 [_Superuser_ privileges](/manage/access-control/#account-management) are required to execute
 this statement.
 
-## Examples
-
-### Enable RBAC
-
-```mzsql
-SHOW enable_rbac_checks;
-
- enable_rbac_checks
----------
- off
-
-ALTER SYSTEM SET enable_rbac_checks = true;
-
-SHOW enable_rbac_checks;
-
- enable_rbac_checks
-------------
- on
-```
-
 ## Related pages
 
 - [`ALTER SYSTEM RESET`](../alter-system-reset)
