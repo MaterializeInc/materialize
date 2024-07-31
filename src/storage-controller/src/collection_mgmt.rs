@@ -120,6 +120,11 @@ where
     /// Send-side for read-only bit.
     pub read_only_tx: Arc<watch::Sender<bool>>,
 
+    /// A watch that is always false. This is a hacky workaround for migrating
+    /// builtin sources in 0dt.
+    /// TODO(jkosh44) Remove me when persist schema migrations are in.
+    hacky_always_false_watch: (watch::Sender<bool>, watch::Receiver<bool>),
+
     // WIP: Name TBD! I thought about `managed_collections`, `ivm_collections`,
     // `self_correcting_collections`.
     /// These are collections that we write to by adding/removing updates to an
@@ -167,10 +172,12 @@ where
             .expect("known to fit");
 
         let (read_only_tx, read_only_rx) = watch::channel(read_only);
+        let (always_false_tx, always_false_rx) = watch::channel(false);
 
         CollectionManager {
             read_only_tx: Arc::new(read_only_tx),
             read_only_rx,
+            hacky_always_false_watch: (always_false_tx, always_false_rx),
             differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
             append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
             write_handle,
@@ -201,8 +208,12 @@ where
     ///
     /// Update the `desired` state of a differential collection using
     /// [Self::differential_write].
-    pub(super) fn register_differential_collection<'a, R>(&self, id: GlobalId, read_handle_fn: R)
-    where
+    pub(super) fn register_differential_collection<'a, R>(
+        &self,
+        id: GlobalId,
+        read_handle_fn: R,
+        force_writable: bool,
+    ) where
         R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
             + Send
             + 'static,
@@ -222,12 +233,14 @@ where
             }
         }
 
+        let read_only_rx = self.get_read_only_rx(id, force_writable);
+
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = DifferentialWriteTask::spawn(
             id,
             self.write_handle.clone(),
             read_handle_fn,
-            self.read_only_rx.clone(),
+            read_only_rx,
             self.now.clone(),
         );
         let prev = guard.insert(id, writer_and_handle);
@@ -245,7 +258,7 @@ where
     ///
     /// The [CollectionManager] will automatically advance the upper of every
     /// registered collection every second.
-    pub(super) fn register_append_only_collection(&self, id: GlobalId) {
+    pub(super) fn register_append_only_collection(&self, id: GlobalId, force_writable: bool) {
         let mut guard = self
             .append_only_collections
             .lock()
@@ -261,13 +274,15 @@ where
             }
         }
 
+        let read_only_rx = self.get_read_only_rx(id, force_writable);
+
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = append_only_write_task(
             id,
             self.write_handle.clone(),
             Arc::clone(&self.user_batch_duration_ms),
             self.now.clone(),
-            self.read_only_rx.clone(),
+            read_only_rx,
         );
         let prev = guard.insert(id, writer_and_handle);
 
@@ -399,6 +414,15 @@ where
             .ok_or(StorageError::IdentifierMissing(id))?;
 
         Ok(MonotonicAppender::new(tx))
+    }
+
+    fn get_read_only_rx(&self, id: GlobalId, force_writable: bool) -> watch::Receiver<bool> {
+        if force_writable {
+            assert!(id.is_system(), "unexpected non-system global id: {id:?}");
+            self.hacky_always_false_watch.1.clone()
+        } else {
+            self.read_only_rx.clone()
+        }
     }
 }
 
