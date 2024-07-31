@@ -80,17 +80,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use differential_dataflow::AsCollection;
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
-use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
-use mz_postgres_util::desc::PostgresTableDesc;
+use mz_ore::iter::IteratorExt;
 use mz_postgres_util::{simple_query_opt, Client};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::postgres::CastType;
+use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -117,7 +116,7 @@ use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
-use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
+use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::types::{
     ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
@@ -131,8 +130,8 @@ static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_sec
 // whose `lsn <= snapshot_lsn`. By convention the snapshot is always emitted at LSN 0.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RewindRequest {
-    /// The table OID that should be rewound.
-    pub(crate) oid: u32,
+    /// The output index that should be rewound.
+    pub(crate) output_index: usize,
     /// The LSN that the snapshot was taken at.
     pub(crate) snapshot_lsn: MzOffset,
 }
@@ -142,8 +141,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     scope: G,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
-    subsource_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
-    table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<(CastType, MirScalarExpr)>)>,
+    table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     rewind_stream: &Stream<G, RewindRequest>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
@@ -169,8 +167,22 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         Exchange::new(move |_| slot_reader),
         &data_output,
     );
+    let mut output_uppers = table_info
+        .iter()
+        .flat_map(|(_, outputs)| outputs.values().map(|o| o.resume_upper.clone()))
+        .collect::<Vec<_>>();
+    metrics.tables.set(u64::cast_from(output_uppers.len()));
 
-    metrics.tables.set(u64::cast_from(table_info.len()));
+    // Include the upper of the main source output for use in calculating the initial
+    // resume upper.
+    output_uppers.push(Antichain::from_iter(
+        config
+            .source_resume_uppers
+            .get(&config.id)
+            .expect("id exists")
+            .iter()
+            .map(MzOffset::decode_row),
+    ));
 
     let reader_table_info = table_info.clone();
     let (button, transient_errors) = builder.build_fallible(move |caps| {
@@ -277,8 +289,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
 
             let resume_upper = Antichain::from_iter(
-                subsource_resume_uppers
-                    .values()
+                output_uppers
+                    .iter()
                     .flat_map(|f| f.elements())
                     // Advance any upper as far as the slot_lsn.
                     .map(|t| std::cmp::max(*t, slot_metadata.confirmed_flush_lsn)),
@@ -303,15 +315,21 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             );
                             // If the replication stream cannot be obtained from the resume point there is nothing
                             // else to do. These errors are not retractable.
-                            for &oid in table_info.keys() {
-                                // We pick `u64::MAX` as the LSN which will (in practice) never conflict
-                                // any previously revealed portions of the TVC.
-                                let update = (
-                                    (oid, Err(DataflowError::from(err.clone()))),
-                                    MzOffset::from(u64::MAX),
-                                    1,
-                                );
-                                data_output.give_fueled(&data_cap_set[0], update).await;
+                            for (oid, outputs) in table_info.iter() {
+                                for output_index in outputs.keys() {
+                                    // We pick `u64::MAX` as the LSN which will (in practice) never conflict
+                                    // any previously revealed portions of the TVC.
+                                    let update = (
+                                        (
+                                            *oid,
+                                            *output_index,
+                                            Err(DataflowError::from(err.clone())),
+                                        ),
+                                        MzOffset::from(u64::MAX),
+                                        1,
+                                    );
+                                    data_output.give_fueled(&data_cap_set[0], update).await;
+                                }
                             }
                             definite_error_handle.give(
                                 &definite_error_cap_set[0],
@@ -319,7 +337,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             );
                             return Ok(());
                         }
-                        rewinds.insert(req.oid, (cap.clone(), req));
+                        rewinds.insert(req.output_index, (cap.clone(), req));
                     }
                 }
             }
@@ -346,11 +364,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 Err(err) => {
                     // If the replication stream cannot be obtained in a definite way there is
                     // nothing else to do. These errors are not retractable.
-                    for &oid in table_info.keys() {
-                        // We pick `u64::MAX` as the LSN which will (in practice) never conflict
-                        // any previously revealed portions of the TVC.
-                        let update = ((oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
-                        data_output.give_fueled(&data_cap_set[0], update).await;
+                    for (oid, outputs) in table_info.iter() {
+                        for output_index in outputs.keys() {
+                            // We pick `u64::MAX` as the LSN which will (in practice) never conflict
+                            // any previously revealed portions of the TVC.
+                            let update = (
+                                (*oid, *output_index, Err(DataflowError::from(err.clone()))),
+                                MzOffset::from(u64::MAX),
+                                1,
+                            );
+                            data_output.give_fueled(&data_cap_set[0], update).await;
+                        }
                     }
 
                     definite_error_handle.give(
@@ -360,6 +384,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     return Ok(());
                 }
             };
+
             let mut stream = pin!(stream.peekable());
 
             let mut errored = HashSet::new();
@@ -408,11 +433,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             // this transaction and therefore be able to pass the data of the
                             // transaction through as we stream it.
                             upper_cap_set.downgrade([&data_upper]);
-                            while let Some((oid, event, diff)) = tx.try_next().await? {
-                                if !table_info.contains_key(&oid) {
-                                    continue;
-                                }
-
+                            while let Some((oid, output_index, event, diff)) = tx.try_next().await?
+                            {
                                 let event = match event {
                                     Ok(cols) => {
                                         row_temp.clear();
@@ -430,8 +452,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     }
                                     Err(err) => Err(err.into()),
                                 };
-                                let mut data = (oid, event);
-                                if let Some((data_cap, req)) = rewinds.get(&oid) {
+                                let mut data = (oid, output_index, event);
+                                if let Some((data_cap, req)) = rewinds.get(&output_index) {
                                     if commit_lsn <= req.snapshot_lsn {
                                         let update = (data, MzOffset::from(0), -diff);
                                         data_output.give_fueled(data_cap, &update).await;
@@ -441,7 +463,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 let update = (data, commit_lsn, diff);
                                 data_output.give_fueled(&data_cap_set[0], &update).await;
                                 // Store buffers for reuse
-                                if let Ok(mut row) = update.0 .1 {
+                                if let Ok(mut row) = update.0 .2 {
                                     col_temp.extend(row.drain(..).flatten());
                                     row_temp = row;
                                 }
@@ -466,6 +488,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 if will_yield {
                     upper_cap_set.downgrade([&data_upper]);
                     data_cap_set.downgrade([&data_upper]);
+                    trace!(
+                        %id,
+                        "timely-{worker_id} yielding at lsn={}",
+                        data_upper
+                    );
                     rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);
                 }
             }
@@ -481,15 +508,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
     let replication_updates = data_stream
-        .map(move |((oid, event), time, diff)| {
-            let (output_index, _, casts) = &table_info[oid];
+        .map(move |((oid, output_index, event), time, diff)| {
+            let output = &table_info
+                .get(oid)
+                .and_then(|outputs| outputs.get(output_index))
+                .expect("table_info contains all outputs");
             let event = event.as_ref().map_err(|e| e.clone()).and_then(|row| {
                 let mut datums = datum_vec.borrow();
                 for col in row.iter() {
                     let datum = col.as_deref().map(super::decode_utf8_text).transpose()?;
                     datums.push(datum.unwrap_or(Datum::Null));
                 }
-                super::cast_row(casts, &datums, &mut final_row)?;
+                super::cast_row(&output.casts, &datums, &mut final_row)?;
                 Ok(SourceMessage {
                     key: Row::default(),
                     value: final_row.clone(),
@@ -713,14 +743,14 @@ fn extract_transaction<'a>(
     stream: impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
         + 'a,
     commit_lsn: MzOffset,
-    table_info: &'a BTreeMap<u32, (usize, PostgresTableDesc, Vec<(CastType, MirScalarExpr)>)>,
+    table_info: &'a BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     connection_config: &'a mz_postgres_util::Config,
     ssh_tunnel_manager: &'a SshTunnelManager,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
-    errored_tables: &'a mut HashSet<u32>,
+    errored_outputs: &'a mut HashSet<usize>,
 ) -> impl AsyncStream<
-    Item = Result<(u32, Result<Vec<Option<Bytes>>, DefiniteError>, Diff), TransientError>,
+    Item = Result<(u32, usize, Result<Vec<Option<Bytes>>, DefiniteError>, Diff), TransientError>,
 > + 'a {
     use LogicalReplicationMessage::*;
     async_stream::try_stream!({
@@ -737,14 +767,23 @@ fn extract_transaction<'a>(
             };
             metrics.total.inc();
             match message {
-                Insert(body) if errored_tables.contains(&body.rel_id()) => continue,
-                Update(body) if errored_tables.contains(&body.rel_id()) => continue,
-                Delete(body) if errored_tables.contains(&body.rel_id()) => continue,
-                Relation(body) if errored_tables.contains(&body.rel_id()) => continue,
+                Insert(body) if !table_info.contains_key(&body.rel_id()) => continue,
+                Update(body) if !table_info.contains_key(&body.rel_id()) => continue,
+                Delete(body) if !table_info.contains_key(&body.rel_id()) => continue,
+                Relation(body) if !table_info.contains_key(&body.rel_id()) => continue,
                 Insert(body) => {
                     metrics.inserts.inc();
                     let row = unpack_tuple(body.tuple().tuple_data());
-                    yield (body.rel_id(), row, 1);
+                    let rel = body.rel_id();
+                    for ((output, _), row) in table_info
+                        .get(&rel)
+                        .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
+                        .into_iter()
+                        .flatten()
+                        .repeat_clone(row)
+                    {
+                        yield (rel, *output, row, 1);
+                    }
                 }
                 Update(body) => match body.old_tuple() {
                     Some(old_tuple) => {
@@ -757,27 +796,67 @@ fn extract_transaction<'a>(
                                     _ => new,
                                 });
                         let old_row = unpack_tuple(old_tuple.tuple_data());
-                        yield (body.rel_id(), old_row, -1);
                         let new_row = unpack_tuple(new_tuple);
-                        yield (body.rel_id(), new_row, 1);
+                        let rel = body.rel_id();
+                        for ((output, _), (old_row, new_row)) in table_info
+                            .get(&rel)
+                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
+                            .into_iter()
+                            .flatten()
+                            .repeat_clone((old_row, new_row))
+                        {
+                            yield (rel, *output, old_row, -1);
+                            yield (rel, *output, new_row, 1);
+                        }
                     }
                     None => {
-                        yield (body.rel_id(), Err(DefiniteError::DefaultReplicaIdentity), 1);
+                        let rel = body.rel_id();
+                        for (output, _) in table_info
+                            .get(&rel)
+                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
+                            .into_iter()
+                            .flatten()
+                        {
+                            yield (rel, *output, Err(DefiniteError::DefaultReplicaIdentity), 1);
+                        }
                     }
                 },
                 Delete(body) => match body.old_tuple() {
                     Some(old_tuple) => {
                         metrics.deletes.inc();
                         let row = unpack_tuple(old_tuple.tuple_data());
-                        yield (body.rel_id(), row, -1);
+                        let rel = body.rel_id();
+                        for ((output, _), row) in table_info
+                            .get(&rel)
+                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
+                            .into_iter()
+                            .flatten()
+                            .repeat_clone(row)
+                        {
+                            yield (rel, *output, row, -1);
+                        }
                     }
                     None => {
-                        yield (body.rel_id(), Err(DefiniteError::DefaultReplicaIdentity), 1);
+                        let rel = body.rel_id();
+                        for (output, _) in table_info
+                            .get(&rel)
+                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
+                            .into_iter()
+                            .flatten()
+                        {
+                            yield (rel, *output, Err(DefiniteError::DefaultReplicaIdentity), 1);
+                        }
                     }
                 },
                 Relation(body) => {
                     let rel_id = body.rel_id();
-                    if let Some((_, expected_desc, casts)) = table_info.get(&rel_id) {
+                    let valid_outputs = table_info
+                        .get(&rel_id)
+                        .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>();
+                    if valid_outputs.len() > 0 {
                         // Because the replication stream doesn't include columns' attnums, we need
                         // to check the current local schema against the current remote schema to
                         // ensure e.g. we haven't received a schema update with the same terminal
@@ -789,20 +868,29 @@ fn extract_transaction<'a>(
                             mz_postgres_util::publication_info(&client, publication).await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
-                        if let Err(err) =
-                            verify_schema(rel_id, expected_desc, &upstream_info, casts)
-                        {
-                            errored_tables.insert(rel_id);
-                            yield (rel_id, Err(err), 1);
-                        }
+                        for (output_index, output) in valid_outputs {
+                            if let Err(err) =
+                                verify_schema(rel_id, &output.desc, &upstream_info, &output.casts)
+                            {
+                                errored_outputs.insert(*output_index);
+                                yield (rel_id, *output_index, Err(err), 1);
+                            }
 
-                        // Error any dropped tables.
-                        for oid in table_info.keys() {
-                            if !upstream_info.contains_key(oid) {
-                                if errored_tables.insert(*oid) {
-                                    // Minimize the number of excessive errors
-                                    // this will generate.
-                                    yield (*oid, Err(DefiniteError::TableDropped), 1);
+                            // Error any dropped tables.
+                            for (oid, outputs) in table_info {
+                                if !upstream_info.contains_key(oid) {
+                                    for output in outputs.keys() {
+                                        if errored_outputs.insert(*output) {
+                                            // Minimize the number of excessive errors
+                                            // this will generate.
+                                            yield (
+                                                *oid,
+                                                *output,
+                                                Err(DefiniteError::TableDropped),
+                                                1,
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -810,8 +898,12 @@ fn extract_transaction<'a>(
                 }
                 Truncate(body) => {
                     for &rel_id in body.rel_ids() {
-                        if errored_tables.insert(rel_id) {
-                            yield (rel_id, Err(DefiniteError::TableTruncated), 1);
+                        if let Some(outputs) = table_info.get(&rel_id) {
+                            for (output, _) in outputs {
+                                if errored_outputs.insert(*output) {
+                                    yield (rel_id, *output, Err(DefiniteError::TableTruncated), 1);
+                                }
+                            }
                         }
                     }
                 }

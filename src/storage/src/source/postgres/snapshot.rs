@@ -132,7 +132,7 @@
 //!      v          v
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -141,14 +141,12 @@ use std::time::Duration;
 use anyhow::bail;
 use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
-use mz_expr::MirScalarExpr;
+use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
-use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, Client, PostgresError};
-use mz_repr::{Datum, DatumVec, GlobalId, Row};
+use mz_repr::{Datum, DatumVec, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -158,13 +156,15 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 use tokio_postgres::types::{Oid, PgLsn};
 use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::postgres::replication::RewindRequest;
-use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
+use crate::source::postgres::{
+    verify_schema, DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
+};
 use crate::source::types::{
     ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
@@ -175,8 +175,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     mut scope: G,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
-    subsource_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
-    table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<(CastType, MirScalarExpr)>)>,
+    table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: PgSnapshotMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
@@ -207,34 +206,25 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let is_snapshot_leader = config.responsible_for("snapshot_leader");
 
-    // A global view of all exports that need to be snapshot by all workers. Note that this affects
-    // `reader_snapshot_table_info` but must be kept separate from it because each worker needs to
-    // understand if any worker is snapshotting any subsource.
-    let exports_to_snapshot: BTreeSet<_> = subsource_resume_uppers
-        .into_iter()
-        .filter_map(|(id, upper)| {
-            // Determined which collections need to be snapshot and which already have been.
-            if id != config.id && *upper == [MzOffset::minimum()] {
-                // Convert from `GlobalId` to output index.
-                Some(config.source_exports[&id].ingestion_output)
-            } else {
-                None
-            }
-        })
-        .collect();
-
+    // A global view of all outputs that will be snapshot by all workers.
+    let mut all_outputs = vec![];
     // A filtered table info containing only the tables that this worker should snapshot.
-    let reader_snapshot_table_info: BTreeMap<_, _> = table_info
-        .iter()
-        .filter(|(oid, (output_index, _, _))| {
-            mz_ore::soft_assert_or_log!(
-                *output_index != 0,
-                "primary collection should not be represented in table info"
-            );
-            exports_to_snapshot.contains(output_index) && config.responsible_for(oid)
-        })
-        .map(|(k, v)| (*k, v.clone()))
-        .collect();
+    let mut reader_table_info = BTreeMap::new();
+    for (table, outputs) in table_info.iter() {
+        for (&output_index, output) in outputs {
+            if *output.resume_upper != [MzOffset::minimum()] {
+                // Already has been snapshotted.
+                continue;
+            }
+            all_outputs.push(output_index);
+            if config.responsible_for(*table) {
+                reader_table_info
+                    .entry(*table)
+                    .or_insert_with(BTreeMap::new)
+                    .insert(output_index, (output.desc.clone(), output.casts.clone()));
+            }
+        }
+    }
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
@@ -254,11 +244,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 %id,
                 "timely-{worker_id} initializing table reader \
                     with {} tables to snapshot",
-                reader_snapshot_table_info.len()
+                    reader_table_info.len()
             );
 
             // Nothing needs to be snapshot.
-            if exports_to_snapshot.is_empty() {
+            if all_outputs.is_empty() {
                 trace!(%id, "no exports to snapshot");
                 // Note we do not emit a `ProgressStatisticsUpdate::Snapshot` update here,
                 // as we do not want to attempt to override the current value with 0. We
@@ -347,7 +337,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     // nothing else to do. These errors are not retractable.
                     Err(PostgresError::PublicationMissing(publication)) => {
                         let err = DefiniteError::PublicationDropped(publication);
-                        for oid in reader_snapshot_table_info.keys() {
+                        for (oid, outputs) in reader_table_info.iter() {
                             // Produce a definite error here and then exit to ensure
                             // a missing publication doesn't generate a transient
                             // error and restart this dataflow indefinitely.
@@ -355,9 +345,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             // We pick `u64::MAX` as the LSN which will (in
                             // practice) never conflict any previously revealed
                             // portions of the TVC.
-                            let update =
-                                ((*oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
-                            raw_handle.give_fueled(&data_cap_set[0], update).await;
+                            for output_index in outputs.keys() {
+                                let update = (
+                                    (*oid, *output_index, Err(err.clone().into())),
+                                    MzOffset::from(u64::MAX),
+                                    1,
+                                );
+                                raw_handle.give_fueled(&data_cap_set[0], update).await;
+                            }
                         }
 
                         definite_error_handle.give(
@@ -373,9 +368,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
-            let worker_tables = reader_snapshot_table_info
+            let worker_tables = reader_table_info
                 .iter()
-                .map(|(_, (_, desc, _))| {
+                .map(|(_, outputs)| {
+                    // just use the first output's desc since the fields accessed here should
+                    // be the same for all outputs
+                    let desc = &outputs.values().next().expect("at least 1").0;
                     (
                         format!(
                             "{}.{}",
@@ -383,6 +381,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             Ident::new_unchecked(desc.name.clone()).to_ast_string()
                         ),
                         desc.oid.clone(),
+                        outputs.len(),
                     )
                 })
                 .collect();
@@ -399,16 +398,40 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             );
 
             let mut snapshot_staged = 0;
-            for (&oid, (_, expected_desc, casts)) in reader_snapshot_table_info.iter() {
-                let desc = match verify_schema(oid, expected_desc, &upstream_info, casts) {
-                    Ok(()) => expected_desc,
-                    Err(err) => {
-                        raw_handle
-                            .give_fueled(
-                                &data_cap_set[0],
-                                ((oid, Err(err.into())), MzOffset::minimum(), 1),
-                            )
-                            .await;
+            for (&oid, outputs) in reader_table_info.iter() {
+                let mut table_name = None;
+                let mut output_indexes = vec![];
+                for (output_index, (expected_desc, casts)) in outputs.iter() {
+                    match verify_schema(oid, expected_desc, &upstream_info, casts) {
+                        Ok(()) => {
+                            if table_name.is_none() {
+                                table_name = Some((
+                                    expected_desc.namespace.clone(),
+                                    expected_desc.name.clone(),
+                                ));
+                            }
+                            output_indexes.push(output_index);
+                        }
+                        Err(err) => {
+                            raw_handle
+                                .give_fueled(
+                                    &data_cap_set[0],
+                                    (
+                                        (oid, *output_index, Err(err.into())),
+                                        MzOffset::minimum(),
+                                        1,
+                                    ),
+                                )
+                                .await;
+                            continue;
+                        }
+                    };
+                }
+
+                let (namespace, table) = match table_name {
+                    Some(t) => t,
+                    None => {
+                        // all outputs errored for this table
                         continue;
                     }
                 };
@@ -416,34 +439,37 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 trace!(
                     %id,
                     "timely-{worker_id} snapshotting table {:?}({oid}) @ {snapshot_lsn}",
-                    desc.name
+                    table
                 );
 
                 // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
                 // emulate's PG's rules for name formatting.
                 let query = format!(
                     "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
-                    Ident::new_unchecked(desc.name.clone()).to_ast_string(),
+                    Ident::new_unchecked(namespace).to_ast_string(),
+                    Ident::new_unchecked(table).to_ast_string(),
                 );
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
-                let mut update = ((oid, Ok(vec![])), MzOffset::minimum(), 1);
+                let mut update = ((oid, 0, Ok(vec![])), MzOffset::minimum(), 1);
                 while let Some(bytes) = stream.try_next().await? {
-                    let data = update.0 .1.as_mut().unwrap();
+                    let data = update.0 .2.as_mut().unwrap();
                     data.clear();
                     data.extend_from_slice(&bytes);
-                    raw_handle.give_fueled(&data_cap_set[0], &update).await;
-                    snapshot_staged += 1;
-                    // TODO(guswynn): does this 1000 need to be configurable?
-                    if snapshot_staged % 1000 == 0 {
-                        stats_output.give(
-                            &stats_cap[0],
-                            ProgressStatisticsUpdate::Snapshot {
-                                records_known: snapshot_total,
-                                records_staged: snapshot_staged,
-                            },
-                        );
+                    for output_index in &output_indexes {
+                        update.0 .1 = **output_index;
+                        raw_handle.give_fueled(&data_cap_set[0], &update).await;
+                        snapshot_staged += 1;
+                        // TODO(guswynn): does this 1000 need to be configurable?
+                        if snapshot_staged % 1000 == 0 {
+                            stats_output.give(
+                                &stats_cap[0],
+                                ProgressStatisticsUpdate::Snapshot {
+                                    records_known: snapshot_total,
+                                    records_staged: snapshot_staged,
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -454,10 +480,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // idea to read the replication stream concurrently with the snapshot but it actually
             // leads to a lot of data being staged for the future, which needlesly consumed memory
             // in the cluster.
-            for &oid in reader_snapshot_table_info.keys() {
-                trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
-                let req = RewindRequest { oid, snapshot_lsn };
-                rewinds_handle.give(&rewind_cap_set[0], req);
+            for output in reader_table_info.values() {
+                for (output_index, (desc, _)) in output {
+                    trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", desc.name);
+                    let req = RewindRequest { output_index: *output_index, snapshot_lsn };
+                    rewinds_handle.give(&rewind_cap_set[0], req);
+                }
             }
             *rewind_cap_set = CapabilitySet::new();
 
@@ -503,16 +531,19 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut datum_vec = DatumVec::new();
     let snapshot_updates = raw_data
         .distribute()
-        .map(move |((oid, event), time, diff)| {
-            let (output_index, _, casts) = &table_info[oid];
+        .map(move |((oid, output_index, event), time, diff)| {
+            let output = &table_info
+                .get(oid)
+                .and_then(|outputs| outputs.get(output_index))
+                .expect("table_info contains all outputs");
 
             let event = event
                 .as_ref()
                 .map_err(|e: &DataflowError| e.clone())
                 .and_then(|bytes| {
-                    decode_copy_row(bytes, casts.len(), &mut text_row)?;
+                    decode_copy_row(bytes, output.casts.len(), &mut text_row)?;
                     let datums = datum_vec.borrow_with(&text_row);
-                    super::cast_row(casts, &datums, &mut final_row)?;
+                    super::cast_row(&output.casts, &datums, &mut final_row)?;
                     Ok(SourceMessage {
                         key: Row::default(),
                         value: final_row.clone(),
@@ -605,8 +636,8 @@ fn decode_copy_row(data: &[u8], col_len: usize, row: &mut Row) -> Result<(), Def
 /// Record the sizes of the tables being snapshotted in `PgSnapshotMetrics`.
 async fn fetch_snapshot_size(
     client: &Client,
-    // The table names and oids owned by this worker.
-    tables: Vec<(String, Oid)>,
+    // The table names, oids, and number of outputs for this table owned by this worker.
+    tables: Vec<(String, Oid, usize)>,
     metrics: PgSnapshotMetrics,
     config: &RawSourceCreationConfig,
 ) -> Result<u64, anyhow::Error> {
@@ -614,7 +645,7 @@ async fn fetch_snapshot_size(
     let snapshot_config = config.config.parameters.pg_snapshot_config;
 
     let mut total = 0;
-    for (table, oid) in tables {
+    for (table, oid, output_count) in tables {
         let stats =
             collect_table_statistics(client, snapshot_config.collect_strict_count, &table, oid)
                 .await?;
@@ -623,7 +654,7 @@ async fn fetch_snapshot_size(
             stats.count_latency,
             snapshot_config.collect_strict_count,
         );
-        total += stats.count;
+        total += stats.count * u64::cast_from(output_count);
     }
     Ok(total)
 }
