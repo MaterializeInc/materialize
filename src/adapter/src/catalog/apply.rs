@@ -808,7 +808,7 @@ impl CatalogState {
                         if retraction.create_sql() != create_sql {
                             let item = self
                                 .deserialize_item(&create_sql)
-                                .expect("invalid persisted SQL: {create_sql}");
+                                .unwrap_or_else(|_| panic!("invalid persisted SQL: {create_sql}"));
                             retraction.item = item;
                         }
                         retraction.id = id;
@@ -822,7 +822,7 @@ impl CatalogState {
                     None => {
                         let catalog_item = self
                             .deserialize_item(&create_sql)
-                            .expect("invalid persisted SQL: {create_sql}");
+                            .unwrap_or_else(|_| panic!("invalid persisted SQL: {create_sql}"));
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
