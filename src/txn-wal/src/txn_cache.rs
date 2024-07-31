@@ -77,7 +77,7 @@ use crate::TxnsCodecDefault;
 /// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. See [crate::operator::txns_progress].
 #[derive(Debug)]
-pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
+pub struct TxnsCacheState<T> {
     txns_id: ShardId,
     /// The since of the txn_shard when this cache was initialized.
     /// Some writes with a timestamp < than this may have been applied and
@@ -119,7 +119,7 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
 
 /// A self-updating [TxnsCacheState].
 #[derive(Debug)]
-pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+pub struct TxnsCache<T, C: TxnsCodec = TxnsCodecDefault> {
     /// A subscribe over the txn shard.
     pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
     /// Pending updates for timestamps that haven't closed.
@@ -964,14 +964,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> Deref for TxnsCache<T, C> {
+impl<T, C: TxnsCodec> Deref for TxnsCache<T, C> {
     type Target = TxnsCacheState<T>;
     fn deref(&self) -> &Self::Target {
         &self.state
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> DerefMut for TxnsCache<T, C> {
+impl<T, C: TxnsCodec> DerefMut for TxnsCache<T, C> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
     }

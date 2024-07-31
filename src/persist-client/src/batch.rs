@@ -66,10 +66,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
 /// A [Batch] needs to be marked as consumed or it needs to be deleted via [Self::delete].
 /// Otherwise, a dangling batch will leak and backing blobs will remain in blob storage.
 #[derive(Debug)]
-pub struct Batch<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+pub struct Batch<K, V, T, D> {
     pub(crate) batch_delete_enabled: bool,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
@@ -88,10 +85,7 @@ where
     pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
-impl<K, V, T, D> Drop for Batch<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+impl<K, V, T, D> Drop for Batch<K, V, T, D> {
     fn drop(&mut self) {
         if self.batch.part_count() > 0 {
             warn!(

@@ -579,10 +579,7 @@ pub mod tests {
 
     /// A [`Txn`] wrapper that exposes extra functionality for tests.
     #[derive(Debug)]
-    pub struct TestTxn<K, V, T, D>
-    where
-        T: Timestamp + Lattice + Codec64,
-    {
+    pub struct TestTxn<K, V, T, D> {
         txn: Txn<K, V, T, D>,
         /// A copy of every write to use in tests.
         writes: BTreeMap<ShardId, Vec<(K, V, D)>>,

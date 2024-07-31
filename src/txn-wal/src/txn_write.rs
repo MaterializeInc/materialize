@@ -34,18 +34,12 @@ use crate::txns::{Tidy, TxnsHandle};
 
 /// Pending writes to a shard for an in-progress transaction.
 #[derive(Debug)]
-pub(crate) struct TxnWrite<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+pub(crate) struct TxnWrite<K, V, T, D> {
     pub(crate) batches: Vec<Batch<K, V, T, D>>,
     pub(crate) writes: Vec<(K, V, D)>,
 }
 
-impl<K, V, T, D> TxnWrite<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+impl<K, V, T, D> TxnWrite<K, V, T, D> {
     /// Merges the staged writes in `other` into this.
     pub fn merge(&mut self, other: Self) {
         self.batches.extend(other.batches);
@@ -53,10 +47,7 @@ where
     }
 }
 
-impl<K, V, T, D> Default for TxnWrite<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+impl<K, V, T, D> Default for TxnWrite<K, V, T, D> {
     fn default() -> Self {
         Self {
             batches: Vec::default(),
@@ -67,10 +58,7 @@ where
 
 /// An in-progress transaction.
 #[derive(Debug)]
-pub struct Txn<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
+pub struct Txn<K, V, T, D> {
     pub(crate) writes: BTreeMap<ShardId, TxnWrite<K, V, T, D>>,
     tidy: Tidy,
 }

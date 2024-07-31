@@ -335,7 +335,7 @@ pub(crate) struct DataSubscribe<T> {
 
 /// An active subscription of [`DataRemapEntry`]s for a data shard.
 #[derive(Debug)]
-pub struct DataSubscription<T: Timestamp + Lattice + Codec64> {
+pub struct DataSubscription<T> {
     /// Metadata and current [`DataRemapEntry`] for the data shard.
     subscribe: DataSubscribe<T>,
     /// Channel to send [`DataRemapEntry`]s.
@@ -583,7 +583,7 @@ impl<T: Ord> PartialOrd for WaitTs<T> {
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> WaitTs<T> {
+impl<T: Timestamp + Lattice> WaitTs<T> {
     /// Returns `true` iff (sic) this [WaitTs] is ready.
     fn is_ready(&self, frontier: &T) -> bool {
         match &self {
@@ -604,7 +604,7 @@ impl<T: Timestamp + Lattice + Codec64> WaitTs<T> {
 }
 
 #[derive(Debug)]
-struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
+struct TxnsReadTask<T> {
     rx: mpsc::UnboundedReceiver<TxnsReadCmd<T>>,
     cache: TxnsCacheState<T>,
     pending_waits_by_ts: BTreeSet<(WaitTs<T>, Uuid)>,
@@ -615,7 +615,7 @@ struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
 /// A pending "wait" notification that we will complete once the frontier
 /// advances far enough.
 #[derive(Debug)]
-struct PendingWait<T: Timestamp + Lattice + Codec64> {
+struct PendingWait<T> {
     ts: WaitTs<T>,
     tx: Option<oneshot::Sender<()>>,
 }
@@ -791,7 +791,7 @@ where
 /// Reads txn updates from a [Subscribe] and forwards them to a [TxnsReadTask]
 /// when receiving a progress update.
 #[derive(Debug)]
-struct TxnsSubscribeTask<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+struct TxnsSubscribeTask<T, C: TxnsCodec = TxnsCodecDefault> {
     txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
 
     /// Staged update that we will consume and forward to the [TxnsReadTask]
