@@ -172,7 +172,6 @@ async fn test_balancer() {
         let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
-            None,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -182,6 +181,11 @@ async fn test_balancer() {
             cert_config.clone(),
             MetricsRegistry::new(),
             ticker,
+            None,
+            Duration::ZERO,
+            None,
+            None,
+            None,
         );
         let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();

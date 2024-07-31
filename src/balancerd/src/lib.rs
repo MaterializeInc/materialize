@@ -17,6 +17,7 @@
 //! to generate an internal hostname that is resolved to an IP address, which is similarly proxied.
 
 mod codec;
+mod dyncfgs;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -35,7 +36,9 @@ use domain::resolv::StubResolver;
 use futures::stream::BoxStream;
 use futures::TryFutureExt;
 use hyper::StatusCode;
+use launchdarkly_server_sdk as ld;
 use mz_build_info::{build_info, BuildInfo};
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
@@ -64,12 +67,12 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
+use crate::dyncfgs::SIGTERM_WAIT;
 
 /// Balancer build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
 
 pub struct BalancerConfig {
-    sigterm_wait: Option<Duration>,
     /// Info about which version of the code is running.
     build_version: Version,
     /// Listen address for internal HTTP health and metrics server.
@@ -86,12 +89,16 @@ pub struct BalancerConfig {
     tls: Option<TlsCertConfig>,
     metrics_registry: MetricsRegistry,
     reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
+    launchdarkly_sdk_key: Option<String>,
+    config_sync_timeout: Duration,
+    config_sync_loop_interval: Option<Duration>,
+    cloud_provider: Option<String>,
+    cloud_provider_region: Option<String>,
 }
 
 impl BalancerConfig {
     pub fn new(
         build_info: &BuildInfo,
-        sigterm_wait: Option<Duration>,
         internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
@@ -101,10 +108,14 @@ impl BalancerConfig {
         tls: Option<TlsCertConfig>,
         metrics_registry: MetricsRegistry,
         reload_certs: ReloadTrigger,
+        launchdarkly_sdk_key: Option<String>,
+        config_sync_timeout: Duration,
+        config_sync_loop_interval: Option<Duration>,
+        cloud_provider: Option<String>,
+        cloud_provider_region: Option<String>,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
-            sigterm_wait,
             internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
@@ -114,6 +125,11 @@ impl BalancerConfig {
             tls,
             metrics_registry,
             reload_certs,
+            launchdarkly_sdk_key,
+            config_sync_timeout,
+            config_sync_loop_interval,
+            cloud_provider,
+            cloud_provider_region,
         }
     }
 }
@@ -149,6 +165,7 @@ pub struct BalancerService {
     pub https: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     pub internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     _metrics: BalancerMetrics,
+    configs: ConfigSet,
 }
 
 impl BalancerService {
@@ -157,12 +174,54 @@ impl BalancerService {
         let https = listen(&cfg.https_listen_addr).await?;
         let internal_http = listen(&cfg.internal_http_listen_addr).await?;
         let metrics = BalancerMetrics::new(&cfg);
+        let mut configs = ConfigSet::default();
+        configs = dyncfgs::all_dyncfgs(configs);
+        if let Err(err) = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+            configs.clone(),
+            &BUILD_INFO,
+            |builder| {
+                let region = cfg
+                    .cloud_provider_region
+                    .clone()
+                    .unwrap_or_else(|| String::from("unknown"));
+                if let Some(provider) = cfg.cloud_provider.clone() {
+                    builder.add_context(
+                        ld::ContextBuilder::new(provider)
+                            .kind("cloud_provider")
+                            .set_string("cloud_provider_region", region)
+                            .build()
+                            .map_err(|e| anyhow::anyhow!(e))?,
+                    );
+                } else {
+                    builder.add_context(
+                        ld::ContextBuilder::new("unknown")
+                            .anonymous(true) // exclude this user from the dashboard
+                            .kind("cloud_provider")
+                            .set_string("cloud_provider_region", region)
+                            .build()
+                            .map_err(|e| anyhow::anyhow!(e))?,
+                    );
+                }
+                Ok(())
+            },
+            cfg.launchdarkly_sdk_key.as_deref(),
+            cfg.config_sync_timeout,
+            cfg.config_sync_loop_interval,
+        )
+        .await
+        {
+            // Log but continue anyway. If LD is down we have no way of fetching the previous value
+            // of the flag (unlike the adapter, but it has a durable catalog). The ConfigSet
+            // defaults have been chosen to be good enough if this is the case.
+            warn!("LaunchDarkly sync error: {err}");
+        }
         Ok(Self {
             cfg,
             pgwire,
             https,
             internal_http,
             _metrics: metrics,
+            configs,
         })
     }
 
@@ -188,6 +247,10 @@ impl BalancerService {
         let pgwire_addr = self.pgwire.0.local_addr();
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
+        // TODO: Change mz_server_core::serve to take a dyncfg so that it can dynamically fetch this
+        // value when it's used, allowing the value to change during runtime in LD instead of
+        // snapshotting at startup.
+        let sigterm_wait = Some(SIGTERM_WAIT.get(&self.configs));
         {
             if let Some(dir) = &self.cfg.cancellation_resolver_dir {
                 if !dir.is_dir() {
@@ -204,7 +267,7 @@ impl BalancerService {
             let (handle, stream) = self.pgwire;
             server_handles.push(handle);
             set.spawn_named(|| "pgwire_stream", async move {
-                mz_server_core::serve(stream, pgwire, self.cfg.sigterm_wait).await;
+                mz_server_core::serve(stream, pgwire, sigterm_wait).await;
                 warn!("pgwire server exited");
             });
         }
@@ -224,7 +287,7 @@ impl BalancerService {
             let (handle, stream) = self.https;
             server_handles.push(handle);
             set.spawn_named(|| "https_stream", async move {
-                mz_server_core::serve(stream, https, self.cfg.sigterm_wait).await;
+                mz_server_core::serve(stream, https, sigterm_wait).await;
                 warn!("https server exited");
             });
         }
