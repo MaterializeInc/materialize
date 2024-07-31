@@ -189,19 +189,19 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     Stream<G, ProgressStatisticsUpdate>,
     Vec<PressOnDropButton>,
 ) {
-    // figure out which outputs from the generator belong to which output index
-    let output_map: BTreeMap<LoadGeneratorView, usize> = config
-        .source_exports
-        .iter()
-        .map(|(_, output)| {
-            let output_type = match &output.details {
-                SourceExportDetails::LoadGenerator(details) => details.output,
-                SourceExportDetails::None => LoadGeneratorView::Default,
-                _ => panic!("unexpected source export details: {:?}", output.details),
-            };
-            (output_type, output.ingestion_output)
-        })
-        .collect();
+    // figure out which output types from the generator belong to which output indexes
+    let mut output_map = BTreeMap::new();
+    for (_, export) in config.source_exports.iter() {
+        let output_type = match &export.details {
+            SourceExportDetails::LoadGenerator(details) => details.output,
+            SourceExportDetails::None => LoadGeneratorView::Default,
+            _ => panic!("unexpected source export details: {:?}", export.details),
+        };
+        output_map
+            .entry(output_type)
+            .or_insert_with(Vec::new)
+            .push(export.ingestion_output);
+    }
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
@@ -265,26 +265,27 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             continue;
                         }
 
-                        let output = match output_map.get(&output_type) {
-                            Some(output) => *output,
+                        let outputs = match output_map.get(&output_type) {
+                            Some(outputs) => outputs,
                             // We don't have an output index for this output type, so drop it
                             None => continue,
                         };
 
-                        let message = (
-                            output,
-                            Ok(SourceMessage {
-                                key: Row::default(),
-                                value,
-                                metadata: Row::default(),
-                            }),
-                        );
+                        let message = Ok(SourceMessage {
+                            key: Row::default(),
+                            value,
+                            metadata: Row::default(),
+                        });
 
                         // Some generators always reproduce their TVC from the beginning which can
                         // generate a significant amount of data that will overwhelm the dataflow.
                         // Since those are not required downstream we eagerly ignore them here.
                         if resume_offset <= offset {
-                            data_output.give_fueled(&cap, (message, offset, diff)).await;
+                            for &output in outputs {
+                                data_output
+                                    .give_fueled(&cap, ((output, message.clone()), offset, diff))
+                                    .await;
+                            }
                         }
                     }
                     Event::Progress(Some(offset)) => {
