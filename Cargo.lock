@@ -4831,6 +4831,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-dyncfg-launchdarkly"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "humantime",
+ "launchdarkly-server-sdk",
+ "mz-build-info",
+ "mz-dyncfg",
+ "mz-ore",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-dyncfgs"
 version = "0.0.0"
 dependencies = [
@@ -10931,6 +10946,7 @@ dependencies = [
  "libc",
  "libz-sys",
  "log",
+ "lru",
  "memchr",
  "mime_guess",
  "minimal-lexical",

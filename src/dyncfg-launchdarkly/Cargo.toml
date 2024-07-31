@@ -1,0 +1,27 @@
+[package]
+name = "mz-dyncfg-launchdarkly"
+description = "A dyncfg::ConfigSet backed by LaunchDarkly."
+version = "0.0.0"
+license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { version = "1.0.66", features = ["backtrace"] }
+humantime = "2.1.0"
+launchdarkly-server-sdk = { version = "1.0.0", default-features = false, features = [
+  "hypertls",
+] }
+mz-build-info = { path = "../build-info" }
+mz-dyncfg = { path = "../dyncfg" }
+mz-ore = { path = "../ore", default-features = false }
+tokio = { version = "1.38.0", default-features = false }
+tracing = "0.1.37"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

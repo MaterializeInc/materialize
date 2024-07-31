@@ -397,6 +397,7 @@ crates_repository(
         "//:src/controller-types/Cargo.toml",
         "//:src/controller/Cargo.toml",
         "//:src/dyncfg/Cargo.toml",
+        "//:src/dyncfg-launchdarkly/Cargo.toml",
         "//:src/dyncfgs/Cargo.toml",
         "//:src/environmentd/Cargo.toml",
         "//:src/expr-parser/Cargo.toml",
