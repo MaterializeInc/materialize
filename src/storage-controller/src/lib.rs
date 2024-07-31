@@ -882,7 +882,7 @@ where
                     // NOTE: Maybe this shouldn't be in the collection manager,
                     // and collection manager should only be responsble for
                     // built-in introspection collections?
-                    self.collection_manager.register_append_only_collection(id, None);
+                    self.collection_manager.register_append_only_collection(id, false);
                 }
                 DataSource::Progress | DataSource::Other(_) => {}
             };
@@ -2741,6 +2741,8 @@ where
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
+        let force_writable = migrated_storage_collections.contains(&id);
+
         let prev = self
             .introspection_ids
             .lock()
@@ -2811,7 +2813,7 @@ where
                 self.collection_manager.register_differential_collection(
                     id,
                     read_handle_fn,
-                    migrated_storage_collections,
+                    force_writable,
                 );
 
                 if !self.read_only {
@@ -2836,7 +2838,7 @@ where
                 }
 
                 self.collection_manager
-                    .register_append_only_collection(id, Some(migrated_storage_collections));
+                    .register_append_only_collection(id, force_writable);
             }
 
             // Same as our other differential collections, but for these the
@@ -2849,7 +2851,7 @@ where
                 self.collection_manager.register_differential_collection(
                     id,
                     read_handle_fn,
-                    migrated_storage_collections,
+                    force_writable,
                 );
 
                 if !self.read_only {
@@ -2871,7 +2873,7 @@ where
                 }
 
                 self.collection_manager
-                    .register_append_only_collection(id, Some(migrated_storage_collections));
+                    .register_append_only_collection(id, force_writable);
             }
         }
 
