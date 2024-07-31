@@ -1397,9 +1397,9 @@ impl DurableCatalogState for PersistCatalogState {
             // If the transaction is empty then we don't error, even in read-only mode. This matches the
             // semantics that the stash uses.
             if !txn_batch.is_empty() && catalog.is_read_only() {
-                return Err(DurableCatalogError::NotWritable(
-                    "cannot commit a transaction in a read-only catalog".to_string(),
-                )
+                return Err(DurableCatalogError::NotWritable(format!(
+                    "cannot commit a transaction in a read-only catalog: {txn_batch:?}"
+                ))
                 .into());
             }
 
