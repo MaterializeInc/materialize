@@ -64,7 +64,7 @@ CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 ```
 
 Indexes on views both **maintain and incrementally update view results in
-memory** within that [cluster](/concepts/clusters/). The in-memory up-to-date
+memory** within that [cluster](/concepts/clusters/). The in-memory, up-to-date
 results are accessible to queries within the cluster, even for queries that do
 not use the index key(s).
 
