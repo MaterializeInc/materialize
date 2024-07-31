@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from __future__ import annotations
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -45,10 +46,14 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.input_data = input_data
         self.query_output_mode = query_output_mode
 
-    def clone(self, print_mode: OutputPrinterMode):
-        return ReproductionCodePrinter(
+    def clone(self, print_mode: OutputPrinterMode) -> ReproductionCodePrinter:
+        cloned_printer = ReproductionCodePrinter(
             self.input_data, self.query_output_mode, print_mode
         )
+        assert type(cloned_printer) == type(
+            self
+        ), "clone must be overridden when inheriting this class"
+        return cloned_printer
 
     def get_reproduction_code_of_error(self, error: ValidationError) -> str:
         reproduction_code_generator = self.clone(OutputPrinterMode.COLLECT)
