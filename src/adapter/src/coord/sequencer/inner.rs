@@ -2216,7 +2216,7 @@ impl Coordinator {
                 }
             },
             plan::Explainee::View(_) => {
-                let result = self.explain_view(&ctx, plan);
+                let result = self.explain_view(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::MaterializedView(_) => {
@@ -4583,7 +4583,7 @@ impl Coordinator {
         ctx: &ExecuteContext,
         cluster_id: StorageInstanceId,
         id: GlobalId,
-    ) -> Result<StatisticsOracle, AdapterError> {
+    ) -> StatisticsOracle {
         let timeline_context = self.get_timeline_context(id);
         let stats_when = &plan::QueryWhen::Immediately;
 
@@ -4591,7 +4591,7 @@ impl Coordinator {
             .dataflow_builder(cluster_id)
             .sufficient_collections(std::iter::once(&id));
 
-        let (ts, _read_holds) = self.determine_timestamp_for(
+        let ts = match self.determine_timestamp_for(
             &ctx.session,
             &id_bundle,
             stats_when,
@@ -4600,7 +4600,13 @@ impl Coordinator {
             None,
             None,
             &mz_sql::session::vars::IsolationLevel::Serializable,
-        )?;
+        ) {
+            Ok((ts, _read_holds)) => ts,
+            Err(e) => {
+                eprintln!("MGREE cardinality stats could not determine timestamp: {e}");
+                return StatisticsOracle::default();
+            }
+        };
 
         let source_ids = self.catalog().get_entry(&id).uses();
 
@@ -4615,7 +4621,12 @@ impl Coordinator {
             &source_ids,
             &timestamp_context.antichain(),
             true,
-        ).await
+        )
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("MGREE cardinality stats failed: {e}");
+            StatisticsOracle::default()
+        })
     }
 
     pub(super) async fn statistics_oracle(

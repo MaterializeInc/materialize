@@ -230,13 +230,7 @@ impl Coordinator {
         };
         let cluster_id = self.catalog().get_entry(&id).item().cluster_id().unwrap(); // Asserted in `plan_explain_plan`.
 
-        let cardinality_stats = self
-        .statistics_oracle_for_id(ctx, cluster_id, id)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("MGREE stats failed {e}");
-            StatisticsOracle::default()
-        });
+        let cardinality_stats = self.statistics_oracle_for_id(ctx, cluster_id, id).await;
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
             if !id.is_system() {

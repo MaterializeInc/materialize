@@ -184,7 +184,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) fn explain_view(
+    pub(crate) async fn explain_view(
         &mut self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
@@ -197,6 +197,10 @@ impl Coordinator {
         let plan::Explainee::View(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
+
+        let cluster_id = self.catalog().get_entry(&id).item().cluster_id().unwrap(); // Asserted in `plan_explain_plan`.
+        let cardinality_stats = self.statistics_oracle_for_id(ctx, cluster_id, id).await;
+
         let CatalogItem::View(view) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
@@ -205,8 +209,6 @@ impl Coordinator {
 
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
-
-        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) implement
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
