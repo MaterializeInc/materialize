@@ -38,7 +38,7 @@ use uuid::Uuid;
 use crate::cfg::RetryParameters;
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
-use crate::internal::machine::Machine;
+use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
@@ -99,13 +99,7 @@ impl LeasedReaderId {
 ///
 /// For more details, see [`ReadHandle::snapshot`] and [`Listen`].
 #[derive(Debug)]
-pub struct Subscribe<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct Subscribe<K: Codec, V: Codec, T, D> {
     snapshot: Option<Vec<LeasedBatchPart<T>>>,
     listen: Listen<K, V, T, D>,
 }
@@ -226,13 +220,7 @@ pub enum ListenEvent<T, D> {
 
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
-pub struct Listen<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct Listen<K: Codec, V: Codec, T, D> {
     handle: ReadHandle<K, V, T, D>,
     watch: StateWatch<K, V, T, D>,
 
@@ -503,14 +491,7 @@ where
 /// # };
 /// ```
 #[derive(Debug)]
-pub struct ReadHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in the auto-expiring `Drop` impl.
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
@@ -551,6 +532,7 @@ where
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
+        let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
         ReadHandle {
             cfg,
             metrics: Arc::clone(&metrics),
@@ -563,6 +545,7 @@ where
             last_heartbeat,
             leased_seqnos: BTreeMap::new(),
             unexpired_state: Some(UnexpiredReadHandleState {
+                expire_fn,
                 _heartbeat_tasks: machine
                     .start_reader_heartbeat_tasks(reader_id, gc)
                     .await
@@ -873,10 +856,23 @@ where
         // heartbeat tasks can never observe the expired state. This doesn't
         // matter for correctness, but avoids confusing log output if the
         // heartbeat task were to discover that its lease has been expired.
-        self.unexpired_state = None;
+        let Some(unexpired_state) = self.unexpired_state.take() else {
+            return;
+        };
+        unexpired_state.expire_fn.0().await;
+    }
 
-        let (_, maintenance) = self.machine.expire_leased_reader(&self.reader_id).await;
-        maintenance.start_performing(&self.machine, &self.gc);
+    fn expire_fn(
+        mut machine: Machine<K, V, T, D>,
+        gc: GarbageCollector<K, V, T, D>,
+        reader_id: LeasedReaderId,
+    ) -> ExpireFn {
+        ExpireFn(Box::new(move || {
+            Box::pin(async move {
+                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
+                maintenance.start_performing(&machine, &gc);
+            })
+        }))
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -892,6 +888,7 @@ where
 /// State for a read handle that has not been explicitly expired.
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
+    expire_fn: ExpireFn,
     pub(crate) _heartbeat_tasks: Vec<AbortOnDropHandle<()>>,
 }
 
@@ -1157,24 +1154,15 @@ where
     }
 }
 
-impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in this auto-expiring `Drop` impl.
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+impl<K: Codec, V: Codec, T, D> Drop for ReadHandle<K, V, T, D> {
     fn drop(&mut self) {
-        if self.unexpired_state.is_none() {
-            return;
-        }
-
         // We drop the unexpired state before expiring the reader to ensure the
         // heartbeat tasks can never observe the expired state. This doesn't
         // matter for correctness, but avoids confusing log output if the
         // heartbeat task were to discover that its lease has been expired.
-        self.unexpired_state = None;
+        let Some(unexpired_state) = self.unexpired_state.take() else {
+            return;
+        };
 
         let handle = match Handle::try_current() {
             Ok(x) => x,
@@ -1183,9 +1171,6 @@ where
                 return;
             }
         };
-        let mut machine = self.machine.clone();
-        let gc = self.gc.clone();
-        let reader_id = self.reader_id.clone();
         // Spawn a best-effort task to expire this read handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
         // before the shard-global since is unblocked.
@@ -1194,11 +1179,7 @@ where
         let expire_span = debug_span!("drop::expire");
         handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
-            async move {
-                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
-                maintenance.start_performing(&machine, &gc);
-            }
-            .instrument(expire_span),
+            unexpired_state.expire_fn.0().instrument(expire_span),
         );
     }
 }

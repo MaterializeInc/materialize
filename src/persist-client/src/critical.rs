@@ -99,14 +99,7 @@ impl CriticalReaderId {
 /// means that callers can add a timeout using [tokio::time::timeout] or
 /// [tokio::time::timeout_at].
 #[derive(Debug)]
-pub struct SinceHandle<K, V, T, D, O>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
-    O: Opaque + Codec64,
-{
+pub struct SinceHandle<K: Codec, V: Codec, T, D, O> {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) reader_id: CriticalReaderId,

@@ -39,7 +39,7 @@ use crate::batch::{
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::{check_data_version, Schemas};
-use crate::internal::machine::{CompareAndAppendRes, Machine};
+use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch};
 use crate::read::ReadHandle;
@@ -106,14 +106,7 @@ impl WriterId {
 /// # };
 /// ```
 #[derive(Debug)]
-pub struct WriteHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    // These are only here so we can use them in the auto-expiring `Drop` impl.
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub struct WriteHandle<K: Codec, V: Codec, T, D> {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
@@ -126,7 +119,7 @@ where
     pub(crate) schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
-    explicitly_expired: bool,
+    expire_fn: Option<ExpireFn>,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -162,6 +155,7 @@ where
             purpose: purpose.to_owned(),
         };
         let upper = machine.applier.clone_upper();
+        let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), writer_id.clone());
         WriteHandle {
             cfg,
             metrics,
@@ -174,7 +168,7 @@ where
             debug_state,
             schemas,
             upper,
-            explicitly_expired: false,
+            expire_fn: Some(expire_fn),
         }
     }
 
@@ -683,9 +677,23 @@ where
     /// happens.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        let (_, maintenance) = self.machine.expire_writer(&self.writer_id).await;
-        maintenance.start_performing(&self.machine, &self.gc);
-        self.explicitly_expired = true;
+        let Some(expire_fn) = self.expire_fn.take() else {
+            return;
+        };
+        expire_fn.0().await;
+    }
+
+    fn expire_fn(
+        mut machine: Machine<K, V, T, D>,
+        gc: GarbageCollector<K, V, T, D>,
+        writer_id: WriterId,
+    ) -> ExpireFn {
+        ExpireFn(Box::new(move || {
+            Box::pin(async move {
+                let (_, maintenance) = machine.expire_writer(&writer_id).await;
+                maintenance.start_performing(&machine, &gc);
+            })
+        }))
     }
 
     /// Test helper for an [Self::append] call that is expected to succeed.
@@ -764,17 +772,11 @@ where
     }
 }
 
-impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
     fn drop(&mut self) {
-        if self.explicitly_expired {
+        let Some(expire_fn) = self.expire_fn.take() else {
             return;
-        }
+        };
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
@@ -782,9 +784,6 @@ where
                 return;
             }
         };
-        let mut machine = self.machine.clone();
-        let gc = self.gc.clone();
-        let writer_id = self.writer_id.clone();
         // Spawn a best-effort task to expire this write handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
         // before the shard-global since is unblocked.
@@ -793,11 +792,7 @@ where
         let expire_span = debug_span!("drop::expire");
         handle.spawn_named(
             || format!("WriteHandle::expire ({})", self.writer_id),
-            async move {
-                let (_, maintenance) = machine.expire_writer(&writer_id).await;
-                maintenance.start_performing(&machine, &gc);
-            }
-            .instrument(expire_span),
+            expire_fn.0().instrument(expire_span),
         );
     }
 }
