@@ -4336,3 +4336,110 @@ def workflow_test_mz_introspection_cluster_compat(
                 cur.execute("SHOW auto_route_catalog_queries")
                 row = cur.fetchone()
                 assert row == ("off",), row
+
+
+def workflow_test_unified_introspection_during_replica_disconnect(c: Composition):
+    """
+    Test that unified introspection data collected for a replica remains
+    available after the replica disconnects, until it sends updated
+    introspection data.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_unorchestrated_cluster_replicas": "true",
+            },
+        ),
+        Testdrive(
+            no_reset=True,
+            default_timeout="10s",
+        ),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("testdrive", persistent=True)
+
+        # Set up an unorchestrated replica with a couple dataflows.
+        c.sql(
+            """
+            CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            SET cluster = test;
+
+            CREATE TABLE t (a int);
+            CREATE INDEX idx ON t (a);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            """
+        )
+
+        output = c.sql_query("SELECT id FROM mz_cluster_replicas WHERE name = 'test'")
+        replica_id = output[0][0]
+
+        # Wait for the dataflows to be reported as hydrated.
+        c.testdrive(
+            dedent(
+                f"""
+                > SELECT o.name, h.time_ns IS NOT NULL
+                  FROM mz_internal.mz_compute_hydration_times h
+                  JOIN mz_objects o ON o.id = h.object_id
+                  WHERE
+                      h.replica_id = '{replica_id}' AND
+                      h.object_id LIKE 'u%'
+                idx true
+                mv  true
+                """
+            )
+        )
+
+        output = c.sql_query(
+            f"""
+            SELECT sum(time_ns)
+            FROM mz_internal.mz_compute_hydration_times
+            WHERE replica_id = '{replica_id}'
+            """
+        )
+        previous_times = output[0][0]
+
+        # Kill the replica, wait for a bit for envd to notice, then restart it.
+        c.kill("clusterd1")
+        time.sleep(5)
+
+        # Verify that the hydration times are still queryable.
+        c.testdrive(
+            dedent(
+                f"""
+                > SELECT o.name, h.time_ns IS NOT NULL
+                  FROM mz_internal.mz_compute_hydration_times h
+                  JOIN mz_objects o ON o.id = h.object_id
+                  WHERE
+                      h.replica_id = '{replica_id}' AND
+                      h.object_id LIKE 'u%'
+                idx true
+                mv  true
+                """
+            )
+        )
+
+        # Restart the replica, wait for it to report a new set of hydration times.
+        c.up("clusterd1")
+
+        c.testdrive(
+            dedent(
+                f"""
+                > SELECT sum(time_ns) != {previous_times}
+                  FROM mz_internal.mz_compute_hydration_times
+                  WHERE replica_id = '{replica_id}'
+                true
+                """
+            )
+        )

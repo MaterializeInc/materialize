@@ -29,6 +29,7 @@
 //!   by reinstalling the failed introspection subscribes.
 
 use anyhow::bail;
+use derivative::Derivative;
 use mz_adapter_types::dyncfgs::ENABLE_INTROSPECTION_SUBSCRIBES;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED;
@@ -53,7 +54,8 @@ use crate::optimize::Optimize;
 use crate::{optimize, AdapterError, ExecuteResponse};
 
 // State tracked about an active introspection subscribe.
-#[derive(Debug, Clone)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub(super) struct IntrospectionSubscribe {
     /// The ID of the targeted cluster.
     cluster_id: ClusterId,
@@ -61,6 +63,28 @@ pub(super) struct IntrospectionSubscribe {
     replica_id: ReplicaId,
     /// The spec from which this subscribe was created.
     spec: &'static SubscribeSpec,
+    /// A storage write to be applied the next time the introspection subscribe produces any
+    /// output.
+    ///
+    /// This mechanism exists to delay the deletion of previous subscribe results from the target
+    /// storage collection when an introspection subscribe is reinstalled. After reinstallation it
+    /// can take a while for the new subscribe dataflow to produce its snapshot and keeping the old
+    /// introspection data around in the meantime makes for a better UX than removing it.
+    #[derivative(Debug = "ignore")]
+    deferred_write: Option<StorageWriteOp>,
+}
+
+impl IntrospectionSubscribe {
+    /// Returns a `StorageWriteOp` that instructs the deletion of all data previously written by
+    /// this subscribe.
+    fn delete_write_op(&self) -> StorageWriteOp {
+        let target_replica = self.replica_id.to_string();
+        let filter = Box::new(move |row: &Row| {
+            let replica_id = row.unpack_first();
+            replica_id == Datum::String(&target_replica)
+        });
+        StorageWriteOp::Delete { filter }
+    }
 }
 
 impl Coordinator {
@@ -119,6 +143,7 @@ impl Coordinator {
             cluster_id,
             replica_id,
             spec,
+            deferred_write: None,
         };
         self.introspection_subscribes.insert(id, subscribe);
 
@@ -334,35 +359,59 @@ impl Coordinator {
             .compute
             .drop_collections(subscribe.cluster_id, vec![id]);
 
-        let target_replica = subscribe.replica_id.to_string();
-        let filter = Box::new(move |row: &Row| {
-            let replica_id = row.unpack_first();
-            replica_id == Datum::String(&target_replica)
-        });
         self.controller
             .storage
             .update_introspection_collection(
                 subscribe.spec.introspection_type,
-                StorageWriteOp::Delete { filter },
+                subscribe.delete_write_op(),
             )
             .await;
     }
 
     async fn reinstall_introspection_subscribe(&mut self, id: GlobalId) {
-        let Some(subscribe) = self.introspection_subscribes.get(&id) else {
+        let Some(mut subscribe) = self.introspection_subscribes.remove(&id) else {
             soft_panic_or_log!("attempt to reinstall unknown introspection subscribe (id={id})");
             return;
         };
 
-        let subscribe = subscribe.clone();
+        // Note that we don't simply call `drop_introspection_subscribe` here because that would
+        // cause an immediate deletion of all data previously reported by the subscribe from its
+        // target storage collection. We'd like to not present empty introspection data while the
+        // replica reconnects, so we want to delay the `StorageWriteOp::Delete` until then.
 
-        self.drop_introspection_subscribe(id).await;
-        self.install_introspection_subscribe(
-            subscribe.cluster_id,
-            subscribe.replica_id,
-            subscribe.spec,
-        )
-        .await;
+        let IntrospectionSubscribe {
+            cluster_id,
+            replica_id,
+            spec,
+            ..
+        } = subscribe;
+        let old_id = id;
+        let new_id = self.allocate_transient_id();
+
+        info!(
+            %old_id, %new_id, %replica_id,
+            type_ = ?subscribe.spec.introspection_type,
+            "reinstalling introspection subscribe",
+        );
+
+        if let Err(error) = self
+            .controller
+            .compute
+            .drop_collections(cluster_id, vec![old_id])
+        {
+            soft_panic_or_log!(
+                "error dropping compute collection for introspection subscribe: {error} \
+                 (id={old_id}, cluster_id={cluster_id})"
+            );
+        }
+
+        // Ensure that the contents of the target storage collection are cleaned when the new
+        // subscribe starts reporting data.
+        subscribe.deferred_write = Some(subscribe.delete_write_op());
+
+        self.introspection_subscribes.insert(new_id, subscribe);
+        self.sequence_introspection_subscribe(new_id, spec, cluster_id, replica_id)
+            .await;
     }
 
     /// Processes a batch returned by an introspection subscribe.
@@ -374,7 +423,7 @@ impl Coordinator {
         id: GlobalId,
         batch: SubscribeBatch,
     ) {
-        let Some(subscribe) = self.introspection_subscribes.get(&id) else {
+        let Some(subscribe) = self.introspection_subscribes.get_mut(&id) else {
             soft_panic_or_log!("updates for unknown introspection subscribe (id={id})");
             return;
         };
@@ -405,6 +454,15 @@ impl Coordinator {
             packer.push(Datum::String(&replica_id));
             packer.extend_by_row(&row);
             new_updates.push((new_row.clone(), diff));
+        }
+
+        // If we have a pending deferred write, we need to apply it _before_ the append of the new
+        // rows.
+        if let Some(op) = subscribe.deferred_write.take() {
+            self.controller
+                .storage
+                .update_introspection_collection(subscribe.spec.introspection_type, op)
+                .await;
         }
 
         self.controller
