@@ -76,7 +76,12 @@ def create_postgres(
 
 
 SERVICES = [
-    Materialized(volumes_extra=["secrets:/share/secrets"]),
+    Materialized(
+        volumes_extra=["secrets:/share/secrets"],
+        additional_system_parameter_defaults={
+            "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+        },
+    ),
     Testdrive(),
     TestCerts(),
     Toxiproxy(),
