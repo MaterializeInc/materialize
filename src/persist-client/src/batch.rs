@@ -31,6 +31,7 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
+use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
@@ -337,6 +338,7 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
     pub(crate) write_diffs_sum: bool,
+    pub(crate) encoding_config: EncodingConfig,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -363,6 +365,18 @@ pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(
     "persist_batch_record_part_format",
     false,
     "Wether we record the format of the Part in state (Materialize).",
+);
+
+pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
+    "persist_encoding_enable_dictionary",
+    false,
+    "A feature flag to enable dictionary encoding for Parquet data (Materialize).",
+);
+
+pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new(
+    "persist_encoding_compression_format",
+    "none",
+    "A feature flag to enable compression of Parquet data (Materialize).",
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -416,6 +430,10 @@ impl BatchBuilderConfig {
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
             write_diffs_sum: WRITE_DIFFS_SUM.get(value),
+            encoding_config: EncodingConfig {
+                use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
+                compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
+            },
         }
     }
 }
@@ -1065,7 +1083,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                 let encode_start = Instant::now();
                 let mut buf = Vec::new();
-                updates.encode(&mut buf, &metrics_.columnar);
+                updates.encode(&mut buf, &metrics_.columnar, &cfg.encoding_config);
 
                 // Drop batch as soon as we can to reclaim its memory.
                 drop(updates);

@@ -17,10 +17,11 @@ use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::Codec64;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, Encoding};
+use parquet::basic::Encoding;
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use timely::progress::{Antichain, Timestamp};
@@ -46,12 +47,13 @@ pub fn encode_trace_parquet<W: Write + Send, T: Timestamp + Codec64>(
     w: &mut W,
     batch: &BlobTraceBatchPart<T>,
     metrics: &ColumnarMetrics,
+    cfg: &EncodingConfig,
 ) -> Result<(), Error> {
     // Better to error now than write out an invalid batch.
     batch.validate()?;
 
     let inline_meta = encode_trace_inline_meta(batch);
-    encode_parquet_kvtd(w, inline_meta, &batch.updates, metrics)
+    encode_parquet_kvtd(w, inline_meta, &batch.updates, metrics, cfg)
 }
 
 /// Decodes a BlobTraceBatchPart from the Parquet format.
@@ -109,16 +111,17 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     inline_base64: String,
     updates: &BlobTraceUpdates,
     metrics: &ColumnarMetrics,
+    cfg: &EncodingConfig,
 ) -> Result<(), Error> {
     let metadata = KeyValue::new(INLINE_METADATA_KEY.to_string(), inline_base64);
 
-    // We configure our writer to match the defaults from `arrow2` so our blobs
-    // can roundtrip. Eventually we should tune these settings.
+    // Note: most of these settings are the defaults from `arrow2` which we
+    // previously used and maintain until we tune with benchmarking.
     let properties = WriterProperties::builder()
-        .set_dictionary_enabled(false)
+        .set_dictionary_enabled(cfg.use_dictionary)
         .set_encoding(Encoding::PLAIN)
         .set_statistics_enabled(EnabledStatistics::None)
-        .set_compression(Compression::UNCOMPRESSED)
+        .set_compression(cfg.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
         .set_max_row_group_size(usize::MAX)
