@@ -133,6 +133,10 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         apply_row_filter: bool,
     ) -> None:
         self._print_text(f"Setup for evaluation strategy '{evaluation_strategy.name}':")
+
+        if evaluation_strategy.additional_setup_info is not None:
+            self._print_text(evaluation_strategy.additional_setup_info)
+
         row_selection = (
             query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
         )

@@ -61,6 +61,7 @@ class EvaluationStrategy:
         self.object_name_base = object_name_base
         self.simple_db_object_name = simple_db_object_name
         self.sql_adjuster = sql_adjuster
+        self.additional_setup_info: str | None = None
 
     def generate_sources(
         self,
