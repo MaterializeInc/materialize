@@ -16,13 +16,10 @@ from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.execution.evaluation_strategy import (
-    EVALUATION_STRATEGY_NAME_CTF,
     EVALUATION_STRATEGY_NAME_DFR,
     INTERNAL_EVALUATION_STRATEGY_NAMES,
-    ConstantFoldingEvaluation,
-    DataFlowRenderingEvaluation,
     EvaluationStrategy,
-    EvaluationStrategyKey,
+    create_internal_evaluation_strategy_twice,
 )
 from materialize.output_consistency.execution.query_output_mode import (
     QUERY_OUTPUT_MODE_CHOICES,
@@ -139,20 +136,9 @@ class VersionConsistencyTest(OutputConsistencyTest):
             self.evaluation_strategy_name is not None
         ), "Evaluation strategy name is not initialized"
 
-        strategies: list[EvaluationStrategy]
-
-        if self.evaluation_strategy_name == EVALUATION_STRATEGY_NAME_DFR:
-            strategies = [DataFlowRenderingEvaluation(), DataFlowRenderingEvaluation()]
-            strategies[1].identifier = (
-                EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB
-            )
-        elif self.evaluation_strategy_name == EVALUATION_STRATEGY_NAME_CTF:
-            strategies = [ConstantFoldingEvaluation(), ConstantFoldingEvaluation()]
-            strategies[1].identifier = (
-                EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB
-            )
-        else:
-            raise RuntimeError(f"Unexpected name: {self.evaluation_strategy_name}")
+        strategies = create_internal_evaluation_strategy_twice(
+            self.evaluation_strategy_name
+        )
 
         for i, strategy in enumerate(strategies):
             number = i + 1

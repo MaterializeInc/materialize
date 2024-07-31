@@ -316,3 +316,28 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         )
 
         return [create_view_statement]
+
+
+def create_internal_evaluation_strategy_twice(
+    evaluation_strategy_name: str,
+) -> list[EvaluationStrategy]:
+    strategies: list[EvaluationStrategy]
+
+    if evaluation_strategy_name == EVALUATION_STRATEGY_NAME_DFR:
+        strategies = [DataFlowRenderingEvaluation(), DataFlowRenderingEvaluation()]
+        strategies[1].identifier = EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB
+        return strategies
+
+    if evaluation_strategy_name == EVALUATION_STRATEGY_NAME_CTF:
+        strategies = [ConstantFoldingEvaluation(), ConstantFoldingEvaluation()]
+        strategies[1].identifier = EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB
+        return strategies
+
+    raise RuntimeError(f"Unexpected strategy name: { evaluation_strategy_name}")
+
+
+def is_other_db_evaluation_strategy(evaluation_key: EvaluationStrategyKey) -> bool:
+    return evaluation_key in {
+        EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB,
+        EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB,
+    }
