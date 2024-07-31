@@ -1022,10 +1022,12 @@ async fn handle_list_scim_groups(
     Ok(Json(SCIMGroupsResponse { groups: groups_vec }))
 }
 
+// https://docs.frontegg.com/reference/groupscontrollerv1_creategroup
 async fn handle_create_scim_group(
     State(context): State<Arc<Context>>,
     Json(params): Json<GroupCreateParams>,
 ) -> Result<(StatusCode, Json<ScimGroup>), StatusCode> {
+    let now = Utc::now();
     let new_group = ScimGroup {
         id: Uuid::new_v4().to_string(),
         name: params.name,
@@ -1035,6 +1037,8 @@ async fn handle_create_scim_group(
         users: Vec::new(),
         managed_by: "".to_string(),
         color: params.color.unwrap_or_default(),
+        created_at: now,
+        updated_at: now,
     };
 
     let mut groups = context.groups.lock().unwrap();
@@ -1076,6 +1080,7 @@ async fn handle_update_scim_group(
         if let Some(metadata) = params.metadata {
             group.metadata = metadata;
         }
+        group.updated_at = Utc::now();
         Ok(Json(group.clone()))
     } else {
         Err(StatusCode::NOT_FOUND)
@@ -1130,7 +1135,7 @@ async fn handle_add_roles_to_group(
 async fn handle_remove_roles_from_group(
     State(context): State<Arc<Context>>,
     Path(group_id): Path<String>,
-    Json(payload): Json<AddRolesToGroupParams>,
+    Json(payload): Json<RemoveRolesFromGroupParams>,
 ) -> Result<StatusCode, StatusCode> {
     let mut groups = context.groups.lock().unwrap();
 
@@ -1146,6 +1151,12 @@ async fn handle_remove_roles_from_group(
 
 #[derive(Deserialize)]
 struct AddRolesToGroupParams {
+    #[serde(rename = "roleIds")]
+    role_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RemoveRolesFromGroupParams {
     #[serde(rename = "roleIds")]
     role_ids: Vec<String>,
 }
@@ -1191,39 +1202,55 @@ async fn handle_remove_users_from_group(
     }
 }
 
-#[derive(Deserialize)]
-struct AddUsersToGroupParams {
-    #[serde(rename = "userIds")]
-    user_ids: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct RemoveUsersFromGroupParams {
-    #[serde(rename = "userIds")]
-    user_ids: Vec<String>,
-}
-
 async fn handle_list_scim_configurations(
     State(context): State<Arc<Context>>,
-) -> Json<Vec<SCIM2Configuration>> {
+) -> Json<Vec<SCIM2ConfigurationResponse>> {
     let configs = context.scim_configurations.lock().unwrap();
-    Json(configs.values().cloned().collect())
+    let responses: Vec<SCIM2ConfigurationResponse> = configs
+        .values()
+        .map(|config| SCIM2ConfigurationResponse {
+            id: config.id.clone(),
+            source: config.source.clone(),
+            tenant_id: config.tenant_id.clone(),
+            connection_name: config.connection_name.clone(),
+            sync_to_user_management: config.sync_to_user_management,
+            created_at: config.created_at,
+            token: config.token.clone(),
+        })
+        .collect();
+    Json(responses)
 }
 
 async fn handle_create_scim_configuration(
     State(context): State<Arc<Context>>,
-    Json(mut new_config): Json<SCIM2Configuration>,
-) -> Json<SCIM2Configuration> {
-    new_config.id = Uuid::new_v4().to_string();
-    new_config.created_at = Utc::now();
-    new_config.token = Uuid::new_v4().to_string();
+    Json(request): Json<SCIM2ConfigurationCreateRequest>,
+) -> Result<Json<SCIM2ConfigurationResponse>, StatusCode> {
+    let now = Utc::now();
+    let new_config = SCIM2ConfigurationStorage {
+        id: Uuid::new_v4().to_string(),
+        source: request.source,
+        tenant_id: request.tenant_id,
+        connection_name: request.connection_name,
+        sync_to_user_management: request.sync_to_user_management,
+        created_at: now,
+        token: Uuid::new_v4().to_string(),
+    };
+
+    let response = SCIM2ConfigurationResponse {
+        id: new_config.id.clone(),
+        source: new_config.source.clone(),
+        tenant_id: new_config.tenant_id.clone(),
+        connection_name: new_config.connection_name.clone(),
+        sync_to_user_management: new_config.sync_to_user_management,
+        created_at: new_config.created_at,
+        token: new_config.token.clone(),
+    };
 
     let mut configs = context.scim_configurations.lock().unwrap();
-    configs.insert(new_config.id.clone(), new_config.clone());
+    configs.insert(new_config.id.clone(), new_config);
 
-    Json(new_config)
+    Ok(Json(response))
 }
-
 async fn handle_delete_scim_configuration(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -1542,6 +1569,10 @@ pub struct ScimGroup {
     #[serde(rename = "managedBy")]
     pub managed_by: String,
     pub color: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: DateTime<Utc>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -1576,8 +1607,19 @@ pub struct GroupUpdateParams {
     pub metadata: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SCIM2Configuration {
+#[derive(Deserialize)]
+pub struct SCIM2ConfigurationCreateRequest {
+    pub source: String,
+    #[serde(rename = "tenantId")]
+    pub tenant_id: String,
+    #[serde(rename = "connectionName")]
+    pub connection_name: String,
+    #[serde(rename = "syncToUserManagement")]
+    pub sync_to_user_management: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct SCIM2ConfigurationResponse {
     pub id: String,
     pub source: String,
     #[serde(rename = "tenantId")]
@@ -1591,9 +1633,32 @@ pub struct SCIM2Configuration {
     pub token: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct SCIM2ConfigurationStorage {
+    pub id: String,
+    pub source: String,
+    pub tenant_id: String,
+    pub connection_name: String,
+    pub sync_to_user_management: bool,
+    pub created_at: DateTime<Utc>,
+    pub token: String,
+}
+
 #[derive(Serialize)]
 pub struct SCIMGroupsResponse {
     pub groups: Vec<ScimGroup>,
+}
+
+#[derive(Deserialize)]
+struct AddUsersToGroupParams {
+    #[serde(rename = "userIds")]
+    user_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RemoveUsersFromGroupParams {
+    #[serde(rename = "userIds")]
+    user_ids: Vec<String>,
 }
 
 impl From<SSOConfigStorage> for SSOConfigResponse {
@@ -1686,5 +1751,5 @@ struct Context {
     roles: Arc<Vec<UserRole>>,
     sso_configs: Mutex<BTreeMap<String, SSOConfigStorage>>,
     groups: Mutex<BTreeMap<String, ScimGroup>>,
-    scim_configurations: Mutex<BTreeMap<String, SCIM2Configuration>>,
+    scim_configurations: Mutex<BTreeMap<String, SCIM2ConfigurationStorage>>,
 }
