@@ -422,7 +422,7 @@ where
             // "trick" the write task into thinking that it's not in read-only mode so something is
             // advancing this new shard.
             assert!(id.is_system(), "unexpected non-system global id: {id:?}");
-            info!("writing to migrated append only collection {id} in read-only mode");
+            info!("writing to migrated storage collection {id} in read-only mode");
             self.hacky_always_false_watch.1.clone()
         } else {
             self.read_only_rx.clone()
