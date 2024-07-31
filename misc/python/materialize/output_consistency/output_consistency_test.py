@@ -65,6 +65,7 @@ class OutputConsistencyTest:
         mz_system_connection: Connection,
         args: argparse.Namespace,
         query_output_mode: QueryOutputMode,
+        override_max_runtime_in_sec: int | None = None,
     ) -> ConsistencyTestSummary:
         """Entry point for output consistency tests"""
 
@@ -76,7 +77,7 @@ class OutputConsistencyTest:
             args.fail_fast,
             args.verbose,
             args.max_cols_per_query,
-            args.max_runtime_in_sec,
+            override_max_runtime_in_sec or args.max_runtime_in_sec,
             args.max_iterations,
             args.avoid_expressions_expecting_db_error,
             args.disable_predefined_queries,
