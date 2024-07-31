@@ -252,9 +252,7 @@ def try_get_remote_name_by_url(url: str) -> str | None:
     result = spawn.capture(["git", "remote", "--verbose"])
     for line in result.splitlines():
         remote, desc = line.split("\t")
-        if desc.lower() == f"{url} (fetch)".lower():
-            return remote
-        if f"{desc.lower()}.git" == f"{url} (fetch)".lower():
+        if desc.lower() in (f"{url} (fetch)".lower(), f"{url}.git (fetch)".lower()):
             return remote
     return None
 
