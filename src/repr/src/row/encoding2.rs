@@ -858,6 +858,10 @@ enum DatumColumnDecoder {
     Range(BinaryArray),
     MzAclItem(BinaryArray),
     AclItem(FixedSizeBinaryArray),
+    SingleValue {
+        value: Datum<'static>,
+        len: usize,
+    },
 }
 
 impl DatumColumnDecoder {
@@ -1120,6 +1124,12 @@ impl DatumColumnDecoder {
                 // Return early because we've already packed the necessary Datums.
                 return;
             }
+            DatumColumnDecoder::SingleValue { value, len } => {
+                if idx > *len {
+                    panic!("Out of bounds, indexing at {idx} but length is {len}");
+                }
+                Some(*value)
+            }
         };
 
         match datum {
@@ -1158,29 +1168,28 @@ impl RowColumnarDecoder {
     ///
     /// Returns an error if the schema of the [`StructArray`] does not match
     /// the provided [`RelationDesc`].
-    pub fn new(col: StructArray, desc: &RelationDesc) -> Result<Self, anyhow::Error> {
-        let inner_columns = col.columns();
+    pub fn new(col: StructArray, desc: &RelationDesc) -> Result<Self, anyhow::Error> {        
         let desc_columns = desc.typ().columns();
-
-        if inner_columns.len() != desc_columns.len() {
-            anyhow::bail!(
-                "provided array has {inner_columns:?}, relation desc has {desc_columns:?}"
-            );
-        }
-
         // For performance reasons we downcast just a single time.
         let mut decoders = Vec::with_capacity(desc_columns.len());
 
         // The columns of the `StructArray` are named with their column index.
         for (col_idx, col_type) in desc_columns.iter().enumerate() {
             let field_name = col_idx.to_string();
-            let column = col.column_by_name(&field_name).ok_or_else(|| {
-                anyhow::anyhow!(
+            let decoder = match col.column_by_name(&field_name) {
+                Some(col) => array_to_decoder(col, &col_type.scalar_type)?,
+                // Fill in missing columns with a default value.
+                //
+                // TODO(parkmycar): Make sure the existing columns match a known version of `RelationDesc`.
+                None if col_idx < desc_columns.len() => DatumColumnDecoder::SingleValue {
+                    value: Datum::Null,
+                    len: usize::MAX,
+                },
+                None => anyhow::bail!(
                     "StructArray did not contain column name {field_name}, found {:?}",
                     col.column_names()
-                )
-            })?;
-            let decoder = array_to_decoder(column, &col_type.scalar_type)?;
+                ),
+            };
             decoders.push(decoder);
         }
 

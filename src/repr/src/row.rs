@@ -130,15 +130,22 @@ impl Row {
             col_idx += 1;
         }
 
-        // TODO(parkmycar): This is where we'll add new default values to Codec
-        // data whose upstream relation has had columns added.
+        let num_columns = desc.typ().column_types.len();
+
+        // TODO(parkmycar): Make sure the already pushed data matches V0 of `RelationDesc`.
+        if col_idx < num_columns {
+            let missing_columns = col_idx..num_columns;
+            for _ in missing_columns {
+                packer.push(Datum::Null);
+                col_idx += 1;
+            }
+        }
 
         // HACK(parkmycar): Only validate that the decoded Row matches the RelationDesc if it was
         // non-empty. We have an optimization for queries like COUNT(*) that returns a fake empty
         // Part instead of decoding the data, which this assertion will fail on.
         //
         // TODO(#28146): Remove the check for if the num_columns is 0.
-        let num_columns = desc.typ().column_types.len();
         if num_columns != 0 && col_idx != 0 {
             mz_ore::soft_assert_eq_or_log!(
                 col_idx,
