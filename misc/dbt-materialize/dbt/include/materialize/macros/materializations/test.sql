@@ -69,8 +69,13 @@
   {% set fail_calc = config.get('fail_calc') %}
   {% set warn_if = config.get('warn_if') %}
   {% set error_if = config.get('error_if') %}
+  --Tests compile to ad-hoc queries, which need a cluster to run against. If no
+  --cluster is configured for data tests, use the target cluster from
+  --profiles.yml.
   {% set cluster = config.get('cluster') %}
-  {% if cluster == none %}{% set cluster = target.cluster %}{% endif %}
+  {% if cluster == none %}
+    {% set cluster = target.cluster %}
+  {% endif %}
 
   {% call statement('main', fetch_result=True) -%}
 
