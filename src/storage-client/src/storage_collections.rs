@@ -1576,19 +1576,27 @@ where
                     // establishing a new persist connection, still have data we
                     // said _could_ be compacted.
                     if PartialOrder::less_than(&data_shard_since, &dependency_since) {
-                        // The dependency since cannot be in advance of the
-                        // dependent upper unless the collection is new. If the
-                        // dependency since advanced past the dependent's upper,
-                        // the dependent cannot read data from the dependency at
-                        // its upper.
+                        // The dependency since cannot be beyond the dependent
+                        // (our) upper unless the collection is new. In
+                        // practice, the depdenency is the remap shard of a
+                        // source (export), and if the since is allowed to
+                        // "catch up" to the upper, that is `upper <= since`, a
+                        // restarting ingestion cannot differentiate between
+                        // updates that have already been written out to the
+                        // backing persist shard and updates that have yet to be
+                        // written. We would write duplicate updates.
                         //
-                        // Another way of understanding that this is a problem
-                        // is that this means that the read hold installed on
-                        // the dependency was probably not been upheld––if it
-                        // were, the dependency's since could not have advanced
-                        // as far the dependent's upper.
+                        // If this check fails, it means that the read hold
+                        // installed on the dependency was probably not upheld
+                        // –– if it were, the dependency's since could not have
+                        // advanced as far the dependent's upper.
+                        //
+                        // We don't care about the dependency since when the
+                        // write frontier is empty. In that case, no-one can
+                        // write down any more updates.
                         mz_ore::soft_assert_or_log!(
                             write_frontier.elements() == &[T::minimum()]
+                                || write_frontier.is_empty()
                                 || PartialOrder::less_than(&dependency_since, write_frontier),
                             "dependency ({dep}) since has advanced past dependent ({id}) upper \n
                             dependent ({id}): since {:?}, upper {:?} \n
