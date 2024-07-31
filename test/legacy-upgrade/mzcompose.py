@@ -227,7 +227,8 @@ def test_upgrade_from_version(
     with c.override(
         Testdrive(
             external_cockroach=True,
-            validate_catalog_store=True,
+            # TODO(def-) Reenable when #28636 is fixed
+            validate_catalog_store=False,
             volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
         )
     ):
