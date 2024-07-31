@@ -13,6 +13,10 @@ Webhook sources let your applications push webhook events into Materialize. This
 quickstart uses an embedded **webhook event generator** that makes it easier for
 you to learn and prototype with no external dependencies.
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Before you begin
 
 All you need is a Materialize account. If you already have one —

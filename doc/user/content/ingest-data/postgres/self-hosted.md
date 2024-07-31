@@ -13,6 +13,10 @@ menu:
 This page shows you how to stream data from a self-hosted PostgreSQL database to
 Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Before you begin
 
 {{% postgres-direct/before-you-begin %}}

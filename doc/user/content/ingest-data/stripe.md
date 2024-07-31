@@ -12,6 +12,10 @@ aliases:
 This guide walks through the steps to ingest data from [Stripe](https://stripe.com/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ### Before you begin
 
 Ensure that you have a Stripe account.

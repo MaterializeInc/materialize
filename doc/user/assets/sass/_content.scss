@@ -142,7 +142,8 @@ p+p {
 
     pre,
     .warning,
-    .note {
+    .note,
+	.tip {
         font-size: 1.5rem;
         font-weight: 300;
     }
@@ -505,6 +506,34 @@ p+p {
         }
     }
 
+    .tip {
+        background: var(--tip);
+        border: 1px solid var(--tip-border);
+
+        a {
+            &:hover,
+            &:focus {
+                color: var(--sub) !important;
+            }
+
+            code {
+                &:hover,
+                &:focus {
+                    color: var(--sub) !important;
+                }
+            }
+        }
+
+        &::after {
+            border-color: var(--bg) var(--bg) var(--tip-after) var(--tip-after);
+            background: var(--tip-after);
+        }
+
+        .gutter {
+            color: var(--tip-gutter);
+        }
+    }
+
     .public-preview {
         background: var(--public-preview);
         border: 1px solid var(--public-preview-border);
@@ -522,6 +551,7 @@ p+p {
 
     .warning,
     .note,
+    .tip,
     .private-preview,
     .public-preview {
         box-sizing: border-box;
@@ -1125,6 +1155,17 @@ body.dark .content {
         &::after {
             border-color: --var(--note-border);
             background: var(--note);
+        }
+    }
+
+    .tip {
+        a {
+            color: var(--link);
+        }
+
+        &::after {
+            border-color: --var(--tip-border);
+            background: var(--tip);
         }
     }
 

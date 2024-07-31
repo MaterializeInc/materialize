@@ -17,6 +17,10 @@ with the Postgres ones. We should include spill to disk in the guidance then."
 This guide goes through the required steps to connect Materialize to a
 self-hosted Kafka cluster.
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Before you begin
 
 Before you begin, you must have:

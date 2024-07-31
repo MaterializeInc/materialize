@@ -22,6 +22,10 @@ Storage, Azure Blob Storage) and offers benefits such as no inter-AZ bandwidth
 costs and no local disks management. This guide highlights its integration with
 Materialize using [Fly.io](https://fly.io/).
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 #### Before you begin
 
 Ensure you have the following:

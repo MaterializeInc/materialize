@@ -18,6 +18,10 @@ database to downstream consumers based on its binary log (`binlog`). In this
 guide, we'll cover how to use Materialize to create and efficiently maintain
 real-time materialized views on top of CDC data.
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Kafka + Debezium
 
 You can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium)

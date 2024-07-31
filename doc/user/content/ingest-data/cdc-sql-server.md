@@ -18,6 +18,10 @@ Server database to downstream consumers. In this guide, we’ll cover how to use
 Materialize to create and efficiently maintain real-time materialized views on
 top of CDC data.
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Kafka + Debezium
 
 Use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium)

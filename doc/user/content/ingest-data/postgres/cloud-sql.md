@@ -13,6 +13,11 @@ menu:
 This page shows you how to stream data from [Google Cloud SQL for PostgreSQL](https://cloud.google.com/sql/postgresql)
 to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
+
 ## Before you begin
 
 {{% postgres-direct/before-you-begin %}}

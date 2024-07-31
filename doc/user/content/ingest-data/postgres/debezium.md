@@ -20,6 +20,10 @@ changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the
 upstream database and publishes them as events to Kafka using Kafka
 Connect-compatible connectors.
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## A. Configure database
 
 **Minimum requirements:** PostgreSQL 11+

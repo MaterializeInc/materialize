@@ -19,6 +19,10 @@ troubleshooting guidance for slow or unresponsive queries, check out the
 [`Transform data` troubleshooting](/transform-data/troubleshooting) guide
 instead.
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Why isn't my source ingesting data?
 
 First, check the status of your source in the Materialize console by navigating
