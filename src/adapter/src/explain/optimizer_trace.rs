@@ -16,7 +16,7 @@ use mz_catalog::memory::objects::Cluster;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing, StatisticsOracle};
 use mz_ore::collections::CollectionExt;
 use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{
@@ -353,7 +353,7 @@ impl OptimizerTrace {
             config,
             features,
             humanizer,
-            cardinality_stats: Default::default(), // empty stats // !!!(mgree) implement
+            cardinality_stats: &StatisticsOracle::default(), // empty stats // !!!(mgree) implement
             used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
             duration: Default::default(),
@@ -376,7 +376,7 @@ impl OptimizerTrace {
             config,
             features,
             humanizer,
-            cardinality_stats: Default::default(), // empty stats // !!!(mgree) implement
+            cardinality_stats: &StatisticsOracle::default(), // empty stats // !!!(mgree) implement
             used_indexes: Default::default(),
             finishing: row_set_finishing,
             duration: Default::default(),

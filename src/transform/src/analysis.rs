@@ -1262,11 +1262,9 @@ mod cardinality {
     use std::collections::{BTreeMap, BTreeSet};
 
     use mz_expr::{
-        BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
-        VariadicFunc,
+        BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, StatisticsOracle, TableFunc, UnaryFunc, VariadicFunc
     };
     use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
-    use mz_repr::GlobalId;
 
     use ordered_float::OrderedFloat;
 
@@ -1276,12 +1274,12 @@ mod cardinality {
     #[allow(missing_debug_implementations)]
     pub struct Cardinality {
         /// Cardinalities for globally named entities
-        pub stats: BTreeMap<GlobalId, usize>,
+        pub stats: StatisticsOracle,
     }
 
     impl Cardinality {
         /// A cardinality estimator with provided statistics for the given global identifiers
-        pub fn with_stats(stats: BTreeMap<GlobalId, usize>) -> Self {
+        pub fn with_stats(stats: StatisticsOracle) -> Self {
             Cardinality { stats }
         }
     }
@@ -1289,7 +1287,7 @@ mod cardinality {
     impl Default for Cardinality {
         fn default() -> Self {
             Cardinality {
-                stats: BTreeMap::new(),
+                stats: StatisticsOracle::default(),
             }
         }
     }
@@ -1742,7 +1740,6 @@ mod cardinality {
 
                         self.stats
                             .get(id)
-                            .copied()
                             .map(CardinalityEstimate::from)
                             .unwrap_or(CardinalityEstimate::Unknown)
                     }

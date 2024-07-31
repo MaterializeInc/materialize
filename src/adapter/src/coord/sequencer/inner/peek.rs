@@ -15,7 +15,7 @@ use http::Uri;
 use itertools::Either;
 use maplit::btreemap;
 use mz_controller_types::ClusterId;
-use mz_expr::{CollectionPlan, ResultSpec};
+use mz_expr::{CollectionPlan, ResultSpec, StatisticsOracle};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -28,7 +28,6 @@ use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_transform::EmptyStatisticsOracle;
 use tokio::sync::oneshot;
 use tracing::warn;
 use tracing::{Instrument, Span};
@@ -572,7 +571,7 @@ impl Coordinator {
             .await
             .unwrap_or_else(|e| {
                 eprintln!("MGREE statistics_oracle = Err({e:?})");
-                Box::new(EmptyStatisticsOracle)
+                StatisticsOracle::default()
             });
         let session = session.meta();
         let now = self.catalog().config().now.clone();
@@ -588,6 +587,7 @@ impl Coordinator {
         }
 
         let span = Span::current();
+        let optimizer_stats = stats.clone();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize peek",
             move || {
@@ -603,7 +603,7 @@ impl Coordinator {
                                 // HIR ⇒ MIR lowering and MIR optimization (local)
                                 let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                                 // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
+                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, optimizer_stats);
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                                 let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -614,7 +614,7 @@ impl Coordinator {
                                 // HIR ⇒ MIR lowering and MIR optimization (local and global)
                                 let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                                 // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
+                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, optimizer_stats);
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                                 let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -664,6 +664,7 @@ impl Coordinator {
                                         validity,
                                         optimizer,
                                         df_meta,
+                                        stats,
                                         explain_ctx,
                                         insights_ctx,
                                     })
@@ -677,6 +678,7 @@ impl Coordinator {
                                         target_replica,
                                         source_ids,
                                         determination,
+                                        stats,
                                         optimizer,
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         global_lir_plan,
@@ -692,6 +694,7 @@ impl Coordinator {
                                     target_replica,
                                     source_ids,
                                     determination,
+                                    stats,
                                     optimizer,
                                     plan_insights_optimizer_trace: None,
                                     global_lir_plan,
@@ -752,6 +755,7 @@ impl Coordinator {
                                     validity,
                                     optimizer,
                                     df_meta: Default::default(),
+                                    stats,
                                     explain_ctx,
                                     insights_ctx: None,
                             })
@@ -841,6 +845,7 @@ impl Coordinator {
             target_replica,
             source_ids,
             determination,
+            stats,
             optimizer,
             plan_insights_optimizer_trace,
             global_lir_plan,

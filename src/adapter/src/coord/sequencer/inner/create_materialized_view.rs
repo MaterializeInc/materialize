@@ -13,7 +13,7 @@ use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
-use mz_expr::{CollectionPlan, ResultSpec};
+use mz_expr::{CollectionPlan, ResultSpec, StatisticsOracle};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
@@ -30,7 +30,6 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
-use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -250,7 +249,7 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
-        let cardinality_stats = BTreeMap::new(); // !!!(mgree) implement
+        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) implement
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
@@ -259,7 +258,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
+                &cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
@@ -268,7 +267,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
+                &cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
@@ -282,7 +281,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
-                    cardinality_stats,
+                    &cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
@@ -298,7 +297,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
-                    cardinality_stats,
+                    &cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?

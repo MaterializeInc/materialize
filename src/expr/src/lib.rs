@@ -22,6 +22,7 @@ mod interpret;
 mod linear;
 mod relation;
 mod scalar;
+mod statistics;
 
 pub mod explain;
 pub mod virtual_syntax;
@@ -51,6 +52,7 @@ pub use scalar::{
     like_pattern, EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit,
     ProtoEvalError, ProtoMirScalarExpr,
 };
+pub use statistics::StatisticsOracle;
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.

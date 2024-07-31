@@ -18,7 +18,7 @@ use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
 };
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, StatisticsOracle};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -29,7 +29,7 @@ use mz_storage_types::sinks::S3UploadInfo;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::{StatisticsOracle, TransformCtx};
+use mz_transform::TransformCtx;
 use timely::progress::Antichain;
 use tracing::warn;
 
@@ -120,7 +120,7 @@ pub struct LocalMirPlan<T = Unresolved> {
 /// with attached environment context required for the next optimization stage.
 pub struct Resolved<'s> {
     timestamp_ctx: TimestampContext<Timestamp>,
-    stats: Box<dyn StatisticsOracle>,
+    stats: StatisticsOracle,
     session: &'s dyn SessionMetadata,
 }
 
@@ -159,9 +159,14 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
+        let stats = StatisticsOracle::default();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &stats,
+            &mut df_meta,
+        );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();
@@ -182,7 +187,7 @@ impl LocalMirPlan<Unresolved> {
         self,
         timestamp_ctx: TimestampContext<Timestamp>,
         session: &dyn SessionMetadata,
-        stats: Box<dyn StatisticsOracle>,
+        stats: StatisticsOracle,
     ) -> LocalMirPlan<Resolved> {
         LocalMirPlan {
             expr: self.expr,
@@ -313,7 +318,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Construct TransformCtx for global optimization.
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
-            &*stats,
+            &stats,
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,

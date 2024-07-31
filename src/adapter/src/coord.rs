@@ -107,7 +107,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
-use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, StatisticsOracle};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::TimeoutError;
@@ -510,6 +510,7 @@ pub struct PeekStageFinish {
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
+    stats: StatisticsOracle,
     optimizer: optimize::peek::Optimizer,
     /// When present, an optimizer trace to be used for emitting a plan insights
     /// notice.
@@ -533,6 +534,7 @@ pub struct PeekStageExplainPlan {
     validity: PlanValidity,
     optimizer: optimize::peek::Optimizer,
     df_meta: DataflowMetainfo,
+    stats: StatisticsOracle,
     explain_ctx: ExplainPlanContext,
     insights_ctx: Option<PlanInsightsContext>,
 }

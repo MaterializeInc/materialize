@@ -23,6 +23,7 @@ use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::ReplicaId;
+use mz_expr::StatisticsOracle;
 use mz_expr::{
     CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -94,7 +95,6 @@ use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
 use mz_storage_types::AlterCompatible;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
-use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch, OwnedMutexGuard};
 use tracing::{warn, Instrument, Span};
@@ -4551,46 +4551,29 @@ impl Coordinator {
     }
 }
 
-#[derive(Debug)]
-struct CachedStatisticsOracle {
-    cache: BTreeMap<GlobalId, usize>,
-}
+async fn new_statistics_oracle<T: TimelyTimestamp>(
+    ids: &BTreeSet<GlobalId>,
+    as_of: &Antichain<T>,
+    storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
+) -> Result<StatisticsOracle, StorageError<T>> {
+    let mut cache = BTreeMap::new();
 
-impl CachedStatisticsOracle {
-    pub async fn new<T: TimelyTimestamp>(
-        ids: &BTreeSet<GlobalId>,
-        as_of: &Antichain<T>,
-        storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
-    ) -> Result<Self, StorageError<T>> {
-        let mut cache = BTreeMap::new();
+    for id in ids {
+        let stats = storage.snapshot_stats(*id, as_of.clone()).await;
 
-        for id in ids {
-            let stats = storage.snapshot_stats(*id, as_of.clone()).await;
-
-            match stats {
-                Ok(stats) => {
-                    cache.insert(*id, stats.num_updates);
-                }
-                Err(StorageError::IdentifierMissing(id)) => {
-                    eprintln!("MGREE no statistics for {id}");
-                    ::tracing::debug!("no statistics for {id}")
-                }
-                Err(e) => return Err(e),
+        match stats {
+            Ok(stats) => {
+                cache.insert(*id, stats.num_updates);
             }
+            Err(StorageError::IdentifierMissing(id)) => {
+                eprintln!("MGREE no statistics for {id}");
+                ::tracing::debug!("no statistics for {id}")
+            }
+            Err(e) => return Err(e),
         }
-
-        Ok(Self { cache })
-    }
-}
-
-impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
-    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
-        self.cache.get(&id).map(|estimate| *estimate)
     }
 
-    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
-        self.cache.clone()
-    }
+    Ok(StatisticsOracle::from(cache))
 }
 
 impl Coordinator {
@@ -4600,9 +4583,9 @@ impl Coordinator {
         source_ids: &BTreeSet<GlobalId>,
         query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
-    ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
+    ) -> Result<StatisticsOracle, AdapterError> {
         if !session.vars().enable_session_cardinality_estimates() {
-            return Ok(Box::new(EmptyStatisticsOracle));
+            return Ok(StatisticsOracle::default());
         }
 
         let timeout = if is_oneshot {
@@ -4616,14 +4599,14 @@ impl Coordinator {
 
         let cached_stats = mz_ore::future::timeout(
             timeout,
-            CachedStatisticsOracle::new(source_ids, query_as_of, self.controller.storage.as_ref()),
+            new_statistics_oracle(source_ids, query_as_of, self.controller.storage.as_ref()),
         )
         .await;
 
         match cached_stats {
             Ok(stats) => {
                 eprintln!("MGREE successfully collected stats for {source_ids:?}");
-                Ok(Box::new(stats))
+                Ok(stats)
             }
             Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
                 eprintln!("MGREE timed out");
@@ -4633,7 +4616,7 @@ impl Coordinator {
                     timeout.as_millis()
                 );
 
-                Ok(Box::new(EmptyStatisticsOracle))
+                Ok(StatisticsOracle::default())
             }
             Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
         }

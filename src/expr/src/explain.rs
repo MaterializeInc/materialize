@@ -24,6 +24,7 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 
 use crate::interpret::{Interpreter, MfpEval, Trace};
+use crate::statistics::StatisticsOracle;
 use crate::visit::Visit;
 use crate::{
     AccessStrategy, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
@@ -43,7 +44,7 @@ pub struct ExplainContext<'a> {
     pub config: &'a ExplainConfig,
     pub features: &'a OptimizerFeatures,
     pub humanizer: &'a dyn ExprHumanizer,
-    pub cardinality_stats: BTreeMap<GlobalId, usize>,
+    pub cardinality_stats: &'a StatisticsOracle,
     pub used_indexes: UsedIndexes,
     pub finishing: Option<RowSetFinishing>,
     pub duration: Duration,
