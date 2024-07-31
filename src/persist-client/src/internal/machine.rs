@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use mz_dyncfg::{Config, ConfigSet};
@@ -1062,6 +1063,20 @@ where
                 }
             }
         }
+    }
+}
+
+pub(crate) struct ExpireFn(
+    /// This is stored on WriteHandle and ReadHandle, which we require to be
+    /// Send + Sync, but the Future is only Send and not Sync. Instead store a
+    /// FnOnce that returns the Future. This could also be made an `IntoFuture`,
+    /// once producing one of those is made easier.
+    pub(crate) Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send + Sync + 'static>,
+);
+
+impl Debug for ExpireFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExpireFn").finish_non_exhaustive()
     }
 }
 
