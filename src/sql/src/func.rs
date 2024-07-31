@@ -4366,7 +4366,7 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Interval { },
                 )
-            }) => Interval, oid::FUNC_AVG_INTERNAL_V1_INTERVAL_OID;
+            }) => Interval, oid::FUNC_MZ_AVG_PROMOTION_INTERVAL_OID;
         },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
