@@ -219,12 +219,7 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        // Capture the expression type, but remove statements about column nullability.
-        // Using such statements will optimize away equivalence expressions stating the same.
-        let mut expr_type = depends.results::<RelationType>().unwrap()[index].clone();
-        for typ in expr_type.as_mut().unwrap().iter_mut() {
-            typ.nullable = true;
-        }
+        let expr_type = depends.results::<RelationType>().unwrap()[index].clone();
         equivalences.as_mut().map(|e| e.minimize(&expr_type));
         equivalences
     }
@@ -345,7 +340,7 @@ impl EquivalenceClasses {
             for class in self.classes.iter_mut() {
                 for expr in class.iter_mut() {
                     let prev_expr = expr.clone();
-                    expr.reduce(columns);
+                    expr.reduce_safely(columns);
                     if &prev_expr != expr {
                         stable = false;
                     }
