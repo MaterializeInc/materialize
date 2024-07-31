@@ -251,6 +251,13 @@ pub trait StorageCollections: Debug {
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    /// Updates the [`RelationDesc`] for the specified table.
+    async fn alter_table_desc(
+        &self,
+        table_id: GlobalId,
+        new_desc: RelationDesc,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Drops the read capability for the sources and allows their resources to
     /// be reclaimed.
     ///
@@ -1746,6 +1753,34 @@ where
                 }
             }
         }
+
+        Ok(())
+    }
+
+    async fn alter_table_desc(
+        &self,
+        table_id: GlobalId,
+        new_desc: RelationDesc,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let mut self_collections = self.collections.lock().expect("lock poisoned");
+        let collection = self_collections
+            .get_mut(&table_id)
+            .ok_or_else(|| StorageError::IdentifierMissing(table_id))?;
+
+        // TODO(parkmycar): To support changing the `RelationDesc` of sources
+        // we'll need to cancel the currently running `BackgroundCmd` that
+        // fetches recent uppers. See `BackgroundCmd::Register`.
+        if !matches!(
+            &collection.description.data_source,
+            DataSource::Other(DataSourceOther::TableWrites)
+        ) {
+            return Err(StorageError::IdentifierInvalid(table_id));
+        }
+
+        collection.collection_metadata.relation_desc = new_desc.clone();
+        collection.description.desc = new_desc.clone();
+
+        debug!("altered table {table_id}'s RelationDesc");
 
         Ok(())
     }

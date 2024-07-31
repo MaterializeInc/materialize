@@ -1033,6 +1033,62 @@ where
         Ok(())
     }
 
+    async fn alter_table_desc(
+        &mut self,
+        table_id: GlobalId,
+        new_desc: RelationDesc,
+        forget_ts: Self::Timestamp,
+        register_ts: Self::Timestamp,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let shard_id = {
+            let Controller {
+                collections,
+                storage_collections,
+                ..
+            } = self;
+
+            // TODO(parkmycar): We're threading a needle here to make sure we don't
+            // leave either the Controller or StorageCollections in an inconsistent
+            // state. We should refactor this to be more robust.
+
+            // Before letting StorageCollections know, make sure we know about this
+            // collection.
+            let collection = collections
+                .get_mut(&table_id)
+                .ok_or(StorageError::IdentifierMissing(table_id))?;
+            if !matches!(
+                collection.data_source,
+                DataSource::Other(DataSourceOther::TableWrites)
+            ) {
+                return Err(StorageError::IdentifierInvalid(table_id));
+            }
+
+            // Now also let StorageCollections know!
+            storage_collections
+                .alter_table_desc(table_id, new_desc.clone())
+                .await?;
+            // StorageCollections was successfully updated, now we can update our
+            // in-memory state.
+            collection.collection_metadata.relation_desc = new_desc.clone();
+
+            collection.collection_metadata.data_shard
+        };
+
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .expect("invalid persist location");
+        let write_handle = self
+            .open_data_handles(&table_id, shard_id, new_desc.clone(), &persist_client)
+            .await;
+
+        self.persist_table_worker
+            .update(table_id, forget_ts, register_ts, write_handle);
+
+        Ok(())
+    }
+
     fn export(
         &self,
         id: GlobalId,
