@@ -195,13 +195,13 @@ where
                             if state.i >= mz_service::retry::INFO_MIN_RETRIES {
                                 info!(
                                     replica = ?self.replica_id,
-                                    "error connecting to replica, retrying in {:?}: {e}",
-                                    state.next_backoff.unwrap()
+                                    "error connecting to replica, retrying in {:?}: {e:#}",
+                                    state.next_backoff.unwrap(),
                                 );
                             } else {
                                 debug!(
                                     replica = ?self.replica_id,
-                                    "error connecting to replica, retrying in {:?}: {e}",
+                                    "error connecting to replica, retrying in {:?}: {e:#}",
                                     state.next_backoff.unwrap()
                                 );
                             }
