@@ -13,6 +13,10 @@ menu:
 This page shows you how to stream data from [Amazon Aurora MySQL](https://aws.amazon.com/rds/aurora/)
 to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
+{{< tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
+
 ## Before you begin
 
 {{% mysql-direct/before-you-begin %}}

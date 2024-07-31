@@ -19,7 +19,7 @@ Materialize to create and efficiently maintain real-time materialized views on
 top of CDC data.
 
 {{< tip >}}
-For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
 
 ## Kafka + Debezium

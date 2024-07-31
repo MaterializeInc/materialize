@@ -17,7 +17,7 @@ This guide goes through the required steps to connect Materialize to a Confluent
 Cloud Kafka cluster.
 
 {{< tip >}}
-For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
 
 If you already have a Confluent Cloud Kafka cluster, you can skip step 1 and

@@ -21,7 +21,7 @@ upstream database and publishes them as events to Kafka using Kafka
 Connect-compatible connectors.
 
 {{< tip >}}
-For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
 
 ## A. Configure database

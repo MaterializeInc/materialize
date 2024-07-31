@@ -306,13 +306,13 @@ DROP TABLE fraud_accounts;
 
 ## What's next?
 
-{{< note >}}
-For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
-{{< /note >}}
-
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
 To get started ingesting your own data from an external system like Kafka, MySQL
 or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
 navigate to **Data** > **Sources** > **New source** in the [Materialize Console](https://console.materialize.com/)
 to create your first source.
+
+For help getting started with your data or other questions about Materialize,
+you can schedule a [free guided
+trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).

@@ -17,7 +17,7 @@ with the Postgres ones. We should include spill to disk in the guidance then."
 This guide goes through the required steps to connect Materialize to an Amazon MSK cluster.
 
 {{< tip >}}
-For help getting started with your own data, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+{{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
 
 ## Before you begin
