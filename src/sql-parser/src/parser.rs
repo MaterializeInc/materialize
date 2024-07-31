@@ -7918,7 +7918,7 @@ impl<'a> Parser<'a> {
         // Explainees that represent a view only work in association with an
         // explicitly defined stage.
         if matches!((explainee.is_view(), &stage), (true, None)) {
-            let msg = format!("EXPLAIN statement for a view needs an explicit stage");
+            let msg = "EXPLAIN statement for a view needs an explicit stage".to_string();
             return Err(self.error(start, msg));
         }
 

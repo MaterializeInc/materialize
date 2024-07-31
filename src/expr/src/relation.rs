@@ -1692,7 +1692,7 @@ impl MirRelationExpr {
                 }
                 match implementation {
                     JoinImplementation::Differential((_, start_key, _), order) => {
-                        for start_key in start_key {
+                        if let Some(start_key) = start_key {
                             for k in start_key {
                                 f(k)?;
                             }

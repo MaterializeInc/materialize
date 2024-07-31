@@ -3,7 +3,7 @@
 default-criteria = "maintained-and-necessary"
 
 [cargo-vet]
-version = "0.8"
+version = "0.9"
 
 [imports.bytecode-alliance]
 url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"

@@ -161,7 +161,7 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
             }
         }
 
-        let map = temp_storage.make_datum(|packer| packer.push_dict(map.into_iter()));
+        let map = temp_storage.make_datum(|packer| packer.push_dict(map));
         Ok(map)
     }
 

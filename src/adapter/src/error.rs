@@ -342,7 +342,7 @@ impl AdapterError {
             }
             AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
             AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
-            AdapterError::UserSessionsDisallowed => Some(format!("Your organization has been blocked. Please contact support.")),
+            AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
             _ => None,
         }
     }

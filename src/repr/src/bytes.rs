@@ -58,7 +58,7 @@ impl ByteSize {
 
     fn format_string(&self) -> String {
         match self.0 {
-            zero if zero == 0 => format!("0"),
+            zero if zero == 0 => "0".to_string(),
             tb if tb % BytesUnit::Tb.value() == 0 => {
                 format!("{}{}", tb / BytesUnit::Tb.value(), BytesUnit::Tb)
             }
@@ -133,7 +133,7 @@ impl FromStr for ByteSize {
 
         let bytes = size
             .checked_mul(unit.value())
-            .ok_or_else(|| format!("bytes value exceeds u64 range"))?;
+            .ok_or_else(|| "bytes value exceeds u64 range".to_string())?;
         Ok(Self(bytes))
     }
 }
@@ -179,7 +179,7 @@ impl FromStr for BytesUnit {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.as_ref() {
+        match s {
             "B" => Ok(Self::B),
             "kB" => Ok(Self::Kb),
             "MB" => Ok(Self::Mb),

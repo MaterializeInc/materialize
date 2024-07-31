@@ -172,7 +172,7 @@ where
             // for more info.
             options.set_merge_operator_associative(fn_name, move |key, existing, operands| {
                 let operands = ValueIterator {
-                    iter: existing.into_iter().chain(operands.iter()).into_iter(),
+                    iter: existing.into_iter().chain(operands.iter()),
                     bincode: &bincode,
                     v: std::marker::PhantomData::<V>,
                 };

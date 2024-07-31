@@ -175,9 +175,9 @@ impl Coordinator {
                 desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),
             )?;
             if &current_desc != desc {
-                Err(AdapterError::ChangedPlan(format!(
-                    "cached plan must not change result type",
-                )))
+                Err(AdapterError::ChangedPlan(
+                    "cached plan must not change result type".to_string(),
+                ))
             } else {
                 Ok(Some(current_revision))
             }

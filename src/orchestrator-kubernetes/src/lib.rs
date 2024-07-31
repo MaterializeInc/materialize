@@ -1590,7 +1590,7 @@ impl OrchestratorWorker {
                 Ok(pod) => pod,
                 // Pod already doesn't exist.
                 Err(kube::Error::Api(e)) if e.code == 404 => continue,
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             };
             if pod.annotations().get(POD_TEMPLATE_HASH_ANNOTATION) != Some(&desc.pod_template_hash)
             {
@@ -1602,7 +1602,7 @@ impl OrchestratorWorker {
                     Ok(_) => (),
                     // Pod got deleted while we were looking at it.
                     Err(kube::Error::Api(e)) if e.code == 404 => (),
-                    Err(e) => return Err(e.into()),
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -1618,7 +1618,7 @@ impl OrchestratorWorker {
         match res {
             Ok(_) => (),
             Err(K8sError::Api(e)) if e.code == 404 => (),
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         }
 
         let res = self
@@ -1628,7 +1628,7 @@ impl OrchestratorWorker {
         match res {
             Ok(_) => Ok(()),
             Err(K8sError::Api(e)) if e.code == 404 => Ok(()),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(e),
         }
     }
 

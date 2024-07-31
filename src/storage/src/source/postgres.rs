@@ -406,8 +406,8 @@ async fn fetch_slot_metadata(
 
 /// Fetch the `pg_current_wal_lsn`, used to report metrics.
 async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
-    let query = format!("SELECT pg_current_wal_lsn()",);
-    let row = simple_query_opt(client, &query).await?;
+    let query = "SELECT pg_current_wal_lsn()";
+    let row = simple_query_opt(client, query).await?;
 
     match row.and_then(|row| {
         row.get("pg_current_wal_lsn")

@@ -3037,10 +3037,9 @@ fn kafka_sink_builder(
                 sql_bail!("{} must be a positive integer", name);
             }
         }
-        Ok(val
-            .map(NonNeg::try_from)
+        val.map(NonNeg::try_from)
             .transpose()
-            .map_err(|_| PlanError::Unstructured(format!("{} must be a positive integer", name)))?)
+            .map_err(|_| PlanError::Unstructured(format!("{} must be a positive integer", name)))
     };
     let topic_partition_count = assert_positive(topic_partition_count, "TOPIC PARTITION COUNT")?;
     let topic_replication_factor =

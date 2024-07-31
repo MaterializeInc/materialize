@@ -182,7 +182,7 @@ fn transform_body(
 ) -> Result<Vec<BodyRow>, AppendWebhookError> {
     let rows = match format {
         WebhookBodyFormat::Bytes => {
-            vec![Row::pack_slice(&[Datum::Bytes(&body[..])])]
+            vec![Row::pack_slice(&[Datum::Bytes(body)])]
         }
         WebhookBodyFormat::Text => {
             let s = std::str::from_utf8(body)

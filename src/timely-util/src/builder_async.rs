@@ -269,7 +269,7 @@ where
     }
 }
 
-impl<'a, T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
+impl<T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
 where
     T: Timestamp,
     C: Container,

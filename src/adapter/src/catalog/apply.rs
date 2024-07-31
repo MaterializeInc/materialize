@@ -1650,12 +1650,12 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         .chain(cluster_retractions.into_iter().rev())
         .chain(other_builtin_retractions.into_iter().rev())
         .chain(pre_cluster_retractions.into_iter().rev())
-        .chain(pre_cluster_additions.into_iter())
-        .chain(other_builtin_additions.into_iter())
-        .chain(cluster_additions.into_iter())
-        .chain(builtin_index_additions.into_iter())
-        .chain(item_additions.into_iter())
-        .chain(post_item_additions.into_iter())
+        .chain(pre_cluster_additions)
+        .chain(other_builtin_additions)
+        .chain(cluster_additions)
+        .chain(builtin_index_additions)
+        .chain(item_additions)
+        .chain(post_item_additions)
         .collect()
 }
 

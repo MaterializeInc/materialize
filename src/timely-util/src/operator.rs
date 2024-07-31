@@ -666,7 +666,7 @@ where
             > + 'static,
     {
         let exchange =
-            Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed().into());
+            Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
         consolidate_pact::<Ba, _, _, _, _, _>(&self.map(|k| (k, ())), exchange, name)
             .map(|(k, ())| k)

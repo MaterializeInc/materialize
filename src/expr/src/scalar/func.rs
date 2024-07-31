@@ -6681,7 +6681,7 @@ fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> 
         })
         .collect();
 
-    temp_storage.make_datum(|packer| packer.push_dict(map.into_iter()))
+    temp_storage.make_datum(|packer| packer.push_dict(map))
 }
 
 /// Constructs a new multidimensional array out of an arbitrary number of

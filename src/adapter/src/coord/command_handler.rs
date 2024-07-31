@@ -756,9 +756,9 @@ impl Coordinator {
                         "session {} attempted to get ddl lock while already owning it",
                         ctx.session().conn_id()
                     );
-                    ctx.retire(Err(AdapterError::Internal(format!(
-                        "session attempted to get ddl lock while already owning it"
-                    ))));
+                    ctx.retire(Err(AdapterError::Internal(
+                        "session attempted to get ddl lock while already owning it".to_string(),
+                    )));
                     return;
                 }
                 self.serialized_ddl.push_back(DeferredPlanStatement {

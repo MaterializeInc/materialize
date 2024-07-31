@@ -866,7 +866,7 @@ where
             "reclock-demux-ok-err",
             |((output, r), ts, diff)| match r {
                 Ok(ok) => Ok(((output, ok), ts, diff)),
-                Err(err) => Err(((output, err), ts, diff.into())),
+                Err(err) => Err(((output, err), ts, diff)),
             },
         );
 
@@ -970,7 +970,7 @@ where
         "reclock-demux-ok-err",
         |((output, r), ts, diff)| match r {
             Ok(ok) => Ok(((output, ok), ts, diff)),
-            Err(err) => Err(((output, err), ts, diff.into())),
+            Err(err) => Err(((output, err), ts, diff)),
         },
     );
 

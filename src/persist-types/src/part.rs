@@ -129,7 +129,7 @@ impl Part {
         }
         let len = arrays
             .get(0)
-            .ok_or_else(|| "should have at least 3 arrays, found none")
+            .ok_or("should have at least 3 arrays, found none")
             .map(|a| a.len())?;
         let mut arrays = arrays.into_iter();
         let key = if key_schema.cols.is_empty() {

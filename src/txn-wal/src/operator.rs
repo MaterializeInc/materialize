@@ -665,7 +665,7 @@ impl DataSubscribe {
                 );
                 (data_stream.leave(), token)
             });
-            let (mut data, mut txns) = (ProbeHandle::new(), ProbeHandle::new());
+            let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
                 let part = part.parse();
                 part.part.map(|((k, v), t, d)| {
@@ -673,7 +673,7 @@ impl DataSubscribe {
                     (k, t, d)
                 })
             });
-            let data_stream = data_stream.probe_with(&mut data);
+            let data_stream = data_stream.probe_with(&data);
             // We purposely do not use the `ConfigSet` in `client` so that
             // different tests can set different values.
             let config_set = ConfigSet::default().add(&USE_GLOBAL_TXN_CACHE_SOURCE);
@@ -694,7 +694,7 @@ impl DataSubscribe {
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
                 );
-            let data_stream = data_stream.probe_with(&mut txns);
+            let data_stream = data_stream.probe_with(&txns);
             let mut tokens = shard_source_token;
             tokens.append(&mut txns_progress_token);
             (data, txns, data_stream.capture(), tokens)

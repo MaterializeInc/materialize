@@ -345,7 +345,7 @@ fn builder_for_datatype(
                 field.name().clone(),
                 field.is_nullable(),
                 field.data_type().clone(),
-                typename_from_field(*&field)?,
+                typename_from_field(field)?,
                 item_capacity,
                 data_capacity,
             )?;
@@ -360,7 +360,7 @@ fn builder_for_datatype(
                     field.name().clone(),
                     field.is_nullable(),
                     field.data_type().clone(),
-                    typename_from_field(*&field)?,
+                    typename_from_field(field)?,
                     item_capacity,
                     data_capacity,
                 )?;

@@ -93,7 +93,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
         // on drop.
         let other_since = std::mem::take(&mut other.since);
 
-        self.since.extend(other_since.into_iter());
+        self.since.extend(other_since);
 
         // Record the new requirements, which we're guaranteed to be possible
         // because we're only retracing the two merged sinces together with this

@@ -48,7 +48,7 @@ impl ValueConstraint {
                 if cur_value != new_value {
                     return Err(VarError::FixedValueParameter {
                         name: var.name(),
-                        value: cur_value.format().into(),
+                        value: cur_value.format(),
                     });
                 }
             }

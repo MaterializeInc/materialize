@@ -208,7 +208,7 @@ where
     ///
     /// Update the `desired` state of a differential collection using
     /// [Self::differential_write].
-    pub(super) fn register_differential_collection<'a, R>(
+    pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
         read_handle_fn: R,
