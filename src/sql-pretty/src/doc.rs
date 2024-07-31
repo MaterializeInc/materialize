@@ -59,7 +59,7 @@ pub(crate) fn doc_create_source<T: AstInfo>(v: &CreateSourceStatement<T>) -> RcD
     }
     docs.push(nest_title("FROM", doc_display_pass(&v.connection)));
     if let Some(format) = &v.format {
-        docs.push(doc_display(format, "FormatSpecifier"));
+        docs.push(doc_format_specifier(format));
     }
     if !v.include_metadata.is_empty() {
         docs.push(nest_title(
@@ -84,6 +84,19 @@ pub(crate) fn doc_create_source<T: AstInfo>(v: &CreateSourceStatement<T>) -> RcD
         ));
     }
     RcDoc::intersperse(docs, Doc::line()).group()
+}
+
+fn doc_format_specifier<T: AstInfo>(v: &FormatSpecifier<T>) -> RcDoc {
+    match v {
+        FormatSpecifier::Bare(format) => nest_title("FORMAT", doc_display_pass(format)),
+        FormatSpecifier::KeyValue { key, value } => {
+            let docs = vec![
+                nest_title("KEY FORMAT", doc_display_pass(key)),
+                nest_title("VALUE FORMAT", doc_display_pass(value)),
+            ];
+            RcDoc::intersperse(docs, Doc::line()).group()
+        }
+    }
 }
 
 fn doc_external_references(v: &ExternalReferences) -> RcDoc {
