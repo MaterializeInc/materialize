@@ -25,8 +25,14 @@ from materialize.output_consistency.input_data.operations.date_time_operations_p
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     TAG_DATA_TYPE_ENUM,
 )
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.types.all_types_provider import (
     internal_type_identifiers_to_data_type_names,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    NON_INTEGER_TYPE_IDENTIFIERS,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -141,6 +147,13 @@ def involves_data_type_categories(
 def is_known_to_involve_exact_data_types(
     expression: Expression, internal_data_type_identifiers: set[str]
 ):
+    if (
+        len(internal_data_type_identifiers.intersection(NON_INTEGER_TYPE_IDENTIFIERS))
+        > 0
+    ):
+        if is_known_to_return_non_integer_number(expression):
+            return True
+
     if isinstance(expression, EnumConstant) and expression.is_tagged(
         TAG_DATA_TYPE_ENUM
     ):
@@ -200,3 +213,12 @@ def is_any_date_time_expression(expression: Expression) -> bool:
             True,
         )
     )
+
+
+def is_known_to_return_non_integer_number(expression: Expression):
+    return_type_spec = expression.resolve_return_type_spec()
+
+    if isinstance(return_type_spec, NumericReturnTypeSpec):
+        return return_type_spec.always_floating_type
+
+    return False
