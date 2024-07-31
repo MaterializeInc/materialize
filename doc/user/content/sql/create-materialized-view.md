@@ -8,12 +8,10 @@ menu:
 ---
 
 {{< note >}}
-
-As an alternative to materialized views, [indexes on
-views](/concepts/views/#views) **maintain and incrementally update view results
-in memory** for the cluster where you create the index.  For more information,
-see [Views](/concepts/views/#views) and [`CREATE VIEW`](/sql/create-view).
-
+As an alternative to materialized views, [indexes on views](/concepts/views/#views)
+**maintain and incrementally update view results in memory** for the cluster
+where you create the index.  For more information, see [Views](/concepts/views/#views)
+and [`CREATE VIEW`](/sql/create-view).
 {{</ note >}}
 
 `CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
@@ -390,7 +388,7 @@ The privileges required to execute this statement are:
 - `USAGE` privileges on all types used in the materialized view definition.
 - `USAGE` privileges on the schemas that all types in the statement are contained in.
 
-## Additional Information
+## Additional information
 
 - Materialized views are not monotonic; that is, materialized views cannot be
   recognized as append-only.

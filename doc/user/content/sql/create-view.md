@@ -41,7 +41,7 @@ automatically dropped at the end of the SQL session and are not visible to other
 connections. They are always created in the special `mz_temp` schema.
 
 Temporary views may depend upon other temporary database objects, but non-temporary
-views may not depend on temporary objects
+views may not depend on temporary objects.
 
 ## Examples
 
@@ -69,7 +69,7 @@ The privileges required to execute this statement are:
 - `USAGE` privileges on all types used in the view definition.
 - `USAGE` privileges on the schemas that all types in the statement are contained in.
 
-## Additional Information
+## Additional information
 
 - Views can be monotonic; that is, views can be recognized as append-only.
 

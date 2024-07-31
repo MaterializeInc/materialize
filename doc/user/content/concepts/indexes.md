@@ -13,7 +13,7 @@ aliases:
 ## Overview
 
 In Materialize, indexes represent query results stored in memory within a
-[cluster](/concepts/clusters/).  You can create indexes on
+[cluster](/concepts/clusters/). You can create indexes on
 [sources](/concepts/sources/), [views](/concepts/views/#views), or [materialized
 views](/concepts/views/#materialized-views).
 
@@ -22,7 +22,7 @@ For example, indexes in Materialize can:
 
 - Provide faster sequential access.
 
-- Provide fast random access for queries selecting individual keys.
+- Provide fast random access for lookup queries (i.e., selecting individual keys).
 
 Additionally, because indexes in Materialize are maintained in memory, indexing
 views and materialized views can provide further performance improvements.
@@ -30,7 +30,7 @@ views and materialized views can provide further performance improvements.
 ## Indexes and views
 
 In Materialize, indexes on a [view](/concepts/views/#views) **maintain and
-incrementally update** view results in memory within the
+incrementally update** view results in memory within a
 [cluster](/concepts/clusters/). The in-memory up-to-date results are accessible
 to queries within the cluster, even for queries that do not use the index
 key(s).

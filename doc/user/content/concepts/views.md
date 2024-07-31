@@ -17,7 +17,7 @@ a shorthand for the underlying query.
 
 Type |
 -----|------------
-[**Views**](#views) | Results are **not** persisted in durable storage. These views can be indexed to maintain and incrementally update results in memory.
+[**Views**](#views) | Results are **not** persisted in durable storage. Views can be indexed to maintain and incrementally update results in memory within a cluster.
 [**Materialized views**](#materialized-views) | Results **are** persisted and incrementally updated in durable storage. Materialized views can be indexed to maintain the results in memory.
 
 All views in Materialize are built by reading data from
@@ -26,9 +26,12 @@ All views in Materialize are built by reading data from
 ## Views
 
 A view saves a query under a name to provide a shorthand for referencing the
-query. Views can be referenced across [clusters](/concepts/clusters/).
+query. Views are not associated with a cluster, and can be referenced across
+[clusters](/concepts/clusters/).
 
-During view creation, the underlying query is not executed , and the view
+During view creation, the underlying query is not executed, so results are not
+persisted. This means that view results will be recomputed from scratch each
+time the view is accessed.
 results are not persisted in durable storage.
 
 ```mzsql
@@ -36,9 +39,9 @@ CREATE VIEW my_view_name AS
   SELECT ... FROM ...  ;
 ```
 
-<red>However</red>, in Materialize, you can [index](/concepts/indexes/) a view
-to **maintain and incrementally update** view results in memory within a
-cluster.
+<red>However</red>, in Materialize, you can create an [index](/concepts/indexes/)
+on a view to **maintain and incrementally update** its results in memory within
+a cluster.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
@@ -103,7 +106,7 @@ CREATE INDEX idx_on_my_view ON my_mat_view_name(...) ;
 
 Because materialized views maintain the up-to-date results in durable storage,
 indexes on materialized views serve up-to-date results without themselves
-performing the incremental computation. The in-memory up-to-date results are
+performing the incremental computation. The in-memory, up-to-date results are
 accessible to queries within the cluster, even for queries that do not use the
 index key(s).
 
