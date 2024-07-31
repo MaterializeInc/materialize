@@ -295,13 +295,13 @@ where
                 Err(e) => {
                     if state.i >= mz_service::retry::INFO_MIN_RETRIES {
                         tracing::info!(
-                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                            "error connecting to {:?} for storage, retrying in {:?}: {e:#}",
                             location,
                             state.next_backoff.unwrap()
                         );
                     } else {
                         tracing::debug!(
-                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                            "error connecting to {:?} for storage, retrying in {:?}: {e:#}",
                             location,
                             state.next_backoff.unwrap()
                         );
