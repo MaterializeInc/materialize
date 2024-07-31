@@ -298,7 +298,7 @@ NUMERIC_OPERATION_TYPES.append(
                 },
             ),
         ],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
