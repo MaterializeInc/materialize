@@ -17,6 +17,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
@@ -559,6 +560,13 @@ where
             .codecs
             .val
             .encode(|| V::encode(val, &mut self.val_buf));
+        validate_schema(
+            &self.stats_schemas,
+            &self.key_buf,
+            &self.val_buf,
+            Some(key),
+            Some(val),
+        );
         let result = self
             .builder
             .add(&self.stats_schemas, &self.key_buf, &self.val_buf, ts, diff)
@@ -827,6 +835,41 @@ where
         self.parts_written += 1;
         self.num_updates += num_updates;
     }
+}
+
+// Ideally this would be done inside `BatchBuilderInternal::add`, but that seems
+// to require plumbing around `Sync` bounds for `K` and `V`, so instead just
+// inline it at the two callers.
+pub(crate) fn validate_schema<K: Codec, V: Codec>(
+    stats_schemas: &Schemas<K, V>,
+    key: &[u8],
+    val: &[u8],
+    decoded_key: Option<&K>,
+    decoded_val: Option<&V>,
+) {
+    // Attempt to catch any bad schema usage in CI. This is probably too
+    // expensive to run in prod.
+    if !mz_ore::assert::SOFT_ASSERTIONS.load(Ordering::Relaxed) {
+        return;
+    }
+    let key_valid = match decoded_key {
+        Some(key) => K::validate(key, &stats_schemas.key),
+        None => {
+            let key = K::decode(key, &stats_schemas.key).expect("valid encoded key");
+            K::validate(&key, &stats_schemas.key)
+        }
+    };
+    let () = key_valid
+        .unwrap_or_else(|err| panic!("constructing batch with mismatched key schema: {}", err));
+    let val_valid = match decoded_val {
+        Some(val) => V::validate(val, &stats_schemas.val),
+        None => {
+            let val = V::decode(val, &stats_schemas.val).expect("valid encoded val");
+            V::validate(&val, &stats_schemas.val)
+        }
+    };
+    let () = val_valid
+        .unwrap_or_else(|err| panic!("constructing batch with mismatched val schema: {}", err));
 }
 
 #[derive(Debug)]

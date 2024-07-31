@@ -1343,6 +1343,13 @@ impl Codec for SourceData {
         }
     }
 
+    fn validate(val: &Self, desc: &Self::Schema) -> Result<(), String> {
+        match &val.0 {
+            Ok(row) => Row::validate(row, desc),
+            Err(_) => Ok(()),
+        }
+    }
+
     fn encode_schema(schema: &Self::Schema) -> Bytes {
         schema.into_proto().encode_to_vec().into()
     }
