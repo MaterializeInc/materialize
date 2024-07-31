@@ -583,7 +583,10 @@ def annotate_logged_errors(
     annotate_errors(unknown_errors, known_errors, build_history_on_main, test_analytics)
 
     if unknown_errors:
-        print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s)")
+        print(
+            f"+++ Failing test because of {len(unknown_errors)} unknown error{'s' if len(unknown_errors) != 1 else ''}",
+            file=sys.stderr,
+        )
 
     # No need for rest of the logic as no error logs were found, but since
     # this script was called the test still failed, so showing the current
