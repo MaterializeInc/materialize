@@ -88,8 +88,10 @@ artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 # Continue even if ci-annotate-errors fails
 CI_ANNOTATE_ERRORS_RESULT=0
+# We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
+buildkite-agent artifact upload "$artifacts_str"
 bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
-buildkite-agent artifact upload "$artifacts_str;ci-annotate-errors.log"
+buildkite-agent artifact upload "ci-annotate-errors.log"
 
 # File should not be empty, see #25369
 test -s kubectl-get-logs-previous.log
