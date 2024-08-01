@@ -107,15 +107,20 @@ class TestModelCluster:
     def test_materialize_override_noexist(self, project):
         run_dbt(["run", "--models", "invalid_cluster"], expect_pass=False)
 
-    # In the absence of the pre-installed `default` cluster, Materialize should
-    # not error if a user-provided cluster is specified as a connection or
-    # model config, but will error otherwise.
+    # In the absence of the pre-installed `quickstart` cluster, Materialize
+    # should not error if a user-provided cluster is specified as a profile,
+    # model or test config, but will error otherwise.
     # See #17197: https://github.com/MaterializeInc/materialize/pull/17197
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {"data_tests": {"cluster": "not_default"}}
+
     def test_materialize_drop_quickstart(self, project):
         project.run_sql("DROP CLUSTER quickstart CASCADE")
 
         run_dbt(["run", "--models", "override_cluster"], expect_pass=True)
         run_dbt(["run", "--models", "default_cluster"], expect_pass=False)
+        run_dbt(["test", "--models", "override_cluster"], expect_pass=True)
 
         project.run_sql("CREATE CLUSTER quickstart SIZE = '1'")
 
