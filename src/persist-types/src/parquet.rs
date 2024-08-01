@@ -77,7 +77,7 @@ impl CompressionFormat {
             match CompressionLevel::from_str(val) {
                 Ok(level) => level,
                 Err(err) => {
-                    mz_ore::soft_panic_or_log!("invalid {name} compression level, err: {err}");
+                    tracing::error!("invalid {name} compression level, err: {err}");
                     CompressionLevel::default()
                 }
             }
@@ -93,9 +93,7 @@ impl CompressionFormat {
                 Some(("zstd", level)) => CompressionFormat::Zstd(parse_level("zstd", level)),
                 Some(("gzip", level)) => CompressionFormat::Gzip(parse_level("gzip", level)),
                 _ => {
-                    mz_ore::soft_panic_or_log!(
-                        "unrecognized compression format {s}, returning None"
-                    );
+                    tracing::error!("unrecognized compression format {s}, returning None");
                     CompressionFormat::None
                 }
             },
