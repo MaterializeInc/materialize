@@ -736,17 +736,17 @@ impl HirRelationExpr {
                                     config.enable_new_outer_join_lowering,
                                     config.enable_outer_join_null_filter,
                                 )? {
-                                    metrics.iter().for_each(|metrics| {
-                                        metrics.inc_outer_join_lowering("equi")
-                                    });
+                                    if let Some(metrics) = metrics {
+                                        metrics.inc_outer_join_lowering("equi");
+                                    }
                                     return Ok(joined);
                                 }
                             }
 
                             // Otherwise, perform a more general join.
-                            metrics
-                                .iter()
-                                .for_each(|metrics| metrics.inc_outer_join_lowering("general"));
+                            if let Some(metrics) = metrics {
+                                metrics.inc_outer_join_lowering("general");
+                            }
                             let mut join = product.filter(vec![on]);
                             if on_has_subqueries {
                                 // This means that `on.applied_to(...)` appended

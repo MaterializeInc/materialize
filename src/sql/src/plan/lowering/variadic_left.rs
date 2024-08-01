@@ -49,9 +49,9 @@ pub(crate) fn attempt_left_join_magic(
     );
 
     let inc_metrics = |case: &str| {
-        metrics
-            .iter()
-            .for_each(|metrics| metrics.inc_outer_join_lowering(case));
+        if let Some(metrics) = metrics {
+            metrics.inc_outer_join_lowering(case);
+        }
     };
 
     let oa = get_outer.arity();
