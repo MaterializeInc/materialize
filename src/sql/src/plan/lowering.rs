@@ -150,8 +150,12 @@ impl From<&SystemVars> for Config {
     }
 }
 
+/// Context passed to the lowering. This is wired to most parts of the lowering.
 struct Context<'a> {
+    /// Feature flags affecting the behavior of lowering.
     config: &'a Config,
+    /// Optional, because some callers don't have an `OptimizerMetrics` handy. When it's None, we
+    /// simply don't write metrics.
     metrics: Option<&'a OptimizerMetrics>,
 }
 
@@ -164,6 +168,10 @@ impl HirRelationExpr {
         config: C,
         metrics: Option<&OptimizerMetrics>,
     ) -> Result<MirRelationExpr, PlanError> {
+        let context = Context {
+            config: &config.into(),
+            metrics,
+        };
         let result =
             match self {
                 // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
@@ -189,10 +197,7 @@ impl HirRelationExpr {
                                 get_outer,
                                 &ColumnMap::empty(),
                                 &mut CteMap::new(),
-                                &Context {
-                                    config: &config.into(),
-                                    metrics,
-                                },
+                                &context,
                             )
                         })?
                 }
@@ -559,10 +564,10 @@ impl HirRelationExpr {
                             get_left.clone(),
                             col_map,
                             cte_map,
-                            context.config,
                             *right,
                             apply_requires_distinct_outer,
-                            |id_gen, right, get_left, col_map, cte_map, config| {
+                            context,
+                            |id_gen, right, get_left, col_map, cte_map, context| {
                                 right.applied_to(id_gen, get_left, col_map, cte_map, context)
                             },
                         )?;
@@ -707,8 +712,7 @@ impl HirRelationExpr {
                                     kind.clone(),
                                     oa,
                                     id_gen,
-                                    context.config.enable_new_outer_join_lowering,
-                                    context.config.enable_outer_join_null_filter,
+                                    context,
                                 )? {
                                     if let Some(metrics) = context.metrics {
                                         metrics.inc_outer_join_lowering("equi");
@@ -1661,9 +1665,9 @@ fn branch<F>(
     outer: MirRelationExpr,
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
-    config: &Config,
     inner: HirRelationExpr,
     apply_requires_distinct_outer: bool,
+    context: &Context,
     apply: F,
 ) -> Result<MirRelationExpr, PlanError>
 where
@@ -1673,7 +1677,7 @@ where
         MirRelationExpr,
         &ColumnMap,
         &mut CteMap,
-        &Config,
+        &Context,
     ) -> Result<MirRelationExpr, PlanError>,
 {
     // TODO: It would be nice to have a version of this code w/o optimizations,
@@ -1736,7 +1740,7 @@ where
     if is_simple && !apply_requires_distinct_outer {
         let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
         return outer.let_in_fallible(id_gen, |id_gen, get_outer| {
-            apply(id_gen, inner, get_outer, &new_col_map, cte_map, config)
+            apply(id_gen, inner, get_outer, &new_col_map, cte_map, context)
         });
     }
 
@@ -1832,7 +1836,7 @@ where
                 get_keyed_outer,
                 &new_col_map,
                 cte_map,
-                config,
+                context,
             )?;
             let ba = branch.arity();
             let joined = MirRelationExpr::join(
@@ -1863,10 +1867,10 @@ fn apply_scalar_subquery(
         outer,
         col_map,
         cte_map,
-        context.config,
         scalar_subquery,
         apply_requires_distinct_outer,
-        |id_gen, expr, get_inner, col_map, cte_map, config| {
+        context,
+        |id_gen, expr, get_inner, col_map, cte_map, context| {
             // compute for every row in get_inner
             let select = expr.applied_to(id_gen, get_inner.clone(), col_map, cte_map, context)?;
             let col_type = select.typ().column_types.into_last();
@@ -1920,10 +1924,10 @@ fn apply_existential_subquery(
         outer,
         col_map,
         cte_map,
-        context.config,
         subquery_expr,
         apply_requires_distinct_outer,
-        |id_gen, expr, get_inner, col_map, cte_map, config| {
+        context,
+        |id_gen, expr, get_inner, col_map, cte_map, context| {
             let exists = expr
                 // compute for every row in get_inner
                 .applied_to(id_gen, get_inner.clone(), col_map, cte_map, context)?
@@ -1981,8 +1985,7 @@ fn attempt_outer_equijoin(
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
-    enable_new_outer_join_lowering: bool,
-    enable_outer_join_null_filter: bool,
+    context: &Context,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     // TODO(#22581): In theory, we can be smarter and also handle `on`
     // predicates that reference subqueries as long as these subqueries don't
@@ -2027,9 +2030,8 @@ fn attempt_outer_equijoin(
     let rt = output_type.drain(0..ra).collect_vec();
     assert!(output_type.len() == sa);
 
-    let on_predicates =
-        OnPredicates::new(oa, la, ra, sa, on.clone(), enable_outer_join_null_filter);
-    if !on_predicates.is_equijoin(enable_new_outer_join_lowering) {
+    let on_predicates = OnPredicates::new(oa, la, ra, sa, on.clone(), context);
+    if !on_predicates.is_equijoin(context) {
         return Ok(None);
     }
 
@@ -2195,7 +2197,7 @@ impl OnPredicates {
         ra: usize,
         sa: usize,
         on: Vec<MirScalarExpr>,
-        enable_outer_join_null_filter: bool,
+        context: &Context,
     ) -> Self {
         use mz_expr::BinaryFunc::Eq;
 
@@ -2254,7 +2256,7 @@ impl OnPredicates {
                         let mut rhs = expr2.take();
                         rhs.permute(&rhs_permutation);
                         predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
-                        if enable_outer_join_null_filter {
+                        if context.config.enable_outer_join_null_filter {
                             predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
                             predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
                         }
@@ -2265,7 +2267,7 @@ impl OnPredicates {
                         let mut rhs = expr1.take();
                         rhs.permute(&rhs_permutation);
                         predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
-                        if enable_outer_join_null_filter {
+                        if context.config.enable_outer_join_null_filter {
                             predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
                             predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
                         }
@@ -2318,7 +2320,7 @@ impl OnPredicates {
     }
 
     /// Check if the predicates can be lowered with an equijoin-based strategy.
-    fn is_equijoin(&self, enable_new_outer_join_lowering: bool) -> bool {
+    fn is_equijoin(&self, context: &Context) -> bool {
         // Count each `OnPredicate` variant in `self.predicates`.
         let (const_cnt, lhs_cnt, rhs_cnt, eq_cnt, eq_cols, theta_cnt) =
             self.predicates.iter().fold(
@@ -2335,7 +2337,7 @@ impl OnPredicates {
                 },
             );
 
-        let is_equijion = if enable_new_outer_join_lowering {
+        let is_equijion = if context.config.enable_new_outer_join_lowering {
             // New classifier.
             eq_cnt > 0 && theta_cnt == 0
         } else {
