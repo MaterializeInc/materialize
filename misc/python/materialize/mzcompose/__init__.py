@@ -108,7 +108,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "wait_catalog_consolidation_on_startup": "true",
     "persist_batch_record_part_format": "true",
     "storage_use_reclock_v2": "true",
-    "persist_schema_require": "true",
 }
 
 
@@ -117,7 +116,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
 def version_dependent_system_parameters(version: MzVersion) -> dict[str, str]:
     return {
         "persist_schema_register": (
-            "false" if version < MzVersion.parse_mz("v0.111.0") else "true"
+            "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
         )
     }
 
