@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if "OptbenchTPCH" in scenario_class_name:
+        # PR#28664 (Introduce MirScalarExpr::reduce_safely) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "0a570022e1b78a205d5d9d3ebcb640b714e738c2"
+        ] = MzVersion.parse_mz("v0.111.0")
+
     if scenario_class_name in {"OptbenchTPCHQ02", "OptbenchTPCHQ18", "OptbenchTPCHQ21"}:
         # PR#28566 (Incorporate non-null information, and prevent its deletion) increased wallclock
         min_ancestor_mz_version_per_commit[
