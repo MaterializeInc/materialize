@@ -100,15 +100,7 @@ use crate::TxnsCodecDefault;
 /// (d1, <empty>, 2, 1)
 /// ```
 #[derive(Debug)]
-pub struct TxnsHandle<K, V, T, D, O = u64, C = TxnsCodecDefault>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
-    O: Opaque + Debug + Codec64,
-    C: TxnsCodec,
-{
+pub struct TxnsHandle<K: Codec, V: Codec, T, D, O = u64, C: TxnsCodec = TxnsCodecDefault> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
@@ -691,13 +683,7 @@ impl Tidy {
 
 /// A helper to make a more targeted mutable borrow of self.
 #[derive(Debug)]
-pub(crate) struct DataHandles<K, V, T, D>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
-{
+pub(crate) struct DataHandles<K: Codec, V: Codec, T, D> {
     pub(crate) client: PersistClient,
     data_write: BTreeMap<ShardId, WriteHandle<K, V, T, D>>,
     key_schema: Arc<K::Schema>,
