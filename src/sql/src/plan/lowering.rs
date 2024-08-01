@@ -633,7 +633,7 @@ impl HirRelationExpr {
                                 rights.push((&**right, on));
                                 left_test = left;
                             }
-                            if rights.len() > 1 && get_outer.arity() == 0 {
+                            if rights.len() > 1 {
                                 // Defensively clone `cte_map` as it may be mutated.
                                 let cte_map_clone = cte_map.clone();
                                 if let Ok(Some(magic)) = variadic_left::attempt_left_join_magic(
