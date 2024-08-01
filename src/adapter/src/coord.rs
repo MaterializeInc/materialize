@@ -127,6 +127,7 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -179,7 +180,6 @@ use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};

@@ -14,12 +14,13 @@ use std::time::Duration;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::HistogramVec;
+use prometheus::{HistogramVec, IntCounterVec};
 
 /// Optimizer metrics.
 #[derive(Debug, Clone)]
 pub struct OptimizerMetrics {
-    pub(super) e2e_optimization_time_seconds: HistogramVec,
+    e2e_optimization_time_seconds: HistogramVec,
+    outer_join_lowering_cases: IntCounterVec,
 }
 
 impl OptimizerMetrics {
@@ -31,12 +32,23 @@ impl OptimizerMetrics {
                  var_labels: ["object_type"],
                  buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            outer_join_lowering_cases: registry.register(metric!(
+                name: "outer_join_lowering_cases",
+                help: "How many times the different outer join lowering cases happened.",
+                var_labels: ["case"],
+            )),
         }
     }
 
-    pub(super) fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
+    pub fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
             .observe(duration.as_secs_f64())
+    }
+
+    pub fn inc_outer_join_lowering(&self, case: &str) {
+        self.outer_join_lowering_cases
+            .with_label_values(&[case])
+            .inc()
     }
 }

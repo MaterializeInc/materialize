@@ -33,6 +33,7 @@ use mz_compute_types::plan::Plan;
 use mz_repr::explain::trace_plan;
 use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
@@ -43,7 +44,6 @@ use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,

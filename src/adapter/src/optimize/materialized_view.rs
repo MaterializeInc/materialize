@@ -34,6 +34,7 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -45,7 +46,6 @@ use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
@@ -168,7 +168,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config)?;
+        let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();

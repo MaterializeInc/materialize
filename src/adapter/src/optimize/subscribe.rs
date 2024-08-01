@@ -21,6 +21,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -33,7 +34,6 @@ use crate::optimize::dataflows::{
     dataflow_import_id_bundle, prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot,
     DataflowBuilder, ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,

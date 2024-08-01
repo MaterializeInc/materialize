@@ -11,10 +11,10 @@ use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
 
+use crate::optimizer_metrics::OptimizerMetrics;
 use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
-use crate::plan::PlanError;
-
 use crate::plan::lowering::{ColumnMap, Config, CteMap};
+use crate::plan::PlanError;
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
 ///
@@ -38,6 +38,7 @@ pub(crate) fn attempt_left_join_magic(
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
     config: &Config,
+    metrics: Option<&OptimizerMetrics>,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     use mz_expr::LocalId;
 
@@ -47,12 +48,19 @@ pub(crate) fn attempt_left_join_magic(
         "attempt_left_join_magic"
     );
 
+    let inc_metrics = |case: &str| {
+        if let Some(metrics) = metrics {
+            metrics.inc_outer_join_lowering(case);
+        }
+    };
+
     let oa = get_outer.arity();
     if oa > 0 {
         // Bail out in correlated contexts for now. Even though the code below
         // supports them, we want to test this code path more thoroughly before
         // enabling this.
         tracing::debug!(case = 1, oa, "attempt_left_join_magic");
+        inc_metrics("voj_1");
         return Ok(None);
     }
 
@@ -61,16 +69,16 @@ pub(crate) fn attempt_left_join_magic(
     let mut bindings = Vec::new();
     let mut augmented = Vec::new();
     // A vector associating result columns with their corresponding input number
-    // (where 0 idicates columns from the outer context).
+    // (where 0 indicates columns from the outer context).
     let mut bound_to = (0..oa).map(|_| 0).collect::<Vec<_>>();
     // A vector associating inputs with their arities (where the [0] entry
-    // correponds to the arity of the outer context).
+    // corresponds to the arity of the outer context).
     let mut arities = vec![oa];
 
     // Left relation, its type, and its arity.
-    let left = left
-        .clone()
-        .applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+    let left =
+        left.clone()
+            .applied_to(id_gen, get_outer.clone(), col_map, cte_map, config, metrics)?;
     let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
     let la = lt.len();
 
@@ -96,6 +104,7 @@ pub(crate) fn attempt_left_join_magic(
         // outer join lowering, and I don't know what they mean. Fail conservatively.
         if right.is_correlated() {
             tracing::debug!(case = 2, index, "attempt_left_join_magic");
+            inc_metrics("voj_2");
             return Ok(None);
         }
 
@@ -104,7 +113,14 @@ pub(crate) fn attempt_left_join_magic(
         let right = right
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
-            .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, config)?;
+            .applied_to(
+                id_gen,
+                get_outer.clone(),
+                &right_col_map,
+                cte_map,
+                config,
+                metrics,
+            )?;
         let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
         let ra = rt.len() - 1; // don't count the new column
 
@@ -139,14 +155,21 @@ pub(crate) fn attempt_left_join_magic(
         );
 
         // Decorrelate and lower the `on` clause.
-        let on = on
-            .clone()
-            .applied_to(id_gen, col_map, cte_map, config, &mut product, &None)?;
+        let on = on.clone().applied_to(
+            id_gen,
+            col_map,
+            cte_map,
+            config,
+            &mut product,
+            &None,
+            metrics,
+        )?;
 
         // if `on` added any new columns, .. no clue what to do.
         // Return with failure, to avoid any confusion.
         if product.typ().column_types.len() > oa + ba + ra + 1 {
             tracing::debug!(case = 3, index, "attempt_left_join_magic");
+            inc_metrics("voj_3");
             return Ok(None);
         }
 
@@ -159,6 +182,7 @@ pub(crate) fn attempt_left_join_magic(
             list
         } else {
             tracing::debug!(case = 4, index, "attempt_left_join_magic");
+            inc_metrics("voj_4");
             return Ok(None);
         };
 
@@ -171,6 +195,7 @@ pub(crate) fn attempt_left_join_magic(
             // If the right reference is not actually to `right`, bail out.
             if right < oa + ba {
                 tracing::debug!(case = 5, index, "attempt_left_join_magic");
+                inc_metrics("voj_5");
                 return Ok(None);
             }
             // Only columns not from the outer scope introduce bindings.
@@ -179,6 +204,7 @@ pub(crate) fn attempt_left_join_magic(
                     // If left references come from different inputs, bail out.
                     if bound_to[left] != bound {
                         tracing::debug!(case = 6, index, "attempt_left_join_magic");
+                        inc_metrics("voj_6");
                         return Ok(None);
                     }
                 }
@@ -339,6 +365,7 @@ pub(crate) fn attempt_left_join_magic(
             assert_eq!(oa + ba, body.arity());
         } else {
             tracing::debug!(case = 7, index, "attempt_left_join_magic");
+            inc_metrics("voj_7");
             return Ok(None);
         }
     }
@@ -361,6 +388,7 @@ pub(crate) fn attempt_left_join_magic(
     }
 
     tracing::debug!(case = 0, "attempt_left_join_magic");
+    inc_metrics("voj_0");
     Ok(Some(body))
 }
 

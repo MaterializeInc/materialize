@@ -19,6 +19,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, RelationType, Timestamp};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -34,7 +35,6 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,
@@ -176,7 +176,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config)?;
+        let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
