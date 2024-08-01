@@ -87,6 +87,61 @@ $ kafka-create-topic topic=topic1 partitions=1
 ! SELECT * FROM source1
 contains:topic was recreated: high watermark of partition 0 regressed from 1 to 0
 
+# Test a pathological topic recreation observed in the wild.
+# See incidents-and-escalations#98.
+
+# First we create a topic and successfully ingest some data.
+$ kafka-create-topic topic=topic2 partitions=1
+$ kafka-ingest format=bytes topic=topic2 repeat=100
+one
+> CREATE SOURCE source2
+  IN CLUSTER to_recreate
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic2-${testdrive.seed}')
+  FORMAT TEXT
+  ENVELOPE NONE
+> SELECT count(*) FROM source2
+100
+
+# Then we turn off the source cluster, so that we lose our record of what the
+# high water mark used to be.
+> ALTER CLUSTER to_recreate SET (REPLICATION FACTOR = 0)
+
+# Then we delete the topic and recreate it...
+# See comment above about needing to sleep after deleting Kafka topics.
+$ kafka-delete-topic-flaky topic=topic2
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
+$ kafka-create-topic topic=topic2 partitions=1
+
+# ...crucially, with *fewer* offsets than we had previously.
+$ kafka-ingest format=bytes topic=topic2 repeat=50
+one
+
+# Finally, we turn the source cluster back on. This would previously cause
+# Materialize to panic because we'd attempt to regress the data shard's
+# capability to offset 2 (the max offset in the new topic) when it was
+# already at offset 3 (the max offset in the old topic).
+> ALTER CLUSTER to_recreate SET (REPLICATION FACTOR = 1)
+
+# Give the source a few seconds to reconnect to the Kafka partitions and
+# possibly read bad data. This is what actually reproduces the panic we saw in
+# incidents-and-escalations#98. Unfortunately there is no signal we can wait
+# for, so the best we can do is sleep.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
+
+# Ensure the source reports the previous data.
+> SELECT count(*) FROM source2
+100
+
+# Check whether the source is still lumbering along. Correctness has gone out
+# the window here. Data in the new topic will be ignored up until the first new
+# offset, at which point it will start being ingested. In this case, 7 and 8 are
+# the two new data rows.
+$ kafka-ingest format=bytes topic=topic2 repeat=53
+one
+
+> SELECT count(*) FROM source2
+103
+
 # Ensure we don't panic after we restart due to the above finished ingestions.
 $ kafka-create-topic topic=good-topic
 
@@ -114,6 +169,10 @@ name            status    error
 good_source     running   <null>
 source0         paused    <null>
 source1         paused    <null>
+# Ideally source 2 would be permanently stalled because the topic was recreated,
+# but we can't easily distingiush that situation from a temporary ingestion
+# hiccup, and so at the moment we consider source2 to be fully healthy.
+source2         running   <null>
 
 # Testdrive expects all sources to end in a healthy state, so manufacture that
 # by dropping sources.
