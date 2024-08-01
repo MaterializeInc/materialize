@@ -11,9 +11,8 @@ use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
 
-use crate::optimizer_metrics::OptimizerMetrics;
 use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
-use crate::plan::lowering::{ColumnMap, Config, CteMap};
+use crate::plan::lowering::{ColumnMap, Context, CteMap};
 use crate::plan::PlanError;
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
@@ -37,8 +36,7 @@ pub(crate) fn attempt_left_join_magic(
     get_outer: MirRelationExpr,
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
-    config: &Config,
-    metrics: Option<&OptimizerMetrics>,
+    context: &Context,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     use mz_expr::LocalId;
 
@@ -49,7 +47,7 @@ pub(crate) fn attempt_left_join_magic(
     );
 
     let inc_metrics = |case: &str| {
-        if let Some(metrics) = metrics {
+        if let Some(metrics) = context.metrics {
             metrics.inc_outer_join_lowering(case);
         }
     };
@@ -76,9 +74,9 @@ pub(crate) fn attempt_left_join_magic(
     let mut arities = vec![oa];
 
     // Left relation, its type, and its arity.
-    let left =
-        left.clone()
-            .applied_to(id_gen, get_outer.clone(), col_map, cte_map, config, metrics)?;
+    let left = left
+        .clone()
+        .applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
     let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
     let la = lt.len();
 
@@ -113,14 +111,7 @@ pub(crate) fn attempt_left_join_magic(
         let right = right
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
-            .applied_to(
-                id_gen,
-                get_outer.clone(),
-                &right_col_map,
-                cte_map,
-                config,
-                metrics,
-            )?;
+            .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, context)?;
         let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
         let ra = rt.len() - 1; // don't count the new column
 
@@ -155,15 +146,9 @@ pub(crate) fn attempt_left_join_magic(
         );
 
         // Decorrelate and lower the `on` clause.
-        let on = on.clone().applied_to(
-            id_gen,
-            col_map,
-            cte_map,
-            config,
-            &mut product,
-            &None,
-            metrics,
-        )?;
+        let on = on
+            .clone()
+            .applied_to(id_gen, col_map, cte_map, &mut product, &None, context)?;
 
         // if `on` added any new columns, .. no clue what to do.
         // Return with failure, to avoid any confusion.
