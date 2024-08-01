@@ -49,13 +49,13 @@ impl TryFrom<String> for SchemaId {
 
 pub(crate) const SCHEMA_REGISTER: Config<bool> = Config::new(
     "persist_schema_register",
-    false,
+    true,
     "register schemas with the shard when opening a read or write handle",
 );
 
 pub(crate) const SCHEMA_REQUIRE: Config<bool> = Config::new(
     "persist_schema_require",
-    false,
+    true,
     "error if schema registration is unsuccessful when opening a read or write handle",
 );
 
