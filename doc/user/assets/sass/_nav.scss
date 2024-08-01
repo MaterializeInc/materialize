@@ -67,7 +67,7 @@
     &-logo {
         display: flex;
         font-weight: 600;
-        font-size: 1.8rem;
+        font-size: rem(1.8);
         color: var(--important);
 
         a {
@@ -75,14 +75,14 @@
         }
 
         svg {
-            margin-right: 1.5rem;
+            margin-right: rem(1.5);
         }
     }
 }
 
 .toggle {
     display: none;
-    transform: translateX(.8rem);
+    transform: translateX(rem(.8));
 
     @media(max-width: 850px) {
         display: initial;
@@ -93,8 +93,8 @@
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        height: 4.8rem;
-        width: 4.8rem;
+        height: rem(4.8);
+        width: rem(4.8);
         border-radius: 12px;
         transition: all .2s cubic-bezier(0, 0, 0.2, 1);
 
@@ -102,8 +102,8 @@
         &::before,
         &::after {
             background: var(--sub);
-            height: .2rem;
-            width: 2.4rem;
+            height: rem(.2);
+            width: rem(2.4);
             transition: all .2s cubic-bezier(0, 0, 0.2, 1);
         }
 
@@ -113,11 +113,11 @@
         }
 
         &::before {
-            margin-bottom: .6rem;
+            margin-bottom: rem(.6);
         }
 
         &::after {
-            margin-top: .6rem;
+            margin-top: rem(.6);
         }
     }
 
@@ -173,8 +173,8 @@ button.close-topics {
     right: 0;
     transform: translateX(50%) translateY(50%);
     background: var(--bg);
-    height: 4.8rem;
-    width: 4.8rem;
+    height: rem(4.8);
+    width: rem(4.8);
     border: 1px solid var(--divider-light);
     border-radius: 100%;
     box-shadow: var(--shadow-default);
