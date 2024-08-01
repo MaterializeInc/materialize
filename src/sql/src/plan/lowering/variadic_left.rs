@@ -38,6 +38,7 @@ pub(crate) fn attempt_left_join_magic(
     col_map: &ColumnMap,
     cte_map: &mut CteMap,
     config: &Config,
+    metrics: Option<&OptimizerMetrics>,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     use mz_expr::LocalId;
 
@@ -61,16 +62,16 @@ pub(crate) fn attempt_left_join_magic(
     let mut bindings = Vec::new();
     let mut augmented = Vec::new();
     // A vector associating result columns with their corresponding input number
-    // (where 0 idicates columns from the outer context).
+    // (where 0 indicates columns from the outer context).
     let mut bound_to = (0..oa).map(|_| 0).collect::<Vec<_>>();
     // A vector associating inputs with their arities (where the [0] entry
-    // correponds to the arity of the outer context).
+    // corresponds to the arity of the outer context).
     let mut arities = vec![oa];
 
     // Left relation, its type, and its arity.
-    let left = left
-        .clone()
-        .applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+    let left =
+        left.clone()
+            .applied_to(id_gen, get_outer.clone(), col_map, cte_map, config, metrics)?;
     let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
     let la = lt.len();
 
@@ -104,7 +105,14 @@ pub(crate) fn attempt_left_join_magic(
         let right = right
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
-            .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, config)?;
+            .applied_to(
+                id_gen,
+                get_outer.clone(),
+                &right_col_map,
+                cte_map,
+                config,
+                metrics,
+            )?;
         let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
         let ra = rt.len() - 1; // don't count the new column
 
@@ -139,9 +147,15 @@ pub(crate) fn attempt_left_join_magic(
         );
 
         // Decorrelate and lower the `on` clause.
-        let on = on
-            .clone()
-            .applied_to(id_gen, col_map, cte_map, config, &mut product, &None)?;
+        let on = on.clone().applied_to(
+            id_gen,
+            col_map,
+            cte_map,
+            config,
+            &mut product,
+            &None,
+            metrics,
+        )?;
 
         // if `on` added any new columns, .. no clue what to do.
         // Return with failure, to avoid any confusion.
@@ -364,6 +378,7 @@ pub(crate) fn attempt_left_join_magic(
     Ok(Some(body))
 }
 
+use crate::optimizer_metrics::OptimizerMetrics;
 use mz_expr::{BinaryFunc, VariadicFunc};
 
 /// If `predicate` can be decomposed as any number of `col(x) = col(y)` expressions anded together, return them.

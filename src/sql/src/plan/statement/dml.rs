@@ -690,7 +690,8 @@ pub fn plan_query(
     expr.bind_parameters(params)?;
 
     Ok(query::PlannedRootQuery {
-        expr: expr.lower(scx.catalog.system_vars())?,
+        // No metrics passed! One more reason not to use this deprecated function.
+        expr: expr.lower(scx.catalog.system_vars(), None)?,
         desc,
         finishing,
         scope,

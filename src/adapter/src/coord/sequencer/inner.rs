@@ -2408,7 +2408,9 @@ impl Coordinator {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             let expr = return_if_err!(
-                plan.values.clone().lower(self.catalog().system_config()),
+                plan.values
+                    .clone()
+                    .lower(self.catalog().system_config(), None),
                 ctx
             );
             OptimizedMirRelationExpr(expr)

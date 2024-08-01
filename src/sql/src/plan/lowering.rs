@@ -39,17 +39,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
-use itertools::Itertools;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
-use mz_ore::collections::CollectionExt;
-use mz_ore::stack::maybe_grow;
-use mz_repr::*;
-
+use crate::optimizer_metrics::OptimizerMetrics;
 use crate::plan::expr::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 use crate::plan::{transform_expr, PlanError};
 use crate::session::vars::SystemVars;
+use itertools::Itertools;
+use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack::maybe_grow;
+use mz_repr::*;
 
 mod variadic_left;
 
@@ -154,7 +154,11 @@ impl HirRelationExpr {
     /// Rewrite `self` into a `MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
     #[mz_ore::instrument(target = "optimizer", level = "trace", name = "hir_to_mir")]
-    pub fn lower<C: Into<Config>>(self, config: C) -> Result<MirRelationExpr, PlanError> {
+    pub fn lower<C: Into<Config>>(
+        self,
+        config: C,
+        metrics: Option<&OptimizerMetrics>,
+    ) -> Result<MirRelationExpr, PlanError> {
         let result =
             match self {
                 // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
@@ -181,6 +185,7 @@ impl HirRelationExpr {
                                 &ColumnMap::empty(),
                                 &mut CteMap::new(),
                                 &config.into(),
+                                metrics,
                             )
                         })?
                 }
@@ -210,6 +215,7 @@ impl HirRelationExpr {
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
         config: &Config,
+        metrics: Option<&OptimizerMetrics>,
     ) -> Result<MirRelationExpr, PlanError> {
         maybe_grow(|| {
             use MirRelationExpr as SR;
@@ -301,8 +307,14 @@ impl HirRelationExpr {
                     value,
                     body,
                 } => {
-                    let value =
-                        value.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                    let value = value.applied_to(
+                        id_gen,
+                        get_outer.clone(),
+                        col_map,
+                        cte_map,
+                        config,
+                        metrics,
+                    )?;
                     value.let_in_fallible(id_gen, |id_gen, get_value| {
                         let (new_id, typ) = if let MirRelationExpr::Get {
                             id: mz_expr::Id::Local(id),
@@ -327,7 +339,7 @@ impl HirRelationExpr {
                                 outer_relation: get_outer.clone(),
                             },
                         );
-                        let body = body.applied_to(id_gen, get_outer, col_map, cte_map, config);
+                        let body = body.applied_to(id_gen, get_outer, col_map, cte_map, config, metrics);
                         if let Some(old_value) = old_value {
                             cte_map.insert(id, old_value);
                         } else {
@@ -377,10 +389,12 @@ impl HirRelationExpr {
                             col_map,
                             cte_map,
                             config,
+                            metrics,
                         )?);
                     }
 
-                    let mir_body = body.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                    let mir_body =
+                        body.applied_to(id_gen, get_outer, col_map, cte_map, config, metrics)?;
 
                     // Remove our bindings and reinstate any shadowed bindings.
                     for (id, shadowed) in shadowed_bindings {
@@ -402,8 +416,14 @@ impl HirRelationExpr {
                 Project { input, outputs } => {
                     // Projections should be applied to the decorrelated `inner`, and to its columns,
                     // which means rebasing `outputs` to start `get_outer.arity()` columns later.
-                    let input =
-                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                    let input = input.applied_to(
+                        id_gen,
+                        get_outer.clone(),
+                        col_map,
+                        cte_map,
+                        config,
+                        metrics,
+                    )?;
                     let outputs = (0..get_outer.arity())
                         .chain(outputs.into_iter().map(|i| get_outer.arity() + i))
                         .collect::<Vec<_>>();
@@ -417,7 +437,7 @@ impl HirRelationExpr {
                     let mut lowered_arity = input.arity();
 
                     let mut input =
-                        input.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                        input.applied_to(id_gen, get_outer, col_map, cte_map, config, metrics)?;
 
                     // Lower subqueries in maximally sized batches, such as no subquery in the current
                     // batch depends on columns from the same batch.
@@ -444,7 +464,7 @@ impl HirRelationExpr {
 
                         let old_arity = input.arity();
                         let (with_subqueries, subquery_map) = HirScalarExpr::lower_subqueries(
-                            &scalars, id_gen, col_map, cte_map, config, input,
+                            &scalars, id_gen, col_map, cte_map, config, input, metrics,
                         )?;
                         input = with_subqueries;
 
@@ -465,6 +485,7 @@ impl HirRelationExpr {
                                 config,
                                 &mut input,
                                 &Some(&subquery_map),
+                                metrics,
                             )?;
                             input = input.map_one(scalar);
                             scalar_columns.push(input.arity() - 1);
@@ -487,7 +508,11 @@ impl HirRelationExpr {
 
                     let exprs = exprs
                         .into_iter()
-                        .map(|e| e.applied_to(id_gen, col_map, cte_map, config, &mut input, &None))
+                        .map(|e| {
+                            e.applied_to(
+                                id_gen, col_map, cte_map, config, &mut input, &None, metrics,
+                            )
+                        })
                         .collect::<Result<Vec<_>, _>>()?;
 
                     let new_arity = input.arity();
@@ -508,11 +533,12 @@ impl HirRelationExpr {
                     // We extend `get_outer` with sufficient values to determine the value of the predicate,
                     // then filter the results, then strip off any columns that were added for this purpose.
                     let mut input =
-                        input.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                        input.applied_to(id_gen, get_outer, col_map, cte_map, config, metrics)?;
                     for predicate in predicates {
                         let old_arity = input.arity();
-                        let predicate = predicate
-                            .applied_to(id_gen, col_map, cte_map, config, &mut input, &None)?;
+                        let predicate = predicate.applied_to(
+                            id_gen, col_map, cte_map, config, &mut input, &None, metrics,
+                        )?;
                         let new_arity = input.arity();
                         input = input.filter(vec![predicate]);
                         if old_arity != new_arity {
@@ -539,7 +565,8 @@ impl HirRelationExpr {
 
                     assert!(kind.can_be_correlated());
 
-                    let left = left.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                    let left =
+                        left.applied_to(id_gen, get_outer, col_map, cte_map, config, metrics)?;
                     left.let_in_fallible(id_gen, |id_gen, get_left| {
                         let apply_requires_distinct_outer = false;
                         let mut join = branch(
@@ -551,14 +578,16 @@ impl HirRelationExpr {
                             *right,
                             apply_requires_distinct_outer,
                             |id_gen, right, get_left, col_map, cte_map, config| {
-                                right.applied_to(id_gen, get_left, col_map, cte_map, config)
+                                right
+                                    .applied_to(id_gen, get_left, col_map, cte_map, config, metrics)
                             },
                         )?;
 
                         // Plan the `on` predicate.
                         let old_arity = join.arity();
-                        let on =
-                            on.applied_to(id_gen, col_map, cte_map, config, &mut join, &None)?;
+                        let on = on.applied_to(
+                            id_gen, col_map, cte_map, config, &mut join, &None, metrics,
+                        )?;
                         join = join.filter(vec![on]);
                         let new_arity = join.arity();
                         if old_arity != new_arity {
@@ -615,6 +644,7 @@ impl HirRelationExpr {
                                     col_map,
                                     cte_map,
                                     config,
+                                    metrics,
                                 ) {
                                     return Ok(magic);
                                 } else {
@@ -634,8 +664,14 @@ impl HirRelationExpr {
                     // against the records present in the left and right (decorrelated) inputs,
                     // depending on the type of join.
                     let oa = get_outer.arity();
-                    let left =
-                        left.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                    let left = left.applied_to(
+                        id_gen,
+                        get_outer.clone(),
+                        col_map,
+                        cte_map,
+                        config,
+                        metrics,
+                    )?;
                     let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
                     let la = lt.len();
                     left.let_in_fallible(id_gen, |id_gen, get_left| {
@@ -646,6 +682,7 @@ impl HirRelationExpr {
                             &right_col_map,
                             cte_map,
                             config,
+                            metrics,
                         )?;
                         let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
                         let ra = rt.len();
@@ -669,6 +706,7 @@ impl HirRelationExpr {
                                 config,
                                 &mut product,
                                 &None,
+                                metrics,
                             )?;
                             // Collect the types of all subqueries appearing in
                             // the `on` clause. The subquery results were
@@ -764,6 +802,7 @@ impl HirRelationExpr {
                             col_map,
                             cte_map,
                             config,
+                            metrics,
                         )?),
                         inputs: inputs
                             .into_iter()
@@ -774,6 +813,7 @@ impl HirRelationExpr {
                                     col_map,
                                     cte_map,
                                     config,
+                                    metrics,
                                 )
                             })
                             .collect::<Result<Vec<_>, _>>()?,
@@ -788,15 +828,22 @@ impl HirRelationExpr {
                     // Reduce may contain expressions with correlated subqueries.
                     // In addition, here an empty reduction key signifies that we need to supply default values
                     // in the case that there are no results (as in a SQL aggregation without an explicit GROUP BY).
-                    let mut input =
-                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                    let mut input = input.applied_to(
+                        id_gen,
+                        get_outer.clone(),
+                        col_map,
+                        cte_map,
+                        config,
+                        metrics,
+                    )?;
                     let applied_group_key = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
                         .collect();
                     let applied_aggregates = aggregates
                         .into_iter()
                         .map(|aggregate| {
-                            aggregate.applied_to(id_gen, col_map, cte_map, config, &mut input)
+                            aggregate
+                                .applied_to(id_gen, col_map, cte_map, config, &mut input, metrics)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let input_type = input.typ();
@@ -822,7 +869,7 @@ impl HirRelationExpr {
                 Distinct { input } => {
                     // Distinct is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map, config)?
+                        .applied_to(id_gen, get_outer, col_map, cte_map, config, metrics)?
                         .distinct()
                 }
                 TopK {
@@ -834,8 +881,14 @@ impl HirRelationExpr {
                     expected_group_size,
                 } => {
                     // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
-                    let mut input =
-                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
+                    let mut input = input.applied_to(
+                        id_gen,
+                        get_outer.clone(),
+                        col_map,
+                        cte_map,
+                        config,
+                        metrics,
+                    )?;
                     let mut applied_group_key: Vec<_> = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
                         .collect();
@@ -853,10 +906,9 @@ impl HirRelationExpr {
                     // Lower `limit`, which may introduce new columns if is a correlated subquery.
                     let mut limit_mir = None;
                     if let Some(limit) = limit {
-                        limit_mir = Some(
-                            limit
-                                .applied_to(id_gen, col_map, cte_map, config, &mut input, &None)?,
-                        );
+                        limit_mir = Some(limit.applied_to(
+                            id_gen, col_map, cte_map, config, &mut input, &None, metrics,
+                        )?);
                     }
 
                     let new_arity = input.arity();
@@ -881,13 +933,13 @@ impl HirRelationExpr {
                 Negate { input } => {
                     // Negate is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map, config)?
+                        .applied_to(id_gen, get_outer, col_map, cte_map, config, metrics)?
                         .negate()
                 }
                 Threshold { input } => {
                     // Threshold is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map, config)?
+                        .applied_to(id_gen, get_outer, col_map, cte_map, config, metrics)?
                         .threshold()
                 }
             })
@@ -914,6 +966,7 @@ impl HirScalarExpr {
         config: &Config,
         inner: &mut MirRelationExpr,
         subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
+        metrics: Option<&OptimizerMetrics>,
     ) -> Result<MirScalarExpr, PlanError> {
         maybe_grow(|| {
             use MirScalarExpr as SS;
@@ -940,6 +993,7 @@ impl HirScalarExpr {
                         config,
                         inner,
                         subquery_map,
+                        metrics,
                     )?),
                 },
                 CallBinary { func, expr1, expr2 } => SS::CallBinary {
@@ -951,6 +1005,7 @@ impl HirScalarExpr {
                         config,
                         inner,
                         subquery_map,
+                        metrics,
                     )?),
                     expr2: Box::new(expr2.applied_to(
                         id_gen,
@@ -959,6 +1014,7 @@ impl HirScalarExpr {
                         config,
                         inner,
                         subquery_map,
+                        metrics,
                     )?),
                 },
                 CallVariadic { func, exprs } => SS::CallVariadic {
@@ -966,7 +1022,15 @@ impl HirScalarExpr {
                     exprs: exprs
                         .into_iter()
                         .map(|expr| {
-                            expr.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)
+                            expr.applied_to(
+                                id_gen,
+                                col_map,
+                                cte_map,
+                                config,
+                                inner,
+                                subquery_map,
+                                metrics,
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                 },
@@ -992,8 +1056,15 @@ impl HirScalarExpr {
                     // and we would benefit from not introducing the complexity.
 
                     let inner_arity = inner.arity();
-                    let cond_expr =
-                        cond.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)?;
+                    let cond_expr = cond.applied_to(
+                        id_gen,
+                        col_map,
+                        cte_map,
+                        config,
+                        inner,
+                        subquery_map,
+                        metrics,
+                    )?;
 
                     // Defensive copies, in case we mangle these in decorrelation.
                     let inner_clone = inner.clone();
@@ -1001,10 +1072,24 @@ impl HirScalarExpr {
                     let else_clone = els.clone();
 
                     let cond_arity = inner.arity();
-                    let then_expr =
-                        then.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)?;
-                    let else_expr =
-                        els.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)?;
+                    let then_expr = then.applied_to(
+                        id_gen,
+                        col_map,
+                        cte_map,
+                        config,
+                        inner,
+                        subquery_map,
+                        metrics,
+                    )?;
+                    let else_expr = els.applied_to(
+                        id_gen,
+                        col_map,
+                        cte_map,
+                        config,
+                        inner,
+                        subquery_map,
+                        metrics,
+                    )?;
 
                     if cond_arity == inner.arity() {
                         // If no additional columns were added, we simply return the
@@ -1030,6 +1115,7 @@ impl HirScalarExpr {
                                 config,
                                 &mut then_inner,
                                 subquery_map,
+                                metrics,
                             )?;
                             let then_arity = then_inner.arity();
                             then_inner = then_inner
@@ -1053,6 +1139,7 @@ impl HirScalarExpr {
                                 config,
                                 &mut else_inner,
                                 subquery_map,
+                                metrics,
                             )?;
                             let else_arity = else_inner.arity();
                             else_inner = else_inner
@@ -1088,6 +1175,7 @@ impl HirScalarExpr {
                         config,
                         *expr,
                         apply_requires_distinct_outer,
+                        metrics,
                     )?;
                     SS::Column(inner.arity() - 1)
                 }
@@ -1102,6 +1190,7 @@ impl HirScalarExpr {
                         config,
                         *expr,
                         apply_requires_distinct_outer,
+                        metrics,
                     )?;
                     SS::Column(inner.arity() - 1)
                 }
@@ -1174,6 +1263,7 @@ impl HirScalarExpr {
                                 config,
                                 get_inner,
                                 subquery_map,
+                                metrics,
                             )?;
                             let mir_encoded_args_type = mir_encoded_args
                                 .typ(&get_inner.typ().column_types)
@@ -1242,6 +1332,7 @@ impl HirScalarExpr {
                                 order_by,
                                 mir_aggr_func,
                                 scalar_lower_args,
+                                metrics,
                             )?
                         }
                         WindowExprType::Value(value_window_expr) => {
@@ -1258,6 +1349,7 @@ impl HirScalarExpr {
                                 order_by,
                                 mir_aggr_func,
                                 value_or_aggr_lower_args(hir_encoded_args),
+                                metrics,
                             )?
                         }
                         WindowExprType::Aggregate(aggr_window_expr) => {
@@ -1274,6 +1366,7 @@ impl HirScalarExpr {
                                 order_by,
                                 mir_aggr_func,
                                 value_or_aggr_lower_args(hir_encoded_args),
+                                metrics,
                             )?
                         }
                     }
@@ -1293,6 +1386,7 @@ impl HirScalarExpr {
         order_by: Vec<HirScalarExpr>,
         mir_aggr_func: AggregateFunc,
         lower_args: F,
+        metrics: Option<&OptimizerMetrics>,
     ) -> Result<MirScalarExpr, PlanError>
     where
         F: FnOnce(
@@ -1367,6 +1461,7 @@ impl HirScalarExpr {
                             config,
                             &mut get_inner,
                             subquery_map,
+                            metrics,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1392,6 +1487,7 @@ impl HirScalarExpr {
                         config,
                         &mut get_inner,
                         subquery_map,
+                        metrics,
                     )?;
                     if let MirScalarExpr::Column(c) = key {
                         group_key.push(c);
@@ -1494,6 +1590,7 @@ impl HirScalarExpr {
         cte_map: &mut CteMap,
         config: &Config,
         inner: MirRelationExpr,
+        metrics: Option<&OptimizerMetrics>,
     ) -> Result<(MirRelationExpr, BTreeMap<HirScalarExpr, usize>), PlanError> {
         let mut subquery_map = BTreeMap::new();
         let output = inner.let_in_fallible(id_gen, |id_gen, get_inner| {
@@ -1519,6 +1616,7 @@ impl HirScalarExpr {
                                 config,
                                 (**expr).clone(),
                                 apply_requires_distinct_outer,
+                                metrics,
                             )
                             .unwrap();
 
@@ -1534,6 +1632,7 @@ impl HirScalarExpr {
                                 config,
                                 (**expr).clone(),
                                 apply_requires_distinct_outer,
+                                metrics,
                             )
                             .unwrap();
                             subqueries.push((e.clone(), subquery));
@@ -1839,6 +1938,7 @@ fn apply_scalar_subquery(
     config: &Config,
     scalar_subquery: HirRelationExpr,
     apply_requires_distinct_outer: bool,
+    metrics: Option<&OptimizerMetrics>,
 ) -> Result<MirRelationExpr, PlanError> {
     branch(
         id_gen,
@@ -1850,7 +1950,8 @@ fn apply_scalar_subquery(
         apply_requires_distinct_outer,
         |id_gen, expr, get_inner, col_map, cte_map, config| {
             // compute for every row in get_inner
-            let select = expr.applied_to(id_gen, get_inner.clone(), col_map, cte_map, config)?;
+            let select =
+                expr.applied_to(id_gen, get_inner.clone(), col_map, cte_map, config, metrics)?;
             let col_type = select.typ().column_types.into_last();
 
             let inner_arity = get_inner.arity();
@@ -1896,6 +1997,7 @@ fn apply_existential_subquery(
     config: &Config,
     subquery_expr: HirRelationExpr,
     apply_requires_distinct_outer: bool,
+    metrics: Option<&OptimizerMetrics>,
 ) -> Result<MirRelationExpr, PlanError> {
     branch(
         id_gen,
@@ -1908,7 +2010,7 @@ fn apply_existential_subquery(
         |id_gen, expr, get_inner, col_map, cte_map, config| {
             let exists = expr
                 // compute for every row in get_inner
-                .applied_to(id_gen, get_inner.clone(), col_map, cte_map, config)?
+                .applied_to(id_gen, get_inner.clone(), col_map, cte_map, config, metrics)?
                 // throw away actual values and just remember whether or not there were __any__ rows
                 .distinct_by((0..get_inner.arity()).collect())
                 // Append true to anything that returned any rows.
@@ -1928,6 +2030,7 @@ impl AggregateExpr {
         cte_map: &mut CteMap,
         config: &Config,
         inner: &mut MirRelationExpr,
+        metrics: Option<&OptimizerMetrics>,
     ) -> Result<mz_expr::AggregateExpr, PlanError> {
         let AggregateExpr {
             func,
@@ -1937,7 +2040,7 @@ impl AggregateExpr {
 
         Ok(mz_expr::AggregateExpr {
             func: func.into_expr(),
-            expr: expr.applied_to(id_gen, col_map, cte_map, config, inner, &None)?,
+            expr: expr.applied_to(id_gen, col_map, cte_map, config, inner, &None, metrics)?,
             distinct,
         })
     }
