@@ -654,7 +654,7 @@ class ResolvedImage:
 
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
-        ui.section(f"Acquiring {self.spec()}")
+        ui.header(f"Acquiring {self.spec()}")
         if not self.acquired:
             for retry in range(1, max_retries + 1):
                 try:
