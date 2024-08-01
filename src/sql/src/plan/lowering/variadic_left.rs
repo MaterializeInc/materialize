@@ -11,10 +11,10 @@ use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
 
+use crate::optimizer_metrics::OptimizerMetrics;
 use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
-use crate::plan::PlanError;
-
 use crate::plan::lowering::{ColumnMap, Config, CteMap};
+use crate::plan::PlanError;
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
 ///
@@ -392,7 +392,6 @@ pub(crate) fn attempt_left_join_magic(
     Ok(Some(body))
 }
 
-use crate::optimizer_metrics::OptimizerMetrics;
 use mz_expr::{BinaryFunc, VariadicFunc};
 
 /// If `predicate` can be decomposed as any number of `col(x) = col(y)` expressions anded together, return them.

@@ -23,6 +23,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::Statement;
 use mz_sql::names::Aug;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
@@ -34,7 +35,6 @@ use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::optimize::{self, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::SessionMeta;
 use crate::TimestampContext;
-use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 /// Information needed to compute PlanInsights.
 #[derive(Debug)]

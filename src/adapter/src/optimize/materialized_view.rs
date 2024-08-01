@@ -34,6 +34,7 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -49,7 +50,6 @@ use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
 };
-use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.

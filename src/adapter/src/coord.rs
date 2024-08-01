@@ -127,6 +127,7 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -185,7 +186,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycle
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
-use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 

@@ -21,6 +21,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::connections::Connection;
@@ -43,7 +44,6 @@ use crate::optimize::{
     OptimizeMode, OptimizerConfig, OptimizerError,
 };
 use crate::TimestampContext;
-use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.

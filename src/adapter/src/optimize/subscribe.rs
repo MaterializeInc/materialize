@@ -21,6 +21,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
@@ -38,7 +39,6 @@ use crate::optimize::{
     OptimizeMode, OptimizerConfig, OptimizerError,
 };
 use crate::CollectionIdBundle;
-use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
