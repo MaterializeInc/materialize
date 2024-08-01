@@ -31,6 +31,8 @@ _minor_versions: list[MzVersion] | None = None
 _last_version: MzVersion | None = None
 _previous_version: MzVersion | None = None
 
+_no_0dt_system_parameters = {"enable_0dt_deployment": "false"}
+
 
 def get_minor_versions() -> list[MzVersion]:
     global _minor_versions
@@ -82,18 +84,30 @@ class UpgradeEntireMz(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the new version
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Validate(self),
         ]
 
@@ -109,20 +123,36 @@ class UpgradeEntireMzTwoVersions(Scenario):
         print(f"Upgrade path: {self.base_version()} -> {get_last_version()} -> current")
         return [
             # Start with previous_version
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Initialize(self),
             # Upgrade to last_version
             KillMz(capture_logs=True),
-            StartMz(self, tag=get_last_version()),
+            StartMz(
+                self,
+                tag=get_last_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Manipulate(self, phase=1),
             # Upgrade to current source
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the current source
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Validate(self),
         ]
 
@@ -144,21 +174,45 @@ class UpgradeEntireMzFourVersions(Scenario):
             f"Upgrade path: {self.minor_versions[3]} -> {self.minor_versions[2]} -> {get_previous_version()} -> {get_last_version()} -> current"
         )
         return [
-            StartMz(self, tag=self.minor_versions[3]),
+            StartMz(
+                self,
+                tag=self.minor_versions[3],
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Initialize(self),
             KillMz(capture_logs=True),
-            StartMz(self, tag=self.minor_versions[2]),
+            StartMz(
+                self,
+                tag=self.minor_versions[2],
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Manipulate(self, phase=1),
             KillMz(capture_logs=True),
-            StartMz(self, tag=get_previous_version()),
+            StartMz(
+                self,
+                tag=get_previous_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Manipulate(self, phase=2),
             KillMz(capture_logs=True),
-            StartMz(self, tag=get_last_version()),
+            StartMz(
+                self,
+                tag=get_last_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             KillMz(capture_logs=True),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Validate(self),
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Validate(self),
         ]
 
@@ -180,13 +234,22 @@ class UpgradeClusterdComputeLast(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             StartClusterdCompute(tag=self.base_version()),
             UseClusterdCompute(self),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(capture_logs=True),
-            StartMz(self, tag=None, system_parameter_version=self.base_version()),
+            StartMz(
+                self,
+                tag=None,
+                system_parameter_version=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             # No useful work can be done while clusterd is old-version
             # and environmentd is new-version. So we proceed
             # to upgrade clusterd as well.
@@ -199,7 +262,11 @@ class UpgradeClusterdComputeLast(Scenario):
             Validate(self),
             # A second restart while already on the new version
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Validate(self),
         ]
 
@@ -212,7 +279,11 @@ class UpgradeClusterdComputeFirst(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             StartClusterdCompute(tag=self.base_version()),
             UseClusterdCompute(self),
             Initialize(self),
@@ -226,11 +297,19 @@ class UpgradeClusterdComputeFirst(Scenario):
             # though we are not issuing queries during that time.
             Sleep(10),
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Manipulate(self, phase=2),
             Validate(self),
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Validate(self),
         ]
 
@@ -257,7 +336,11 @@ class PreflightCheckContinue(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(
@@ -274,6 +357,7 @@ class PreflightCheckContinue(Scenario):
                 self,
                 tag=None,
                 deploy_generation=1,
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
             ),
             Validate(self),
         ]
@@ -288,7 +372,11 @@ class PreflightCheckRollback(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         return [
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(
@@ -302,7 +390,11 @@ class PreflightCheckRollback(Scenario):
             ),
             WaitReadyMz(),
             KillMz(capture_logs=True),
-            StartMz(self, tag=self.base_version()),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
+            ),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while still on old version
@@ -310,6 +402,7 @@ class PreflightCheckRollback(Scenario):
             StartMz(
                 self,
                 tag=self.base_version(),
+                additional_system_parameter_defaults=_no_0dt_system_parameters,
             ),
             Validate(self),
         ]
