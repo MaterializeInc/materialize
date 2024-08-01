@@ -24,7 +24,6 @@ jobs:
         with:
           path-to-signatures: 'signatures/version1/signatures.json'
           path-to-document: 'https://github.com/MaterializeInc/cla/blob/main/Materialize_CLA.md'
-          # branch should not be protected
           branch: 'main'
           allowlist: "materialize-bot,materialize-bot-monitoring,dependabot[bot]"
 
