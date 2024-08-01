@@ -16,8 +16,13 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use mz_catalog::builtin::{BuiltinTable, Fingerprint, BUILTINS};
 use mz_catalog::config::BuiltinItemMigrationConfig;
-use mz_catalog::durable::{builtin_migration_shard_id, DurableCatalogError, Transaction};
+use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
+use mz_catalog::durable::{
+    builtin_migration_shard_id, DurableCatalogError, SystemObjectDescription, SystemObjectMapping,
+    Transaction,
+};
 use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_ore::{halt, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::critical::SinceHandle;
@@ -27,6 +32,7 @@ use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::ShardIdSchema;
 use mz_persist_types::ShardId;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_sql::catalog::CatalogItem;
 use mz_storage_client::controller::StorageTxn;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, error};
@@ -174,6 +180,44 @@ async fn migrate_builtin_items_0dt(
         txn.is_savepoint(),
         "txn must be in savepoint mode when read_only is true, and in writable mode when read_only is false"
     );
+
+    // 0. Update durably stored fingerprints.
+    let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
+        .map(|builtin| {
+            let id = state.resolve_builtin_object(builtin);
+            let fingerprint = builtin.fingerprint();
+            (id, fingerprint)
+        })
+        .collect();
+    let mut migrated_system_object_mappings = BTreeMap::new();
+    for id in &migrated_builtins {
+        let fingerprint = id_fingerprint_map.get(id).expect("missing fingerprint");
+        let entry = state.get_entry(id);
+        let schema_name = state
+            .get_schema(
+                &entry.name().qualifiers.database_spec,
+                &entry.name().qualifiers.schema_spec,
+                entry.conn_id().unwrap_or(&SYSTEM_CONN_ID),
+            )
+            .name
+            .schema
+            .as_str();
+        migrated_system_object_mappings.insert(
+            *id,
+            SystemObjectMapping {
+                description: SystemObjectDescription {
+                    schema_name: schema_name.to_string(),
+                    object_type: entry.item_type(),
+                    object_name: entry.name().item.clone(),
+                },
+                unique_identifier: SystemObjectUniqueIdentifier {
+                    id: *id,
+                    fingerprint: fingerprint.clone(),
+                },
+            },
+        );
+    }
+    txn.update_system_object_mappings(migrated_system_object_mappings)?;
 
     // 1. Open migration shard.
     let organization_id = state.config.environment_id.organization_id();
