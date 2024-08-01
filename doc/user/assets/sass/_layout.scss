@@ -89,7 +89,7 @@ table.inline-headings {
     }
 
     .DocSearch-Button-Placeholder {
-        font-size: rem(1.6);
+        font-size: 1.6rem;
         font-weight: 300;
 
         @media(max-width: 768px) {
@@ -150,7 +150,7 @@ table.inline-headings {
     overflow-y: auto;
     height: 100vh;
     display: flex;
-    font-size: rem(1.3);
+    font-size: 1.3rem;
     overflow-x: hidden;
 
     &,
@@ -242,7 +242,7 @@ table.inline-headings {
         padding-left: 0;
 
         ul ul {
-            margin-left: rem(0.8);
+            margin-left: 0.8rem;
         }
     }
 
@@ -259,7 +259,7 @@ table.inline-headings {
         }
 
         &>ul {
-            margin-bottom: rem(1.5);
+            margin-bottom: 1.5rem;
         }
     }
 
@@ -267,8 +267,8 @@ table.inline-headings {
     li.level-3 {
         >ul {
             display: none;
-            padding-top: rem(0.5);
-            margin-bottom: rem(0.625);
+            padding-top: 0.5rem;
+            margin-bottom: 0.625rem;
 
             &:before,
             &:after {
@@ -325,7 +325,7 @@ table.inline-headings {
 .toc {
     max-width: fit-content;
     min-width: 180px;
-    padding: var(--x-small) rem(2);
+    padding: var(--x-small) 2rem;
     position: sticky;
     top: 0;
     height: 100vh;
@@ -339,7 +339,7 @@ table.inline-headings {
     h2 {
         font-size: var(--xsm);
         letter-spacing: 0.1em;
-        margin: 0 0 rem(0.75) 0;
+        margin: 0 0 0.75rem 0;
         padding: 0;
         display: inline-block;
         color: var(--highlight);
@@ -357,7 +357,7 @@ table.inline-headings {
     }
 
     li {
-        padding: rem(0.25) 0;
+        padding: 0.25rem 0;
     }
 
     a {
@@ -448,8 +448,8 @@ table.inline-headings {
     }
 
     svg {
-        height: rem(2.2);
-        width: rem(2.2);
+        height: 2.2rem;
+        width: 2.2rem;
         fill: var(--gray-mid);
     }
 

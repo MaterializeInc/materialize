@@ -103,7 +103,7 @@ p+p {
         }
 
         .highlight:only-child {
-            margin: rem(1) 0;
+            margin: 1rem 0;
 
             pre {
                 margin: 0;
@@ -111,8 +111,8 @@ p+p {
         }
 
         pre {
-            margin-left: rem(1.8);
-            margin: rem(1) 0;
+            margin-left: 1.8rem;
+            margin: 1rem 0;
             display: block;
         }
     }
@@ -133,18 +133,18 @@ p+p {
     pre+p,
     table+p,
     *+p {
-        margin-top: rem(1.6);
+        margin-top: 1.6rem;
     }
 
     p+table {
-        margin-top: rem(0.5);
+        margin-top: 0.5rem;
     }
 
     pre,
     .warning,
     .note,
-    .tip {
-        font-size: rem(1.5);
+	.tip {
+        font-size: 1.5rem;
         font-weight: 300;
     }
 
@@ -198,7 +198,7 @@ p+p {
         background: var(--brand);
         border-radius: 3px;
         padding: 1px;
-        border-radius: rem(1.2);
+        border-radius: 1.2rem;
         box-shadow: var(--shadow-default);
 
         &:not(.bottom) {
@@ -244,7 +244,7 @@ p+p {
             width: 48px;
             height: 48px;
             position: absolute;
-            top: rem(2);
+            top: 2rem;
             background-size: contain;
         }
 
@@ -252,7 +252,7 @@ p+p {
         &.bulb,
         &.doc,
         &.touch {
-            padding-top: rem(8);
+            padding-top: 8rem;
         }
 
         &.book::before {
@@ -295,7 +295,7 @@ p+p {
         border-collapse: collapse;
         font-size: var(--sm);
         font-weight: 300;
-        line-height: rem(2.1);
+        line-height: 2.1rem;
 
         @media(max-width: 500px) {
             code {
@@ -313,7 +313,7 @@ p+p {
         border-bottom: 1px var(--highlight) solid;
         text-align: left;
         padding: 8px;
-        font-size: rem(1.3);
+        font-size: 1.3rem;
         vertical-align: bottom;
     }
 
@@ -340,10 +340,10 @@ p+p {
         border: 1px solid var(--divider-light);
         color: $black-v2;
         font-family: Courier, monospace;
-        font-size: rem(1.5);
-        margin: rem(1) 0 rem(0.5);
+        font-size: 1.5rem;
+        margin: 1rem 0 0.5rem;
         overflow: auto;
-        padding: rem(1.6);
+        padding: 1.6rem;
 
         code {
             color: $black-v2;
@@ -356,13 +356,13 @@ p+p {
     code {
         font-family: "Fira Code", Courier, monospace;
         font-variant-ligatures: none;
-        font-size: rem(1.3);
+        font-size: 1.3rem;
         font-weight: 500;
         background: var(--code-block);
         border: 1px solid var(--divider-light);
         box-sizing: border-box;
         border-radius: 2px;
-        padding: rem(0.1) rem(0.25) rem(0);
+        padding: 0.1rem 0.25rem 0rem;
         color: var(--code-simple);
         background: var(--code-simple-bg);
     }
@@ -381,7 +381,7 @@ p+p {
         margin: 0;
 
         li {
-            margin-bottom: rem(0.5);
+            margin-bottom: 0.5rem;
         }
     }
 
@@ -399,9 +399,9 @@ p+p {
 
          >li {
             counter-increment: list-counter;
-            min-height: rem(5);
+            min-height: 5rem;
             position: relative;
-            padding: rem(1.6) 0 rem(1.6) rem(6);
+            padding: 1.6rem 0 1.6rem 6rem;
             border-top: 1px solid var(--divider-light);
 
             ul,
@@ -416,29 +416,29 @@ p+p {
             }
 
             @media(max-width: 850px) {
-                padding-left: rem(4.5);
+                padding-left: 4.5rem;
             }
 
             @media(max-width: 480px) {
-                padding-left: rem(3);
+                padding-left: 3rem;
             }
 
             &:before {
                 content: counter(list-counter);
                 color: var(--orchid);
-                font-size: rem(3);
+                font-size: 3rem;
                 font-weight: 100;
                 position: absolute;
                 top: 100;
-                left: rem(1);
+                left: 1rem;
 
                 @media(max-width: 850px) {
-                    font-size: rem(4);
-                    left: rem(.5);
+                    font-size: 4rem;
+                    left: .5rem;
                 }
 
                 @media(max-width: 480px) {
-                    font-size: rem(3.5);
+                    font-size: 3.5rem;
                     left: 0;
                 }
             }
@@ -456,7 +456,7 @@ p+p {
     hr {
         border: none;
         border-top: 1px solid $medium-grey-v2;
-        margin: rem(3.6) auto;
+        margin: 3.6rem auto;
         width: 80%;
     }
 
@@ -555,13 +555,13 @@ p+p {
     .private-preview,
     .public-preview {
         box-sizing: border-box;
-        margin: rem(1.6) 0;
-        padding: rem(1.6) rem(1.6) rem(1.6) rem(10.4);
+        margin: 1.6rem 0;
+        padding: 1.6rem 1.6rem 1.6rem 10.4rem;
         position: relative;
-        border-radius: rem(1.2);
+        border-radius: 1.2rem;
 
         @media(max-width: 510px) {
-            padding: rem(1) rem(1) rem(1) rem(6);
+            padding: 1rem 1rem 1rem 6rem;
         }
 
         p:first-of-type {
@@ -573,28 +573,28 @@ p+p {
             position: absolute;
             top: -1px;
             right: -1px;
-            border-width: 0 rem(1.6) rem(1.6) 0;
+            border-width: 0 1.6rem 1.6rem 0;
             border-style: solid;
         }
 
         .gutter {
             position: absolute;
-            left: rem(1.6);
-            top: rem(1.8);
+            left: 1.6rem;
+            top: 1.8rem;
             line-height: 23px;
-            font-size: rem(1.2);
+            font-size: 1.2rem;
             font-weight: bold;
             text-transform: uppercase;
 
             @media(max-width: 510px) {
-                top: rem(1.2);
+                top: 1.2rem;
             }
         }
     }
 
     .warning {
         @media(max-width: 510px) {
-            padding-left: rem(9);
+            padding-left: 9rem;
         }
     }
 
@@ -604,8 +604,8 @@ p+p {
         color: #fff;
         display: inline-block;
         font-weight: 500;
-        margin: rem(3.2) 0;
-        padding: rem(2) rem(6.4);
+        margin: 3.2rem 0;
+        padding: 2rem 6.4rem;
         opacity: 1;
         transition: opacity 350ms ease;
 
@@ -637,8 +637,8 @@ p+p {
 
     .release-date+ul,
     .release-date+ol {
-        margin-top: rem(1.6);
-        padding-left: rem(3.2);
+        margin-top: 1.6rem;
+        padding-left: 3.2rem;
     }
 
     .symbol {
@@ -646,7 +646,7 @@ p+p {
     }
 
     .breadcrumb {
-        font-size: rem(1.4);
+        font-size: 1.4rem;
         letter-spacing: 0.03em;
         text-transform: uppercase;
         color: var(--sub);
@@ -654,7 +654,7 @@ p+p {
 
         a {
             color: var(--sub) !important;
-            margin: 0 rem(0.8);
+            margin: 0 0.8rem;
 
             &:hover {
                 color: $black-v2;
@@ -670,9 +670,9 @@ p+p {
 
 #helpful {
     border-top: 1px solid $grey;
-    margin-top: rem(4.8);
+    margin-top: 4.8rem;
     max-width: 40%;
-    padding-top: rem(0.8);
+    padding-top: 0.8rem;
     text-align: center;
 
     table {
@@ -689,7 +689,7 @@ p+p {
         color: $purple;
         display: inline-block;
         font-weight: bold;
-        padding: rem(1.1) 0;
+        padding: 1.1rem 0;
         width: 100%;
     }
 
@@ -700,7 +700,7 @@ p+p {
 
 // Navigation tabs (tab+tabs.html)
 .code-tabs {
-    margin: rem(1) 0;
+    margin: 1rem 0;
 
     .nav-tabs {
         list-style: none;
@@ -715,7 +715,7 @@ p+p {
 
         li {
             display: inline-block;
-            margin: 0 rem(0.1);
+            margin: 0 0.1rem;
             padding: 0;
             position: relative;
             bottom: -1px;
@@ -724,17 +724,17 @@ p+p {
             a {
                 color: var(--body);
                 display: block;
-                padding: rem(0.8) rem(3.2);
-                font-size: rem(1.6);
+                padding: 0.8rem 3.2rem;
+                font-size: 1.6rem;
                 text-decoration: none;
                 font-weight: 500;
 
                 @media(max-width: 850px) {
-                    padding: rem(0.8) rem(2.5);
+                    padding: 0.8rem 2.5rem;
                 }
 
                 @media(max-width: 380px) {
-                    padding: rem(0.8) rem(1.5);
+                    padding: 0.8rem 1.5rem;
                 }
 
                 &:hover {
@@ -758,7 +758,7 @@ p+p {
 
     .tab-pane {
         display: none;
-        padding: rem(1.6) 0;
+        padding: 1.6rem 0;
 
         &.active {
             display: block;
@@ -781,7 +781,7 @@ p+p {
             display: flex;
 
             input[type="email"] {
-                font-size: rem(0.8);
+                font-size: 0.8rem;
                 padding: 7px 5px 6px 5px;
                 border-radius: $border-radius;
                 border: none;
@@ -843,7 +843,7 @@ p+p {
 
 .table-scrollable {
     box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
-    margin: rem(1) 0 rem(3);
+    margin: 1rem 0 3rem;
     overflow: auto;
 
     .table-container {
@@ -870,7 +870,7 @@ p+p {
     }
 
     &+* {
-        margin-top: rem(3) !important;
+        margin-top: 3rem !important;
     }
 }
 
@@ -904,7 +904,7 @@ p+p {
 .copy_button {
     display: none;
     position: absolute;
-    font-size: rem(1.2);
+    font-size: 1.2rem;
     font-weight: 300;
     border: none;
     background-color: $grey-light;
@@ -938,11 +938,11 @@ p+p {
         display: flex;
 
         input[type="email"] {
-            font-size: rem(1.4);
-            padding: rem(.5);
+            font-size: 1.4rem;
+            padding: .5rem;
             border-radius: $border-radius;
             border: none;
-            margin-right: rem(.8);
+            margin-right: .8rem;
             background: var(--bg);
             color: var(--important);
             border: 1px solid var(--divider-light);
@@ -958,7 +958,7 @@ p+p {
         width: 100%;
         color: var(--important);
         margin-top: var(--nano);
-        padding: rem(.4) rem(.8);
+        padding: .4rem .8rem;
         font-size: var(--xsm);
         border-bottom-left-radius: $border-radius;
         border-bottom-right-radius: $border-radius;
@@ -1122,11 +1122,11 @@ div.json_widget {
 }
 
 .notify_button {
-    font-size: rem(1);
-    padding: rem(0.4) rem(0.8);
+    font-size: 1rem;
+    padding: 0.4rem 0.8rem;
 
     &.success {
-        width: rem(8);
+        width: 8rem;
     }
 }
 
