@@ -522,12 +522,12 @@ impl CatalogState {
         }
 
         if let Some(entry) = retractions.system_object_mappings.remove(&id) {
-            // System objects can only be updated through the builtin migration process, which
-            // allocates new IDs for each object.
-            panic!(
-                "cannot update system objects in place, entry: {:?}, durable: {:?}",
-                entry, system_object_mapping
-            )
+            // This implies that we updated the fingerprint for some builtin item. The retraction
+            // was parsed, planned, and optimized using the compiled in definition, not the
+            // definition from a previous version. So we can just stick the old entry back into the
+            // catalog.
+            self.insert_entry(entry);
+            return;
         }
 
         let builtin = BUILTIN_LOOKUP
