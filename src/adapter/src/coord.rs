@@ -179,13 +179,13 @@ use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 

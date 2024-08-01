@@ -19,7 +19,7 @@ use prometheus::HistogramVec;
 /// Optimizer metrics.
 #[derive(Debug, Clone)]
 pub struct OptimizerMetrics {
-    pub(super) e2e_optimization_time_seconds: HistogramVec,
+    e2e_optimization_time_seconds: HistogramVec,
 }
 
 impl OptimizerMetrics {
@@ -34,7 +34,7 @@ impl OptimizerMetrics {
         }
     }
 
-    pub(super) fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
+    pub fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
             .observe(duration.as_secs_f64())

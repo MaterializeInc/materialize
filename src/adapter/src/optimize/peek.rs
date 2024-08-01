@@ -34,12 +34,12 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,
 };
 use crate::TimestampContext;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.

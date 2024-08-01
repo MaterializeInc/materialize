@@ -31,10 +31,10 @@ use serde::Serialize;
 use crate::catalog::Catalog;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
-use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::SessionMeta;
 use crate::TimestampContext;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 
 /// Information needed to compute PlanInsights.
 #[derive(Debug)]

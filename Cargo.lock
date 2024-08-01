@@ -6180,6 +6180,7 @@ dependencies = [
  "num_enum",
  "once_cell",
  "paste",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
