@@ -25,11 +25,11 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConnection, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
     KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
-    MySqlSslMode, PostgresConnection, SshConnection, SshTunnel, StringOrSecret, TlsIdentity,
-    Tunnel,
+    MySqlSslMode, PostgresConnection, SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;

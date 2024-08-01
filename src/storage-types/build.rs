@@ -54,6 +54,7 @@ fn main() {
             &[
                 "storage-types/src/controller.proto",
                 "storage-types/src/collections.proto",
+                "storage-types/src/connections/aws.proto",
                 "storage-types/src/connections.proto",
                 "storage-types/src/shim.proto",
                 "storage-types/src/errors.proto",
