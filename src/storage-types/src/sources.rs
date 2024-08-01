@@ -1975,6 +1975,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::parquet::EncodingConfig;
     use mz_repr::{arb_datum_for_scalar, ProtoRelationDesc, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -2045,7 +2046,7 @@ mod tests {
     }
 
     #[track_caller]
-    fn roundtrip_source_data(desc: RelationDesc, datas: Vec<SourceData>) {
+    fn roundtrip_source_data(desc: RelationDesc, datas: Vec<SourceData>, config: &EncodingConfig) {
         let metrics = ColumnarMetrics::disconnected();
         let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
         for data in &datas {
@@ -2075,7 +2076,7 @@ mod tests {
         let mut buf = Vec::new();
         let fields = Fields::from(vec![Field::new("k", col.data_type().clone(), false)]);
         let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col)];
-        mz_persist_types::parquet::encode_arrays(&mut buf, fields, arrays).unwrap();
+        mz_persist_types::parquet::encode_arrays(&mut buf, fields, arrays, config).unwrap();
 
         // Decode from Parquet.
         let buf = Bytes::from(buf);
@@ -2131,8 +2132,8 @@ mod tests {
                 .prop_map(move |datas| (desc.clone(), datas))
         });
 
-        proptest!(|((desc, source_datas) in strat)| {
-            roundtrip_source_data(desc, source_datas);
+        proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), strat))| {
+            roundtrip_source_data(desc, source_datas, &config);
         });
     }
 
@@ -2140,13 +2141,13 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn empty_relation_desc_roundtrips() {
         let empty = RelationDesc::empty();
-        let strat = proptest::collection::vec(arb_source_data_for_relation_desc(&empty), 0..8)
+        let rows = proptest::collection::vec(arb_source_data_for_relation_desc(&empty), 0..8)
             .prop_map(move |datas| (empty.clone(), datas));
 
         // Note: This case should be covered by the `all_source_data_roundtrips` test above, but
         // it's a special case that we explicitly want to exercise.
-        proptest!(|((desc, source_datas) in strat)| {
-            roundtrip_source_data(desc, source_datas);
+        proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), rows))| {
+            roundtrip_source_data(desc, source_datas, &config);
         });
     }
 

@@ -46,7 +46,7 @@ mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }
-parquet = { version = "51.0.0", default-features = false, features = ["arrow"] }
+parquet = { version = "51.0.0", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
 postgres-openssl = { version = "0.5.0" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }

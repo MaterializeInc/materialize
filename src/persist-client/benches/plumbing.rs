@@ -25,6 +25,7 @@ use mz_persist::metrics::ColumnarMetrics;
 use mz_persist::workload::{self, DataGenerator};
 use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use mz_persist_client::ShardId;
+use mz_persist_types::parquet::EncodingConfig;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -192,6 +193,7 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
     }
 
     let metrics = ColumnarMetrics::disconnected();
+    let config = EncodingConfig::default();
     let trace = BlobTraceBatchPart {
         desc: Description::new(
             Antichain::from_elem(0u64),
@@ -209,7 +211,7 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
         b.iter(|| {
             // Intentionally alloc a new buf each iter.
             let mut buf = Vec::new();
-            trace.encode(&mut buf, &metrics);
+            trace.encode(&mut buf, &metrics, &config);
         })
     });
 }

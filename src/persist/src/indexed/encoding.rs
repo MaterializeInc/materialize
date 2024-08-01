@@ -21,6 +21,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
+use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::Codec64;
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
@@ -327,11 +328,11 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     }
 
     /// Encodes an BlobTraceBatchPart into the Parquet format.
-    pub fn encode<B>(&self, buf: &mut B, metrics: &ColumnarMetrics)
+    pub fn encode<B>(&self, buf: &mut B, metrics: &ColumnarMetrics, cfg: &EncodingConfig)
     where
         B: BufMut + Send,
     {
-        encode_trace_parquet(&mut buf.writer(), self, metrics).expect("batch was invalid");
+        encode_trace_parquet(&mut buf.writer(), self, metrics, cfg).expect("batch was invalid");
     }
 
     /// Decodes a BlobTraceBatchPart from the Parquet format.
@@ -644,7 +645,8 @@ mod tests {
     ) -> u64 {
         let mut val = Vec::new();
         let metrics = ColumnarMetrics::disconnected();
-        batch.encode(&mut val, &metrics);
+        let config = EncodingConfig::default();
+        batch.encode(&mut val, &metrics, &config);
         let val = Bytes::from(val);
         let val_len = u64::cast_from(val.len());
         blob.set(key, val).await.expect("failed to set trace batch");
@@ -737,6 +739,7 @@ mod tests {
     fn encoded_batch_sizes() {
         fn sizes(data: DataGenerator) -> usize {
             let metrics = ColumnarMetrics::disconnected();
+            let config = EncodingConfig::default();
             let updates: Vec<_> = data.batches().collect();
             let updates = BlobTraceUpdates::Row(ColumnarRecords::concat(&updates, &metrics));
             let trace = BlobTraceBatchPart {
@@ -749,7 +752,7 @@ mod tests {
                 updates,
             };
             let mut trace_buf = Vec::new();
-            trace.encode(&mut trace_buf, &metrics);
+            trace.encode(&mut trace_buf, &metrics, &config);
             trace_buf.len()
         }
 

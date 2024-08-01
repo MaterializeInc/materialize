@@ -10,6 +10,16 @@ Certification of this crate means the reviewer has confirmed the crate is:
 """
 implies = "safe-to-deploy"
 
+[[audits.alloc-no-stdlib]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.0.4"
+
+[[audits.alloc-stdlib]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.2.2"
+
 [[audits.array-concat]]
 who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
@@ -155,6 +165,16 @@ version = "2.1.0"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.0.1"
+
+[[audits.brotli]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.5.0"
+
+[[audits.brotli-decompressor]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.5.1"
 
 [[audits.built]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
@@ -477,6 +497,11 @@ version = "0.2.8"
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.16.0+8.10.0"
+
+[[audits.lz4_flex]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.11.3"
 
 [[audits.mappings]]
 who = "Moritz Hoffmann <mh@materialize.com>"
