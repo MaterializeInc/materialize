@@ -12,4 +12,5 @@
 #![warn(missing_docs)]
 
 pub mod admin;
+pub mod aws;
 pub mod client;

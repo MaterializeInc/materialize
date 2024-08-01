@@ -2562,10 +2562,11 @@ impl<'a> Parser<'a> {
                     self.expect_keyword(ZONES)?;
                     ConnectionOptionName::AvailabilityZones
                 }
-                AWS => {
-                    self.expect_keyword(PRIVATELINK)?;
-                    ConnectionOptionName::AwsPrivatelink
-                }
+                AWS => match self.expect_one_of_keywords(&[CONNECTION, PRIVATELINK])? {
+                    CONNECTION => ConnectionOptionName::AwsConnection,
+                    PRIVATELINK => ConnectionOptionName::AwsPrivatelink,
+                    _ => unreachable!(),
+                },
                 BROKER => ConnectionOptionName::Broker,
                 BROKERS => ConnectionOptionName::Brokers,
                 DATABASE => ConnectionOptionName::Database,
@@ -2628,6 +2629,12 @@ impl<'a> Parser<'a> {
 
     fn parse_connection_option_unified(&mut self) -> Result<ConnectionOption<Raw>, ParserError> {
         let name = match self.parse_connection_option_name()? {
+            ConnectionOptionName::AwsConnection => {
+                return Ok(ConnectionOption {
+                    name: ConnectionOptionName::AwsConnection,
+                    value: Some(self.parse_object_option_value()?),
+                });
+            }
             ConnectionOptionName::AwsPrivatelink => {
                 return Ok(ConnectionOption {
                     name: ConnectionOptionName::AwsPrivatelink,

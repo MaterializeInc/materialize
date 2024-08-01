@@ -2116,6 +2116,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_aws_msk_iam_auth,
+        desc: "Enable AWS MSK IAM authentication for Kafka connections",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

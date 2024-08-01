@@ -9,6 +9,8 @@
 
 //! Helpers for working with Kafka's client API.
 
+use anyhow::bail;
+use aws_config::SdkConfig;
 use fancy_regex::Regex;
 use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
@@ -37,7 +39,9 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
-use tracing::{debug, error, info, warn, Level};
+use tracing::{debug, error, info, trace, warn, Level};
+
+use crate::aws;
 
 /// A reasonable default timeout when refreshing topic metadata. This is configured
 /// at a source level.
@@ -329,6 +333,7 @@ pub struct TunnelingClientContext<C> {
     in_task: InTask,
     ssh_tunnel_manager: SshTunnelManager,
     ssh_timeout_config: SshTimeoutConfig,
+    aws_config: Option<SdkConfig>,
     runtime: Handle,
 }
 
@@ -339,6 +344,7 @@ impl<C> TunnelingClientContext<C> {
         runtime: Handle,
         ssh_tunnel_manager: SshTunnelManager,
         ssh_timeout_config: SshTimeoutConfig,
+        aws_config: Option<SdkConfig>,
         in_task: InTask,
     ) -> TunnelingClientContext<C> {
         TunnelingClientContext {
@@ -348,6 +354,7 @@ impl<C> TunnelingClientContext<C> {
             in_task,
             ssh_tunnel_manager,
             ssh_timeout_config,
+            aws_config,
             runtime,
         }
     }
@@ -438,7 +445,48 @@ impl<C> ClientContext for TunnelingClientContext<C>
 where
     C: ClientContext,
 {
-    const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
+    const ENABLE_REFRESH_OAUTH_TOKEN: bool = true;
+
+    fn generate_oauth_token(
+        &self,
+        _oauthbearer_config: Option<&str>,
+    ) -> Result<OAuthToken, Box<dyn Error>> {
+        // NOTE(benesch): We abuse the `TunnelingClientContext` to handle AWS
+        // IAM authentication because it's used in exactly the right places and
+        // already has a handle to the Tokio runtime. It might be slightly
+        // cleaner to have a separate `AwsIamAuthenticatingClientContext`, but
+        // that would be quite a bit of additional plumbing.
+
+        // NOTE(benesch): at the moment, the only OAUTHBEARER authentication we
+        // support is AWS IAM, so we can assume that if this method is invoked
+        // AWS IAM is desired. We may need to generalize this in the future.
+
+        info!(target: "librdkafka", "generating OAuth token");
+
+        let generate = || {
+            let Some(sdk_config) = &self.aws_config else {
+                bail!("internal error: AWS configuration missing");
+            };
+
+            self.runtime.block_on(aws::generate_auth_token(sdk_config))
+        };
+
+        match generate() {
+            Ok((token, lifetime_ms)) => {
+                info!(target: "librdkafka", %lifetime_ms, "successfully generated OAuth token");
+                trace!(target: "librdkafka", %token);
+                Ok(OAuthToken {
+                    token,
+                    lifetime_ms,
+                    principal_name: "".to_string(),
+                })
+            }
+            Err(e) => {
+                warn!(target: "librdkafka", "failed to generate OAuth token: {e:#}");
+                Err(e.into())
+            }
+        }
+    }
 
     fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
         let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
@@ -564,13 +612,6 @@ where
 
     fn stats_raw(&self, statistics: &[u8]) {
         self.inner.stats_raw(statistics)
-    }
-
-    fn generate_oauth_token(
-        &self,
-        oauthbearer_config: Option<&str>,
-    ) -> Result<OAuthToken, Box<dyn Error>> {
-        self.inner.generate_oauth_token(oauthbearer_config)
     }
 }
 

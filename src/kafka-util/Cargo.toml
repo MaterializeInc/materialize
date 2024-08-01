@@ -11,6 +11,11 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
+aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
+aws-credential-types = { version = "1.1.1" }
+aws-sigv4 = { version = "1.2.0" }
+aws-types = "1.1.1"
+base64 = "0.22.0"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 clap = { version = "3.2.24", features = ["derive"] }
 crossbeam = "0.8.2"

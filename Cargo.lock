@@ -5239,6 +5239,11 @@ name = "mz-kafka-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-types",
+ "base64 0.22.0",
  "chrono",
  "clap",
  "crossbeam",
@@ -8260,7 +8265,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#1e27332856a433235aeba7f82d46d06e3f646b69"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#302aa0e66bdb695abeef3f963d464eb9148e4099"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -8277,7 +8282,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.3.0+2.4.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#1e27332856a433235aeba7f82d46d06e3f646b69"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#302aa0e66bdb695abeef3f963d464eb9148e4099"
 dependencies = [
  "cmake",
  "libc",

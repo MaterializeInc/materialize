@@ -16,6 +16,7 @@ use itertools::Itertools;
 use maplit::btreemap;
 use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
+use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::{
@@ -23,7 +24,9 @@ use mz_sql_parser::ast::{
     KafkaBroker, KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName,
     KafkaBrokerTunnel,
 };
-use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConnection, AwsCredentials};
+use mz_storage_types::connections::aws::{
+    AwsAssumeRole, AwsAuth, AwsConnection, AwsConnectionReference, AwsCredentials,
+};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
@@ -36,6 +39,7 @@ use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{PlanError, StatementContext};
+use crate::session::vars::ENABLE_AWS_MSK_IAM_AUTH;
 
 generate_extracted_config!(
     ConnectionOption,
@@ -43,6 +47,7 @@ generate_extracted_config!(
     (AssumeRoleArn, String),
     (AssumeRoleSessionName, String),
     (AvailabilityZones, Vec<String>),
+    (AwsConnection, with_options::Object),
     (AwsPrivatelink, ConnectionDefaultAwsPrivatelink<Aug>),
     // (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
@@ -113,6 +118,7 @@ pub(super) fn validate_options_per_connection_type(
             User,
         ],
         CreateConnectionType::Kafka => &[
+            AwsConnection,
             Broker,
             Brokers,
             ProgressTopic,
@@ -272,7 +278,7 @@ impl ConnectionOptionExtracted {
                 Connection::AwsPrivatelink(connection)
             }
             CreateConnectionType::Kafka => {
-                let (tls, sasl) = plan_kafka_security(&self)?;
+                let (tls, sasl) = plan_kafka_security(scx, &self)?;
 
                 Connection::Kafka(KafkaConnection {
                     brokers: self.get_brokers(scx)?,
@@ -561,15 +567,23 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
 }
 
 fn plan_kafka_security(
+    scx: &StatementContext,
     v: &ConnectionOptionExtracted,
-) -> Result<(Option<KafkaTlsConfig>, Option<KafkaSaslConfig>), PlanError> {
-    const SASL_CONFIGS: [ConnectionOptionName; 3] = [
+) -> Result<
+    (
+        Option<KafkaTlsConfig>,
+        Option<KafkaSaslConfig<ReferencedConnection>>,
+    ),
+    PlanError,
+> {
+    const SASL_CONFIGS: [ConnectionOptionName; 4] = [
+        ConnectionOptionName::AwsConnection,
         ConnectionOptionName::SaslMechanisms,
         ConnectionOptionName::SaslUsername,
         ConnectionOptionName::SaslPassword,
     ];
 
-    const ALL_CONFIGS: [ConnectionOptionName; 6] = concat_arrays!(
+    const ALL_CONFIGS: [ConnectionOptionName; 7] = concat_arrays!(
         [
             ConnectionOptionName::SslKey,
             ConnectionOptionName::SslCertificate,
@@ -632,35 +646,59 @@ fn plan_kafka_security(
 
     let sasl = match security_protocol {
         SecurityProtocol::SaslPlaintext | SecurityProtocol::SaslSsl => {
-            outstanding.remove(&ConnectionOptionName::SaslMechanisms);
-            outstanding.remove(&ConnectionOptionName::SaslUsername);
-            outstanding.remove(&ConnectionOptionName::SaslPassword);
-            let Some(mechanism) = &v.sasl_mechanisms else {
-                // TODO(benesch): support a less confusing `SASL MECHANISM`
-                // alias, as only a single mechanism that can be specified.
-                sql_bail!("SASL MECHANISMS must be specified");
-            };
-            let Some(username) = &v.sasl_username else {
-                sql_bail!("SASL USERNAME must be specified");
-            };
-            let Some(password) = &v.sasl_password else {
-                sql_bail!("SASL PASSWORD must be specified");
-            };
-            Some(KafkaSaslConfig {
-                // librdkafka requires SASL mechanisms to be upper case (PLAIN,
-                // SCRAM-SHA-256). For usability, we automatically uppercase the
-                // mechanism that user provides. This avoids a frustrating
-                // interaction with identifier case folding. Consider `SASL
-                // MECHANISMS = PLAIN`. Identifier case folding results in a
-                // SASL mechanism of `plain` (note the lowercase), which
-                // Materialize previously rejected with an error of "SASL
-                // mechanism must be uppercase." This was deeply frustarting for
-                // users who were not familiar with identifier case folding
-                // rules. See #22205.
-                mechanism: mechanism.to_uppercase(),
-                username: username.clone(),
-                password: (*password).into(),
-            })
+            outstanding.remove(&ConnectionOptionName::AwsConnection);
+            match &v.aws_connection {
+                Some(id) => {
+                    scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
+                    let id = GlobalId::from(id);
+                    let item = scx.catalog.get_item(&id);
+                    let aws = match item.connection()? {
+                        Connection::Aws(_) => AwsConnectionReference {
+                            connection_id: id,
+                            connection: id,
+                        },
+                        _ => sql_bail!("{} is not an AWS connection", item.name().item),
+                    };
+                    Some(KafkaSaslConfig {
+                        mechanism: "OAUTHBEARER".into(),
+                        username: "".into(),
+                        password: None,
+                        aws: Some(aws),
+                    })
+                }
+                None => {
+                    outstanding.remove(&ConnectionOptionName::SaslMechanisms);
+                    outstanding.remove(&ConnectionOptionName::SaslUsername);
+                    outstanding.remove(&ConnectionOptionName::SaslPassword);
+                    // TODO(benesch): support a less confusing `SASL MECHANISM`
+                    // alias, as only a single mechanism that can be specified.
+                    let Some(mechanism) = &v.sasl_mechanisms else {
+                        sql_bail!("SASL MECHANISMS must be specified");
+                    };
+                    let Some(username) = &v.sasl_username else {
+                        sql_bail!("SASL USERNAME must be specified");
+                    };
+                    let Some(password) = &v.sasl_password else {
+                        sql_bail!("SASL PASSWORD must be specified");
+                    };
+                    Some(KafkaSaslConfig {
+                        // librdkafka requires SASL mechanisms to be upper case (PLAIN,
+                        // SCRAM-SHA-256). For usability, we automatically uppercase the
+                        // mechanism that user provides. This avoids a frustrating
+                        // interaction with identifier case folding. Consider `SASL
+                        // MECHANISMS = PLAIN`. Identifier case folding results in a
+                        // SASL mechanism of `plain` (note the lowercase), which
+                        // Materialize previously rejected with an error of "SASL
+                        // mechanism must be uppercase." This was deeply frustarting for
+                        // users who were not familiar with identifier case folding
+                        // rules. See #22205.
+                        mechanism: mechanism.to_uppercase(),
+                        username: username.clone(),
+                        password: Some((*password).into()),
+                        aws: None,
+                    })
+                }
+            }
         }
         _ => None,
     };

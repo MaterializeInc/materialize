@@ -717,6 +717,7 @@ pub enum ConnectionOptionName {
     AssumeRoleArn,
     AssumeRoleSessionName,
     AvailabilityZones,
+    AwsConnection,
     AwsPrivatelink,
     Broker,
     Brokers,
@@ -749,6 +750,7 @@ impl AstDisplay for ConnectionOptionName {
         f.write_str(match self {
             ConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
             ConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
+            ConnectionOptionName::AwsConnection => "AWS CONNECTION",
             ConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
             ConnectionOptionName::Broker => "BROKER",
             ConnectionOptionName::Brokers => "BROKERS",
@@ -793,6 +795,7 @@ impl WithOptionName for ConnectionOptionName {
         match self {
             ConnectionOptionName::AccessKeyId
             | ConnectionOptionName::AvailabilityZones
+            | ConnectionOptionName::AwsConnection
             | ConnectionOptionName::AwsPrivatelink
             | ConnectionOptionName::Broker
             | ConnectionOptionName::Brokers

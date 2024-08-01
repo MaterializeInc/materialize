@@ -51,7 +51,9 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::configuration::StorageConfiguration;
-use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
+use crate::connections::aws::{
+    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+};
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
@@ -263,6 +265,13 @@ impl Connection<InlinedConnection> {
         }
     }
 
+    pub fn unwrap_aws(self) -> <InlinedConnection as ConnectionAccess>::Aws {
+        match self {
+            Self::Aws(conn) => conn,
+            o => unreachable!("{o:?} is not an AWS connection"),
+        }
+    }
+
     pub fn unwrap_ssh(self) -> <InlinedConnection as ConnectionAccess>::Ssh {
         match self {
             Self::Ssh(conn) => conn,
@@ -347,10 +356,24 @@ pub struct KafkaTlsConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
-pub struct KafkaSaslConfig {
+pub struct KafkaSaslConfig<C: ConnectionAccess = InlinedConnection> {
     pub mechanism: String,
     pub username: StringOrSecret,
-    pub password: GlobalId,
+    pub password: Option<GlobalId>,
+    pub aws: Option<AwsConnectionReference<C>>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSaslConfig, R>
+    for KafkaSaslConfig<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSaslConfig {
+        KafkaSaslConfig {
+            mechanism: self.mechanism,
+            username: self.username,
+            password: self.password,
+            aws: self.aws.map(|aws| aws.into_inline_connection(&r)),
+        }
+    }
 }
 
 /// Specifies a Kafka broker in a [`KafkaConnection`].
@@ -433,7 +456,7 @@ pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub progress_topic_options: KafkaTopicOptions,
     pub options: BTreeMap<String, StringOrSecret>,
     pub tls: Option<KafkaTlsConfig>,
-    pub sasl: Option<KafkaSaslConfig>,
+    pub sasl: Option<KafkaSaslConfig<C>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
@@ -462,7 +485,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
             default_tunnel: default_tunnel.into_inline_connection(&r),
             options,
             tls,
-            sasl,
+            sasl: sasl.map(|sasl| sasl.into_inline_connection(&r)),
         }
     }
 }
@@ -613,10 +636,9 @@ impl KafkaConnection {
         if let Some(sasl) = &self.sasl {
             options.insert("sasl.mechanisms".into(), (&sasl.mechanism).into());
             options.insert("sasl.username".into(), sasl.username.clone());
-            options.insert(
-                "sasl.password".into(),
-                StringOrSecret::Secret(sasl.password),
-            );
+            if let Some(password) = sasl.password {
+                options.insert("sasl.password".into(), StringOrSecret::Secret(password));
+            }
         }
 
         let mut config = mz_kafka_util::client::create_new_client_config(
@@ -640,6 +662,19 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
+        let aws_config = match self.sasl.as_ref().and_then(|sasl| sasl.aws.as_ref()) {
+            None => None,
+            Some(aws) => Some(
+                aws.connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws.connection_id,
+                        in_task,
+                    )
+                    .await?,
+            ),
+        };
+
         // TODO(roshan): Implement enforcement of external address validation once
         // rdkafka client has been updated to support providing multiple resolved
         // addresses for brokers
@@ -651,6 +686,7 @@ impl KafkaConnection {
                 .ssh_tunnel_manager
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
+            aws_config,
             in_task,
         );
 
@@ -887,7 +923,8 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
         ProtoKafkaConnectionSaslConfig {
             mechanism: self.mechanism.into_proto(),
             username: Some(self.username.into_proto()),
-            password: Some(self.password.into_proto()),
+            password: self.password.into_proto(),
+            aws: self.aws.into_proto(),
         }
     }
 
@@ -897,9 +934,8 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
             username: proto
                 .username
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
-            password: proto
-                .password
-                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
+            password: proto.password.into_rust()?,
+            aws: proto.aws.into_rust()?,
         })
     }
 }
@@ -2024,7 +2060,7 @@ impl AlterCompatible for AwsPrivatelink {
     }
 }
 
-/// Specifies an AWS PrivateLink service for a [`Tunnel`].
+/// Specifies an SSH tunnel connection.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
     /// id of the ssh connection
