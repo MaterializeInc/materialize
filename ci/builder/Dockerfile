@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:noble-20240605 AS crosstool
+FROM ubuntu:lunar-20230731 as crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -37,7 +37,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libncurses-dev \
     libstdc++6 \
     libstdc++-13-dev \
-    libtinfo6 \
+    libtinfo5 \
     libtool-bin \
     llvm \
     make \
@@ -55,8 +55,9 @@ RUN gpg --import crosstool.asc \
     && rm crosstool.asc \
     && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
     && mkdir crosstool \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz > crosstool.tar.xz \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz.sig > crosstool.sig \
+    # TODO(teske): Remove the CT_ZLIB_VERSION workaround below when we upgrade crosstools. \
+    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz > crosstool.tar.xz \
+    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz.sig > crosstool.sig \
     && gpg --verify crosstool.sig crosstool.tar.xz \
     && tar -xf crosstool.tar.xz -C crosstool --strip-components=1 \
     && rm crosstool.sig crosstool.tar.xz \
@@ -67,12 +68,14 @@ COPY crosstool-$ARCH_GCC.defconfig ./
 
 RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
-    && ct-ng build.8
+    # https://github.com/crosstool-ng/crosstool-ng/issues/1832 \
+    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.3.1"/g' .config \
+    && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:noble-20240605
+FROM ubuntu:lunar-20230731
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -105,7 +108,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libclang-common-15-dev \
     libclang-dev \
     libclang-rt-15-dev \
-    libtinfo6 \
+    libtinfo5 \
     libpq-dev \
     lld \
     llvm \
@@ -140,8 +143,8 @@ RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
-    && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
-    && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.10.0/shellcheck \
+    && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.8.0/shellcheck-v0.8.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
+    && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
     && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.18.0/buf-Linux-$ARCH_GCC.tar.gz > buf.tar.gz \
     && tar -xf buf.tar.gz -C /usr/local/bin --strip-components 2 buf/bin \
@@ -209,7 +212,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.9.72" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.6.11" --locked cargo-llvm-cov \
     && cargo install --root /usr/local --version "=0.1.50" --features=vendored-openssl cargo-udeps \
-    && cargo install --root /usr/local --version "=0.8.1" --no-default-features --features=s3,openssl/vendored sccache \
+    && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \
     && cargo install --root /usr/local --version "=0.3.6" cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.0" wasm-pack
 
@@ -236,13 +239,13 @@ RUN pip3 install --break-system-packages -r /workdir/requirements.txt && rm /wor
 
 # Install APT repo generator.
 
-RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.8/deb-s3-0.11.8.gem > deb-s3.gem \
+RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-0.11.3.gem > deb-s3.gem \
     && gem install ./deb-s3.gem \
     && rm deb-s3.gem
 
 # Install the AWS CLI.
 
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.17.20.zip" > awscli.zip \
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.17.2.zip" > awscli.zip \
     && unzip awscli.zip \
     && ./aws/install \
     && rm -rf aws
@@ -252,12 +255,12 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.17.20.
 # See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
 
 RUN if [ $ARCH_GCC = x86_64 ]; then \
-    curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz > htmltest.tar.gz \
-    && echo '775c597ee74899d6002cd2d93076f897f4ba68686bceabe2e5d72e84c57bc0fb htmltest.tar.gz' | sha256sum --check \
+    curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmltest_0.12.1_linux_amd64.tar.gz > htmltest.tar.gz \
+    && echo '04d4be5097b98cd28de469f8856b3fbe82669f57b482a4cf3092a55e9e8e9e0d  htmltest.tar.gz' | sha256sum --check \
     && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
     && rm htmltest.tar.gz \
-    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.130.0/hugo_extended_0.130.0_Linux-64bit.tar.gz > hugo.tar.gz \
-    && echo '9ac781d19ca65f1263695dd3f8c0e26e52fd42d67416a4ba78530f9f9508cc75 hugo.tar.gz' | sha256sum --check \
+    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.128.0/hugo_extended_0.128.0_Linux-64bit.tar.gz > hugo.tar.gz \
+    && echo 'a39cd72eff188f8596f09f3a7db9195477c4ce21072d286832f9fde15ba5d336 hugo.tar.gz' | sha256sum --check \
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
     && rm hugo.tar.gz; \
     fi
