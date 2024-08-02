@@ -73,6 +73,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     Func(BuiltinFunc),
     Source(&'static BuiltinSource),
     Index(&'static BuiltinIndex),
+    Connection(&'static BuiltinConnection),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -85,6 +86,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Func(func) => func.name,
             Builtin::Source(coll) => coll.name,
             Builtin::Index(index) => index.name,
+            Builtin::Connection(connection) => connection.name,
         }
     }
 
@@ -97,6 +99,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Func(func) => func.schema,
             Builtin::Source(coll) => coll.schema,
             Builtin::Index(index) => index.schema,
+            Builtin::Connection(connection) => connection.schema,
         }
     }
 
@@ -109,6 +112,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
             Builtin::Index(_) => CatalogItemType::Index,
+            Builtin::Connection(_) => CatalogItemType::Connection,
         }
     }
 }
@@ -211,6 +215,16 @@ impl BuiltinIndex {
     }
 }
 
+#[derive(Hash, Debug)]
+pub struct BuiltinConnection {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub oid: u32,
+    pub sql: &'static str,
+    pub access: &'static [MzAclItem],
+    pub owner_id: &'static RoleId,
+}
+
 #[derive(Clone, Debug)]
 pub struct BuiltinRole {
     pub id: RoleId,
@@ -255,6 +269,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Func(func) => func.fingerprint(),
             Builtin::Source(coll) => coll.fingerprint(),
             Builtin::Index(index) => index.fingerprint(),
+            Builtin::Connection(connection) => connection.fingerprint(),
         }
     }
 }
@@ -332,6 +347,12 @@ impl Fingerprint for &BuiltinSource {
 impl Fingerprint for &BuiltinIndex {
     fn fingerprint(&self) -> String {
         self.create_sql()
+    }
+}
+
+impl Fingerprint for &BuiltinConnection {
+    fn fingerprint(&self) -> String {
+        self.sql.to_string()
     }
 }
 
