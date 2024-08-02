@@ -17,6 +17,7 @@ use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -316,8 +317,21 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.typecheck_ctx,
             &mut df_meta,
         );
+
+        // Let's already try creating a fast path plan. If successful, we don't need to run the
+        // whole optimizer pipeline, but just a tiny subset of it. (But we'll need to run
+        // `create_fast_path_plan` later again, because, e.g., running `LiteralConstraints` is still
+        // ahead of us.)
+        let use_fast_path_optimizer = create_fast_path_plan(
+            &mut df_desc,
+            self.select_id,
+            Some(&self.finishing),
+            self.config.features.persist_fast_path_limit,
+        )?
+        .is_some();
+
         // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, use_fast_path_optimizer)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.
@@ -381,6 +395,11 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 PeekPlan::FastPath(plan)
             }
             _ => {
+                soft_assert_or_log!(
+                    !use_fast_path_optimizer || self.config.no_fast_path,
+                    "The fast_path_optimizer shouldn't make a fast path plan slow path."
+                );
+
                 // Ensure all expressions are normalized before finalizing.
                 for build in df_desc.objects_to_build.iter_mut() {
                     normalize_lets(&mut build.plan.0, &self.config.features)?
