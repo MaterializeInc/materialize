@@ -18,7 +18,7 @@
 /doc/user                           @morsapaes
 /doc/developer/reference/compute    @MaterializeInc/cluster
 /doc/developer/reference/storage    @MaterializeInc/cluster
-/misc/bazel                         @parkmycar @maddyblue
+/misc/bazel                         @parkmycar
 /misc/dbt-materialize               @morsapaes @MaterializeInc/integrations
 /misc/python/materialize/benches    @MaterializeInc/testing
 /misc/python/materialize/buildkite_insights @MaterializeInc/testing
@@ -135,5 +135,5 @@
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test
-/MODULE.bazel                       @parkmycar @maddyblue
-/WORKSPACE                          @parkmycar @maddyblue
+/MODULE.bazel                       @parkmycar
+/WORKSPACE                          @parkmycar
