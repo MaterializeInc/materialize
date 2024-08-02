@@ -44,7 +44,10 @@ where
             Ok((item, stmt))
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
     // Clone this vec to be referenced within the closure if needed
+    // TODO(roshan): Remove this once the `ast_rewrite_create_subsource_options` migration is
+    // removed.
     let items_with_statements_ref = items_with_statements.clone();
 
     for (mut item, mut stmt) in items_with_statements {
