@@ -107,3 +107,26 @@ SELECT pg_cancel_backend(CAST(${backend-pid} AS int4));
 
 ! ALTER SINK wedged_sink SET FROM post_alter;
 contains:canceling statement due to user request
+
+
+# There is a meaningful difference in having an object created after the sink
+# already exists, see incident-131:
+> CREATE TABLE created_post_alter (created_post_name string, created_post_value int);
+# This value should be ignored by the sink because the alter will happen after
+# this record has been inserted and we don't re-emit a snapshot of the new
+# collection when it changes.
+> INSERT INTO created_post_alter VALUES ('ignored', 0);
+> INSERT INTO created_post_alter VALUES ('ignored2', 1);
+
+> ALTER SINK sink SET FROM created_post_alter;
+
+# The sink will start sinking updates from `post_alter` at the timestamp that
+# the previous dataflow happens to stop. This happens pretty quickly but we
+# wait a few seconds more for good measure to avoid flaking.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
+
+> INSERT INTO post_alter VALUES ('hundred', 99);
+
+# TODO(jkosh44) uncomment when we figure out why this doesn't work.
+# $ kafka-verify-data format=json sink=materialize.public.sink key=false
+# {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}

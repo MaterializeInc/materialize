@@ -539,6 +539,7 @@ class KafkaSink(DBObject):
     rename: int
     cluster: "Cluster"
     schema: Schema
+    base_object: DBObject
     envelope: str
     key: str
 
