@@ -1586,7 +1586,17 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
         item_updates
             .into_iter()
-            .sorted_by_key(|(item, _ts, _diff)| item.id)
+            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
+            // depend upon. Fortunately, because sinks can never have dependencies
+            // and can never depend upon one another, to fix the topological sort,
+            // we can just always move sinks to the end.
+            .sorted_by_key(|(item, _ts, _diff)| {
+                if item.create_sql.starts_with("CREATE SINK") {
+                    GlobalId::User(u64::MAX)
+                } else {
+                    item.id
+                }
+            })
             .collect()
     }
     let item_retractions = sort_item_updates(item_retractions);
@@ -1598,7 +1608,14 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {
         temp_item_updates
             .into_iter()
-            .sorted_by_key(|(item, _ts, _diff)| item.id)
+            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
+            // depend upon. Fortunately, because sinks can never have dependencies
+            // and can never depend upon one another, to fix the topological sort,
+            // we can just always move sinks to the end.
+            .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
+                CatalogItemType::Sink => GlobalId::User(u64::MAX),
+                _ => item.id,
+            })
             .collect()
     }
     let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);
