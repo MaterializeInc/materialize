@@ -123,7 +123,7 @@ impl GtidReplicationPartitions {
                 // and add back to the future partitions.
                 let (before_range, after_range) = contained_part.split(source_id);
                 self.future
-                    .extend(before_range.into_iter().chain(after_range.into_iter()));
+                    .extend(before_range.into_iter().chain(after_range));
 
                 // Store the new part in our active partitions
                 self.active.insert(source_id.clone(), new_part);

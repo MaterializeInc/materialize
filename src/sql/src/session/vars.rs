@@ -304,9 +304,9 @@ impl SessionVar {
     pub fn value_dyn(&self) -> &dyn Value {
         self.local_value
             .as_deref()
-            .or_else(|| self.staged_value.as_deref())
-            .or_else(|| self.session_value.as_deref())
-            .or_else(|| self.default_value.as_deref())
+            .or(self.staged_value.as_deref())
+            .or(self.session_value.as_deref())
+            .or(self.default_value.as_deref())
             .unwrap_or(self.definition.value.value())
     }
 
@@ -910,7 +910,7 @@ impl SystemVar {
     pub fn value_dyn(&self) -> &dyn Value {
         self.persisted_value
             .as_deref()
-            .or_else(|| self.dynamic_default.as_deref())
+            .or(self.dynamic_default.as_deref())
             .unwrap_or(self.definition.default_value())
     }
 
@@ -1318,7 +1318,7 @@ impl SystemVars {
             .chain(Self::SESSION_VARS.values().copied())
             .cloned()
             // Include Persist configs.
-            .chain(dyncfg_vars.into_iter())
+            .chain(dyncfg_vars)
             .map(|var| (var.name, SystemVar::new(var)))
             .collect();
 

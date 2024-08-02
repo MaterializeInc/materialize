@@ -105,7 +105,7 @@ mod simple_option_names {
             }
             buf.write_block("", |buf| {
                 buf.writeln(format!(r#"let msg = "a valid {msg}".to_string();"#));
-                buf.writeln(format!(r#"Err(self.error(self.peek_pos(), msg))"#));
+                buf.writeln(r#"Err(self.error(self.peek_pos(), msg))"#);
             });
         });
         buf.end_line();

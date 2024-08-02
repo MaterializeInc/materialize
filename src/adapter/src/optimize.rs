@@ -131,7 +131,7 @@ where
                 }
             }
             Err(_) => {
-                let msg = format!("unexpected panic during query optimization");
+                let msg = "unexpected panic during query optimization".to_string();
                 Err(OptimizerError::Internal(msg))
             }
         }

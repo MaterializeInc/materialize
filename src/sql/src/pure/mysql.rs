@@ -48,7 +48,9 @@ pub(super) fn external_reference_to_table(
     name: &UnresolvedItemName,
 ) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
     if name.0.len() != 2 {
-        Err(MySqlSourcePurificationError::InvalidTableReference(name.to_string()).into())?
+        Err(MySqlSourcePurificationError::InvalidTableReference(
+            name.to_string(),
+        ))?
     }
     Ok(QualifiedTableRef {
         schema_name: name.0[0].as_str(),
@@ -217,7 +219,7 @@ pub(super) fn map_column_refs<'a>(
 }
 
 /// Normalize column references to a sorted, deduplicated options list of column names.
-pub(super) fn normalize_column_refs<'a>(
+pub(super) fn normalize_column_refs(
     cols: Vec<UnresolvedItemName>,
     reference_resolver: &SourceReferenceResolver,
     tables: &[MySqlTableDesc],

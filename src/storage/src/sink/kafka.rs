@@ -400,7 +400,7 @@ impl TransactionalProducer {
         upper: Antichain<Timestamp>,
     ) -> Result<(), ContextCreationError> {
         let progress = ProgressRecord {
-            frontier: upper.into(),
+            frontier: upper,
             version: self.sink_version,
         };
         let payload = serde_json::to_vec(&progress).expect("infallible");

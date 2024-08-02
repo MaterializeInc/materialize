@@ -818,7 +818,7 @@ impl UnopenedPersistCatalogState {
             }
         };
 
-        let as_of = as_of(&mut read_handle, upper);
+        let as_of = as_of(&read_handle, upper);
         let snapshot: Vec<_> = snapshot_binary(&mut read_handle, as_of, &metrics)
             .await
             .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
@@ -1341,7 +1341,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
         let upper = self.current_upper().await;
-        self.sync_updates(upper.into()).await
+        self.sync_updates(upper).await
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1349,7 +1349,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         &mut self,
         target_upper: mz_repr::Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
-        self.sync(target_upper.into()).await?;
+        self.sync(target_upper).await?;
         let mut updates = Vec::new();
         while let Some(update) = self.update_applier.updates.front() {
             if update.ts >= target_upper {

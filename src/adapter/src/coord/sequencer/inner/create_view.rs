@@ -333,7 +333,7 @@ impl Coordinator {
                         Err(err) => {
                             let ExplainContext::Plan(explain_ctx) = explain_ctx else {
                                 // In `sequence_~` contexts, immediately return the error.
-                                return Err(err.into());
+                                return Err(err);
                             };
 
                             if explain_ctx.broken {
@@ -349,7 +349,7 @@ impl Coordinator {
                                 })
                             } else {
                                 // In regular `EXPLAIN` contexts, immediately return the error.
-                                return Err(err.into());
+                                return Err(err);
                             }
                         }
                     };

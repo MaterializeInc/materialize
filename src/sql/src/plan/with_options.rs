@@ -235,7 +235,7 @@ impl TryFromValue<Value> for Duration {
     fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
         let interval = Interval::from_duration(&self)
             .expect("planning ensured that this is convertible back to Interval");
-        Some(interval.try_into_value(catalog)?)
+        interval.try_into_value(catalog)
     }
 
     fn name() -> String {

@@ -74,7 +74,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             let snapshotting = resume_offset.offset == 0;
 
             let mut local_partitions: Vec<_> = (0..key_value.partitions)
-                .into_iter()
                 .filter_map(|p| {
                     config
                         .responsible_for(p)
@@ -154,7 +153,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             };
 
             let mut local_partitions: Vec<_> = (0..key_value.partitions)
-                .into_iter()
                 .filter_map(|p| {
                     config
                         .responsible_for(p)

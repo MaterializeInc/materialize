@@ -202,7 +202,7 @@ impl UpdateFrom<durable::Schema> for Schema {
             schema: name,
         };
         self.id = id.into();
-        self.oid = oid.into();
+        self.oid = oid;
         self.owner_id = owner_id;
         self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
     }

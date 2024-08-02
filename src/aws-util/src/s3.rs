@@ -35,8 +35,7 @@ pub async fn list_bucket_path(
         .prefix(prefix)
         .send()
         .await?;
-    Ok(res
-        .contents
+    res.contents
         .map(|objs| {
             objs.into_iter()
                 .map(|obj| {
@@ -45,5 +44,5 @@ pub async fn list_bucket_path(
                 })
                 .collect::<Result<Vec<String>, _>>()
         })
-        .transpose()?)
+        .transpose()
 }

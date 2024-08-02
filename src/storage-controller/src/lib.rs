@@ -923,7 +923,7 @@ where
                     let collection = self
                         .collections
                         .get(export_id)
-                        .ok_or_else(|| AlterError { id: ingestion_id })?;
+                        .ok_or(AlterError { id: ingestion_id })?;
 
                     let external_reference = match &collection.data_source {
                         DataSource::IngestionExport {
@@ -2271,7 +2271,7 @@ where
                 .storage_collections
                 .acquire_read_holds(vec![remap_id])
                 .map_err(|_e| StorageError::ReadBeforeSince(remap_id))?
-                .expect_element(|| format!("known to be exactly one"));
+                .expect_element(|| "known to be exactly one");
 
             let remap_as_of = remap_read_hold
                 .since()

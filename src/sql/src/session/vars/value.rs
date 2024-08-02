@@ -306,8 +306,8 @@ impl Value for Duration {
             "d" => (Duration::from_secs, SEC_TO_DAY),
             o => {
                 return Err(VarParseError::InvalidParameterValue {
-                    invalid_values: vec![s.to_string()],
-                    reason: format!("expected us, ms, s, min, h, or d but got {o:?}").into(),
+                    invalid_values: vec![o.to_string()],
+                    reason: "expected us, ms, s, min, h, or d but got {o:?}".to_string(),
                 })
             }
         };
@@ -465,7 +465,7 @@ impl Value for Vec<Ident> {
             .collect::<Result<_, _>>()
             .map_err(|e| VarParseError::InvalidParameterValue {
                 invalid_values: values.to_vec(),
-                reason: e.to_string().into(),
+                reason: e.to_string(),
             })?;
         Ok(values)
     }
@@ -499,7 +499,7 @@ impl Value for Vec<SerializableDirective> {
             .collect();
         dirs.map_err(|e| VarParseError::InvalidParameterValue {
             invalid_values: values.to_vec(),
-            reason: e.to_string().into(),
+            reason: e.to_string(),
         })
     }
 
@@ -549,7 +549,7 @@ impl Value for Failpoints {
                 })?;
             fail::cfg(failpoint, action).map_err(|e| VarParseError::InvalidParameterValue {
                 invalid_values: input.to_vec(),
-                reason: e.to_string().into(),
+                reason: e.to_string(),
             })?;
         }
 
@@ -964,7 +964,7 @@ impl Value for CloneableEnvFilter {
         let s = extract_single_value(input)?;
         CloneableEnvFilter::from_str(s).map_err(|e| VarParseError::InvalidParameterValue {
             invalid_values: vec![s.to_string()],
-            reason: e.to_string().into(),
+            reason: e.to_string(),
         })
     }
 

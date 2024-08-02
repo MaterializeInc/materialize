@@ -1139,9 +1139,7 @@ where
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
-        self.finalizable_shards
-            .lock()
-            .extend(unfinalized_shards.into_iter());
+        self.finalizable_shards.lock().extend(unfinalized_shards);
 
         Ok(())
     }

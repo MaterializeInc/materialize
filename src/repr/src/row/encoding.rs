@@ -792,7 +792,7 @@ impl RelationDesc {
         Ok((validity, RowDecoder { col_decoders }))
     }
 
-    pub fn encoder<'a, V>(&self, mut part: ColumnsMut<V>) -> Result<(V, RowEncoder), String> {
+    pub fn encoder<V>(&self, mut part: ColumnsMut<V>) -> Result<(V, RowEncoder), String> {
         struct DatumEncoderFn<'b, V>(&'b str, &'b mut ColumnsMut<V>);
         impl<'b, V> DatumToPersistFn<DatumEncoder> for DatumEncoderFn<'b, V> {
             fn call<T: DatumToPersist>(self) -> DatumEncoder

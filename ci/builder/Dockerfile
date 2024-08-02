@@ -160,7 +160,7 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
-    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.9.0/parca-debuginfo_0.9.0_Linux_$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/").tar.gz \
+    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.11.0/parca-debuginfo_0.11.0_Linux_$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/").tar.gz \
     | tar xz -C /usr/local/bin parca-debuginfo
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
@@ -203,18 +203,18 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
-    && cargo install --root /usr/local --version "=0.8.0" --locked cargo-vet \
+    && cargo install --root /usr/local --version "=0.9.1" --locked cargo-vet \
     && cargo install --root /usr/local --version "=0.6.1" --locked cargo-about \
     && cargo install --root /usr/local --version "=2.0.2" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.14.21" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version ="0.9.28" --locked cargo-hakari \
-    && cargo install --root /usr/local --version "=0.9.68" --locked cargo-nextest \
-    && cargo install --root /usr/local --version "=0.5.37" --locked cargo-llvm-cov \
-    && cargo install --root /usr/local --version "=0.1.47" --features=vendored-openssl cargo-udeps \
+    && cargo install --root /usr/local --version "=0.9.72" --locked cargo-nextest \
+    && cargo install --root /usr/local --version "=0.6.11" --locked cargo-llvm-cov \
+    && cargo install --root /usr/local --version "=0.1.50" --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \
     && cargo install --root /usr/local --version "=0.3.6" cargo-binutils \
-    && cargo install --root /usr/local --version "=0.12.1" wasm-pack
+    && cargo install --root /usr/local --version "=0.13.0" wasm-pack
 
 # Link the system lld into the cross-compiling sysroot.
 

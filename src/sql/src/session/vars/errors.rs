@@ -169,7 +169,7 @@ impl VarParseError {
             },
             VarParseError::InvalidParameterType => VarError::InvalidParameterType {
                 name: var.name(),
-                required_type: var.type_name().into(),
+                required_type: var.type_name(),
             },
             VarParseError::InvalidParameterValue {
                 invalid_values,

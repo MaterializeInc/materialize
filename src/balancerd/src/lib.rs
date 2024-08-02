@@ -558,7 +558,7 @@ impl PgwireBalancer {
         // Count the # of pgwire connections that have SNI available / unavailable
         // per tenant. In the future we may want to remove non-SNI connections.
         if let Conn::Ssl(ssl_stream) = conn.inner() {
-            let tenant = resolved.tenant.as_deref().unwrap_or_else(|| "unknown");
+            let tenant = resolved.tenant.as_deref().unwrap_or("unknown");
             let has_sni = ssl_stream.ssl().servername(NameType::HOST_NAME).is_some();
             metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
         }
@@ -1071,7 +1071,7 @@ impl Resolver {
                     _ => anyhow::bail!("expected Password message"),
                 };
 
-                let auth_response = auth.authenticate(user.into(), &password).await;
+                let auth_response = auth.authenticate(user, &password).await;
                 let auth_session = match auth_response {
                     Ok(auth_session) => auth_session,
                     Err(e) => {

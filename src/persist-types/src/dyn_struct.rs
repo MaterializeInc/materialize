@@ -412,7 +412,7 @@ impl DynStructMut {
             .cfg
             .cols
             .iter()
-            .zip(self.cols.into_iter())
+            .zip(self.cols)
             .map(|((name, _typ, _stats_fn), col)| {
                 #[cfg(debug_assertions)]
                 {

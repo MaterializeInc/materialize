@@ -128,13 +128,10 @@ pub(crate) async fn migrate(
     let mut state = state.clone();
     let item_updates = tx
         .get_items()
-        .map(|item| {
-            let item = mz_catalog::durable::objects::Item::from(item);
-            StateUpdate {
-                kind: StateUpdateKind::Item(item),
-                ts: tx.commit_ts(),
-                diff: StateDiff::Addition,
-            }
+        .map(|item| StateUpdate {
+            kind: StateUpdateKind::Item(item),
+            ts: tx.commit_ts(),
+            diff: StateDiff::Addition,
         })
         .collect();
     // The catalog is temporary, so we can throw out the builtin updates.

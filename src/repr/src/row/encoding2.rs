@@ -693,7 +693,7 @@ impl DatumColumnEncoder {
                 let array = StringArray::new(offsets, values, nulls);
                 let stats = stats_for_json(array.iter());
 
-                (Arc::new(array), stats.values.into())
+                (Arc::new(array), stats.values)
             }
             DatumColumnEncoder::Array {
                 mut dims,
@@ -1298,7 +1298,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
 
         let (arrays, fields, stats): (Vec<_>, Vec<_>, Vec<_>) = col_names
             .iter()
-            .zip_eq(encoders.into_iter())
+            .zip_eq(encoders)
             .map(|((col_idx, col_name), encoder)| {
                 let nullable = encoder.nullable;
                 let (array, stats) = encoder.finish();

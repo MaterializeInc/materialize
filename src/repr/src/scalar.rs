@@ -4187,7 +4187,7 @@ fn arb_record(
         .prop_map(move |x| {
             let mut row = Row::default();
             row.packer().push_list(x.iter().map(Datum::from));
-            let entries: Vec<_> = names.clone().into_iter().zip(x.into_iter()).collect();
+            let entries: Vec<_> = names.clone().into_iter().zip(x).collect();
             PropDict(row, entries)
         })
         .boxed()

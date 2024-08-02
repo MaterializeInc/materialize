@@ -903,9 +903,7 @@ impl CatalogState {
                 }
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
 
-                let initial_as_of = materialized_view
-                    .as_of
-                    .map(|time| Antichain::from_elem(time.into()));
+                let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
 
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,

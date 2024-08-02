@@ -254,8 +254,8 @@ fn bench_timestamp(c: &mut Criterion) {
     let mut group = c.benchmark_group("Timestamp");
     group.throughput(Throughput::Elements(1));
 
-    let date = NaiveDate::from_ymd_opt(2024, 06, 30).unwrap();
-    let time = NaiveTime::from_hms_opt(12, 30, 01).unwrap();
+    let date = NaiveDate::from_ymd_opt(2024, 6, 30).unwrap();
+    let time = NaiveTime::from_hms_opt(12, 30, 1).unwrap();
     let val = NaiveDateTime::new(date, time);
 
     group.bench_function("encode", |b| {

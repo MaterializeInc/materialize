@@ -442,7 +442,7 @@ impl<'a> Transaction<'a> {
         let oids = self.allocate_oids(amount, temporary_oids)?;
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
-            .zip(oids.into_iter())
+            .zip(oids)
             .map(|((builtin, index_id), oid)| (builtin, index_id, oid))
             .collect();
         for (builtin, index_id, oid) in introspection_source_indexes {
@@ -1543,7 +1543,7 @@ impl<'a> Transaction<'a> {
         let oids = self.allocate_oids(amount, temporary_oids)?;
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
-            .zip(oids.into_iter())
+            .zip(oids)
             .map(
                 |((cluster_id, name, index_id), oid)| IntrospectionSourceIndex {
                     cluster_id,
@@ -2504,7 +2504,7 @@ where
             }
         });
         if let Some(violation) = violation {
-            return Err(violation.into());
+            return Err(violation);
         }
         self.pending.entry(k).or_default().push(TransactionUpdate {
             value: v,
