@@ -1010,6 +1010,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_batch_columnar_stats_only_override"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_part_decode_format"] = [
+            "row_with_validate",
+            "arrow",
+        ]
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
