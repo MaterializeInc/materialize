@@ -33,7 +33,7 @@ To make these concepts a bit more tangible, let's look at the example from the
 ```mzsql
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
-  (TICK INTERVAL '100ms')
+  (TICK INTERVAL '1s', AS OF 100000)
   FOR ALL TABLES;
 
 CREATE MATERIALIZED VIEW num_bids AS
@@ -56,19 +56,24 @@ plan used to evaluate the join.
 EXPLAIN MATERIALIZED VIEW num_bids;
 ```
 ```
-                    Optimized Plan
--------------------------------------------------------
- materialize.public.num_bids:                         +
-   Reduce group_by=[#0] aggregates=[count(*)]         +
-     Project (#3)                                     +
-       Filter (#1 < #4)                               +
-         Join on=(#0 = #2) type=differential          +
-           ArrangeBy keys=[[#0]]                      +
-             Project (#2, #4)                         +
-               ReadStorage materialize.public.bids    +
-           ArrangeBy keys=[[#0]]                      +
-             Project (#0, #2, #3)                     +
-               ReadStorage materialize.public.auctions+
+                               Optimized Plan
+-----------------------------------------------------------------------------
+ materialize.public.num_bids:                                               +
+   Reduce group_by=[#0{item}] aggregates=[count(*)] // { arity: 2 }         +
+     Project (#3) // { arity: 1 }                                           +
+       Filter (#1{bid_time} < #4{end_time}) // { arity: 5 }                 +
+         Join on=(#0{auction_id} = #2{id}) type=differential // { arity: 5 }+
+           ArrangeBy keys=[[#0{auction_id}]] // { arity: 2 }                +
+             Project (#2, #4) // { arity: 2 }                               +
+               ReadStorage materialize.public.bids // { arity: 5 }          +
+           ArrangeBy keys=[[#0{id}]] // { arity: 3 }                        +
+             Project (#0{id}, #2{end_time}, #3) // { arity: 3 }             +
+               ReadStorage materialize.public.auctions // { arity: 4 }      +
+                                                                            +
+ Source materialize.public.auctions                                         +
+ Source materialize.public.bids                                             +
+                                                                            +
+ Target cluster: quickstart                                                 +
 
 (1 row)
 ```
@@ -145,7 +150,7 @@ FROM mz_introspection.mz_scheduling_elapsed AS mse,
     mz_introspection.mz_dataflow_operators AS mdo,
     mz_introspection.mz_dataflow_addresses AS mda
 WHERE mse.id = mdo.id AND mdo.id = mda.id AND list_length(address) = 1
-ORDER BY elapsed_ns DESC
+ORDER BY elapsed_ns DESC;
 ```
 ```
  id  |                  name                  |  elapsed_time
@@ -193,7 +198,7 @@ WHERE
         SELECT DISTINCT address[:list_length(address) - 1]
         FROM mz_introspection.mz_dataflow_addresses
     )
-ORDER BY elapsed_ns DESC
+ORDER BY elapsed_ns DESC;
 ```
 ```
  id  |                      name                       |             dataflow_name              |  elapsed_time
@@ -257,7 +262,7 @@ WITH histograms AS (
 SELECT *
 FROM histograms
 WHERE duration > '100 millisecond'::interval
-ORDER BY duration DESC
+ORDER BY duration DESC;
 ```
 ```
  id  |                 name                 |             dataflow_name              | count |    duration
@@ -307,7 +312,7 @@ COPY(SUBSCRIBE(
     SELECT *
     FROM histograms
     WHERE duration > '100 millisecond'::interval
-) WITH (SNAPSHOT = false, PROGRESS)) TO STDOUT
+) WITH (SNAPSHOT = false, PROGRESS)) TO STDOUT;
 ```
 ```
 1691667343000	t	\N	\N	\N	\N	\N	\N
@@ -334,18 +339,18 @@ state.
 ```mzsql
 -- Extract dataflow records and sizes
 SELECT
-    id,
-    name,
-    records,
-    round(size / 1024 / 1024, 2) AS size_mb
-FROM mz_introspection.mz_dataflow_arrangement_sizes
-ORDER BY size DESC
+    s.id,
+    s.name,
+    s.records,
+    pg_size_pretty(s.size) AS size
+FROM mz_introspection.mz_dataflow_arrangement_sizes AS s
+ORDER BY s.size DESC;
 ```
 ```
-  id   |                  name                  | records | size_mb
--------+----------------------------------------+---------+---------
- 19157 | Dataflow: materialize.qck.num_bids     | 1612747 |  113.82
- 19158 | Dataflow: materialize.qck.num_bids_idx |      13 |       0
+  id   |                   name                    | records  |    size
+-------+-------------------------------------------+----------+------------
+ 49030 | Dataflow: materialize.public.num_bids     | 10000135 | 165 MB
+ 49031 | Dataflow: materialize.public.num_bids_idx |       33 | 1661 bytes
 ```
 
 If you need to drill down into individual operators, you can query
@@ -358,23 +363,22 @@ SELECT
     mdod.name,
     mdod.dataflow_name,
     mas.records,
-    round(size / 1024 / 1024, 2) AS size_mb
+    pg_size_pretty(mas.size) AS size
 FROM mz_introspection.mz_arrangement_sizes AS mas,
     mz_introspection.mz_dataflow_operator_dataflows AS mdod
 WHERE mas.operator_id = mdod.id
-ORDER BY mas.records DESC
+ORDER BY mas.size DESC;
 ```
 ```
-   id    |             name              |             dataflow_name              | records | size_mb
----------+-------------------------------+----------------------------------------+---------+---------
- 2722012 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.qck.num_bids     | 1612747 |  113.82
- 2722027 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.qck.num_bids     |  292662 |   20.65
- 2722216 | ArrangeBy[[Column(0)]]        | Dataflow: materialize.qck.num_bids_idx |      17 |       0
- 2722077 | ReduceAccumulable             | Dataflow: materialize.qck.num_bids     |       5 |       0
- 2722073 | ArrangeAccumulable            | Dataflow: materialize.qck.num_bids     |       5 |       0
- 2722081 | AccumulableErrorCheck         | Dataflow: materialize.qck.num_bids     |       0 |       0
- 2722225 | ArrangeBy[[Column(0)]]-errors | Dataflow: materialize.qck.num_bids_idx |       0 |       0
-(7 rows)
+    id    |              name               |               dataflow_name               | records |    size
+----------+---------------------------------+-------------------------------------------+---------+------------
+ 16318351 | ArrangeBy[[Column(0)]]          | Dataflow: materialize.public.num_bids     | 8462247 | 110 MB
+ 16318370 | ArrangeBy[[Column(0)]]          | Dataflow: materialize.public.num_bids     | 1537865 | 55 MB
+ 16318418 | ArrangeAccumulable [val: empty] | Dataflow: materialize.public.num_bids     |       5 | 1397 bytes
+ 16318550 | ArrangeBy[[Column(0)]]          | Dataflow: materialize.public.num_bids_idx |      13 | 1277 bytes
+ 16318422 | ReduceAccumulable               | Dataflow: materialize.public.num_bids     |       5 | 1073 bytes
+ 16318426 | AccumulableErrorCheck           | Dataflow: materialize.public.num_bids     |       0 | 256 bytes
+ 16318559 | ArrangeBy[[Column(0)]]-errors   | Dataflow: materialize.public.num_bids_idx |       0 | 0 bytes
 ```
 
 We've also bundled an interactive, web-based memory usage visualization tool to
