@@ -161,7 +161,7 @@ impl Catalog {
         self.plans.optimized_plan_by_id.insert(id, plan.into());
     }
 
-    /// Set the optimized plan for the item identified by `id`.
+    /// Set the physical plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_physical_plan(
         &mut self,
@@ -180,7 +180,7 @@ impl Catalog {
         self.plans.optimized_plan_by_id.get(id).map(AsRef::as_ref)
     }
 
-    /// Try to get the optimized plan for the item identified by `id`.
+    /// Try to get the physical plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn try_get_physical_plan(
         &self,

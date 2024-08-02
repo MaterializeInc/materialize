@@ -160,7 +160,7 @@ pub enum MirRelationExpr {
         /// The collections to be bound to each `id`.
         values: Vec<MirRelationExpr>,
         /// Maximum number of iterations, after which we should artificially force a fixpoint.
-        /// (We don't error when reaching the limit, just return the current state as final result.)
+        /// (Whether we error or just stop is configured by `LetRecLimit::return_at_limit`.)
         /// The per-`LetRec` limit that the user specified is initially copied to each binding to
         /// accommodate slicing and merging of `LetRec`s in MIR transforms (e.g., `NormalizeLets`).
         #[mzreflect(ignore)]
@@ -1630,7 +1630,8 @@ impl MirRelationExpr {
 
     /// Return:
     /// * every row in keys_and_values
-    /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
+    /// * every row in `self` that does not have a matching row in the first columns of
+    ///   `keys_and_values`, using `default` to fill in the remaining columns
     /// (This is LEFT OUTER JOIN if:
     /// 1) `default` is a row of null
     /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
@@ -1756,9 +1757,11 @@ impl MirRelationExpr {
         Ok(())
     }
 
-    /// Fallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `self`.
+    /// Fallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
@@ -1767,9 +1770,11 @@ impl MirRelationExpr {
         self.try_visit_mut_post(&mut |expr| expr.try_visit_scalars_mut1(f))
     }
 
-    /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at at `self`.
+    /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn visit_scalars_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut MirScalarExpr),
@@ -1848,9 +1853,11 @@ impl MirRelationExpr {
         Ok(())
     }
 
-    /// Fallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at `self`.
+    /// Fallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn try_visit_scalars<F, E>(&self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&MirScalarExpr) -> Result<(), E>,
@@ -1859,9 +1866,11 @@ impl MirRelationExpr {
         self.try_visit_post(&mut |expr| expr.try_visit_scalars_1(f))
     }
 
-    /// Infallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at at `self`.
+    /// Infallible immutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree
+    /// rooted at `self`.
     ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
+    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`]
+    /// nodes.
     pub fn visit_scalars<F>(&self, f: &mut F)
     where
         F: FnMut(&MirScalarExpr),

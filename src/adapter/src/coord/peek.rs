@@ -363,8 +363,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                     id: Id::Global(get_id),
                     ..
                 } => {
-                    // Just grab any arrangement
-                    // Nothing to be done if an arrangement does not exist
+                    // Just grab any arrangement if an arrangement exists
                     for (index_id, IndexImport { desc, .. }) in dataflow_plan.index_imports.iter() {
                         if desc.on_id == *get_id {
                             return Ok(Some(FastPathPlan::PeekExisting(

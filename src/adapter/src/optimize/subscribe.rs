@@ -298,7 +298,7 @@ impl GlobalMirPlan<Unresolved> {
     /// optimization stage in order to profit from possible single-time
     /// optimizations in the `Plan::finalize_dataflow` call.
     pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
-        // A datalfow description for a `SUBSCRIBE` statement should not have
+        // A dataflow description for a `SUBSCRIBE` statement should not have
         // index exports.
         soft_assert_or_log!(
             self.df_desc.index_exports.is_empty(),

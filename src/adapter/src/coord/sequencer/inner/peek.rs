@@ -568,7 +568,7 @@ impl Coordinator {
                             }
                             // Optimize COPY TO statement.
                             Either::Right(optimizer) => {
-                                // HIR ⇒ MIR lowering and MIR optimization (local and global)
+                                // HIR ⇒ MIR lowering and MIR optimization (local)
                                 let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                                 // Attach resolved context required to continue the pipeline.
                                 let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);

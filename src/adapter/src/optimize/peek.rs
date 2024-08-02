@@ -133,7 +133,7 @@ impl Debug for Optimizer {
 pub struct Unresolved;
 
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
-/// and MIR optimization.
+/// and local MIR optimization.
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
@@ -157,9 +157,6 @@ pub struct Resolved<'s> {
 /// 4. optimizing the resulting `DataflowDescription` with `MIR` plans.
 /// 5. MIR ⇒ LIR lowering, and
 /// 6. optimizing the resulting `DataflowDescription` with `LIR` plans.
-///
-///  MIR ⇒ LIR lowering and optimizing the resulting
-/// `DataflowDescription` with `LIR` plans.
 #[derive(Debug)]
 pub struct GlobalLirPlan {
     peek_plan: PeekPlan,

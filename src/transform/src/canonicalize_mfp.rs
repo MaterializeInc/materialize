@@ -55,7 +55,7 @@ impl crate::Transform for CanonicalizeMfp {
 }
 
 impl CanonicalizeMfp {
-    /// Extract and optimzie MFPs.
+    /// Extract and optimize MFPs.
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
         // Optimize MFP, e.g., perform CSE Push MFPs through `Negate` operators,
