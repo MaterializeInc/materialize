@@ -25,6 +25,7 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, RoleKey, SchemaKey,
 };
+use mz_catalog::durable::{CatalogError, DurableCatalogError};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
@@ -55,7 +56,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{info_span, warn, Instrument};
+use tracing::{error, info_span, warn, Instrument};
 
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::util::index_sql;
@@ -131,18 +132,18 @@ impl CatalogState {
     pub(crate) fn apply_updates(
         &mut self,
         updates: Vec<StateUpdate>,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
             let builtin_table_update =
-                self.apply_updates_inner(updates.collect(), &mut retractions);
+                self.apply_updates_inner(updates.collect(), &mut retractions)?;
             builtin_table_updates.extend(builtin_table_update);
         }
 
-        builtin_table_updates
+        Ok(builtin_table_updates)
     }
 
     #[must_use]
@@ -151,7 +152,7 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
         soft_assert_no_log!(
             updates.iter().map(|update| update.ts).all_equal(),
             "all timestamps should be equal: {updates:?}"
@@ -165,10 +166,10 @@ impl CatalogState {
                     // before applying the update.
                     builtin_table_updates
                         .extend(self.generate_builtin_table_update(kind.clone(), diff));
-                    self.apply_update(kind, diff, retractions);
+                    self.apply_update(kind, diff, retractions)?;
                 }
                 StateDiff::Addition => {
-                    self.apply_update(kind.clone(), diff, retractions);
+                    self.apply_update(kind.clone(), diff, retractions)?;
                     // We want the builtin table addition to match the state of the catalog
                     // after applying the update.
                     builtin_table_updates
@@ -176,7 +177,7 @@ impl CatalogState {
                 }
             }
         }
-        builtin_table_updates
+        Ok(builtin_table_updates)
     }
 
     #[instrument(level = "debug")]
@@ -185,7 +186,7 @@ impl CatalogState {
         kind: StateUpdateKind,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
-    ) {
+    ) -> Result<(), CatalogError> {
         match kind {
             StateUpdateKind::Role(role) => {
                 self.apply_role_update(role, diff, retractions);
@@ -225,7 +226,7 @@ impl CatalogState {
                 self.apply_temporary_item_update(item, diff, retractions);
             }
             StateUpdateKind::Item(item) => {
-                self.apply_item_update(item, diff, retractions);
+                self.apply_item_update(item, diff, retractions)?;
             }
             StateUpdateKind::Comment(comment) => {
                 self.apply_comment_update(comment, diff, retractions);
@@ -247,6 +248,8 @@ impl CatalogState {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);
             }
         }
+
+        Ok(())
     }
 
     #[instrument(level = "debug")]
@@ -777,7 +780,7 @@ impl CatalogState {
         item: mz_catalog::durable::Item,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
-    ) {
+    ) -> Result<(), CatalogError> {
         match diff {
             StateDiff::Addition => {
                 let key = item.key();
@@ -835,6 +838,17 @@ impl CatalogState {
                         }
                     }
                 };
+                // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
+                // https://github.com/MaterializeInc/materialize/pull/28708.
+                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
+                    let msg = format!(
+                        "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
+                        entry,
+                        entry.uses()
+                    );
+                    error!("internal catalog errr: {msg}");
+                    return Err(CatalogError::Durable(DurableCatalogError::Internal(msg)));
+                }
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
@@ -843,6 +857,7 @@ impl CatalogState {
                 retractions.items.insert(key, entry);
             }
         }
+        Ok(())
     }
 
     #[instrument(level = "debug")]
@@ -1722,11 +1737,13 @@ impl BootstrapApplyState {
                 builtin_table_updates
             }
             BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
-                state.apply_updates_inner(updates, retractions)
+                state
+                    .apply_updates_inner(updates, retractions)
+                    .expect("corrupt catalog")
             }),
-            BootstrapApplyState::Updates(updates) => {
-                state.apply_updates_inner(updates, retractions)
-            }
+            BootstrapApplyState::Updates(updates) => state
+                .apply_updates_inner(updates, retractions)
+                .expect("corrupt catalog"),
         }
     }
 

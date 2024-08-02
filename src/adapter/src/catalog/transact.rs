@@ -508,7 +508,7 @@ impl Catalog {
 
             let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
-            let op_builtin_table_updates = state.apply_updates(updates);
+            let op_builtin_table_updates = state.apply_updates(updates)?;
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
@@ -526,7 +526,7 @@ impl Catalog {
             }
 
             let updates = tx.get_and_commit_op_updates();
-            let op_builtin_table_updates = state.apply_updates(updates);
+            let op_builtin_table_updates = state.apply_updates(updates)?;
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);

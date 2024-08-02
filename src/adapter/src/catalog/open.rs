@@ -602,7 +602,7 @@ impl Catalog {
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
         let updates = txn.get_and_commit_op_updates();
-        let builtin_updates = state.apply_updates(updates);
+        let builtin_updates = state.apply_updates(updates)?;
         assert_eq!(builtin_updates, Vec::new());
         txn.commit().await?;
         drop(storage);

@@ -1196,7 +1196,7 @@ impl Catalog {
         &mut self,
     ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
         let updates = self.storage().await.sync_to_current_updates().await?;
-        let builtin_table_updates = self.state.apply_updates(updates);
+        let builtin_table_updates = self.state.apply_updates(updates)?;
         Ok(builtin_table_updates)
     }
 }
