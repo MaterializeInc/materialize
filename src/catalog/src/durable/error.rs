@@ -68,6 +68,9 @@ pub enum DurableCatalogError {
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
     Storage(StorageError<Timestamp>),
+    /// An internal programming error.
+    #[error("Internal catalog error: {0}")]
+    Internal(String),
 }
 
 impl DurableCatalogError {
@@ -82,7 +85,8 @@ impl DurableCatalogError {
             | DurableCatalogError::NotWritable(_)
             | DurableCatalogError::DuplicateKey
             | DurableCatalogError::UniquenessViolation
-            | DurableCatalogError::Storage(_) => false,
+            | DurableCatalogError::Storage(_)
+            | DurableCatalogError::Internal(_) => false,
         }
     }
 
