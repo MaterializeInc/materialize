@@ -2207,7 +2207,8 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
-        (AlterKafkaSinkFromAction, 8),
+        # TODO(def-): Enable when #28726 is fixed
+        # (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,
