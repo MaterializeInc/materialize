@@ -18,12 +18,16 @@ bytesize = "1.1.0"
 clap = { version = "3.2.24", features = ["derive", "env"] }
 domain = { version = "0.9.3", default-features = false, features = ["resolv"] }
 futures = "0.3.25"
+humantime = "2.1.0"
 hyper = { version = "0.14.23", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
 jsonwebtoken = "9.2.0"
+launchdarkly-server-sdk = { version = "1.0.0", default-features = false }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
+mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }

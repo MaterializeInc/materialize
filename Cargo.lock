@@ -4334,12 +4334,16 @@ dependencies = [
  "clap",
  "domain",
  "futures",
+ "humantime",
  "hyper 0.14.27",
  "hyper-openssl 0.9.2",
  "jsonwebtoken",
+ "launchdarkly-server-sdk",
  "mz-alloc",
  "mz-alloc-default",
  "mz-build-info",
+ "mz-dyncfg",
+ "mz-dyncfg-launchdarkly",
  "mz-environmentd",
  "mz-frontegg-auth",
  "mz-frontegg-mock",
@@ -4826,6 +4830,21 @@ dependencies = [
  "prost-build",
  "serde",
  "serde_json",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-dyncfg-launchdarkly"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "humantime",
+ "launchdarkly-server-sdk",
+ "mz-build-info",
+ "mz-dyncfg",
+ "mz-ore",
+ "tokio",
  "tracing",
  "workspace-hack",
 ]
@@ -10931,6 +10950,7 @@ dependencies = [
  "libc",
  "libz-sys",
  "log",
+ "lru",
  "memchr",
  "mime_guess",
  "minimal-lexical",

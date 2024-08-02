@@ -26,9 +26,6 @@ use tracing::warn;
 
 #[derive(Debug, clap::Parser)]
 pub struct Args {
-    /// Seconds to wait after receiving a SIGTERM for outstanding connections to close.
-    #[clap(long, value_name = "SECONDS")]
-    sigterm_wait_seconds: Option<u64>,
     #[clap(long, value_name = "HOST:PORT")]
     pgwire_listen_addr: SocketAddr,
     #[clap(long, value_name = "HOST:PORT")]
@@ -86,6 +83,37 @@ pub struct Args {
         requires = "frontegg-resolver-template"
     )]
     frontegg_admin_role: Option<String>,
+
+    /// An SDK key for LaunchDarkly.
+    ///
+    /// Setting this will enable synchronization of LaunchDarkly features.
+    #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
+    launchdarkly_sdk_key: Option<String>,
+    /// The duration at which the LaunchDarkly synchronization times out during startup.
+    #[clap(
+        long,
+        env = "CONFIG_SYNC_TIMEOUT",
+        parse(try_from_str = humantime::parse_duration),
+        default_value = "30s"
+    )]
+    config_sync_timeout: Duration,
+    /// The interval in seconds at which to synchronize LaunchDarkly values.
+    ///
+    /// If this is not explicitly set, the loop that synchronizes LaunchDarkly will not run _even if
+    /// [`Self::launchdarkly_sdk_key`] is present_ (however one initial sync is always run).
+    #[clap(
+        long,
+        env = "CONFIG_SYNC_LOOP_INTERVAL",
+        parse(try_from_str = humantime::parse_duration),
+    )]
+    config_sync_loop_interval: Option<Duration>,
+
+    /// The cloud provider where the balancer is running.
+    #[clap(long, env = "CLOUD_PROVIDER")]
+    cloud_provider: Option<String>,
+    /// The cloud provider region where the balancer is running.
+    #[clap(long, env = "CLOUD_PROVIDER_REGION")]
+    cloud_provider_region: Option<String>,
 }
 
 pub async fn run(args: Args) -> Result<(), anyhow::Error> {
@@ -141,7 +169,6 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let config = BalancerConfig::new(
         &BUILD_INFO,
-        args.sigterm_wait_seconds.map(Duration::from_secs),
         args.internal_http_listen_addr,
         args.pgwire_listen_addr,
         args.https_listen_addr,
@@ -151,6 +178,11 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.tls.into_config()?,
         metrics_registry,
         mz_server_core::default_cert_reload_ticker(),
+        args.launchdarkly_sdk_key,
+        args.config_sync_timeout,
+        args.config_sync_loop_interval,
+        args.cloud_provider,
+        args.cloud_provider_region,
     );
     let service = BalancerService::new(config).await?;
     service.serve().await?;
