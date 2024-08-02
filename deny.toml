@@ -70,29 +70,23 @@ skip = [
 
     # TODO: Required for Rust nightly upgrade
     { name = "portable-atomic", version = "0.3.20" },
-    { name = "portable-atomic", version = "1.6.0" },
 
     # TODO: Required for Rust nightly upgrade
     { name = "http", version = "0.2.9" },
-    { name = "http", version = "1.1.0" },
 
     # TODO: Required for Rust nightly upgrade
     { name = "http-body", version = "0.4.5" },
-    { name = "http-body", version = "1.0.0" },
 
     # The most recent version of `skeptic` depends on 0.14.2 and the latest
     # version of `guppy` that uses `0.14` is very old.
     { name = "cargo_metadata", version = "0.14.2" },
-    { name = "cargo_metadata", version = "0.18.1" },
 
     # There are many external crates that rely on 0.10.5. Upgrading them should
     # be its own PR.
     { name = "itertools", version = "0.10.5" },
-    { name = "itertools", version = "0.12.1" },
 
     # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
     { name = "toml_edit", version = "0.19.14" },
-    { name = "toml_edit", version = "0.20.2" },
 
     # There are some crates in our dependency tree that have yet to upgrade to
     # `hyper 1.*`. As of now these are:
@@ -103,20 +97,16 @@ skip = [
     # Until they upgrade we'll need to duplicate some related hyper deps.
 
     { name = "hyper", version = "0.14.27" },
-    { name = "hyper", version = "1.4.1" },
 
     { name = "h2", version = "0.3.26" },
 
     { name = "hyper-tls", version = "0.5.0" },
 
     { name = "hyper-timeout", version = "0.4.1" },
-    { name = "hyper-timeout", version = "0.5.1" },
 
     { name = "tokio-tungstenite", version = "0.21.0" },
-    { name = "tokio-tungstenite", version = "0.23.1" },
 
     { name = "tungstenite", version = "0.21.0" },
-    { name = "tungstenite", version = "0.23.0" },
 
     # `axum 0.7.5` depends on both `sync_wrapper 1.*` and `axum-core 0.4.3`.
     # The latter depends on `sync_wrapper 0.1.*`.
