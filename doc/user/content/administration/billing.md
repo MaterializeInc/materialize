@@ -1,17 +1,17 @@
 ---
-title: "Usage & Billing"
-description: "Provides an overview of various factors that can affect cost."
+title: "Usage & billing"
+description: "Understand the billing model of Materialize, and learn best practices for cost control."
 menu:
   main:
     parent: "administration"
     weight: 10
 ---
 
-From the [console](https://console.materialize.com/) (`Admin` > `Usage &
+From the [Materialize console](https://console.materialize.com/) (`Admin` > `Usage &
 Billing`), administrators can access their invoice. The invoice provides
 Compute and Storage usage and cost information.
 
-## Cost Factors
+## Cost factors
 
 Various factors can affect your costs, including (but not limited to):
 
@@ -29,7 +29,7 @@ Various factors can affect your costs, including (but not limited to):
 
   For more information on how incremental computations can lower the cost of
   freshness, see [How Materialized can lower the cost of freshness for data
-  team](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation).
+  teams](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation).
 
   {{< /note >}}
 
@@ -60,12 +60,12 @@ Various factors can affect your costs, including (but not limited to):
   statements.  To see your query history, in the console, under `Monitoring`,
   select `Query History`.
 
-## Cost Reductions
+## Cost reductions
 
 Some considerations for lowering costs:
 
 - Create a view and an index rather than a materialized view.  See
   [Views](/concepts/views/).
 
-- Avoid creating random indexes. That is, create indexes appropriate
+- Avoid creating unnecessary indexes. That is, create indexes appropriate
   for your use cases. See [Optimization](/transform-data/optimization/).
