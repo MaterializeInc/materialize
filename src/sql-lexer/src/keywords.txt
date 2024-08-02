@@ -344,7 +344,6 @@ Refresh
 Regex
 Region
 Registry
-Rehydration
 Rename
 Reoptimize
 Repeatable
