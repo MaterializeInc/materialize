@@ -24,14 +24,11 @@ from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 
 class BuildHistoryAnalysis(BaseDataStorage):
 
-    def get_recent_build_job_failures(
+    def get_recent_build_job_failures_on_main(
         self,
         pipeline: str,
-        branch: str,
         step_key: str,
         parallel_job_index: int | None,
-        max_entries: int = 5,
-        include_retries: bool = True,
     ) -> BuildHistory:
         shard_index_comparison = (
             f"shard_index = {parallel_job_index}"
@@ -42,62 +39,39 @@ class BuildHistoryAnalysis(BaseDataStorage):
         rows = self.query_data(
             f"""
                 SELECT
-                    build_job_id
+                    build_number,
+                    build_id,
+                    build_job_id,
+                    build_step_success
                 FROM
-                    v_most_recent_build_job
+                    mv_recent_build_job_success_on_main_v2
                 WHERE
-                    pipeline = '{pipeline}'
-                    AND branch = '{branch}'
-                    AND build_step_key = '{step_key}'
-                    AND {shard_index_comparison}
+                    pipeline = '{pipeline}' AND
+                    build_step_key = '{step_key}' AND
+                    {shard_index_comparison}
+                ORDER BY
+                    build_number DESC
                 """
         )
 
-        assert len(rows) <= 1, f"Expected at most one row, got {len(rows)}"
-
         result = []
 
-        if len(rows) == 1:
-            build_job_id = rows[0][0]
-
-            retry_filter = ""
-            if not include_retries:
-                retry_filter = "AND predecessor_is_latest_retry = TRUE"
-
-            rows = self.query_data(
-                f"""
-                    SELECT
-                        predecessor_build_number,
-                        predecessor_build_id,
-                        predecessor_build_job_id,
-                        predecessor_build_step_success
-                    FROM
-                        mv_recent_build_job_success_on_main
-                    WHERE
-                        build_job_id = '{build_job_id}'
-                        {retry_filter}
-                    ORDER BY
-                        predecessor_index ASC
-                    LIMIT {max_entries}
-                    """
+        for row in rows:
+            (
+                predecessor_build_number,
+                predecessor_build_id,
+                predecessor_build_job_id,
+                predecessor_build_step_success,
+            ) = row
+            url_to_job = buildkite.get_job_url_from_pipeline_and_build(
+                pipeline, predecessor_build_number, predecessor_build_job_id
+            )
+            result.append(
+                BuildHistoryEntry(
+                    url_to_job=url_to_job, passed=predecessor_build_step_success
+                )
             )
 
-            for row in rows:
-                (
-                    predecessor_build_number,
-                    predecessor_build_id,
-                    predecessor_build_job_id,
-                    predecessor_build_step_success,
-                ) = row
-                url_to_job = buildkite.get_job_url_from_pipeline_and_build(
-                    pipeline, predecessor_build_number, predecessor_build_job_id
-                )
-                result.append(
-                    BuildHistoryEntry(
-                        url_to_job=url_to_job, passed=predecessor_build_step_success
-                    )
-                )
-
         return BuildHistory(
-            pipeline=pipeline, branch=branch, last_build_step_outcomes=result
+            pipeline=pipeline, branch="main", last_build_step_outcomes=result
         )

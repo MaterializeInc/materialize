@@ -748,11 +748,12 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         parallel_job = int(parallel_job)
 
     try:
-        build_history = test_analytics.build_history.get_recent_build_job_failures(
-            pipeline=pipeline_slug,
-            branch="main",
-            step_key=step_key,
-            parallel_job_index=parallel_job,
+        build_history = (
+            test_analytics.build_history.get_recent_build_job_failures_on_main(
+                pipeline=pipeline_slug,
+                step_key=step_key,
+                parallel_job_index=parallel_job,
+            )
         )
 
         if len(build_history.last_build_step_outcomes) < 5:
