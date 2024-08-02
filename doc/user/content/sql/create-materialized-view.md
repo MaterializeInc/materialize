@@ -8,10 +8,14 @@ menu:
 ---
 
 {{< note >}}
-As an alternative to materialized views, [indexes on views](/concepts/views/#views)
-**maintain and incrementally update view results in memory** for the cluster
-where you create the index.  For more information, see [Views](/concepts/views/#views)
-and [`CREATE VIEW`](/sql/create-view).
+
+Depending on your use case, instead of a materialized view, you might prefer to
+[create a view and index it](/concepts/views/#views). In Materialize, [indexes
+on views](/concepts/indexes/) **maintain and incrementally update view results
+in memory** for the cluster where you create the index.  For more information on
+views and indexes, see [Views](/concepts/views/#views) and [`CREATE
+VIEW`](/sql/create-view).
+
 {{</ note >}}
 
 `CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
