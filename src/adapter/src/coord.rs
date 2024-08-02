@@ -1845,7 +1845,11 @@ impl Coordinator {
                 // To meaningfully resolve this, we could need more careful
                 // loading order or more complex IDs, neither of which seem very
                 // beneficial.
+                //
+                // HACK: sinks are permitted to depend on items with larger IDs,
+                // due to `ALTER SINK`.
                 !entry.id().is_user()
+                    || entry.is_sink()
                     || entry
                         .uses()
                         .iter()

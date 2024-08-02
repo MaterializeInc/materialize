@@ -149,13 +149,22 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_updates_inner(
         &mut self,
-        updates: Vec<StateUpdate>,
+        mut updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         soft_assert_no_log!(
             updates.iter().map(|update| update.ts).all_equal(),
             "all timestamps should be equal: {updates:?}"
         );
+
+        // HACK: due to `ALTER SINK`, sinks can appear before the objects they
+        // depend upon. Fortunately, because sinks can never have dependencies
+        // and can never depend upon one another, to fix the topological sort,
+        // we can just always move sinks to the end.
+        updates.sort_by_cached_key(|u| match &u.kind {
+            StateUpdateKind::Item(item) if item.create_sql.starts_with("CREATE SINK") => 1,
+            _ => 0,
+        });
 
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         for StateUpdate { kind, ts: _, diff } in updates {
