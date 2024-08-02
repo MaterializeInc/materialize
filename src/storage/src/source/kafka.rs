@@ -713,6 +713,7 @@ impl SourceRender for KafkaSourceConnection {
                                         .give_fueled(part_cap, ((0, msg), time, diff))
                                         .await;
                                 }
+                                // The message was from an offset we've already seen.
                                 Ok(None) => continue,
                                 Err(err) => {
                                     let pid = consumer.pid();
@@ -759,20 +760,34 @@ impl SourceRender for KafkaSourceConnection {
                                 Partitioned::new_singleton(RangeBound::exact(pid), upper_offset);
 
                             let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
-                            part_cap.data.downgrade(&upper);
-
-                            if is_snapshotting {
-                                // The `.position()` of the consumer represents what offset we have
-                                // read up to.
-                                snapshot_staged += offset.try_into().unwrap_or(0u64);
-                                // This will always be `Some` at this point.
-                                if let Some(snapshot_total) = snapshot_total {
-                                    // We will eventually read past the snapshot total, so we need
-                                    // to bound it here.
-                                    snapshot_staged =
-                                        std::cmp::min(snapshot_staged, snapshot_total);
+                            match part_cap.data.try_downgrade(&upper) {
+                                Ok(()) => {
+                                    if is_snapshotting {
+                                        // The `.position()` of the consumer represents what offset we have
+                                        // read up to.
+                                        snapshot_staged += offset.try_into().unwrap_or(0u64);
+                                        // This will always be `Some` at this point.
+                                        if let Some(snapshot_total) = snapshot_total {
+                                            // We will eventually read past the snapshot total, so we need
+                                            // to bound it here.
+                                            snapshot_staged =
+                                                std::cmp::min(snapshot_staged, snapshot_total);
+                                        }
+                                    }
                                 }
-                            }
+                                Err(_) => {
+                                    // If we can't downgrade, it means we have already seen this offset.
+                                    // This is expected and we can safely ignore it.
+                                    info!(
+                                        source_id = config.id.to_string(),
+                                        worker_id = config.worker_id,
+                                        num_workers = config.worker_count,
+                                        "kafka source frontier downgrade skipped due to already \
+                                        seen offset: {:?}",
+                                        upper
+                                    );
+                                }
+                            };
 
                             // We use try_downgrade here because during the initial snapshot phase the
                             // data capability is not beyond the progress capability and therefore a
@@ -1018,7 +1033,7 @@ impl KafkaSourceReader {
     }
 
     /// Checks if the given message is viable for emission. This checks if the message offset is
-    /// past the expected offset and seeks the consumer if it is not.
+    /// past the expected offset and returns None if it is not.
     fn handle_message(
         &mut self,
         message: Result<SourceMessage, KafkaHeaderParseError>,
