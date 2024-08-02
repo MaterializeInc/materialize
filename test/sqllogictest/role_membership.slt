@@ -917,8 +917,9 @@ mz_system
 mz_monitor
 mz_support
 materialize
+mz_analytics
 mz_monitor_redacted
-COMPLETE 9
+COMPLETE 10
 
 statement ok
 DROP ROLE r1, r2, r3, r4

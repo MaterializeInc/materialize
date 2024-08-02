@@ -105,7 +105,7 @@ contains: unknown catalog item 'johto'
   );
 contains: yshtola is not an SSH connection
 
-> SELECT name, type FROM mz_connections;
+> SELECT name, type from mz_connections WHERE id LIKE 'u%';
 name    type
 ----------------
 phoenix ssh-tunnel
@@ -117,7 +117,7 @@ contains: still depended upon
 
 > DROP CONNECTION phoenix CASCADE;
 
-> SELECT name, type FROM mz_connections;
+> SELECT name, type from mz_connections WHERE id LIKE 'u%';
 name    type
 ----------------
 

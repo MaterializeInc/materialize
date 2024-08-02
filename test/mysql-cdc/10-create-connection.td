@@ -36,7 +36,7 @@ ALTER SYSTEM SET max_mysql_connections = 1000
     PASSWORD SECRET mysqlpass
   )
 
-> SELECT name, type from mz_connections
+> SELECT name, type from mz_connections WHERE id LIKE 'u%'
 name       type
 ------------------------------
 mysq   mysql

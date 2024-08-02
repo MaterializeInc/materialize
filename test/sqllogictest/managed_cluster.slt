@@ -54,12 +54,14 @@ s1  mz_system  true  1  2
 s2  mz_catalog_server  true  1  2
 s3  mz_probe  true  1  2
 s4  mz_support  true  1  2
+s5  mz_analytics  true  1  2
 u1  quickstart  true  1  2
 
 
 query T rowsort
 SELECT name FROM (SHOW CLUSTERS)
 ----
+mz_analytics
 mz_system
 mz_support
 mz_probe

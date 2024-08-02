@@ -115,6 +115,7 @@ s2  mz_catalog_server  s2  r1  2
 s3  mz_probe  s3  r1  2
 u1  quickstart  u1  r1  2
 s4  mz_support  NULL  NULL  NULL
+s5  mz_analytics  NULL  NULL  NULL
 
 
 # ---- useClusterUtilization.ts
