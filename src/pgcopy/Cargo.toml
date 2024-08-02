@@ -16,15 +16,15 @@ mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.152", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.11.2"
-tonic-build = "0.9.2"
+prost-build = "0.13.1"
+tonic-build = "0.12.1"
 
 [features]
 default = ["mz-build-tools/default"]

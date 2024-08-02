@@ -51,7 +51,7 @@ postgres-openssl = { version = "0.5.0" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
 serde = { version = "1.0.152", features = ["derive"] }
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
@@ -77,7 +77,7 @@ tempfile = "3.8.1"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.11.2"
+prost-build = "0.13.1"
 
 [features]
 default = ["mz-build-tools/default"]

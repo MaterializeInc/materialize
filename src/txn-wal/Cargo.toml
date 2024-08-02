@@ -21,7 +21,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-timely-util = { path = "../timely-util" }
 prometheus = { version = "0.13.3", default-features = false }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive", "rc"] }
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = { version = "1.38.0", default-features = false, features = ["rt", "rt-multi-thread"] }
@@ -35,7 +35,7 @@ rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.11.2"
+prost-build = "0.13.1"
 
 [features]
 default = ["mz-build-tools/default"]

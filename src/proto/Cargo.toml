@@ -15,13 +15,13 @@ anyhow = "1.0.66"
 bytes = "1.3.0"
 chrono = { version = "0.4.35", default-features = false, features = ["serde", "std"], optional = true }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
-globset = "0.4.9"
-http = "0.2.8"
+globset = "0.4.14"
+http = "1.1.0"
 mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
 num = "0.4.0"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 serde = { version = "1.0.152", features = ["derive", "rc"] }
 serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
@@ -36,7 +36,7 @@ chrono = ["dep:chrono", "dep:chrono-tz"]
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.11.2"
+prost-build = "0.13.1"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
