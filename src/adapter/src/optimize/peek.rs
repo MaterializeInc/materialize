@@ -322,13 +322,22 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // whole optimizer pipeline, but just a tiny subset of it. (But we'll need to run
         // `create_fast_path_plan` later again, because, e.g., running `LiteralConstraints` is still
         // ahead of us.)
-        let use_fast_path_optimizer = create_fast_path_plan(
+        let use_fast_path_optimizer = match create_fast_path_plan(
             &mut df_desc,
             self.select_id,
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
-        )?
-        .is_some();
+        ) {
+            Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
+            Err(OptimizerError::UnsafeMfpPlan) => {
+                // This is expected, in that `create_fast_path_plan` can choke on `mz_now`, which we
+                // haven't removed yet.
+                false
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
 
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, use_fast_path_optimizer)?;
