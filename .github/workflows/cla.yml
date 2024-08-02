@@ -13,14 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Portions of this file are derived from the README examples in the 
+# Portions of this file are derived from the README examples in the
 # Contributor Assistant project. The original source code was retrieved on
 # July 31, 2024 from:
 #
 #     https://github.com/contributor-assistant/github-action/blob/master/README.md
 
 # Check if PR authors have signed the Materialize CLA, and if not have them sign
-# and record their signature. The CLA and signatures are stored in 
+# and record their signature. The CLA and signatures are stored in
 # https://github.com/MaterializeInc/cla
 
 name: "CLA Assistant"
