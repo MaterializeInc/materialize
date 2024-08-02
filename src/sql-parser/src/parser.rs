@@ -3959,10 +3959,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(REFRESH)?;
                 // Parse optional `(HYDRATION TIME ESTIMATE ...)`
                 let hydration_time_estimate = if self.consume_token(&Token::LParen) {
-                    // `REHYDRATION` is the legacy way of writing this. We'd like to eventually
-                    // remove this, and allow only `HYDRATION`. (Dbt needs to be updated for this.)
-                    self.expect_one_of_keywords(&[HYDRATION, REHYDRATION])?;
-                    self.expect_keywords(&[TIME, ESTIMATE])?;
+                    self.expect_keywords(&[HYDRATION, TIME, ESTIMATE])?;
                     let _ = self.consume_token(&Token::Eq);
                     let interval = self.parse_interval_value()?;
                     self.expect_token(&Token::RParen)?;
