@@ -125,8 +125,7 @@ contains:canceling statement due to user request
 # wait a few seconds more for good measure to avoid flaking.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
 
-> INSERT INTO post_alter VALUES ('hundred', 99);
+> INSERT INTO created_post_alter VALUES ('hundred', 99);
 
-# TODO(jkosh44) uncomment when we figure out why this doesn't work.
-# $ kafka-verify-data format=json sink=materialize.public.sink key=false
-# {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
+$ kafka-verify-data format=json sink=materialize.public.sink key=false
+{"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
