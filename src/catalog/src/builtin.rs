@@ -7207,6 +7207,19 @@ ON mz_internal.mz_webhook_sources (id)",
     is_retained_metrics_object: true,
 };
 
+pub static MZ_ANALYTICS: BuiltinConnection = BuiltinConnection {
+    name: "mz_analytics",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::CONNECTION_MZ_ANALYTICS_OID,
+    sql: "CREATE CONNECTION mz_internal.mz_analytics TO AWS (ASSUME ROLE ARN = '')",
+    access: &[MzAclItem {
+        grantee: MZ_SYSTEM_ROLE_ID,
+        grantor: MZ_ANALYTICS_ROLE_ID,
+        acl_mode: rbac::all_object_privileges(SystemObjectType::Object(ObjectType::Connection)),
+    }],
+    owner_id: &MZ_ANALYTICS_ROLE_ID,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -7750,6 +7763,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
+        Builtin::Connection(&MZ_ANALYTICS),
     ]);
 
     builtins.extend(notice::builtins());
