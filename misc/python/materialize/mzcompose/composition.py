@@ -758,7 +758,16 @@ class Composition:
         self,
         *args: str,
         rm: bool = False,
+        mz_service: str | None = None,
     ) -> subprocess.CompletedProcess:
+        if mz_service is not None:
+            args = tuple(
+                list(args)
+                + [
+                    f"--materialize-url=postgres://materialize@{mz_service}:6875",
+                    f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
+                ]
+            )
         return self.run(
             "testdrive",
             *args,

@@ -17,7 +17,7 @@ from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -41,6 +41,12 @@ SERVICES = [
     MySql(),
     Cockroach(setup_materialize=True),
     Materialized(
+        options=list(mz_options.values()),
+        volumes_extra=["secrets:/share/secrets"],
+        external_cockroach=True,
+    ),
+    Materialized(
+        name="materialized2",
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
@@ -96,9 +102,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # this may happen when versions are marked as invalid
             print("No versions to test!")
         else:
-            test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
+            test_upgrade_from_version(
+                c, f"{version}", priors, filter=args.filter, zero_downtime=True
+            )
+            test_upgrade_from_version(
+                c, f"{version}", priors, filter=args.filter, zero_downtime=False
+            )
 
-    test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
+    test_upgrade_from_version(
+        c, "current_source", priors=[], filter=args.filter, zero_downtime=True
+    )
+    test_upgrade_from_version(
+        c, "current_source", priors=[], filter=args.filter, zero_downtime=False
+    )
 
 
 def get_all_and_latest_two_minor_mz_versions(
@@ -119,8 +135,16 @@ def test_upgrade_from_version(
     from_version: str,
     priors: list[MzVersion],
     filter: str,
+    zero_downtime: bool,
 ) -> None:
-    print(f"+++ Testing upgrade from Materialize {from_version} to current_source.")
+    print(
+        f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
+    )
+
+    additional_system_parameter_defaults = {
+        "enable_0dt_deployment": "true" if zero_downtime else "false",
+    }
+    deploy_generation = 0
 
     # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
     prior_patch_versions = []
@@ -145,8 +169,11 @@ def test_upgrade_from_version(
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql")
 
+    mz_service = "materialized"
+
     if from_version != "current_source":
         mz_from = Materialized(
+            name=mz_service,
             image=f"materialize/materialized:{from_version}",
             options=[
                 opt
@@ -155,11 +182,14 @@ def test_upgrade_from_version(
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            deploy_generation=deploy_generation,
+            restart="on-failure",
         )
         with c.override(mz_from):
-            c.up("materialized")
+            c.up(mz_service)
     else:
-        c.up("materialized")
+        c.up(mz_service)
 
     if from_version == "current_source" or MzVersion.parse_mz(
         from_version
@@ -178,9 +208,15 @@ def test_upgrade_from_version(
         temp_dir,
         seed,
         f"create-in-{version_glob}-{filter}.td",
+        mz_service=mz_service,
     )
-    c.kill("materialized")
-    c.rm("materialized", "testdrive")
+    if zero_downtime:
+        mz_service = "materialized2"
+        deploy_generation += 1
+        c.rm("testdrive")
+    else:
+        c.kill(mz_service)
+        c.rm(mz_service, "testdrive")
 
     if from_version != "current_source":
         # We can't skip in-between minor versions anymore, so go through all of them
@@ -193,9 +229,12 @@ def test_upgrade_from_version(
                 # Old versions didn't care about upgrading the catalog one version at a time, so save some time
                 continue
 
-            print(f"Upgrading to in-between version {version}")
+            print(
+                f"'{'0dt-' if zero_downtime else ''}Upgrading to in-between version {version}"
+            )
             with c.override(
                 Materialized(
+                    name=mz_service,
                     image=f"materialize/materialized:{version}",
                     options=[
                         opt
@@ -204,31 +243,54 @@ def test_upgrade_from_version(
                     ],
                     volumes_extra=["secrets:/share/secrets"],
                     external_cockroach=True,
+                    additional_system_parameter_defaults=additional_system_parameter_defaults,
+                    deploy_generation=deploy_generation,
+                    restart="on-failure",
                 )
             ):
-                c.up("materialized")
-                c.kill("materialized")
-                c.rm("materialized")
+                c.up(mz_service)
+                if zero_downtime:
+                    c.await_mz_deployment_status(
+                        DeploymentStatus.READY_TO_PROMOTE, mz_service
+                    )
+                    c.promote_mz(mz_service)
+                    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+                    mz_service = (
+                        "materialized2"
+                        if mz_service == "materialized"
+                        else "materialized"
+                    )
+                    deploy_generation += 1
+                else:
+                    c.kill(mz_service)
+                    c.rm(mz_service)
 
-    print("Upgrading to final version")
+    print(f"{'0dt-' if zero_downtime else ''}Upgrading to final version")
     mz_to = Materialized(
+        name=mz_service,
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        deploy_generation=deploy_generation,
+        restart="on-failure",
     )
     with c.override(mz_to):
-        c.up("materialized")
-
-        # Restart once more, just in case
-        c.kill("materialized")
-        c.rm("materialized")
-        c.up("materialized")
+        c.up(mz_service)
+        if zero_downtime:
+            c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
+            c.promote_mz(mz_service)
+            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+        else:
+            # Restart once more, just in case
+            c.kill(mz_service)
+            c.rm(mz_service)
+            c.up(mz_service)
 
     with c.override(
         Testdrive(
             external_cockroach=True,
-            # TODO(def-) Reenable when #28636 is fixed
-            validate_catalog_store=False,
+            validate_catalog_store=True,
             volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
         )
     ):
@@ -240,4 +302,5 @@ def test_upgrade_from_version(
             temp_dir,
             seed,
             f"check-from-{version_glob}-{filter}.td",
+            mz_service=mz_service,
         )
