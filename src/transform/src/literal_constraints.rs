@@ -157,29 +157,45 @@ impl LiteralConstraints {
                     }
                     .arrange_by(&[(0..key.len()).map(MirScalarExpr::Column).collect_vec()]);
 
-                    *relation = MirRelationExpr::Join {
-                        // It's important to keep the `filter_list` in the second position.
-                        // Both the lowering and EXPLAIN depends on this.
-                        inputs: vec![relation.clone().arrange_by(&[key.clone()]), filter_list],
-                        equivalences: key
-                            .iter()
-                            .enumerate()
-                            .map(|(i, e)| {
-                                vec![(*e).clone(), MirScalarExpr::column(i + inp_typ.arity())]
-                            })
-                            .collect(),
-                        implementation: IndexedFilter(inp_id, idx_id, key.clone(), possible_vals),
-                    };
+                    if possible_vals.is_empty() {
+                        // Even better than what we were hoping for: Found contradicting
+                        // literal constraints, so the whole relation is empty.
+                        *relation = MirRelationExpr::Constant {
+                            rows: Ok(Vec::new()),
+                            typ: relation.typ(),
+                        };
+                    } else {
+                        // The common case: We need to build the join which is the main point of
+                        // this transform.
+                        *relation = MirRelationExpr::Join {
+                            // It's important to keep the `filter_list` in the second position.
+                            // Both the lowering and EXPLAIN depends on this.
+                            inputs: vec![relation.clone().arrange_by(&[key.clone()]), filter_list],
+                            equivalences: key
+                                .iter()
+                                .enumerate()
+                                .map(|(i, e)| {
+                                    vec![(*e).clone(), MirScalarExpr::column(i + inp_typ.arity())]
+                                })
+                                .collect(),
+                            implementation: IndexedFilter(
+                                inp_id,
+                                idx_id,
+                                key.clone(),
+                                possible_vals,
+                            ),
+                        };
 
-                    // Rebuild the MFP to add the projection that removes the columns coming from
-                    // the filter_list side of the join.
-                    let (map, filter, project) = mfp.as_map_filter_project();
-                    mfp = MapFilterProject::new(inp_typ.arity() + key.len())
-                        .project(0..inp_typ.arity()) // make the join semi
-                        .map(map)
-                        .filter(filter)
-                        .project(project);
-                    mfp.optimize()
+                        // Rebuild the MFP to add the projection that removes the columns coming from
+                        // the filter_list side of the join.
+                        let (map, filter, project) = mfp.as_map_filter_project();
+                        mfp = MapFilterProject::new(inp_typ.arity() + key.len())
+                            .project(0..inp_typ.arity()) // make the join semi
+                            .map(map)
+                            .filter(filter)
+                            .project(project);
+                        mfp.optimize()
+                    }
                 }
             }
         }
