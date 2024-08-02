@@ -7,6 +7,17 @@ menu:
     parent: 'commands'
 ---
 
+{{< note >}}
+
+Depending on your use case, instead of a materialized view, you might prefer to
+[create a view and index it](/concepts/views/#views). In Materialize, [indexes
+on views](/concepts/indexes/) **maintain and incrementally update view results
+in memory** for the cluster where you create the index.  For more information on
+views and indexes, see [Views](/concepts/views/#views) and [`CREATE
+VIEW`](/sql/create-view).
+
+{{</ note >}}
+
 `CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and
 incrementally updated as new data arrives.
 
@@ -52,7 +63,7 @@ view. It's a good idea to create a materialized view if:
 * The final consumer of the view is a sink or a [`SUBSCRIBE`](../subscribe) operation.
 
 On the other hand, if you only need to access a view from a single cluster, you
-should consider creating a [non-materialized view](../create-view) and building
+should consider creating a [view](../create-view) and building
 an index on it instead. The index will incrementally maintain the results of
 the view updated in memory within that cluster, allowing you to avoid the costs
 and latency overhead of materialization.
@@ -77,6 +88,7 @@ indexes in each cluster you are referencing the materialized view in.
 [//]: # "TODO(morsapaes) Point to relevant operational guide on indexes once
 this exists+add detail about using indexes to optimize materialized view
 stacking."
+
 
 ### Non-null assertions
 
@@ -379,6 +391,11 @@ The privileges required to execute this statement are:
 - `CREATE` privileges on the containing cluster.
 - `USAGE` privileges on all types used in the materialized view definition.
 - `USAGE` privileges on the schemas that all types in the statement are contained in.
+
+## Additional information
+
+- Materialized views are not monotonic; that is, materialized views cannot be
+  recognized as append-only.
 
 ## Related pages
 

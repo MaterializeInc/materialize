@@ -1,5 +1,5 @@
 ---
-title: Views (Non-Materialized and Materialized)
+title: Views
 description: Learn about views in Materialize.
 menu:
   main:
@@ -15,104 +15,128 @@ aliases:
 Views represent queries that are saved under a name for reference. Views provide
 a shorthand for the underlying query.
 
-Materialize offers the following types of views:
-
 Type |
 -----|------------
-[**Non-materialized views**](#non-materialized-views) | Results are **not** persisted in durable storage. Non-materialized views can be indexed to maintain and incrementally update results in memory.
+[**Views**](#views) | Results are **not** persisted in durable storage. Views can be indexed to maintain and incrementally update results in memory within a cluster.
 [**Materialized views**](#materialized-views) | Results **are** persisted and incrementally updated in durable storage. Materialized views can be indexed to maintain the results in memory.
 
 All views in Materialize are built by reading data from
 [sources](/concepts/sources) and other views.
 
-## Non-materialized views
+## Views
 
-A non-materialized view, also generally referred to as a "view", saves a query
-under a name to provide a shorthand for referencing the query. The query is
-**not** executed during non-materialized view creation, and a non-materialized
-view does **not** persist its results in durable storage.
+A view saves a query under a name to provide a shorthand for referencing the
+query. Views are not associated with a [cluster](/concepts/clusters/), and can
+be referenced across clusters.
 
-**However**, you can [index](/concepts/indexes/) a non-materialized view to
-**maintain and incrementally update view results** in memory within a cluster.
-This enables queries within that [cluster](/concepts/clusters/) to use the index
-to access view results from memory.  See [Indexes and non-materialized
-views](#indexes-and-non-materialized-views) for more information.
+During view creation, the underlying query is not executed, so results are not
+persisted. This means that view results will be recomputed from scratch each
+time the view is accessed.
+
+```mzsql
+CREATE VIEW my_view_name AS
+  SELECT ... FROM ...  ;
+```
+
+However, in Materialize, you can create an [index](/concepts/indexes/) on a view
+to **maintain and incrementally update** its results in memory within a cluster.
+
+
+```mzsql
+CREATE INDEX idx_on_my_view ON my_view_name(...) ;
+```
+
+Once indexed, queries within that cluster can use the index to access view
+results from memory.  See [Indexes and views](#indexes-and-views) for more
+information.
 
 See also:
 
-- [`CREATE VIEW`](/sql/create-view)
+- [`CREATE VIEW`](/sql/create-view)  for complete syntax information
+- [`CREATE INDEX`](/sql/create-index/)  for complete syntax information
 
-### Indexes and non-materialized views
+### Indexes and views
 
-Indexes can improve query performance. In Materialize, non-materialized views
-can be [indexed](/concepts/indexes/). Indexing a non-materialized view causes
-view results to be **maintained and incrementally updated in memory** within
-that [cluster](/concepts/clusters/). The in-memory up-to-date results are
-accessible to queries within the cluster, even for queries that do not use the
-index key(s).
+In Materialize, views can be [indexed](/concepts/indexes/).
 
-Indexes are local to a cluster.
+For example, to create an index in the current cluster:
+
+```mzsql
+CREATE INDEX idx_on_my_view ON my_view_name(...) ;
+```
+
+You can also explicitly specify the cluster:
+
+```mzsql
+CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
+```
+
+Indexes on views both **maintain and incrementally update view results in
+memory** within that [cluster](/concepts/clusters/). The in-memory, up-to-date
+results are accessible to queries within the cluster.
 
 See also:
 
-- [Indexes](/concepts/indexes/)
-- [`CREATE INDEX`](/sql/create-index/)
-
-### Clusters and non-materialized views
-
-A non-materialized view can be referenced in any [cluster](/concepts/clusters/).
-However, if the non-materialized view is indexed, in-memory results are only
-accessible to queries within the cluster.
-
-Indexes are local to a cluster.  Queries in a different cluster cannot use the
-indexes in another cluster.
+- [Indexes](/concepts/indexes)
+- [Optimization](/transform-data/optimization)
+- [`CREATE INDEX`](/sql/create-index/)  for complete syntax information
 
 ## Materialized views
 
-A materialized view, like a non-materialized view, saves a query under a name to
-provide a shorthand for referencing the query. But, unlike a non-materialized
-view, the query is executed during the view creation, and a materialized view
-**persists and incrementally updates** its results in durable storage.
+In Materialize, a materialized view is a view whose underlying query is executed
+during the view creation, and the view results are persisted **and
+incrementally updated** in durable storage.
 
-You can index a materialized view to maintain the results in memory
-within the cluster. This enables queries within the cluster to use the index to
-access view results from memory.  See [Indexes and materialized views](#indexes-and-materialized-views)
-for more information.
+```mzsql
+CREATE MATERIALIZED VIEW my_mat_view_name AS
+  SELECT ... FROM ...  ;
+```
+
+Materialized views can be referenced across [clusters](/concepts/clusters/).
+
+You can also index a materialized view to maintain the results in memory within
+the cluster. This enables queries within the cluster to use the index to access
+view results from memory.
 
 See also:
 
-- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
+- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view) for complete
+  syntax information
 
 
 ### Indexes and materialized views
 
-Indexes can improve query performance. In Materialize,
-[indexing](/concepts/indexes/) a materialized view maintains the results in
-memory within the [cluster](/concepts/clusters/).  Because materialized views
-maintain the up-to-date results in durable storage, indexes on materialized
-views serve up-to-date results without themselves performing the incremental
-computation. The in-memory up-to-date results are accessible to queries within
-the cluster, even for queries that do not use the index key(s).
+In Materalize, materialized views can be indexed.
 
-Indexes are local to a cluster.
+```mzsql
+CREATE INDEX idx_on_my_view ON my_mat_view_name(...) ;
+```
+
+Because materialized views maintain the up-to-date results in durable storage,
+indexes on materialized views serve up-to-date results without themselves
+performing the incremental computation. However, unlike materialized views that
+are accessible across clusters, indexes are accessible only within the cluster.
 
 See also:
 
-- [Indexes](/concepts/indexes/)
-- [`CREATE INDEX`](/sql/create-index/)
+- [Indexes](/concepts/indexes)
+- [Optimization](/transform-data/optimization)
+- [`CREATE INDEX`](/sql/create-index/)  for complete syntax information
 
-### Clusters and materialized views
 
-A materialized view can be referenced in any [cluster](/concepts/clusters/).
-Because the up-to-date results of a materialized view are persisted in durable
-storage, you can decouple the computational resources used for view maintenance
-from the resources used for query serving.
+## General information
 
-Indexes are local to a cluster.  Queries in a different cluster cannot use the
-indexes in another cluster.
+- Views can be referenced across [clusters](/concepts/clusters/).
 
-## Related pages
+- Materialized views can be referenced across [clusters](/concepts/clusters/).
 
-- [`CREATE VIEW`](/sql/create-view)
-- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
-- [`CREATE INDEX`](/sql/create-index)
+- [Indexes](/concepts/indexes) are local to a cluster.
+
+- Views can be monotonic; that is, views can be recognized as append-only.
+
+- Materialized views are not monotonic; that is, materialized views cannot be
+  recognized as append-only.
+
+<style>
+red { color: Red; font-weight: 500; }
+</style>

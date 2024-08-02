@@ -1,6 +1,6 @@
 ---
 title: "CREATE VIEW"
-description: "`CREATE VIEW` defines a non-materialized view, which provides an alias for the embedded `SELECT` statement."
+description: "`CREATE VIEW` defines view, which provides an alias for the embedded `SELECT` statement."
 menu:
   # This should also have a "non-content entry" under Reference, which is
   # configured in doc/user/config.toml
@@ -8,7 +8,7 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE VIEW` defines a non-materialized view, which simply provides an alias
+`CREATE VIEW` defines a view, which simply provides an alias
 for the embedded `SELECT` statement.
 
 The results of a view can be incrementally maintained **in memory** within a
@@ -68,6 +68,10 @@ The privileges required to execute this statement are:
 - `CREATE` privileges on the containing schema.
 - `USAGE` privileges on all types used in the view definition.
 - `USAGE` privileges on the schemas that all types in the statement are contained in.
+
+## Additional information
+
+- Views can be monotonic; that is, views can be recognized as append-only.
 
 ## Related pages
 
