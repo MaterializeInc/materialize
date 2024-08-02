@@ -45,8 +45,8 @@ use mz_sql::catalog::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{
-    MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
-    SUPPORT_USER_NAME, SYSTEM_USER_NAME,
+    ANALYTICS_USER_NAME, MZ_ANALYTICS_ROLE_ID, MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID,
+    MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
@@ -7200,6 +7200,13 @@ pub const MZ_SUPPORT_ROLE: BuiltinRole = BuiltinRole {
     attributes: RoleAttributes::new(),
 };
 
+pub const MZ_ANALYTICS_ROLE: BuiltinRole = BuiltinRole {
+    id: MZ_ANALYTICS_ROLE_ID,
+    name: ANALYTICS_USER_NAME,
+    oid: oid::ROLE_MZ_ANALYTICS_OID,
+    attributes: RoleAttributes::new(),
+};
+
 /// This role can `SELECT` from various query history objects,
 /// e.g. `mz_prepared_statement_history`.
 pub const MZ_MONITOR_ROLE: BuiltinRole = BuiltinRole {
@@ -7718,6 +7725,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 pub const BUILTIN_ROLES: &[&BuiltinRole] = &[
     &MZ_SYSTEM_ROLE,
     &MZ_SUPPORT_ROLE,
+    &MZ_ANALYTICS_ROLE,
     &MZ_MONITOR_ROLE,
     &MZ_MONITOR_REDACTED,
 ];
