@@ -1015,24 +1015,25 @@ class AlterSinkOrder(Check):
             for s in [
                 """
                 > CREATE TABLE table_alter_order2 (x int, y string)
-                > INSERT INTO table_alter_order2 VALUES (1, 'b')
+
                 > ALTER SINK sink_alter_order SET FROM table_alter_order2;
 
                 # Wait for the actual restart to have occurred before inserting
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
 
+                > INSERT INTO table_alter_order2 VALUES (1, 'b')
                 > INSERT INTO table_alter_order1 VALUES (10, 'aa')
                 > INSERT INTO table_alter_order2 VALUES (11, 'bb')
                 """,
                 """
                 > CREATE TABLE table_alter_order3 (x int, y string)
-                > INSERT INTO table_alter_order3 VALUES (2, 'c')
-                > INSERT INTO table_alter_order3 VALUES (12, 'cc')
                 > ALTER SINK sink_alter_order SET FROM table_alter_order3;
 
                 # Wait for the actual restart to have occurred before inserting
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
 
+                > INSERT INTO table_alter_order3 VALUES (2, 'c')
+                > INSERT INTO table_alter_order3 VALUES (12, 'cc')
                 > INSERT INTO table_alter_order1 VALUES (100, 'aaa')
                 > INSERT INTO table_alter_order2 VALUES (101, 'bbb')
                 > INSERT INTO table_alter_order3 VALUES (102, 'ccc')
@@ -1053,7 +1054,10 @@ class AlterSinkOrder(Check):
 
                 > SELECT before IS NULL, (after).x, (after).y FROM sink_alter_order_source
                 true 0 a
+                true 1 b
+                true 2 c
                 true 11 bb
+                true 12 cc
                 true 102 ccc
 
                 > DROP SOURCE sink_alter_order_source CASCADE;
