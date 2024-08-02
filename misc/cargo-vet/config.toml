@@ -295,7 +295,7 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.crc32c]]
-version = "0.6.5"
+version = "0.6.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.crc32fast]]
