@@ -55,7 +55,6 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use timely::Container;
 use tracing::{info_span, warn, Instrument};
 
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
@@ -150,7 +149,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_updates_inner(
         &mut self,
-        mut updates: Vec<StateUpdate>,
+        updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         soft_assert_no_log!(
