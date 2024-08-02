@@ -1834,10 +1834,9 @@ impl SourceDataRowColumnarEncoder {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
             SourceDataRowColumnarEncoder::EmptyRow => {
-                // TODO(#28146): Re-enable this check.
-                if false {
-                    assert_eq!(row.iter().count(), 0)
-                }
+                // TODO(#28146): Make this into an `assert_eq` once #28539 goes
+                // in.
+                mz_ore::soft_assert_eq_no_log!(row.iter().count(), 0)
             }
         }
     }
