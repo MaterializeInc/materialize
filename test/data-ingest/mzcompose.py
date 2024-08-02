@@ -53,6 +53,7 @@ SERVICES = [
         external_minio=True,
         external_cockroach=True,
         additional_system_parameter_defaults={"enable_table_keys": "true"},
+        sanity_restart=False,
     ),
     Materialized(
         name="materialized2",
@@ -60,6 +61,7 @@ SERVICES = [
         external_minio=True,
         external_cockroach=True,
         additional_system_parameter_defaults={"enable_table_keys": "true"},
+        sanity_restart=False,
     ),
     Clusterd(name="clusterd1", options=["--scratch-directory=/mzdata/source_data"]),
 ]
