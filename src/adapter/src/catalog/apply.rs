@@ -838,7 +838,9 @@ impl CatalogState {
                         }
                     }
                 };
-                if entry.uses().iter().any(|id| *id > entry.id) {
+                // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
+                // https://github.com/MaterializeInc/materialize/pull/28708.
+                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
                     let msg = format!(
                         "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
                         entry,
