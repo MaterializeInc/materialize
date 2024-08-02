@@ -111,22 +111,34 @@ contains:canceling statement due to user request
 
 # There is a meaningful difference in having an object created after the sink
 # already exists, see incident-131:
-> CREATE TABLE created_post_alter (created_post_name string, created_post_value int);
+> CREATE TABLE pre_alter2 (pre_alter_name string, pre_alter_value int);
+> INSERT INTO pre_alter2 VALUES ('pre_alter', 0);
+> CREATE SINK sink_dependency
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM pre_alter2
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-sink-dep-${testdrive.seed}')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM;
+
+$ kafka-verify-data format=json sink=materialize.public.sink_dependency key=false
+{"before": null, "after": {"pre_alter_name": "pre_alter", "pre_alter_value": 0}}
+
+> CREATE TABLE post_alter2 (post_alter_name string, post_alter_value int);
+
 # This value should be ignored by the sink because the alter will happen after
 # this record has been inserted and we don't re-emit a snapshot of the new
 # collection when it changes.
-> INSERT INTO created_post_alter VALUES ('ignored', 0);
-> INSERT INTO created_post_alter VALUES ('ignored2', 1);
+> INSERT INTO post_alter2 VALUES ('ignored', 0);
+> INSERT INTO post_alter2 VALUES ('ignored2', 1);
 
-> ALTER SINK sink SET FROM created_post_alter;
+> ALTER SINK sink_dependency SET FROM post_alter2;
 
 # The sink will start sinking updates from `post_alter` at the timestamp that
 # the previous dataflow happens to stop. This happens pretty quickly but we
 # wait a few seconds more for good measure to avoid flaking.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
 
-> INSERT INTO post_alter VALUES ('hundred', 99);
+> INSERT INTO post_alter2 VALUES ('post_alter', 99);
 
-# TODO(jkosh44) uncomment when we figure out why this doesn't work.
-# $ kafka-verify-data format=json sink=materialize.public.sink key=false
-# {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
+$ kafka-verify-data format=json sink=materialize.public.sink_dependency key=false
+{"before": null, "after": {"post_alter_name": "post_alter", "post_alter_value": 99}}
