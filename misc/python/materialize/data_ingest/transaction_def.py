@@ -85,6 +85,7 @@ class RestartMz(TransactionDef):
                     external_cockroach=True,
                     additional_system_parameter_defaults={"enable_table_keys": "true"},
                     deploy_generation=self.workload.deploy_generation,
+                    sanity_restart=False,
                 ),
             ):
                 self.composition.kill(self.workload.mz_service)
@@ -130,6 +131,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     deploy_generation=self.workload.deploy_generation,
                     restart="on-failure",
                     healthcheck=LEADER_STATUS_HEALTHCHECK,
+                    sanity_restart=False,
                 ),
             ):
                 self.composition.up(self.workload.mz_service, detach=True)
