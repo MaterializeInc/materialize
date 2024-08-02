@@ -622,6 +622,9 @@ impl Catalog {
         storage_collections_to_drop: BTreeSet<GlobalId>,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
+        let controller_start = Instant::now();
+        info!("startup: controller init: beginning");
+
         let mut controller = {
             let mut storage = self.storage().await;
             let mut tx = storage.transaction().await?;
@@ -644,6 +647,11 @@ impl Catalog {
             storage_collections_to_drop,
         )
         .await?;
+
+        info!(
+            "startup: controller init: complete in {:?}",
+            controller_start.elapsed()
+        );
 
         Ok(controller)
     }

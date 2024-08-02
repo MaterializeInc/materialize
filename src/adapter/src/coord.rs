@@ -1731,7 +1731,8 @@ impl Coordinator {
         migrated_storage_collections_0dt: BTreeSet<GlobalId>,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
-        info!("coordinator init: beginning bootstrap");
+        let bootstrap_start = Instant::now();
+        info!("startup: coordinator init: bootstrap beginning");
 
         // Initialize cluster replica statuses.
         // Gross iterator is to avoid partial borrow issues.
@@ -1796,7 +1797,8 @@ impl Coordinator {
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
 
-        debug!("coordinator init: creating compute replicas");
+        let create_compute_replicas_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: create compute replicas beginning");
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
         for instance in self.catalog.clusters() {
@@ -1818,15 +1820,29 @@ impl Coordinator {
                 )?;
             }
         }
+        info!(
+            "startup: coordinator init: bootstrap: create compute replicas complete in {:?}",
+            create_compute_replicas_start.elapsed()
+        );
 
-        debug!("coordinator init: initializing storage collections");
+        let init_storage_collections_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: initialize storage collections beginning");
         self.bootstrap_storage_collections(&migrated_storage_collections_0dt)
             .await;
+        info!(
+            "startup: coordinator init: bootstrap: initialize storage collections complete in {:?}",
+            init_storage_collections_start.elapsed()
+        );
 
         let entries: Vec<_> = self.catalog().entries().cloned().collect();
 
-        debug!("coordinator init: optimizing dataflow plans");
+        let optimize_dataflows_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
         self.bootstrap_dataflow_plans(&entries)?;
+        info!(
+            "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
+            optimize_dataflows_start.elapsed()
+        );
 
         // Discover storage constrains on compute dataflows. Needed for as-of selection below.
         // These steps rely on the dataflow plans created by `bootstrap_dataflow_plans`.
@@ -1836,7 +1852,11 @@ impl Coordinator {
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
 
-        debug!("coordinator init: installing existing objects in catalog");
+        let install_catalog_start = Instant::now();
+        info!(
+            "startup: coordinator init: bootstrap: install existing objects in catalog beginning"
+        );
+
         let mut privatelink_connections = BTreeMap::new();
 
         let local_read_ts_for_index_bootstrapping = self.get_local_read_ts().await;
@@ -2074,6 +2094,13 @@ impl Coordinator {
             }
         }
 
+        info!(
+            "startup: coordinator init: bootstrap: install existing objects in catalog complete in {:?}",
+            install_catalog_start.elapsed()
+        );
+
+        let init_vpc_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: initialize VPC endpoints beginning");
         if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
             // Clean up any extraneous VpcEndpoints that shouldn't exist.
             let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
@@ -2091,15 +2118,25 @@ impl Coordinator {
                     .await?;
             }
         }
+        info!(
+            "startup: coordinator init: bootstrap: initialize VPC endpoints complete in {:?}",
+            init_vpc_start.elapsed()
+        );
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
         //
         // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
+        let init_read_policy_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: initialize read policies beginning");
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
+        info!(
+            "startup: coordinator init: bootstrap: initialize read policies complete in {:?}",
+            init_read_policy_start.elapsed()
+        );
 
-        debug!("coordinator init: announcing completion of initialization to controller");
+        debug!("startup: coordinator init: bootstrap: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
@@ -2113,7 +2150,7 @@ impl Coordinator {
             ),
         );
 
-        debug!("coordinator init: initializing migrated builtin tables");
+        debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
         // In read-only mode, the migrated builtin tables (which are a subset of migrated builtin
         // storage collections) need to be back-filled so that any dependent dataflow can be
@@ -2178,7 +2215,7 @@ impl Coordinator {
         };
 
         let builtin_updates_fut = if self.controller.read_only() {
-            info!("coordinator init: stashing builtin table updates while in read-only mode");
+            info!("startup: coordinator init: bootstrap: stashing builtin table updates while in read-only mode");
 
             self.buffered_builtin_table_updates
                 .as_mut()
@@ -2253,6 +2290,10 @@ impl Coordinator {
         };
 
         // Run all of our final steps concurrently.
+        let final_steps_start = Instant::now();
+        info!(
+            "startup: coordinator init: bootstrap: concurrently update builtin tables and cleanup secrets beginning"
+        );
         futures::future::join_all([
             migrated_updates_fut,
             builtin_updates_fut,
@@ -2260,8 +2301,14 @@ impl Coordinator {
         ])
         .instrument(info_span!("coord::bootstrap::final"))
         .await;
+        info!(
+            "startup: coordinator init: bootstrap: concurrently update builtin tables and cleanup secrets complete in {:?}", final_steps_start.elapsed()
+        );
 
-        info!("coordinator init: bootstrap complete");
+        info!(
+            "startup: coordinator init: bootstrap complete in {:?}",
+            bootstrap_start.elapsed()
+        );
         Ok(())
     }
 
@@ -3465,12 +3512,19 @@ pub fn serve(
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
-        info!("coordinator init: beginning");
+        let coord_start = Instant::now();
+        info!("startup: coordinator init: beginning");
 
         // Initializing the builtins can be an expensive process and consume a lot of memory. We
         // forcibly initialize it early while the stack is relatively empty to avoid stack
         // overflows later.
+        let builtin_init_start = Instant::now();
+        info!("startup: coordinator init: builtin init beginning");
         let _builtins = Lazy::force(&BUILTINS_STATIC);
+        info!(
+            "startup: coordinator init: builtin init complete in {:?}",
+            builtin_init_start.elapsed()
+        );
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
@@ -3497,6 +3551,9 @@ pub fn serve(
 
         let aws_privatelink_availability_zones = aws_privatelink_availability_zones
             .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
+
+        let oracle_init_start = Instant::now();
+        info!("startup: coordinator init: timestamp oracle init beginning");
 
         let pg_timestamp_oracle_config = timestamp_oracle_url
             .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
@@ -3539,7 +3596,13 @@ pub fn serve(
             epoch_millis_oracle.write_ts().await.timestamp
         };
 
-        info!("coordinator init: opening catalog");
+        info!(
+            "startup: coordinator init: timestamp oracle init complete in {:?}",
+            oracle_init_start.elapsed()
+        );
+
+        let catalog_open_start = Instant::now();
+        info!("startup: coordinator init: opening catalog beginning");
         let builtin_item_migration_config = if enable_0dt_deployment {
             let persist_client = controller_config
                 .persist_clients
@@ -3592,6 +3655,10 @@ pub fn serve(
             boot_ts,
         )
         .await?;
+        info!(
+            "startup: coordinator init: opening catalog complete in {:?}",
+            catalog_open_start.elapsed()
+        );
 
         if !read_only_controllers {
             epoch_millis_oracle.apply_write(boot_ts).await;
@@ -3647,6 +3714,8 @@ pub fn serve(
             pg_timestamp_oracle_params.apply(config);
         }
 
+        let coord_thread_start = Instant::now();
+        info!("startup: coordinator init: start coordinator thread beginning");
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
@@ -3757,7 +3826,14 @@ pub fn serve(
             .expect("bootstrap_tx always sends a message or panics/halts")
         {
             Ok(()) => {
-                info!("coordinator init: complete");
+                info!(
+                    "startup: coordinator init: start coordinator thread complete in {:?}",
+                    coord_thread_start.elapsed()
+                );
+                info!(
+                    "startup: coordinator init: complete in {:?}",
+                    coord_start.elapsed()
+                );
                 let handle = Handle {
                     session_id,
                     start_instant,
