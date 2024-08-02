@@ -761,6 +761,51 @@ class RenameSinkAction(Action):
         return True
 
 
+class AlterKafkaSinkFromAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.kafka_sinks:
+                return False
+            sink = self.rng.choice(exe.db.kafka_sinks)
+        with sink.lock:
+            if sink not in exe.db.kafka_sinks:
+                return False
+
+            old_object = sink.base_object
+            if sink.format in ["FORMAT BYTES", "FORMAT TEXT"]:
+                # single column formats
+                new_object = self.rng.choice(
+                    [
+                        o
+                        for o in exe.db.db_objects_without_views()
+                        if len(o.columns) == 1
+                    ]
+                )
+            elif sink.key != "":
+                # key requires same column names, low chance of even having that
+                return False
+            else:
+                # multi column formats require at least as many columns as before
+                new_object = self.rng.choice(
+                    [
+                        o
+                        for o in exe.db.db_objects_without_views()
+                        if len(o.columns) >= len(old_object.columns)
+                    ]
+                )
+            sink.base_object = new_object
+
+            try:
+                exe.execute(
+                    f"ALTER SINK {sink} SET FROM {sink.base_object}",
+                    # http=Http.RANDOM,  # Fails
+                )
+            except:
+                sink.base_object = old_object
+                raise
+        return True
+
+
 class CreateDatabaseAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -2162,6 +2207,7 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
+        (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,
