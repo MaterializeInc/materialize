@@ -1001,7 +1001,7 @@ class AlterSinkOrder(Check):
                 """
                 > CREATE TABLE table_alter_order1 (x int, y string)
                 > CREATE SINK sink_alter_order FROM table_alter_order1
-                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink')
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink-order')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
                 > INSERT INTO table_alter_order1 VALUES (0, 'a')
@@ -1047,7 +1047,7 @@ class AlterSinkOrder(Check):
                 # We check the contents of the sink topics by re-ingesting them.
 
                 > CREATE SOURCE sink_alter_order_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink')
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink-order')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 

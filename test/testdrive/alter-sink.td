@@ -109,7 +109,7 @@ SELECT pg_cancel_backend(CAST(${backend-pid} AS int4));
 contains:canceling statement due to user request
 
 
-# There is a meaninful difference in having an object created after the sink
+# There is a meaningful difference in having an object created after the sink
 # already exists, see incident-131:
 > CREATE TABLE created_post_alter (created_post_name string, created_post_value int);
 # This value should be ignored by the sink because the alter will happen after
