@@ -1027,36 +1027,49 @@ async fn execute_request<S: ResultSender>(
     let mut stmt_groups = vec![];
 
     match request {
-        SqlRequest::Simple { query } => {
-            let stmts = parse(client, &query)?;
-            let mut stmt_group = Vec::with_capacity(stmts.len());
-            for StatementParseResult { ast: stmt, sql } in stmts {
-                check_prohibited_stmts(sender, &stmt)?;
-                stmt_group.push((stmt, sql.to_string(), vec![]));
+        SqlRequest::Simple { query } => match parse(client, &query) {
+            Ok(stmts) => {
+                let mut stmt_group = Vec::with_capacity(stmts.len());
+                for StatementParseResult { ast: stmt, sql } in stmts {
+                    check_prohibited_stmts(sender, &stmt)?;
+                    stmt_group.push((stmt, sql.to_string(), vec![]));
+                }
+                stmt_groups.push(Ok(stmt_group));
             }
-            stmt_groups.push(stmt_group);
-        }
+            Err(e) => stmt_groups.push(Err(e)),
+        },
         SqlRequest::Extended { queries } => {
             for ExtendedRequest { query, params } in queries {
-                let mut stmts = parse(client, &query)?;
-                if stmts.len() != 1 {
-                    return Err(Error::Unstructured(anyhow!(
-                        "each query must contain exactly 1 statement, but \"{}\" contains {}",
-                        query,
-                        stmts.len()
-                    )));
-                }
+                match parse(client, &query) {
+                    Ok(mut stmts) => {
+                        if stmts.len() != 1 {
+                            return Err(Error::Unstructured(anyhow!(
+                                "each query must contain exactly 1 statement, but \"{}\" contains {}",
+                                query,
+                                stmts.len()
+                            )));
+                        }
 
-                let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
-                check_prohibited_stmts(sender, &stmt)?;
+                        let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
+                        check_prohibited_stmts(sender, &stmt)?;
 
-                stmt_groups.push(vec![(stmt, sql.to_string(), params)]);
+                        stmt_groups.push(Ok(vec![(stmt, sql.to_string(), params)]));
+                    }
+                    Err(e) => stmt_groups.push(Err(e)),
+                };
             }
         }
     }
 
-    for stmt_group in stmt_groups {
-        let executed = execute_stmt_group(client, sender, stmt_group).await;
+    for stmt_group_res in stmt_groups {
+        let executed = match stmt_group_res {
+            Ok(stmt_group) => execute_stmt_group(client, sender, stmt_group).await,
+            Err(e) => {
+                let err = SqlResult::err(client, e);
+                let _ = send_and_retire(err.into(), client, sender).await?;
+                Ok(Err(()))
+            }
+        };
         // At the end of each group, commit implicit transactions. Do that here so that any `?`
         // early return can still be handled here.
         if client.session().transaction().is_implicit() {

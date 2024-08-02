@@ -60,8 +60,20 @@ http
 http
 {"query":"'"}
 ----
-400 Bad Request
-unterminated quoted string
+200 OK
+{"results":[{"error":{"message":"unterminated quoted string","code":"42601","position":0},"notices":[]}]}
+
+http
+{"query": "SELECTttt * from t"}
+----
+200 OK
+{"results":[{"error":{"message":"Expected a keyword at the beginning of a statement, found identifier \"selectttt\"","code":"42601","position":0},"notices":[]}]}
+
+http
+{"queries": [{"query": "select 1"}, {"query": "selectttt 2"}, {"query": "select 3"}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"error":{"message":"Expected a keyword at the beginning of a statement, found identifier \"selectttt\"","code":"42601","position":0},"notices":[]}]}
 
 # Tables
 http
