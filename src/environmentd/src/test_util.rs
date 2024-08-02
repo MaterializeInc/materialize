@@ -95,6 +95,7 @@ pub struct TestHarness {
     builtin_catalog_server_cluster_replica_size: String,
     builtin_probe_cluster_replica_size: String,
     builtin_support_cluster_replica_size: String,
+    builtin_analytics_cluster_replica_size: String,
     propagate_crashes: bool,
     enable_tracing: bool,
     // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
@@ -127,6 +128,7 @@ impl Default for TestHarness {
             builtin_catalog_server_cluster_replica_size: "1".to_string(),
             builtin_probe_cluster_replica_size: "1".to_string(),
             builtin_support_cluster_replica_size: "1".to_string(),
+            builtin_analytics_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
@@ -509,6 +511,8 @@ impl Listeners {
                     .builtin_probe_cluster_replica_size,
                 bootstrap_builtin_support_cluster_replica_size: config
                     .builtin_support_cluster_replica_size,
+                bootstrap_builtin_analytics_cluster_replica_size: config
+                    .builtin_analytics_cluster_replica_size,
                 system_parameter_defaults: config.system_parameter_defaults,
                 availability_zones: Default::default(),
                 tracing_handle,

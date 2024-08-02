@@ -539,6 +539,7 @@ impl Catalog {
                     builtin_catalog_server_cluster_replica_size: "1".into(),
                     builtin_probe_cluster_replica_size: "1".into(),
                     builtin_support_cluster_replica_size: "1".into(),
+                    builtin_analytics_cluster_replica_size: "1".into(),
                     system_parameter_defaults,
                     remote_system_parameters: None,
                     availability_zones: vec![],

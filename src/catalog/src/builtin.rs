@@ -7301,6 +7301,19 @@ pub const MZ_SUPPORT_CLUSTER: BuiltinCluster = BuiltinCluster {
     ],
 };
 
+pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
+    name: "mz_analytics",
+    owner_id: &MZ_ANALYTICS_ROLE_ID,
+    privileges: &[
+        MzAclItem {
+            grantee: MZ_SYSTEM_ROLE_ID,
+            grantor: MZ_ANALYTICS_ROLE_ID,
+            acl_mode: rbac::all_object_privileges(SystemObjectType::Object(ObjectType::Cluster)),
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_ANALYTICS_ROLE_ID),
+    ],
+};
+
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
@@ -7734,6 +7747,7 @@ pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[
     &MZ_CATALOG_SERVER_CLUSTER,
     &MZ_PROBE_CLUSTER,
     &MZ_SUPPORT_CLUSTER,
+    &MZ_ANALYTICS_CLUSTER,
 ];
 pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
     &MZ_SYSTEM_CLUSTER_REPLICA,

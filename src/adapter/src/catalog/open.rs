@@ -300,6 +300,7 @@ impl Catalog {
                 catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
                 probe_cluster: config.builtin_probe_cluster_replica_size,
                 support_cluster: config.builtin_support_cluster_replica_size,
+                analytics_cluster: config.builtin_analytics_cluster_replica_size,
             };
             // TODO(jkosh44) These functions should clean up old clusters, replicas, and
             // roles like they do for builtin items and introspection sources, but they
@@ -1260,6 +1261,8 @@ pub struct BuiltinBootstrapClusterSizes {
     pub probe_cluster: String,
     /// Size to default support_cluster on bootstrap
     pub support_cluster: String,
+    /// Size to default analytics_cluster on bootstrap
+    pub analytics_cluster: String,
 }
 
 impl BuiltinBootstrapClusterSizes {
@@ -1273,6 +1276,8 @@ impl BuiltinBootstrapClusterSizes {
             Ok(self.probe_cluster.clone())
         } else if cluster_name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name {
             Ok(self.support_cluster.clone())
+        } else if cluster_name == mz_catalog::builtin::MZ_ANALYTICS_CLUSTER.name {
+            Ok(self.analytics_cluster.clone())
         } else {
             Err(mz_catalog::durable::CatalogError::Catalog(
                 SqlCatalogError::UnexpectedBuiltinCluster(cluster_name.to_owned()),

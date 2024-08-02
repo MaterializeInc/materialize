@@ -65,6 +65,8 @@ pub struct StateConfig {
     pub builtin_probe_cluster_replica_size: String,
     /// Builtin support cluster replica size.
     pub builtin_support_cluster_replica_size: String,
+    /// Builtin analytics cluster replica size.
+    pub builtin_analytics_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// A optional map of system parameters pulled from a remote frontend.
