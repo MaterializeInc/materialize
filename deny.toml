@@ -225,6 +225,7 @@ wrappers = [
 ]
 
 [advisories]
+version = 2
 ignore = [
     # Consider switching `yaml-rust` to the actively maintained `yaml-rust2` fork of the original project
     "RUSTSEC-2024-0320",
@@ -237,6 +238,7 @@ ignore = [
 # Must be manually kept in sync with about.toml.
 # See: https://github.com/EmbarkStudios/cargo-about/issues/201
 [licenses]
+version = 2
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -251,7 +253,7 @@ allow = [
     "Zlib",
     "Unicode-DFS-2016",
 ]
-copyleft = "deny"
+# copyleft is denied by default
 private = { ignore = true }
 [[licenses.clarify]]
 name = "ring"
