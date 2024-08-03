@@ -157,7 +157,15 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let mut data_write = handle.datas.take_write(&data_id).await;
+                    let mut data_write = handle
+                        .datas
+                        .take_write_for_commit(&data_id)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "data shard {} must be registered with this Txn handle to commit",
+                                data_id
+                            )
+                        });
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches = updates
@@ -273,7 +281,7 @@ where
                                     .commit_bytes
                                     .inc_by(u64::cast_from(batch.encoded_size_bytes()));
                             }
-                            handle.datas.put_write(data_write);
+                            handle.datas.put_write_for_commit(data_write);
                         }
                         return Ok(TxnApply {
                             is_empty: apply_is_empty,
@@ -296,7 +304,7 @@ where
                                 batches,
                             };
                             self.writes.insert(data_write.shard_id(), txn_write);
-                            handle.datas.put_write(data_write);
+                            handle.datas.put_write_for_commit(data_write);
                         }
                         let _ = handle.txns_cache.update_ge(&txns_upper).await;
                         continue;

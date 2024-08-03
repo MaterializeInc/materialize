@@ -447,6 +447,7 @@ where
             TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
+                txns_client.dyncfgs().clone(),
                 Arc::clone(&txns_metrics),
                 txns_id,
                 Arc::new(RelationDesc::empty()),
