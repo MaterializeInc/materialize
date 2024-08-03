@@ -22,11 +22,13 @@ use std::time::Duration;
 use headers::Authorization;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use hyper::client::HttpConnector;
 use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use hyper::http::uri::Scheme;
 use hyper::{Request, Response, StatusCode, Uri};
-use hyper_openssl::HttpsConnector;
+use hyper_openssl::client::legacy::HttpsConnector;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
+use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
@@ -234,8 +236,8 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     configure: &Box<
                         dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
                     >,
-                ) -> hyper::Result<Response<Incoming>> {
-                    hyper::Client::builder()
+                ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
+                    hyper_util::client::legacy::Client::builder(TokioExecutor::new())
                         .build(make_http_tls(configure))
                         .request({
                             let mut req = Request::post(uri);
@@ -252,7 +254,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 }
 
                 async fn assert_success_response(
-                    res: hyper::Result<Response<Incoming>>,
+                    res: Result<Response<Incoming>, hyper_util::client::legacy::Error>,
                     expected_rows: Vec<Vec<String>>,
                 ) {
                     #[derive(Deserialize)]
@@ -310,7 +312,12 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                                 let body = String::from_utf8_lossy(&body[..]).into_owned();
                                 (Some(res.status()), body)
                             }
-                            Err(e) => (None, e.to_string()),
+                            Err(e) => {
+                                let e: &dyn std::error::Error = &e;
+                                let errors = std::iter::successors(Some(e), |&e| e.source());
+                                let message = errors.map(|e| e.to_string()).join(": ");
+                                (None, message)
+                            }
                         };
                         check(code, message)
                     }

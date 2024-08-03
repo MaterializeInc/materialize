@@ -84,6 +84,7 @@ tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.11", features = ["alpn"], optional = true }
 hyper = { version = "1.4.1", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
+hyper-util = { version = "0.1.6", optional = true }
 opentelemetry = { version = "0.24.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.17.0", optional = true }
 opentelemetry_sdk = { version = "0.24.1", features = [
@@ -129,8 +130,8 @@ tracing_ = [
   "tokio-native-tls",
   "native-tls",
   "http",
-  "hyper",
   "hyper-tls",
+  "hyper-util",
   "metrics",
   "opentelemetry",
   "opentelemetry-otlp",
