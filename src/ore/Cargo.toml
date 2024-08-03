@@ -82,7 +82,6 @@ tracing-opentelemetry = { version = "0.25.0", optional = true }
 tonic = { version = "0.12.1", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.11", features = ["alpn"], optional = true }
-hyper = { version = "1.4.1", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
 hyper-util = { version = "0.1.6", optional = true }
 opentelemetry = { version = "0.24.0", features = ["trace"], optional = true }
@@ -117,7 +116,7 @@ async = [
   "tracing",
 ]
 bytes_ = ["bytes", "compact_bytes", "smallvec", "smallvec/const_generics", "region", "tracing_"]
-network = ["async", "bytes", "hyper", "smallvec", "tonic", "tracing"]
+network = ["async", "bytes", "smallvec", "tonic", "tracing"]
 process = ["libc"]
 region = ["lgalloc"]
 tracing_ = [

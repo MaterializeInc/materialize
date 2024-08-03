@@ -21,7 +21,6 @@ use std::task::{ready, Context, Poll};
 use std::{fmt, io};
 
 use async_trait::async_trait;
-use hyper::server::accept::Accept;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream};
@@ -334,24 +333,11 @@ impl Listener {
             }
         }
     }
-}
-
-impl futures::stream::Stream for Listener {
-    type Item = Result<Stream, io::Error>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.poll_accept(cx)
-    }
-}
-
-impl Accept for Listener {
-    type Conn = Stream;
-    type Error = io::Error;
 
     fn poll_accept(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
+    ) -> Poll<Option<Result<Stream, io::Error>>> {
         match self.get_mut() {
             Listener::Tcp(listener) => {
                 let (stream, _addr) = ready!(listener.poll_accept(cx))?;
@@ -363,6 +349,14 @@ impl Accept for Listener {
                 Poll::Ready(Some(Ok(Stream::Unix(stream))))
             }
         }
+    }
+}
+
+impl futures::stream::Stream for Listener {
+    type Item = Result<Stream, io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.poll_accept(cx)
     }
 }
 
