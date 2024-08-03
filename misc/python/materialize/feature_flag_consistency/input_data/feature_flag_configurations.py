@@ -7,15 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from enum import Enum
+
+from materialize.feature_flag_consistency.feature_flag.feature_flag import (
+    FeatureFlagSystemConfigurationPair,
+)
+
+FEATURE_FLAG_CONFIGURATION_PAIRS = dict()
 
 
-class EvaluationScenario(Enum):
-    OUTPUT_CONSISTENCY = 1
-    """Data-flow rendering vs. constant folding"""
-    POSTGRES_CONSISTENCY = 2
-    """Materialize vs. Postgres"""
-    VERSION_CONSISTENCY = 3
-    """Two different versions of mz"""
-    FEATURE_FLAG_CONSISTENCY = 4
-    """Different feature flag configuration in mz"""
+def append_config(config_pair: FeatureFlagSystemConfigurationPair) -> None:
+    FEATURE_FLAG_CONFIGURATION_PAIRS[config_pair.name] = config_pair
