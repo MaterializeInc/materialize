@@ -29,10 +29,6 @@ class FeatureFlagSystemConfiguration:
     def to_system_params(self) -> dict[str, str]:
         return {flag.name: flag.value for flag in self.flags}
 
-    def verify_is_applied(self) -> None:
-        # TODO
-        raise NotImplementedError
-
 
 @dataclass
 class FeatureFlagSystemConfigurationPair:

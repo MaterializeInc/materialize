@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import argparse
+import time
 
 from pg8000 import Connection
 from pg8000.exceptions import InterfaceError
@@ -15,7 +16,9 @@ from materialize.feature_flag_consistency.execution.multi_config_executors impor
     MultiConfigSqlExecutors,
 )
 from materialize.feature_flag_consistency.feature_flag.feature_flag import (
+    FeatureFlagSystemConfiguration,
     FeatureFlagSystemConfigurationPair,
+    FeatureFlagValue,
 )
 from materialize.feature_flag_consistency.ignore_filter.feature_flag_consistency_ignore_filter import (
     FeatureFlagConsistencyIgnoreFilter,
@@ -57,17 +60,6 @@ class FeatureFlagConsistencyTest(OutputConsistencyTest):
         self.flag_configuration_pair: FeatureFlagSystemConfigurationPair | None = None
         self.mz2_connection: Connection | None = None
         self.mz2_system_connection: Connection | None = None
-
-    def shall_run(self, sql_executors: SqlExecutors) -> bool:
-        assert self.flag_configuration_pair is not None
-
-        try:
-            self.flag_configuration_pair.config1.verify_is_applied()
-            self.flag_configuration_pair.config2.verify_is_applied()
-            return True
-        except Exception as e:
-            print(e)
-            return False
 
     def get_scenario(self) -> EvaluationScenario:
         return EvaluationScenario.FEATURE_FLAG_CONSISTENCY
