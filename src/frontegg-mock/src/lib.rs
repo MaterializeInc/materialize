@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::future::IntoFuture;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,7 @@ use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::JoinHandle;
 use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
 
@@ -66,12 +68,12 @@ pub struct FronteggMockServer {
     pub enable_auth: Arc<AtomicBool>,
     pub auth_requests: Arc<Mutex<u64>>,
     pub role_updates_tx: UnboundedSender<(String, Vec<String>)>,
-    pub handle: JoinHandle<Result<(), hyper::Error>>,
+    pub handle: JoinHandle<Result<(), std::io::Error>>,
 }
 
 impl FronteggMockServer {
     /// Starts a [`FronteggMockServer`], must be started from within a [`tokio::runtime::Runtime`].
-    pub fn start(
+    pub async fn start(
         addr: Option<&SocketAddr>,
         issuer: String,
         encoding_key: EncodingKey,
@@ -237,10 +239,15 @@ impl FronteggMockServer {
             Some(addr) => Cow::Borrowed(addr),
             None => Cow::Owned(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)),
         };
-        let server = axum::Server::bind(&addr)
-            .serve(router.into_make_service_with_connect_info::<SocketAddr>());
-        let base_url = format!("http://{}", server.local_addr());
-        let handle = mz_ore::task::spawn(|| "mzcloud-mock-server", server);
+        let listener = TcpListener::bind(*addr).await.unwrap_or_else(|e| {
+            panic!("error binding to {}: {}", addr, e);
+        });
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        );
+        let handle = mz_ore::task::spawn(|| "mzcloud-mock-server", server.into_future());
 
         Ok(FronteggMockServer {
             base_url,

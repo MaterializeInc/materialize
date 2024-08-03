@@ -90,6 +90,7 @@ async fn test_balancer() {
         Some(Duration::from_millis(100)),
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(

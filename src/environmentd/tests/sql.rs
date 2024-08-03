@@ -47,6 +47,7 @@ use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use serde_json::json;
 use timely::order::PartialOrder;
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
@@ -60,7 +61,7 @@ struct MockHttpServer {
 
 impl MockHttpServer {
     /// Constructs a new mock HTTP server.
-    fn new() -> MockHttpServer {
+    async fn new() -> MockHttpServer {
         let (conn_tx, conn_rx) = mpsc::unbounded_channel();
         let router = Router::new().route(
             "/*path",
@@ -74,9 +75,10 @@ impl MockHttpServer {
                     .expect("response channel unexpectedly closed")
             }),
         );
-        let server = axum::Server::bind(&SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-            .serve(router.into_make_service());
-        let addr = server.local_addr();
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let listener = TcpListener::bind(addr).await.expect("can bind");
+        let addr = listener.local_addr().unwrap();
+        let server = axum::serve(listener, router.into_make_service());
         let task = task::spawn(|| "mock_http_server", async {
             server
                 .await
@@ -117,7 +119,7 @@ async fn test_no_block() {
             .await;
 
         println!("test_no_block: starting mock HTTP server");
-        let mut schema_registry_server = MockHttpServer::new();
+        let mut schema_registry_server = MockHttpServer::new().await;
 
         println!("test_no_block: connecting to server");
         let client = server.connect().await.unwrap();
@@ -213,7 +215,7 @@ async fn test_drop_connection_race() {
     info!("test_drop_connection_race: server started");
 
     info!("test_drop_connection_race: starting mock HTTP server");
-    let mut schema_registry_server = MockHttpServer::new();
+    let mut schema_registry_server = MockHttpServer::new().await;
 
     // Construct a source that depends on a schema registry connection.
     let client = server.connect().await.unwrap();

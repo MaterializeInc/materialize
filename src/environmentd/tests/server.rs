@@ -2027,6 +2027,7 @@ async fn test_max_connections_limits() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -4341,6 +4342,7 @@ async fn test_cert_reloading() {
         Some(Duration::from_millis(100)),
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(

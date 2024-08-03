@@ -464,6 +464,7 @@ async fn test_auth_expiry() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -733,6 +734,7 @@ async fn test_auth_base_require_tls_frontegg() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -1602,6 +1604,7 @@ async fn test_auth_admin_non_superuser() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1738,6 +1741,7 @@ async fn test_auth_admin_superuser() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1874,6 +1878,7 @@ async fn test_auth_admin_superuser_revoked() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -2000,6 +2005,7 @@ async fn test_auth_deduplication() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2165,6 +2171,7 @@ async fn test_refresh_task_metrics() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2319,6 +2326,7 @@ async fn test_superuser_can_alter_cluster() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -2436,6 +2444,7 @@ async fn test_refresh_dropped_session() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2607,6 +2616,7 @@ async fn test_refresh_dropped_session_lru() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2790,6 +2800,7 @@ async fn test_transient_auth_failures() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2907,6 +2918,7 @@ async fn test_transient_auth_failure_on_refresh() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
