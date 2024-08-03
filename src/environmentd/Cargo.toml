@@ -31,6 +31,7 @@ humantime = "2.1.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-tls = "0.6.0"
+hyper-util = "0.1.6"
 include_dir = "0.7.3"
 itertools = "0.10.5"
 jsonwebtoken = "9.2.0"

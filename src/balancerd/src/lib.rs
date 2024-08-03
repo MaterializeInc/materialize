@@ -36,6 +36,7 @@ use domain::resolv::StubResolver;
 use futures::stream::BoxStream;
 use futures::TryFutureExt;
 use hyper::StatusCode;
+use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dyncfg::ConfigSet;
@@ -63,6 +64,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
+use tower::Service;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -355,9 +357,12 @@ impl mz_server_core::Server for InternalHttpServer {
 
     fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
         let router = self.router.clone();
+        let service = hyper::service::service_fn(move |req| router.clone().call(req));
+        let conn = TokioIo::new(conn);
+
         Box::pin(async {
-            let http = hyper::server::conn::Http::new();
-            http.serve_connection(conn, router).err_into().await
+            let http = hyper::server::conn::http1::Builder::new();
+            http.serve_connection(conn, service).err_into().await
         })
     }
 }
