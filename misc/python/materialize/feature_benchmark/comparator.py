@@ -33,7 +33,9 @@ class Comparator(Generic[T]):
         if self._unit == MeasurementUnit.UNKNOWN:
             self._unit = unit
         else:
-            assert self._unit == unit
+            assert (
+                self._unit == unit
+            ), f"Mix of units in {self.name}: {self._unit} and {unit}"
 
         self._points.append(point)
 
