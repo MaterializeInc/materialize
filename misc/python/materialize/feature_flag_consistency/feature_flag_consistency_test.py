@@ -157,8 +157,6 @@ def main() -> int:
         description="Test the consistency of different feature flag configurations",
     )
 
-    parser.add_argument("--configuration", type=str, mandatory=True)
-
     parser.add_argument("--mz-host", default="localhost", type=str)
     parser.add_argument("--mz-port", default=6875, type=int)
     parser.add_argument("--mz-system-port", default=6877, type=int)
@@ -179,7 +177,24 @@ def main() -> int:
     )
 
     args = test.parse_output_consistency_input_args(parser)
-    test.set_configuration_pair_by_name(args.configuration)
+    test.flag_configuration_pair = FeatureFlagSystemConfigurationPair(
+        name="as_started",
+        config1=FeatureFlagSystemConfiguration(
+            name=f"as mz_1 running on {args.mz_port}",
+            shortcut="as_mz_1",
+            flags=[FeatureFlagValue("as_started", "mz-1")],
+        ),
+        config2=FeatureFlagSystemConfiguration(
+            name=f"as mz_2 running on {args.mz_port_2}",
+            shortcut="as_mz_2",
+            flags=[FeatureFlagValue("as_started", "mz-2")],
+        ),
+    )
+
+    print(
+        "When running outside of mzcompose, make sure that the instances are started with the desired feature flags!"
+    )
+    time.sleep(5)
 
     try:
         mz_db_user = "materialize"
