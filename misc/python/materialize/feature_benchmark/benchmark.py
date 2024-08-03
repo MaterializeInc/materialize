@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import sys
 from collections.abc import Iterable
 from typing import Any
 
@@ -81,17 +80,39 @@ class Benchmark:
 
     def run(self) -> list[Aggregation]:
         scenario = self.create_scenario_instance()
-        name = scenario.name()
 
         ui.header(
-            f"Running scenario {name}, scale = {scenario.scale()}, N = {scenario.n()}"
+            f"Running scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()}"
         )
 
         # Run the shared() section once for both Mzs under measurement
+        self.run_shared(scenario)
+
+        # Run the init() section once for each Mz
+        self.run_init(scenario)
+
+        i = 0
+        while True:
+            # Run the before() section once for each measurement
+            self.run_before(scenario)
+
+            performance_measurement = self.run_measurement(scenario, i)
+
+            if self.shall_terminate(performance_measurement):
+                return [
+                    self._performance_aggregation,
+                    self._messages_aggregation,
+                    self._memory_mz_aggregation,
+                    self._memory_clusterd_aggregation,
+                ]
+
+            i = i + 1
+
+    def run_shared(self, scenario: Scenario) -> None:
         shared = scenario.shared()
         if self._mz_id == 0 and shared is not None:
             print(
-                f"Running the shared() section for scenario {name} with {self._mz_version} ..."
+                f"Running the shared() section for scenario {scenario.name()} with {self._mz_version} ..."
             )
 
             for shared_item in shared if isinstance(shared, list) else [shared]:
@@ -99,11 +120,11 @@ class Benchmark:
 
             print("shared() done")
 
-        # Run the init() section once for each Mz
+    def run_init(self, scenario: Scenario) -> None:
         init = scenario.init()
         if init is not None:
             print(
-                f"Running the init() section for scenario {name} with {self._mz_version} ..."
+                f"Running the init() section for scenario {scenario.name()} with {self._mz_version} ..."
             )
 
             for init_item in init if isinstance(init, list) else [init]:
@@ -111,102 +132,104 @@ class Benchmark:
 
             print("init() done")
 
-        for i in range(sys.maxsize):
-            # Run the before() section once for each measurement
-            print(
-                f"Running the before() section for scenario {name} with {self._mz_version} ..."
+    def run_before(self, scenario: Scenario) -> None:
+        print(
+            f"Running the before() section for scenario {scenario.name()} with {self._mz_version} ..."
+        )
+        before = scenario.before()
+        if before is not None:
+            for before_item in before if isinstance(before, list) else [before]:
+                before_item.run(executor=self._executor)
+
+    def shall_terminate(self, performance_measurement: Measurement) -> bool:
+        for termination_condition in self._termination_conditions:
+            if termination_condition.terminate(performance_measurement):
+                return True
+
+        return False
+
+    def run_measurement(self, scenario: Scenario, i: int) -> Measurement:
+        print(
+            f"Running the benchmark for scenario {scenario.name()} with {self._mz_version} ..."
+        )
+        # Collect timestamps from any part of the workload being benchmarked
+        timestamps: list[WallclockDuration] = []
+        benchmark = scenario.benchmark()
+        for benchmark_item in benchmark if isinstance(benchmark, list) else [benchmark]:
+            assert isinstance(
+                benchmark_item, MeasurementSource
+            ), f"Benchmark item is of type {benchmark_item.__class__} but not a MeasurementSource"
+            item_timestamps = benchmark_item.run(executor=self._executor)
+            timestamps.extend(item_timestamps)
+
+        self._validate_measurement_timestamps(scenario.name(), timestamps)
+
+        performance_measurement = Measurement(
+            type=MeasurementType.WALLCLOCK,
+            value=timestamps[1].duration - timestamps[0].duration,
+            unit=timestamps[0].unit,
+            notes=f"Unit: {timestamps[0].unit}",
+        )
+
+        self._collect_performance_measurement(i, performance_measurement)
+        self._collect_message_count(i)
+
+        if self._memory_mz_aggregation:
+            self._collect_memory_measurement(
+                i, MeasurementType.MEMORY_MZ, self._memory_mz_aggregation
             )
-            before = scenario.before()
-            if before is not None:
-                for before_item in before if isinstance(before, list) else [before]:
-                    before_item.run(executor=self._executor)
 
-            print(
-                f"Running the benchmark for scenario {name} with {self._mz_version} ..."
-            )
-            # Collect timestamps from any part of the workload being benchmarked
-            timestamps: list[WallclockDuration] = []
-            benchmark = scenario.benchmark()
-            for benchmark_item in (
-                benchmark if isinstance(benchmark, list) else [benchmark]
-            ):
-                assert isinstance(
-                    benchmark_item, MeasurementSource
-                ), f"Benchmark item is of type {benchmark_item.__class__} but not a MeasurementSource"
-                item_timestamps = benchmark_item.run(executor=self._executor)
-                timestamps.extend(item_timestamps)
-
-            assert (
-                len(timestamps) == 2
-            ), f"benchmark() did not return exactly 2 timestamps: scenario: {scenario}, timestamps: {timestamps}"
-            assert (
-                timestamps[0].unit == timestamps[1].unit
-            ), f"benchmark() returned timestamps with different units: scenario: {scenario}, timestamps: {timestamps}"
-            assert timestamps[1].is_equal_or_after(
-                timestamps[0]
-            ), f"Second timestamp reported not greater than first: scenario: {scenario}, timestamps: {timestamps}"
-
-            performance_measurement = Measurement(
-                type=MeasurementType.WALLCLOCK,
-                value=timestamps[1].duration - timestamps[0].duration,
-                unit=timestamps[0].unit,
-                notes=f"Unit: {timestamps[0].unit}",
+        if self._memory_clusterd_aggregation:
+            self._collect_memory_measurement(
+                i, MeasurementType.MEMORY_CLUSTERD, self._memory_clusterd_aggregation
             )
 
-            if not self._filter or not self._filter.filter(performance_measurement):
-                print(f"{i} {performance_measurement}")
-                self._performance_aggregation.append(performance_measurement)
+        return performance_measurement
 
-            messages = self._executor.Messages()
-            if messages is not None:
-                messages_measurement = Measurement(
-                    type=MeasurementType.MESSAGES,
-                    value=messages,
-                    unit=MeasurementUnit.COUNT,
-                )
-                print(f"{i}: {messages_measurement}")
-                self._messages_aggregation.append(messages_measurement)
+    def _validate_measurement_timestamps(
+        self, scenario_name: str, timestamps: list[WallclockDuration]
+    ) -> None:
+        assert (
+            len(timestamps) == 2
+        ), f"benchmark() did not return exactly 2 timestamps: scenario: {scenario_name}, timestamps: {timestamps}"
+        assert (
+            timestamps[0].unit == timestamps[1].unit
+        ), f"benchmark() returned timestamps with different units: scenario: {scenario_name}, timestamps: {timestamps}"
+        assert timestamps[1].is_equal_or_after(
+            timestamps[0]
+        ), f"Second timestamp reported not greater than first: scenario: {scenario_name}, timestamps: {timestamps}"
 
-            if self._memory_mz_aggregation:
-                memory_mz_measurement = Measurement(
-                    type=MeasurementType.MEMORY_MZ,
-                    value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
-                    unit=MeasurementUnit.MEGABYTE,
-                )
+    def _collect_performance_measurement(
+        self, i: int, performance_measurement: Measurement
+    ) -> None:
+        if not self._filter or not self._filter.filter(performance_measurement):
+            print(f"{i} {performance_measurement}")
+            self._performance_aggregation.append(performance_measurement)
 
-                if memory_mz_measurement.value > 0:
-                    if not self._filter or not self._filter.filter(
-                        memory_mz_measurement
-                    ):
-                        print(f"{i} {memory_mz_measurement}")
-                        self._memory_mz_aggregation.append(memory_mz_measurement)
+    def _collect_message_count(self, i: int) -> None:
+        messages = self._executor.Messages()
+        if messages is not None:
+            messages_measurement = Measurement(
+                type=MeasurementType.MESSAGES,
+                value=messages,
+                unit=MeasurementUnit.COUNT,
+            )
+            print(f"{i}: {messages_measurement}")
+            self._messages_aggregation.append(messages_measurement)
 
-            if self._memory_clusterd_aggregation:
-                memory_clusterd_measurement = Measurement(
-                    type=MeasurementType.MEMORY_CLUSTERD,
-                    value=self._executor.DockerMemClusterd() / 2**20,  # Convert to Mb
-                    unit=MeasurementUnit.MEGABYTE,
-                )
+    def _collect_memory_measurement(
+        self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
+    ) -> None:
+        memory_measurement = Measurement(
+            type=memory_measurement_type,
+            value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
+            unit=MeasurementUnit.MEGABYTE,
+        )
 
-                if memory_clusterd_measurement.value > 0:
-                    if not self._filter or not self._filter.filter(
-                        memory_clusterd_measurement
-                    ):
-                        print(f"{i} {memory_clusterd_measurement}")
-                        self._memory_clusterd_aggregation.append(
-                            memory_clusterd_measurement
-                        )
-
-            for termination_condition in self._termination_conditions:
-                if termination_condition.terminate(performance_measurement):
-                    return [
-                        self._performance_aggregation,
-                        self._messages_aggregation,
-                        self._memory_mz_aggregation,
-                        self._memory_clusterd_aggregation,
-                    ]
-
-        assert False, "unreachable"
+        if memory_measurement.value > 0:
+            if not self._filter or not self._filter.filter(memory_measurement):
+                print(f"{i} {memory_measurement}")
+                aggregation.append(memory_measurement)
 
 
 class Report:
