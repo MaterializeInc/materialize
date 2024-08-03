@@ -19,7 +19,7 @@ FEATURE_BENCHMARK_SCENARIOS_DIR = FEATURE_BENCHMARK_FRAMEWORK_DIR / "scenarios"
 # Consider increasing the #FEATURE_BENCHMARK_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {}
 SHA256_OF_FRAMEWORK["*"] = (
-    "1b4cb4e8d87f11e471847669a445067775afe386634c1bfb39a13f73b5772019"
+    "e843d1468fb74a4fbc67fd9c093d6ba82de4eda46a82a77996eb1b008ae59b9f"
 )
 
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
@@ -43,5 +43,5 @@ SHA256_BY_SCENARIO_FILE["skew.py"] = (
     "bf60802205fc51ebf94fb008bbdb6b2ccce3c9ed88a6188fa7f090f2c84b120f"
 )
 SHA256_BY_SCENARIO_FILE["subscribe.py"] = (
-    "732c941a33645fc0942afef252e373f36395e119edbdb4f59008eeaebbea6abc"
+    "951cf7f702b511f12a8f506c831c7bdeae5c5735d1b70cb478f12bde72b23197"
 )
