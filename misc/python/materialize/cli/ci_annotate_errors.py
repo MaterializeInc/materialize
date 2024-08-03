@@ -350,7 +350,9 @@ and finds associated open GitHub issues in Materialize repository.""",
             was_successful=has_successful_buildkite_status()
         )
 
-        return_code = annotate_logged_errors(args.log_files, test_analytics)
+        number_of_unknown_errors = annotate_logged_errors(
+            args.log_files, test_analytics
+        )
     except Exception as e:
         test_analytics.on_upload_failed(e)
         # Don't fail
@@ -365,7 +367,7 @@ and finds associated open GitHub issues in Materialize repository.""",
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
 
-    return return_code
+    return 1 if number_of_unknown_errors > 0 else 0
 
 
 def annotate_errors(
