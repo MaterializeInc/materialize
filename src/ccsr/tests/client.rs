@@ -10,7 +10,7 @@
 use std::env;
 
 use hyper::server::conn::AddrIncoming;
-use hyper::{service, Body, Response, Server, StatusCode};
+use hyper::{service, Response, Server, StatusCode};
 use mz_ccsr::tls::Identity;
 use mz_ccsr::{
     Client, CompatibilityLevel, DeleteError, GetByIdError, GetBySubjectError,
@@ -397,7 +397,7 @@ fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, a
                 Ok::<_, hyper::Error>(service::service_fn(move |_req| async move {
                     Response::builder()
                         .status(status_code)
-                        .body(Body::from(body))
+                        .body(body.to_string())
                 }))
             }));
         mz_ore::task::spawn(|| "start_server", async {

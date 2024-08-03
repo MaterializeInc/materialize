@@ -35,7 +35,7 @@ use tonic::body::BoxBody;
 use tonic::codegen::InterceptedService;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
 use tonic::service::Interceptor;
-use tonic::transport::{Body, Channel, Endpoint, NamedService, Server};
+use tonic::transport::{Channel, Endpoint, NamedService, Server};
 use tonic::{IntoStreamingRequest, Request, Response, Status, Streaming};
 use tower::Service;
 use tracing::{debug, error, info};
@@ -263,7 +263,7 @@ where
     ) -> impl Future<Output = Result<(), anyhow::Error>>
     where
         S: Service<
-                http::Request<Body>,
+                http::Request<BoxBody>,
                 Response = http::Response<BoxBody>,
                 Error = std::convert::Infallible,
             > + NamedService

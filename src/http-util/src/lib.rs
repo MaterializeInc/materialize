@@ -175,7 +175,6 @@ where
 mod tests {
     use http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN};
     use http::{HeaderValue, Method, Request, Response};
-    use hyper::Body;
     use tower::{Service, ServiceBuilder, ServiceExt};
     use tower_http::cors::CorsLayer;
 
@@ -184,11 +183,8 @@ mod tests {
         async fn test_request(cors: &CorsLayer, origin: &HeaderValue) -> Option<HeaderValue> {
             let mut service = ServiceBuilder::new()
                 .layer(cors)
-                .service_fn(|_| async { Ok::<_, anyhow::Error>(Response::new(Body::empty())) });
-            let request = Request::builder()
-                .header(ORIGIN, origin)
-                .body(Body::empty())
-                .unwrap();
+                .service_fn(|_| async { Ok::<_, anyhow::Error>(Response::new("")) });
+            let request = Request::builder().header(ORIGIN, origin).body("").unwrap();
             let response = service.ready().await.unwrap().call(request).await.unwrap();
             response.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).cloned()
         }

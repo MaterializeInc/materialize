@@ -4934,7 +4934,6 @@ dependencies = [
  "futures",
  "headers",
  "http 1.1.0",
- "http-body 0.4.5",
  "humantime",
  "hyper 1.4.1",
  "hyper-openssl",

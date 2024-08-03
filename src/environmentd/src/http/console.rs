@@ -11,14 +11,14 @@
 
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use http::header::HOST;
 use http::HeaderValue;
 use hyper::client::HttpConnector;
-use hyper::Uri;
-use hyper::{Body, Client};
+use hyper::{Client, Uri};
 use hyper_tls::HttpsConnector;
 
 pub(crate) struct ConsoleProxyConfig {

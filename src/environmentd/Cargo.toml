@@ -27,7 +27,6 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 headers = "0.4.0"
 http = "1.1.0"
-http-body = "0.4.5"
 humantime = "2.1.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"

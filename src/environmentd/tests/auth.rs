@@ -20,10 +20,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use headers::Authorization;
+use hyper::body::Incoming;
 use hyper::client::HttpConnector;
 use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use hyper::http::uri::Scheme;
-use hyper::{body, Body, Request, Response, StatusCode, Uri};
+use hyper::{body, Request, Response, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
@@ -232,9 +233,9 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     configure: &Box<
                         dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
                     >,
-                ) -> hyper::Result<Response<Body>> {
+                ) -> hyper::Result<Response<Incoming>> {
                     hyper::Client::builder()
-                        .build::<_, Body>(make_http_tls(configure))
+                        .build(make_http_tls(configure))
                         .request({
                             let mut req = Request::post(uri);
                             for (k, v) in headers.iter() {
@@ -244,14 +245,13 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                                 "Content-Type",
                                 HeaderValue::from_static("application/json"),
                             );
-                            req.body(Body::from(json!({ "query": query }).to_string()))
-                                .unwrap()
+                            req.body(json!({ "query": query }).to_string()).unwrap()
                         })
                         .await
                 }
 
                 async fn assert_success_response(
-                    res: hyper::Result<Response<Body>>,
+                    res: hyper::Result<Response<Incoming>>,
                     expected_rows: Vec<Vec<String>>,
                 ) {
                     #[derive(Deserialize)]
