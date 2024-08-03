@@ -15,6 +15,7 @@ use axum::http::StatusCode;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
+use hyper_util::rt::TokioIo;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute::server::ComputeInstanceContext;
@@ -37,7 +38,8 @@ use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use once_cell::sync::Lazy;
-use tracing::info;
+use tower::Service;
+use tracing::{error, info};
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -183,47 +185,75 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.internal_http_listen_addr
         );
         let listener = Listener::bind(args.internal_http_listen_addr).await?;
-        axum::Server::builder(listener).serve(
-            mz_prof_http::router(&BUILD_INFO)
-                .route(
-                    "/api/livez",
-                    routing::get(mz_http_util::handle_liveness_check),
-                )
-                .route(
-                    "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&metrics_registry).await
-                    }),
-                )
-                .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
-                .route(
-                    "/api/opentelemetry/config",
-                    routing::put({
-                        move |_: axum::Json<DynamicFilterTarget>| async {
-                            (
-                                StatusCode::BAD_REQUEST,
-                                "This endpoint has been replaced. \
+        let mut make_service = mz_prof_http::router(&BUILD_INFO)
+            .route(
+                "/api/livez",
+                routing::get(mz_http_util::handle_liveness_check),
+            )
+            .route(
+                "/metrics",
+                routing::get(move || async move {
+                    mz_http_util::handle_prometheus(&metrics_registry).await
+                }),
+            )
+            .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
+            .route(
+                "/api/opentelemetry/config",
+                routing::put({
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
                                 Use the `opentelemetry_filter` system variable."
-                                    .to_string(),
-                            )
-                        }
-                    }),
-                )
-                .route(
-                    "/api/stderr/config",
-                    routing::put({
-                        move |_: axum::Json<DynamicFilterTarget>| async {
-                            (
-                                StatusCode::BAD_REQUEST,
-                                "This endpoint has been replaced. \
+                                .to_string(),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/api/stderr/config",
+                routing::put({
+                    move |_: axum::Json<DynamicFilterTarget>| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "This endpoint has been replaced. \
                                 Use the `log_filter` system variable."
-                                    .to_string(),
-                            )
+                                .to_string(),
+                        )
+                    }
+                }),
+            )
+            .into_make_service();
+
+        // Once https://github.com/tokio-rs/axum/pull/2479 lands, this can become just a call to
+        // `axum::serve`.
+        async move {
+            loop {
+                let (conn, remote_addr) = match listener.accept().await {
+                    Ok(peer) => peer,
+                    Err(error) => {
+                        error!("internal_http connection failed: {error:#}");
+                        break;
+                    }
+                };
+
+                let tower_service = make_service.call(&conn).await.expect("infallible");
+                let hyper_service =
+                    hyper::service::service_fn(move |req| tower_service.clone().call(req));
+
+                mz_ore::task::spawn(
+                    || format!("clusterd_internal_http_server:{remote_addr}"),
+                    async move {
+                        if let Err(error) = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(TokioIo::new(conn), hyper_service)
+                            .await
+                        {
+                            error!("failed to serve internal_http connection: {error:#}");
                         }
-                    }),
-                )
-                .into_make_service(),
-        )
+                    },
+                );
+            }
+        }
     });
 
     let pubsub_caller_id = std::env::var("HOSTNAME")

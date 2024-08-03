@@ -8,15 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
+use std::net::Ipv4Addr;
 
-use hyper::server::conn::AddrIncoming;
-use hyper::{service, Response, Server, StatusCode};
+use hyper::{service, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use mz_ccsr::tls::Identity;
 use mz_ccsr::{
     Client, CompatibilityLevel, DeleteError, GetByIdError, GetBySubjectError,
     GetSubjectConfigError, PublishError, SchemaReference, SchemaType,
 };
 use once_cell::sync::Lazy;
+use tokio::net::TcpListener;
 
 pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
     Lazy::new(|| match env::var("SCHEMA_REGISTRY_URL") {
@@ -305,7 +307,8 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     let client_graceful = start_server(
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"{ "error_code": 50001, "message": "overloaded; try again later" }"#,
-    )?;
+    )
+    .await?;
 
     match client_graceful
         .publish_schema("foo", "bar", SchemaType::Avro, &[])
@@ -348,7 +351,8 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     let client_crash = start_server(
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"panic! an exception occured!"#,
-    )?;
+    )
+    .await?;
 
     match client_crash
         .publish_schema("foo", "bar", SchemaType::Avro, &[])
@@ -388,26 +392,32 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, anyhow::Error> {
-    let addr = {
-        let incoming = AddrIncoming::bind(&([127, 0, 0, 1], 0).into()).unwrap();
-        let addr = incoming.local_addr();
-        let server =
-            Server::builder(incoming).serve(service::make_service_fn(move |_conn| async move {
-                Ok::<_, hyper::Error>(service::service_fn(move |_req| async move {
+async fn start_server(
+    status_code: StatusCode,
+    body: &'static str,
+) -> Result<Client, anyhow::Error> {
+    let addr = (Ipv4Addr::LOCALHOST, 0);
+    let listener = TcpListener::bind(addr).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    mz_ore::task::spawn(|| "start_server", async move {
+        loop {
+            let (conn, remote_addr) = listener.accept().await.unwrap();
+            mz_ore::task::spawn(|| format!("start_server:{remote_addr}"), async move {
+                let service = service::service_fn(move |_req| async move {
                     Response::builder()
                         .status(status_code)
                         .body(body.to_string())
-                }))
-            }));
-        mz_ore::task::spawn(|| "start_server", async {
-            match server.await {
-                Ok(()) => (),
-                Err(err) => eprintln!("server error: {}", err),
-            }
-        });
-        addr
-    };
+                });
+                if let Err(error) = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(conn), service)
+                    .await
+                {
+                    eprintln!("error handling client connection: {error}");
+                }
+            });
+        }
+    });
 
     let url: reqwest::Url = format!("http://{}", addr).parse().unwrap();
     mz_ccsr::ClientConfig::new(url).build()

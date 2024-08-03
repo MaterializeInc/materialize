@@ -4535,6 +4535,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "hyper 1.4.1",
+ "hyper-util",
  "mz-build-tools",
  "mz-ore",
  "mz-tls-util",
@@ -4665,6 +4666,8 @@ dependencies = [
  "clap",
  "fail",
  "futures",
+ "hyper 1.4.1",
+ "hyper-util",
  "mz-alloc",
  "mz-alloc-default",
  "mz-build-info",
@@ -4688,6 +4691,7 @@ dependencies = [
  "once_cell",
  "timely",
  "tokio",
+ "tower",
  "tracing",
  "workspace-hack",
 ]
