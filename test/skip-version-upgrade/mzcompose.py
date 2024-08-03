@@ -76,7 +76,7 @@ def workflow_test_version_skips(c: Composition) -> None:
         # Note: We actually want to retry this 0 times, but we need to retry at least once so a
         # UIError is raised instead of an AssertionError
         c.up("materialized", max_tries=1)
-        assert False, "skipping versions should fail"
+        raise RuntimeError("skipping versions should fail")
     except UIError:
         # Noting useful in the error message to assert. Ideally we'd check that the error is due to
         # skipping versions.

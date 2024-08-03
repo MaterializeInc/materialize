@@ -260,12 +260,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         executor = executor_class(composition=c)
 
-        if args.execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
+        execution_mode = args.execution_mode
+
+        if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
             setup(c)
             scenario = scenario_class(checks=checks, executor=executor, seed=args.seed)
             scenario.run()
             teardown(c)
-        elif args.execution_mode is ExecutionMode.ONEATATIME:
+        elif execution_mode is ExecutionMode.ONEATATIME:
             for check in checks:
                 print(f"Running individual check {check}, scenario {scenario_class}")
                 c.override_current_testcase_name(
@@ -278,4 +280,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 scenario.run()
                 teardown(c)
         else:
-            assert False
+            raise RuntimeError(f"Unsupported execution mode: {execution_mode}")

@@ -70,7 +70,7 @@ class CreateReplica(Action):
             elif size_type is ReplicaSizeType.Both:
                 this_replica.size = f"{size}-{size}"
             else:
-                assert False
+                raise RuntimeError(f"Unsupported size type: {size_type}")
 
             if this_replica.size == "1-1":
                 this_replica.size = "1"
@@ -80,7 +80,7 @@ class CreateReplica(Action):
             self.new_replica = False
             self.replica = existing_replicas[0]
         else:
-            assert False
+            raise RuntimeError("More than one replica exists")
 
         super().__init__(capabilities)
 

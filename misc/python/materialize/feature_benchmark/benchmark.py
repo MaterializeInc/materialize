@@ -261,4 +261,4 @@ class Report:
             if comparison.name == scenario_name:
                 return comparison.get_scenario_version()
 
-        assert False, f"Scenario {scenario_name} not found!"
+        raise RuntimeError(f"Scenario {scenario_name} not found!")

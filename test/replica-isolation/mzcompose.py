@@ -54,10 +54,10 @@ class AllowCompactionCheck:
         self.satisfied = False
 
     def find_ids(self, c: Composition) -> None:
-        assert False
+        raise NotImplementedError
 
     def print_error(self) -> None:
-        assert False
+        raise NotImplementedError
 
     def check_log(self, c: Composition) -> None:
         self.find_ids(c)
@@ -99,7 +99,7 @@ class AllowCompactionCheck:
             return "System(" + iid[1:] + ")"
         if iid.startswith("u"):
             return "User(" + iid[1:] + ")"
-        assert False
+        raise RuntimeError(f"Unexpected iid: {iid}")
 
     @staticmethod
     def all_checks(replica: str, host: str) -> list["AllowCompactionCheck"]:

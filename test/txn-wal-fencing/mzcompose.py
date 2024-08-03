@@ -143,7 +143,7 @@ def execute_operation(
                 # Container died before the SQL connection was established
                 return None
             else:
-                assert False, f"unexpected exception: {e}"
+                raise RuntimeError(f"unexpected exception: {e}")
 
         # No error, so we assume the INSERT successfully committed
         return SuccessfulCommit(

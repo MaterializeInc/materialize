@@ -24,7 +24,7 @@ class Action:
         self.phase = None
 
     def execute(self, e: Executor) -> None:
-        assert False
+        raise NotImplementedError
 
     def join(self, e: Executor) -> None:
         print(f"Action {self} does not implement join()")

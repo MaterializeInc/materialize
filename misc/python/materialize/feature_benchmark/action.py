@@ -31,7 +31,7 @@ class Action:
         self,
         executor: Executor | None = None,
     ) -> None:
-        assert False
+        raise NotImplementedError
 
 
 class LambdaAction(Action):

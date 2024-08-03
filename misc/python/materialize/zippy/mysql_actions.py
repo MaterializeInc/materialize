@@ -90,7 +90,7 @@ class CreateMySqlTable(Action):
             self.new_mysql_table = False
             self.mysql_table = existing_mysql_tables[0]
         else:
-            assert False
+            raise RuntimeError("More than one table exists")
 
         super().__init__(capabilities)
 

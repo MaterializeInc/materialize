@@ -112,7 +112,7 @@ def _run_test_case(c: Composition, path: Path):
         elif test_file.suffix == ".json":
             _run_destination_tester(c, test_file)
         elif test_file.name != "00-README":
-            assert False, f"unexpected test file: {test_file}"
+            raise RuntimeError(f"unexpected test file: {test_file}")
 
 
 # Run the Fivetran Destination Tester with a single file.

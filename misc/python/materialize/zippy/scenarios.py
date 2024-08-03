@@ -79,7 +79,7 @@ class Scenario:
         ]
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
-        assert False
+        raise RuntimeError
 
     def finalization(self) -> list[ActionOrFactory]:
         return [

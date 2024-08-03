@@ -26,7 +26,7 @@ class K8sStatefulSet(K8sResource):
         self.stateful_set = self.generate_stateful_set()
 
     def generate_stateful_set(self) -> V1StatefulSet:
-        assert False
+        raise NotImplementedError
 
     def kind(self) -> str:
         return "statefulset"

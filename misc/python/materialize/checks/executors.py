@@ -32,13 +32,13 @@ class Executor:
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> None:
-        assert False
+        raise NotImplementedError
 
     def mzcompose_composition(self) -> Composition:
-        assert False
+        raise NotImplementedError
 
     def cloudtest_application(self) -> MaterializeApplication:
-        assert False
+        raise NotImplementedError
 
     def join(self, handle: Any) -> None:
         pass

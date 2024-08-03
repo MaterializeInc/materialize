@@ -690,7 +690,7 @@ def workflow_basic(c: Composition) -> None:
                 break
             time.sleep(1)
         else:
-            assert False, "mz_old didn't stop running within 10 seconds"
+            raise RuntimeError("mz_old didn't stop running within 10 seconds")
 
         for i in range(10):
             try:
@@ -702,7 +702,7 @@ def workflow_basic(c: Composition) -> None:
                 pass
             time.sleep(1)
         else:
-            assert False, "mz_new didn't come up within 10 seconds"
+            raise RuntimeError("mz_new didn't come up within 10 seconds")
 
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 

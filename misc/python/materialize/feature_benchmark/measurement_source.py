@@ -84,7 +84,7 @@ class Td(MeasurementSource):
                     assert "rows didn't match" in lines[id + 1]
                     matched_line_id = id + 2
                 else:
-                    assert False
+                    raise RuntimeError("row match not found")
 
         if not matched_line_id:
             # Marker /* ... */ not found

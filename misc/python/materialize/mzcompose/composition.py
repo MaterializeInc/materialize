@@ -1272,7 +1272,7 @@ class Composition:
         elif "GiB" in mem_str:
             mem_float = mem_float * 10**9
         else:
-            assert False, f"Unable to parse {mem_str}"
+            raise RuntimeError(f"Unable to parse {mem_str}")
         return round(mem_float)
 
     def testdrive(

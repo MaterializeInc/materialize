@@ -35,7 +35,7 @@ class Aggregation:
         return self._unit
 
     def func(self) -> Callable:
-        assert False
+        raise NotImplementedError
 
 
 class MinAggregation(Aggregation):
