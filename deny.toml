@@ -225,6 +225,7 @@ wrappers = [
 ]
 
 [advisories]
+version = 2
 ignore = [
     # Consider switching `yaml-rust` to the actively maintained `yaml-rust2` fork of the original project
     "RUSTSEC-2024-0320",
