@@ -6220,6 +6220,7 @@ dependencies = [
  "crossbeam-channel",
  "futures",
  "http 1.1.0",
+ "hyper-util",
  "itertools 0.10.5",
  "mz-aws-secrets-controller",
  "mz-build-info",

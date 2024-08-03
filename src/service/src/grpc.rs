@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::uri::PathAndQuery;
+use hyper_util::rt::TokioIo;
 use mz_ore::metric;
 use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
 use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
@@ -34,8 +35,9 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::body::BoxBody;
 use tonic::codegen::InterceptedService;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
+use tonic::server::NamedService;
 use tonic::service::Interceptor;
-use tonic::transport::{Channel, Endpoint, NamedService, Server};
+use tonic::transport::{Channel, Endpoint, Server};
 use tonic::{IntoStreamingRequest, Request, Response, Status, Streaming};
 use tower::Service;
 use tracing::{debug, error, info};
@@ -116,7 +118,8 @@ where
                 let addr = addr.clone();
                 Endpoint::from_static("http://localhost") // URI is ignored
                     .connect_with_connector(tower::service_fn(move |_| {
-                        UnixStream::connect(addr.clone())
+                        let addr = addr.clone();
+                        async { UnixStream::connect(addr).await.map(TokioIo::new) }
                     }))
                     .await?
             }
