@@ -203,8 +203,10 @@ class KafkaFormats(Check):
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
+                $ set-regex match=testdrive-format-bytes-\\d+ replacement=<TOPIC>
+
                 > SHOW CREATE SOURCE format_bytes1;
-                materialize.public.format_bytes1 "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_bytes1\\" IN CLUSTER \\"kafka_formats\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-bytes-1') KEY FORMAT BYTES VALUE FORMAT BYTES ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_bytes1_progress\\""
+                materialize.public.format_bytes1 "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_bytes1\\" IN CLUSTER \\"kafka_formats\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = '<TOPIC>') KEY FORMAT BYTES VALUE FORMAT BYTES ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_bytes1_progress\\""
                 """
             )
         )
