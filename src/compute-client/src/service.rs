@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// Tonic generates code that calls clone on an Arc. Allow this here.
+// Tonic generates code that violates clippy lints.
 // TODO: Remove this once tonic does not produce this code anymore.
-#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::as_conversions, clippy::clone_on_ref_ptr)]
 
 //! Compute layer client and server.
 
