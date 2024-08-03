@@ -16,14 +16,15 @@ use std::time::Duration;
 
 use axum::extract::Path;
 use axum::extract::State;
-use axum::headers::authorization::Bearer;
-use axum::headers::Authorization;
 use axum::http::{Request, StatusCode};
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
-use axum::{Json, Router, TypedHeader};
+use axum::{Json, Router};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, TokenData};

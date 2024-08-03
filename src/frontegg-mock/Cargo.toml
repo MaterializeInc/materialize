@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 axum = "0.7.5"
+axum-extra = { version = "0.9.3", features = ["typed-header"] }
 base64 = "0.22.0"
 chrono = { version = "0.4.35", default-features = false, features = ["serde"] }
 clap = { version = "3.2.24", features = ["derive", "env"] }
