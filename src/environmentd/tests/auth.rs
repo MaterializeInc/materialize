@@ -20,11 +20,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use headers::Authorization;
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::client::HttpConnector;
 use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use hyper::http::uri::Scheme;
-use hyper::{body, Request, Response, StatusCode, Uri};
+use hyper::{Request, Response, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
@@ -262,7 +263,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     struct Response {
                         results: Vec<Result>,
                     }
-                    let body = body::to_bytes(res.unwrap().into_body()).await.unwrap();
+                    let body = res.unwrap().into_body().collect().await.unwrap().to_bytes();
                     let res: Response = serde_json::from_slice(&body).unwrap();
                     assert_eq!(res.results[0].rows, expected_rows)
                 }
@@ -305,7 +306,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     Assert::Err(check) => {
                         let (code, message) = match res {
                             Ok(mut res) => {
-                                let body = body::to_bytes(res.body_mut()).await.unwrap();
+                                let body = res.body_mut().collect().await.unwrap().to_bytes();
                                 let body = String::from_utf8_lossy(&body[..]).into_owned();
                                 (Some(res.status()), body)
                             }
