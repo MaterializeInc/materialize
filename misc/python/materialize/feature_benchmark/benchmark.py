@@ -225,9 +225,9 @@ class Report:
         output_lines = []
 
         output_lines.append(
-            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'UNIT':^6} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is:"
+            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'UNIT':^6} | {'THRESHOLD':^10} | {'Regression?':^13} | 'THIS' is"
         )
-        output_lines.append("-" * 150)
+        output_lines.append("-" * 152)
 
         for comparison in self._comparisons:
             if not comparison.has_values():

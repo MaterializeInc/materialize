@@ -116,28 +116,30 @@ class RelativeThresholdComparator(Comparator[float | None]):
 
         ratio = self.ratio()
         if ratio is None:
-            return "     N/A"
+            return "not comparable"
         if ratio >= 2:
             return with_conditional_formatting(
-                f"{ratio:4.1f} TIMES {deterioration}", COLOR_BAD, condition=use_colors
+                f"worse:  {ratio:4.1f} TIMES {deterioration}",
+                COLOR_BAD,
+                condition=use_colors,
             )
         elif ratio > 1:
             return with_conditional_formatting(
-                f"{-(1-ratio)*100:4.1f} pct   {deterioration}",
+                f"worse:  {-(1-ratio)*100:4.1f}% {deterioration}",
                 COLOR_BAD,
                 condition=use_colors,
             )
         elif ratio == 1:
-            return "           same"
+            return "the same"
         elif ratio > 0.5:
             return with_conditional_formatting(
-                f"{(1-ratio)*100:4.1f} pct   {improvement}",
+                f"better: {(1-ratio)*100:4.1f}% {improvement}",
                 COLOR_GOOD,
                 condition=use_colors,
             )
         else:
             return with_conditional_formatting(
-                f"{(1/ratio):4.1f} times {improvement}",
+                f"better: {(1/ratio):4.1f} times {improvement}",
                 COLOR_GOOD,
                 condition=use_colors,
             )
