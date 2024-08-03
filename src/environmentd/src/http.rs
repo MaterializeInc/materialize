@@ -25,7 +25,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{routing, Extension, Json, Router};
@@ -33,7 +33,7 @@ use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use http::{Method, Request, StatusCode};
+use http::{Method, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::session::{Session, SessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
@@ -406,7 +406,7 @@ impl InternalHttpServer {
     }
 }
 
-async fn internal_http_auth<B>(mut req: Request<B>, next: Next<B>) -> impl IntoResponse {
+async fn internal_http_auth(mut req: Request, next: Next) -> impl IntoResponse {
     let user_name = req
         .headers()
         .get("x-materialize-user")
@@ -610,9 +610,9 @@ impl IntoResponse for AuthError {
     }
 }
 
-async fn http_auth<B>(
-    mut req: Request<B>,
-    next: Next<B>,
+async fn http_auth(
+    mut req: Request,
+    next: Next,
     tls_mode: TlsMode,
     frontegg: Option<&FronteggAuthentication>,
 ) -> impl IntoResponse {

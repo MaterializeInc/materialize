@@ -14,9 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::extract::Path;
-use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::extract::{Path, Request, State};
+use axum::http::StatusCode;
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
@@ -354,10 +353,10 @@ fn get_user_roles(
         .collect()
 }
 
-async fn latency_middleware<B>(
+async fn latency_middleware(
     State(context): State<Arc<Context>>,
-    request: Request<B>,
-    next: Next<B>,
+    request: Request,
+    next: Next,
 ) -> impl IntoResponse {
     // In some cases we want to add latency to test de-duplicating results.
     if let Some(latency) = context.latency {
@@ -366,10 +365,10 @@ async fn latency_middleware<B>(
     next.run(request).await
 }
 
-async fn role_update_middleware<B>(
+async fn role_update_middleware(
     State(context): State<Arc<Context>>,
-    request: Request<B>,
-    next: Next<B>,
+    request: Request,
+    next: Next,
 ) -> impl IntoResponse {
     {
         let mut role_updates_rx = context.role_updates_rx.lock().unwrap();
