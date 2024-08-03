@@ -123,7 +123,7 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
             assert ss.metadata is not None
             if ss.metadata.name == ss_name:
                 return (compute_pod, ss)
-        assert False
+        raise RuntimeError(f"No data found for {ss_name}")
 
     populate(mz, 2)
 

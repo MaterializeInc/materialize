@@ -282,7 +282,7 @@ def validate_and_adjust_targets(
     args: argparse.Namespace, regression_against_target: str
 ) -> None:
     if args.materialize_url is not None and "remote" not in args.target:
-        assert False, "--materialize_url requires --target=remote"
+        raise RuntimeError("--materialize_url requires --target=remote")
 
     if len(args.target) == 0:
         args.target = ["HEAD"]

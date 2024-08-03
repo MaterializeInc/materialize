@@ -71,7 +71,7 @@ class Scenario:
         return self._checks
 
     def actions(self) -> list[Action]:
-        assert False
+        raise NotImplementedError
 
     def base_version(self) -> MzVersion:
         return self._base_version

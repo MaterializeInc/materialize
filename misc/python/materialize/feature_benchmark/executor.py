@@ -167,8 +167,7 @@ class MzCloud(Executor):
         ]
 
     def RestartMzClusterd(self) -> None:
-        # We can't restart the cloud, so complain.
-        assert False
+        assert False, "We can't restart the cloud"
 
     def Reset(self) -> None:
         print("resetting")
@@ -195,4 +194,4 @@ class MzCloud(Executor):
 
     def Kgen(self, topic: str, args: list[str]) -> Any:
         # TODO: Implement
-        assert False
+        raise NotImplementedError

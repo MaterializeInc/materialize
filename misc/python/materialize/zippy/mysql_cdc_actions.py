@@ -58,7 +58,7 @@ class CreateMySqlCdcTable(Action):
 
             self.mysql_cdc_table = existing_mysql_cdc_tables[0]
         else:
-            assert False
+            raise RuntimeError("More than one CDC table exists")
 
         super().__init__(capabilities)
 

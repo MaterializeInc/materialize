@@ -67,10 +67,10 @@ class K8sResource:
         return self.selected_namespace
 
     def kind(self) -> str:
-        assert False
+        raise NotImplementedError
 
     def create(self) -> None:
-        assert False
+        raise NotImplementedError
 
     def image(
         self,

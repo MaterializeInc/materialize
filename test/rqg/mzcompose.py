@@ -53,7 +53,7 @@ class Dataset(Enum):
             case Dataset.STAR_SCHEMA:
                 return ["/workdir/datasets/star_schema.sql"]
             case _:
-                assert False
+                raise RuntimeError(f"Not handled: {self}")
 
 
 class ReferenceImplementation(Enum):
@@ -67,7 +67,7 @@ class ReferenceImplementation(Enum):
             case ReferenceImplementation.POSTGRES:
                 return "dbname=postgres;host=postgres;user=postgres;password=postgres"
             case _:
-                assert False
+                raise RuntimeError("Unsupported case")
 
 
 @dataclass
@@ -271,7 +271,9 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
         case None:
             pass
         case _:
-            assert False
+            raise RuntimeError(
+                f"Unsupported reference implementation: {reference_impl}"
+            )
 
     dsn1 = "dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875"
     dsn2 = f"dbi:Pg:{reference_impl.dsn()}" if reference_impl else None

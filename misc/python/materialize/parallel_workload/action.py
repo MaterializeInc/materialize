@@ -96,18 +96,19 @@ def ws_connect(ws: websocket.WebSocket, host, port, user: str) -> tuple[int, int
     ws_ready = False
     while True:
         result = json.loads(ws.recv())
-        if result["type"] == "ParameterStatus":
+        result_type = result["type"]
+        if result_type == "ParameterStatus":
             continue
-        elif result["type"] == "BackendKeyData":
+        elif result_type == "BackendKeyData":
             ws_conn_id = result["payload"]["conn_id"]
             ws_secret_key = result["payload"]["secret_key"]
-        elif result["type"] == "ReadyForQuery":
+        elif result_type == "ReadyForQuery":
             ws_ready = True
-        elif result["type"] == "Notice":
+        elif result_type == "Notice":
             assert "connected to Materialize" in result["payload"]["message"], result
             break
         else:
-            assert False, result
+            raise RuntimeError(f"Unexpected result type: {result_type} in: {result}")
     assert ws_ready
     return (ws_conn_id, ws_secret_key)
 

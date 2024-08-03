@@ -161,7 +161,10 @@ class Executor:
                         websocket._exceptions.WebSocketConnectionClosedException
                     ) as e:
                         raise QueryError(str(e), query)
-                    if result["type"] in (
+
+                    result_type = result["type"]
+
+                    if result_type in (
                         "CommandStarting",
                         "CommandComplete",
                         "Notice",
@@ -170,18 +173,20 @@ class Executor:
                         "ParameterStatus",
                     ):
                         continue
-                    elif result["type"] == "Error":
+                    elif result_type == "Error":
                         error = QueryError(
                             f"""WS {result["payload"]["code"]}: {result["payload"]["message"]}
 {result["payload"].get("details", "")}""",
                             query,
                         )
-                    elif result["type"] == "ReadyForQuery":
+                    elif result_type == "ReadyForQuery":
                         if error:
                             raise error
                         break
                     else:
-                        assert False, result
+                        raise RuntimeError(
+                            f"Unexpected result type: {result_type} in: {result}"
+                        )
 
             if fetch and not use_ws:
                 self.cur.fetchall()

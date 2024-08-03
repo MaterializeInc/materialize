@@ -72,13 +72,13 @@ class Comparator(Generic[T]):
         return self.version
 
     def is_regression(self, threshold: float | None = None) -> bool:
-        assert False
+        raise RuntimeError
 
     def is_strong_regression(self) -> bool:
         return self.is_regression(threshold=self.threshold * 2)
 
     def ratio(self) -> float | None:
-        assert False
+        raise RuntimeError
 
     def human_readable(self, use_colors: bool) -> str:
         return str(self)

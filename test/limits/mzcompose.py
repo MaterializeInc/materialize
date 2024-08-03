@@ -55,7 +55,7 @@ class Generator:
 
     @classmethod
     def body(cls) -> None:
-        assert False, "body() must be overriden"
+        raise NotImplementedError
 
     @classmethod
     def footer(cls) -> None:

@@ -68,10 +68,10 @@ class SubscribeParallel(Scenario):
         )
 
     def create_subscribe_source(self) -> str:
-        assert False, "Scenario needs to provide a source/table definition"
+        raise NotImplementedError
 
     def insert(self) -> str:
-        assert False, "Scenario needs to provide insert()"
+        raise NotImplementedError
 
 
 class SubscribeParallelTable(SubscribeParallel):

@@ -89,7 +89,7 @@ class CreateDebeziumSource(Action):
             assert self.debezium_source.postgres_table is not None
             self.postgres_table = self.debezium_source.postgres_table
         else:
-            assert False
+            raise RuntimeError("More than one Debezium source exists")
 
         super().__init__(capabilities)
 

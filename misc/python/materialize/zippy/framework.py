@@ -135,8 +135,8 @@ class Action:
         return []
 
     def run(self, c: Composition, state: State) -> None:
-        """Run this action on the provided copmosition."""
-        assert False
+        """Run this action on the provided composition."""
+        raise NotImplementedError
 
     @classmethod
     def require_explicit_mention(cls) -> bool:
@@ -151,7 +151,7 @@ class ActionFactory:
     """Base class for Action Factories that return parameterized Actions to execute."""
 
     def new(self, capabilities: Capabilities) -> list[Action]:
-        assert False
+        raise NotImplementedError
 
     @classmethod
     def requires(cls) -> set[type[Capability]] | list[set[type[Capability]]]:
@@ -202,7 +202,9 @@ class Test:
         elif issubclass(action_def, Action):
             actions = [action_def(capabilities=self._capabilities)]
         else:
-            assert False
+            raise RuntimeError(
+                f"{type(action_def)} is not a subclass of {ActionFactory} or {Action}"
+            )
 
         for action in actions:
             print("test:", action)

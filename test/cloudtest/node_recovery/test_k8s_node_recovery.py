@@ -397,7 +397,7 @@ def test_envd_on_failing_node(mz: MaterializeApplication) -> None:
             no_reset=True,
             suppress_command_error_output=True,
         )
-        assert False, "Expected timeout"
+        raise RuntimeError("Expected timeout")
     except Exception:
         # OK
         print("Timeout is expected")

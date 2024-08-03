@@ -77,7 +77,7 @@ class CreatePostgresTable(Action):
             self.new_postgres_table = False
             self.postgres_table = existing_postgres_tables[0]
         else:
-            assert False
+            raise RuntimeError("More than one table exists")
 
         super().__init__(capabilities)
 

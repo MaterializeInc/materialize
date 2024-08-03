@@ -138,7 +138,7 @@ def test_credentials(c: Composition, ctx: TestContext):
     except ProgrammingError as e:
         assert "SignatureDoesNotMatch" in e.args[0]["M"]
     else:
-        assert False, "connection validation unexpectedly succeeded"
+        raise RuntimeError("connection validation unexpectedly succeeded")
 
     # Changing the access key to a nonexistent access key should fail with an
     # invalid client ID error.
@@ -150,7 +150,7 @@ def test_credentials(c: Composition, ctx: TestContext):
     except ProgrammingError as e:
         assert "InvalidClientTokenId" in e.args[0]["M"]
     else:
-        assert False, "connection validation unexpectedly succeeded"
+        raise RuntimeError("connection validation unexpectedly succeeded")
 
 
 def test_assume_role(c: Composition, ctx: TestContext):
@@ -170,7 +170,7 @@ def test_assume_role(c: Composition, ctx: TestContext):
     except ProgrammingError as e:
         assert "AccessDenied" in e.args[0]["M"]
     else:
-        assert False, "connection validation unexpectedly succeeded"
+        raise RuntimeError("connection validation unexpectedly succeeded")
 
     # Create the customer role, but incorrectly fail to constrain the
     # external ID.
@@ -197,7 +197,7 @@ def test_assume_role(c: Composition, ctx: TestContext):
                 in e.args[0]["H"]
             )
         else:
-            assert False, "connection validation unexpectedly succeeded"
+            raise RuntimeError("connection validation unexpectedly succeeded")
 
         # Update the customer role's trust policy to use Materialize's example.
         trust_policy = c.sql_query(

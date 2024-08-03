@@ -236,7 +236,7 @@ def workflow_test_github_12251(c: Composition) -> None:
             time.time() - start_time < 2
         ), "idle_in_transaction_session_timeout not respected"
     else:
-        assert False, "unexpected success in test_github_12251"
+        raise RuntimeError("unexpected success in test_github_12251")
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
@@ -1581,7 +1581,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     except ProgrammingError as e:
         assert "target replica failed or was dropped" in e.args[0]["M"], e
     else:
-        assert False, "SUBSCRIBE didn't return the expected error"
+        raise RuntimeError("SUBSCRIBE didn't return the expected error")
 
     dropper.join()
 
@@ -1605,7 +1605,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     except ProgrammingError as e:
         assert "target replica failed or was dropped" in e.args[0]["M"], e
     else:
-        assert False, "SUBSCRIBE didn't return the expected error"
+        raise RuntimeError("SUBSCRIBE didn't return the expected error")
 
     killer.join()
 
@@ -1668,7 +1668,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     except ProgrammingError as e:
         assert "target replica failed or was dropped" in e.args[0]["M"], e
     else:
-        assert False, "SELECT didn't return the expected error"
+        raise RuntimeError("SELECT didn't return the expected error")
 
     dropper.join()
 
@@ -1690,7 +1690,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     except ProgrammingError as e:
         assert "target replica failed or was dropped" in e.args[0]["M"], e
     else:
-        assert False, "SELECT didn't return the expected error"
+        raise RuntimeError("SELECT didn't return the expected error")
 
     killer.join()
 
@@ -4037,7 +4037,7 @@ def workflow_test_http_race_condition(
             f"There are supposed to be no sessions remaining, but there are:\n{result}"
         )
     else:
-        assert False, "Sessions did not clean up after 30s"
+        raise RuntimeError("Sessions did not clean up after 30s")
 
 
 def workflow_test_read_frontier_advancement(

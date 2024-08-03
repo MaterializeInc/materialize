@@ -235,21 +235,21 @@ def workflow_long_query(c: Composition) -> None:
     medium_pad = "x" * medium_pad_size
     try:
         cursor.execute(f"SELECT 'ABC{medium_pad}XYZ';")
-        assert False, "execute() expected to fail"
+        raise RuntimeError("execute() expected to fail")
     except ProgrammingError as e:
         assert "statement batch size cannot exceed 1000.0 KB" in str(e)
     except:
-        assert False, "execute() threw an unexpected exception"
+        raise RuntimeError("execute() threw an unexpected exception")
 
     large_pad_size = 512 * 1024 * 1024
     large_pad = "x" * large_pad_size
     try:
         cursor.execute(f"SELECT 'ABC{large_pad}XYZ';")
-        assert False, "execute() expected to fail"
+        raise RuntimeError("execute() expected to fail")
     except InterfaceError as e:
         assert "network error" in str(e)
     except:
-        assert False, "execute() threw an unexpected exception"
+        raise RuntimeError("execute() threw an unexpected exception")
 
     # Confirm that balancerd remains up
     cursor = sql_cursor(c)
@@ -272,11 +272,11 @@ def workflow_mz_restarted(c: Composition) -> None:
     c.up("materialized")
     try:
         cursor.execute("INSERT INTO restart_mz VALUES (2)")
-        assert False, "execute() expected to fail"
+        raise RuntimeError("execute() expected to fail")
     except InterfaceError as e:
         assert "network error" in str(e)
     except:
-        assert False, "execute() threw an unexpected exception"
+        raise RuntimeError("execute() threw an unexpected exception")
 
     # Future connections work
     sql_cursor(c)
@@ -295,11 +295,11 @@ def workflow_balancerd_restarted(c: Composition) -> None:
     c.up("balancerd")
     try:
         cursor.execute("INSERT INTO restart_balancerd VALUES (2)")
-        assert False, "execute() expected to fail"
+        raise RuntimeError("execute() expected to fail")
     except InterfaceError as e:
         assert "network error" in str(e)
     except:
-        assert False, "execute() threw an unexpected exception"
+        raise RuntimeError("execute() threw an unexpected exception")
 
     # Future connections work
     sql_cursor(c)
@@ -311,7 +311,7 @@ def workflow_mz_not_running(c: Composition) -> None:
     c.kill("materialized")
     try:
         sql_cursor(c)
-        assert False, "connect() expected to fail"
+        raise RuntimeError("connect() expected to fail")
     except ProgrammingError as e:
         assert any(
             expected in str(e)
@@ -324,7 +324,7 @@ def workflow_mz_not_running(c: Composition) -> None:
             ]
         )
     except:
-        assert False, "connect() threw an unexpected exception"
+        raise RuntimeError("connect() threw an unexpected exception")
 
     # Things should work now
     c.up("materialized")
@@ -340,11 +340,11 @@ def workflow_user(c: Composition) -> None:
 
     try:
         cursor.execute("DROP DATABASE materialize CASCADE")
-        assert False, "execute() expected to fail"
+        raise RuntimeError("execute() expected to fail")
     except ProgrammingError as e:
         assert "must be owner of DATABASE materialize" in str(e)
     except:
-        assert False, "execute() threw an unexpected exception"
+        raise RuntimeError("execute() threw an unexpected exception")
 
     cursor.execute("SELECT current_user()")
     assert OTHER_USER in str(cursor.fetchall())
