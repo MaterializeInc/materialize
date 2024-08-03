@@ -313,8 +313,8 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
     }
 
     fn from_proto(proto: proto::GidMappingKey) -> Result<Self, TryFromProtoError> {
-        let object_type = proto::CatalogItemType::from_i32(proto.object_type)
-            .ok_or_else(|| TryFromProtoError::unknown_enum_variant("CatalogItemType"))?;
+        let object_type = proto::CatalogItemType::try_from(proto.object_type)
+            .map_err(|_| TryFromProtoError::unknown_enum_variant("CatalogItemType"))?;
         Ok(GidMappingKey {
             schema_name: proto.schema_name,
             object_type: object_type.into_rust()?,
@@ -808,8 +808,8 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
                 .into_rust_if_some("DefaultPrivilegesKey::role_id")?,
             database_id: proto.database_id.into_rust()?,
             schema_id: proto.schema_id.into_rust()?,
-            object_type: proto::ObjectType::from_i32(proto.object_type)
-                .ok_or_else(|| TryFromProtoError::unknown_enum_variant("ObjectType"))?
+            object_type: proto::ObjectType::try_from(proto.object_type)
+                .map_err(|_| TryFromProtoError::unknown_enum_variant("ObjectType"))?
                 .into_rust()?,
             grantee: proto
                 .grantee
@@ -2438,10 +2438,10 @@ impl RustType<proto::AuditLogEventV1> for EventV1 {
     }
 
     fn from_proto(proto: proto::AuditLogEventV1) -> Result<Self, TryFromProtoError> {
-        let event_type = proto::audit_log_event_v1::EventType::from_i32(proto.event_type)
-            .ok_or_else(|| TryFromProtoError::unknown_enum_variant("EventType"))?;
-        let object_type = proto::audit_log_event_v1::ObjectType::from_i32(proto.object_type)
-            .ok_or_else(|| TryFromProtoError::unknown_enum_variant("ObjectType"))?;
+        let event_type = proto::audit_log_event_v1::EventType::try_from(proto.event_type)
+            .map_err(|_| TryFromProtoError::unknown_enum_variant("EventType"))?;
+        let object_type = proto::audit_log_event_v1::ObjectType::try_from(proto.object_type)
+            .map_err(|_| TryFromProtoError::unknown_enum_variant("ObjectType"))?;
         Ok(EventV1 {
             id: proto.id,
             event_type: event_type.into_rust()?,

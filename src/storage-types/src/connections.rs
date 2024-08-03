@@ -1673,12 +1673,12 @@ impl RustType<i32> for MySqlSslMode {
     }
 
     fn from_proto(proto: i32) -> Result<Self, TryFromProtoError> {
-        Ok(match ProtoMySqlSslMode::from_i32(proto) {
-            Some(ProtoMySqlSslMode::Disabled) => MySqlSslMode::Disabled,
-            Some(ProtoMySqlSslMode::Required) => MySqlSslMode::Required,
-            Some(ProtoMySqlSslMode::VerifyCa) => MySqlSslMode::VerifyCa,
-            Some(ProtoMySqlSslMode::VerifyIdentity) => MySqlSslMode::VerifyIdentity,
-            None => {
+        Ok(match ProtoMySqlSslMode::try_from(proto) {
+            Ok(ProtoMySqlSslMode::Disabled) => MySqlSslMode::Disabled,
+            Ok(ProtoMySqlSslMode::Required) => MySqlSslMode::Required,
+            Ok(ProtoMySqlSslMode::VerifyCa) => MySqlSslMode::VerifyCa,
+            Ok(ProtoMySqlSslMode::VerifyIdentity) => MySqlSslMode::VerifyIdentity,
+            Err(_) => {
                 return Err(TryFromProtoError::UnknownEnumVariant(
                     "tls_mode".to_string(),
                 ))

@@ -1151,11 +1151,11 @@ impl ProtoStateFieldDiffs {
             // We expect one for the key.
             expected_data_slices += 1;
             // And 1 or 2 for val depending on the diff type.
-            match ProtoStateFieldDiffType::from_i32(*diff_type) {
-                Some(ProtoStateFieldDiffType::Insert) => expected_data_slices += 1,
-                Some(ProtoStateFieldDiffType::Update) => expected_data_slices += 2,
-                Some(ProtoStateFieldDiffType::Delete) => expected_data_slices += 1,
-                None => return Err(format!("unknown diff_type {}", diff_type)),
+            match ProtoStateFieldDiffType::try_from(*diff_type) {
+                Ok(ProtoStateFieldDiffType::Insert) => expected_data_slices += 1,
+                Ok(ProtoStateFieldDiffType::Update) => expected_data_slices += 2,
+                Ok(ProtoStateFieldDiffType::Delete) => expected_data_slices += 1,
+                Err(_) => return Err(format!("unknown diff_type {}", diff_type)),
             }
         }
         if expected_data_slices != self.data_lens.len() {
@@ -1210,9 +1210,9 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
             self.data_offset = end;
             data
         };
-        let field = match ProtoStateField::from_i32(self.diffs.fields[self.diff_idx]) {
-            Some(x) => x,
-            None => {
+        let field = match ProtoStateField::try_from(self.diffs.fields[self.diff_idx]) {
+            Ok(x) => x,
+            Err(_) => {
                 return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                     "ProtoStateField({})",
                     self.diffs.fields[self.diff_idx]
@@ -1220,9 +1220,9 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
             }
         };
         let diff_type =
-            match ProtoStateFieldDiffType::from_i32(self.diffs.diff_types[self.diff_idx]) {
-                Some(x) => x,
-                None => {
+            match ProtoStateFieldDiffType::try_from(self.diffs.diff_types[self.diff_idx]) {
+                Ok(x) => x,
+                Err(_) => {
                     return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                         "ProtoStateFieldDiffType({})",
                         self.diffs.diff_types[self.diff_idx]

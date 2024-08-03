@@ -948,13 +948,13 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
 impl RowPacker<'_> {
     pub(crate) fn try_push_proto(&mut self, x: &ProtoDatum) -> Result<(), String> {
         match &x.datum_type {
-            Some(DatumType::Other(o)) => match ProtoDatumOther::from_i32(*o) {
-                Some(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),
-                Some(ProtoDatumOther::Null) => self.push(Datum::Null),
-                Some(ProtoDatumOther::False) => self.push(Datum::False),
-                Some(ProtoDatumOther::True) => self.push(Datum::True),
-                Some(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
-                Some(ProtoDatumOther::Dummy) => {
+            Some(DatumType::Other(o)) => match ProtoDatumOther::try_from(*o) {
+                Ok(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),
+                Ok(ProtoDatumOther::Null) => self.push(Datum::Null),
+                Ok(ProtoDatumOther::False) => self.push(Datum::False),
+                Ok(ProtoDatumOther::True) => self.push(Datum::True),
+                Ok(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
+                Ok(ProtoDatumOther::Dummy) => {
                     // We plan to remove the `Dummy` variant soon (#17099). To prepare for that, we
                     // emit a log to Sentry here, to notify us of any instances that might have
                     // been made durable.
@@ -962,12 +962,10 @@ impl RowPacker<'_> {
                     tracing::error!("protobuf decoding found Dummy datum");
                     self.push(Datum::Dummy);
                 }
-                Some(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
-                Some(ProtoDatumOther::NumericNegInf) => {
-                    self.push(Datum::from(-Numeric::infinity()))
-                }
-                Some(ProtoDatumOther::NumericNaN) => self.push(Datum::from(Numeric::nan())),
-                None => return Err(format!("unknown datum type: {}", o)),
+                Ok(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
+                Ok(ProtoDatumOther::NumericNegInf) => self.push(Datum::from(-Numeric::infinity())),
+                Ok(ProtoDatumOther::NumericNaN) => self.push(Datum::from(Numeric::nan())),
+                Err(_) => return Err(format!("unknown datum type: {}", o)),
             },
             Some(DatumType::Int16(x)) => {
                 let x = i16::try_from(*x)

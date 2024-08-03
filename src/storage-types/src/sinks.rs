@@ -931,20 +931,20 @@ fn csr_compat_level_to_proto(compatibility_level: &Option<mz_ccsr::Compatibility
 
 fn csr_compat_level_from_proto(val: i32) -> Option<mz_ccsr::CompatibilityLevel> {
     use proto_kafka_sink_format_type::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
-    match ProtoCompatLevel::from_i32(val) {
-        Some(ProtoCompatLevel::Backward) => Some(mz_ccsr::CompatibilityLevel::Backward),
-        Some(ProtoCompatLevel::BackwardTransitive) => {
+    match ProtoCompatLevel::try_from(val) {
+        Ok(ProtoCompatLevel::Backward) => Some(mz_ccsr::CompatibilityLevel::Backward),
+        Ok(ProtoCompatLevel::BackwardTransitive) => {
             Some(mz_ccsr::CompatibilityLevel::BackwardTransitive)
         }
-        Some(ProtoCompatLevel::Forward) => Some(mz_ccsr::CompatibilityLevel::Forward),
-        Some(ProtoCompatLevel::ForwardTransitive) => {
+        Ok(ProtoCompatLevel::Forward) => Some(mz_ccsr::CompatibilityLevel::Forward),
+        Ok(ProtoCompatLevel::ForwardTransitive) => {
             Some(mz_ccsr::CompatibilityLevel::ForwardTransitive)
         }
-        Some(ProtoCompatLevel::Full) => Some(mz_ccsr::CompatibilityLevel::Full),
-        Some(ProtoCompatLevel::FullTransitive) => Some(mz_ccsr::CompatibilityLevel::FullTransitive),
-        Some(ProtoCompatLevel::None) => Some(mz_ccsr::CompatibilityLevel::None),
-        Some(ProtoCompatLevel::Unset) => None,
-        None => None,
+        Ok(ProtoCompatLevel::Full) => Some(mz_ccsr::CompatibilityLevel::Full),
+        Ok(ProtoCompatLevel::FullTransitive) => Some(mz_ccsr::CompatibilityLevel::FullTransitive),
+        Ok(ProtoCompatLevel::None) => Some(mz_ccsr::CompatibilityLevel::None),
+        Ok(ProtoCompatLevel::Unset) => None,
+        Err(_) => None,
     }
 }
 
