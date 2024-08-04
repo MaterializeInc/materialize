@@ -136,7 +136,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_expr::MirScalarExpr;
@@ -284,7 +284,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 super::ensure_replication_slot(&client, &connection.publication_details.slot)
                     .await?;
 
-                let snapshot_info = export_snapshot(&client).await?;
+                let snapshot_info =
+                    export_snapshot(&client, &connection.publication_details.slot).await?;
                 trace!(
                     %id,
                     "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
@@ -534,14 +535,63 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 /// Creates a consistent point using a mechanism appropriate for the server.
 /// Returns a snapshot identifier that can be imported in other SQL session and
 /// the LSN of the consistent point.
-async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), TransientError> {
+async fn export_snapshot(
+    client: &Client,
+    main_slot_name: &str,
+) -> Result<(String, MzOffset), TransientError> {
+    match client.is_yugabyte() {
+        true => export_snapshot_yugabyte(client, main_slot_name).await,
+        false => export_snapshot_postgres(client).await,
+    }
+}
+
+/// Exports a snapshot for a YugabyteDB server by inspecting the restart LSN and
+/// hybrid time in `pg_replication_slots`.
+async fn export_snapshot_yugabyte(
+    client: &Client,
+    main_slot_name: &str,
+) -> Result<(String, MzOffset), TransientError> {
+    // TODO(benesch): this approach to snapshotting has a rather large defect, in that when adding a
+    // new table via `ALTER SOURCE ... ADD TABLE`, we're liable to choose a consistent point that is
+    // *before* the table was added. That means that we can't snapshot the table, because it doesn't
+    // yet exist in virtual time. The solution is to wait for the replication slot to progress past
+    // the virtual time that the table was created... but that won't ever happen because the source
+    // will enter a crash loop and never advance the replication slot.
+    //
+    // The end user can work around this by dropping the table that's failing to snapshot, waiting a
+    // bit for the replication slot to progress (perhaps triggering some writes to tables in the
+    // publication to generate some WAL entries), and then re-adding the subsource. Silly, but it
+    // works.
+    //
+    // Ideally we'd have access to a function like `SELECT yb_latest_consistent_point(SLOT)` which
+    // would return the latest available LSN/snapshot for a given replication slot. Then we could
+    // snapshot at that consistent point, which we're guaranteed is ahead of the replication slot.
+    let query = format!(
+        "SELECT yb_restart_commit_ht, restart_lsn FROM pg_replication_slots WHERE slot_name = {}",
+        postgres_protocol::escape::escape_literal(main_slot_name),
+    );
+    let row = simple_query_opt(client, &query).await?.ok_or_else(|| {
+        anyhow!("replication slot {main_slot_name:?} missing from pg_replication_slots")
+    })?;
+    let snapshot_name: String = row.get("yb_restart_commit_ht").unwrap().to_string();
+    let consistent_point: PgLsn = row.get("restart_lsn").unwrap().parse().unwrap();
+    Ok((snapshot_name, MzOffset::from(consistent_point)))
+}
+
+/// Exports a snapshot for a stock PostgreSQL server by creating a temporary
+/// replication slot.
+///
+/// See [`export_snapshot`] for additional context.
+async fn export_snapshot_postgres(client: &Client) -> Result<(String, MzOffset), TransientError> {
     // A temporary replication slot is the only way to get a consistent point
     let slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
-    let query =
-        format!("CREATE_REPLICATION_SLOT {slot:?} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT");
+    let query = format!(
+        "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT",
+        postgres_protocol::escape::escape_identifier(&slot),
+    );
     let row = simple_query_opt(client, &query).await?.unwrap();
-    let consistent_point: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
     let snapshot_name: String = row.get("snapshot_name").unwrap().to_string();
+    let consistent_point: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
 
     // When creating a replication slot postgres returns the LSN of its consistent point, which is
     // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
@@ -550,7 +600,8 @@ async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), Transien
     // the greatest LSN that is not beyond the consistent point. That LSN is `consistent_point - 1`
     let consistent_point = u64::from(consistent_point)
         .checked_sub(1)
-        .expect("consistent point is always non-zero");
+        .ok_or_else(|| anyhow!("consistent point for slot {slot:?} unexpectedly zero"))?;
+
     Ok((snapshot_name, MzOffset::from(consistent_point)))
 }
 
@@ -560,7 +611,16 @@ async fn use_snapshot(client: &Client, snapshot: &str) -> Result<(), TransientEr
     client
         .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
         .await?;
-    let query = format!("SET TRANSACTION SNAPSHOT '{snapshot}';");
+    let query = match client.is_yugabyte() {
+        true => format!(
+            "SET LOCAL yb_read_time = {}",
+            postgres_protocol::escape::escape_literal(&format!("{snapshot} ht")),
+        ),
+        false => format!(
+            "SET TRANSACTION SNAPSHOT {}",
+            postgres_protocol::escape::escape_literal(snapshot),
+        ),
+    };
     client.simple_query(&query).await?;
     Ok(())
 }
