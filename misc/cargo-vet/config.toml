@@ -158,14 +158,6 @@ criteria = "safe-to-deploy"
 version = "0.2.5"
 criteria = "safe-to-deploy"
 
-[[exemptions.axum]]
-version = "0.6.20"
-criteria = "safe-to-deploy"
-
-[[exemptions.axum-core]]
-version = "0.3.4"
-criteria = "safe-to-deploy"
-
 [[exemptions.backoff]]
 version = "0.4.0"
 criteria = "safe-to-deploy"
@@ -264,14 +256,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.console]]
 version = "0.15.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.console-api]]
-version = "0.5.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.console-subscriber]]
-version = "0.1.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.const-oid]]
@@ -994,26 +978,6 @@ criteria = "safe-to-deploy"
 version = "0.3.0@git:4d8c406c32260484747c828050016de599b9f3a4"
 criteria = "safe-to-deploy"
 
-[[exemptions.prost]]
-version = "0.11.9"
-criteria = "safe-to-deploy"
-
-[[exemptions.prost-build]]
-version = "0.11.9"
-criteria = "safe-to-deploy"
-
-[[exemptions.prost-derive]]
-version = "0.11.9"
-criteria = "safe-to-deploy"
-
-[[exemptions.prost-reflect]]
-version = "0.11.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.prost-types]]
-version = "0.11.9"
-criteria = "safe-to-deploy"
-
 [[exemptions.protobuf-native]]
 version = "0.3.1+26.1"
 criteria = "safe-to-deploy"
@@ -1394,14 +1358,6 @@ criteria = "safe-to-deploy"
 version = "0.2.12"
 criteria = "safe-to-deploy"
 
-[[exemptions.tonic]]
-version = "0.9.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.tonic-build]]
-version = "0.9.2@git:0d86e360ab45779770ca150c8487fe7940c299a9"
-criteria = "safe-to-deploy"
-
 [[exemptions.tower]]
 version = "0.4.13"
 criteria = "safe-to-deploy"
@@ -1456,10 +1412,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.try-lock]]
 version = "0.2.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.tungstenite]]
-version = "0.20.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.typed-arena]]

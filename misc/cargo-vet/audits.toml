@@ -10,6 +10,11 @@ Certification of this crate means the reviewer has confirmed the crate is:
 """
 implies = "safe-to-deploy"
 
+[[audits.aho-corasick]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "1.1.3"
+
 [[audits.alloc-no-stdlib]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
@@ -131,6 +136,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "2.0.0"
 
+[[audits.atomic-waker]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "1.1.2"
+
 [[audits.aws-sdk-s3]]
 who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
@@ -140,6 +150,21 @@ version = "0.26.0"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.22.0"
+
+[[audits.axum]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.7.5"
+
+[[audits.axum-core]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.4.3"
+
+[[audits.axum-extra]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.9.3"
 
 [[audits.base64]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -175,6 +200,11 @@ version = "3.5.0"
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "2.5.1"
+
+[[audits.bstr]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "1.10.0"
 
 [[audits.built]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
@@ -220,6 +250,16 @@ version = "0.1.50"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "2.5.0"
+
+[[audits.console-api]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.8.0"
+
+[[audits.console-subscriber]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.4.0"
 
 [[audits.convert_case]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
@@ -318,6 +358,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "3.0.2"
 
+[[audits.globset]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.4.14"
+
 [[audits.governor]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -342,6 +387,16 @@ version = "2.4.1"
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.14.5"
+
+[[audits.headers]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.4.0"
+
+[[audits.headers-core]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.3.0"
 
 [[audits.hibitset]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -372,6 +427,11 @@ version = "0.5.1"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.1.5"
+
+[[audits.hyper-util]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.1.6"
 
 [[audits.id-arena]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -498,6 +558,11 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.16.0+8.10.0"
 
+[[audits.log]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.4.22"
+
 [[audits.lz4_flex]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
@@ -593,15 +658,30 @@ who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.21.0"
 
+[[audits.opentelemetry]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.24.0"
+
 [[audits.opentelemetry-otlp]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.14.0"
 
+[[audits.opentelemetry-otlp]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.17.0"
+
 [[audits.opentelemetry-proto]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.4.0"
+
+[[audits.opentelemetry-proto]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.7.0"
 
 [[audits.opentelemetry-semantic-conventions]]
 who = "Gus Wynn <gus@materialize.com>"
@@ -612,6 +692,11 @@ version = "0.13.0"
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.21.2"
+
+[[audits.opentelemetry_sdk]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.24.1"
 
 [[audits.ordered-float]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -722,6 +807,31 @@ version = "0.4.0"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 version = "1.0.82"
+
+[[audits.prost]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.13.1"
+
+[[audits.prost-build]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.13.1"
+
+[[audits.prost-derive]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.13.1"
+
+[[audits.prost-reflect]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.14.0"
+
+[[audits.prost-types]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.13.1"
 
 [[audits.protobuf]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
@@ -920,6 +1030,11 @@ who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.1.2"
 
+[[audits.sync_wrapper]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "1.0.1"
+
 [[audits.system-configuration]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1016,9 +1131,24 @@ criteria = "safe-to-deploy"
 version = "0.20.1"
 
 [[audits.tokio-tungstenite]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.21.0"
+
+[[audits.tokio-tungstenite]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.23.1"
+
+[[audits.tonic]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.12.1"
+
+[[audits.tonic-build]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.12.1"
 
 [[audits.tower-http]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -1050,6 +1180,11 @@ who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.22.0@git:7035e641b683985cc3b8630f3b61d53c96f83695"
 
+[[audits.tracing-opentelemetry]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.25.0@git:09f0cc90058f5834209aa3f48ac52fb544f5d2c0"
+
 [[audits.tracing-subscriber]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
@@ -1059,6 +1194,11 @@ version = "0.3.18"
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.1.0"
+
+[[audits.tungstenite]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.21.0"
 
 [[audits.tungstenite]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -1084,6 +1224,11 @@ version = "1.7.0"
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.2.4"
+
+[[audits.web-time]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "1.1.0"
 
 [[audits.windows-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

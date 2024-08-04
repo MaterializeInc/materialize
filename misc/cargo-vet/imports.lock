@@ -183,6 +183,13 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.bstr]]
+version = "1.10.0"
+when = "2024-07-25"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.bumpalo]]
 version = "3.12.1"
 when = "2023-04-21"
@@ -378,9 +385,23 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.globset]]
+version = "0.4.14"
+when = "2023-11-26"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.h2]]
 version = "0.3.26"
 when = "2024-04-03"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.h2]]
+version = "0.4.5"
+when = "2024-05-17"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
@@ -420,9 +441,23 @@ user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
+[[publisher.hyper]]
+version = "1.4.1"
+when = "2024-07-09"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
 [[publisher.hyper-tls]]
 version = "0.5.0"
 when = "2020-12-29"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
+[[publisher.hyper-tls]]
+version = "0.6.0"
+when = "2023-11-27"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
@@ -573,6 +608,13 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.prettyplease]]
+version = "0.2.20"
+when = "2024-05-07"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.quickcheck]]
 version = "1.0.3"
 when = "2021-01-15"
@@ -601,6 +643,13 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.regex]]
+version = "1.10.5"
+when = "2024-06-09"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.regex-automata]]
 version = "0.1.9"
 when = "2020-03-09"
@@ -611,6 +660,13 @@ user-name = "Andrew Gallant"
 [[publisher.regex-automata]]
 version = "0.3.9"
 when = "2023-09-30"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-automata]]
+version = "0.4.7"
+when = "2024-06-09"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
