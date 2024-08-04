@@ -229,6 +229,15 @@ http
 400 Bad Request
 unsupported via this API: SUBSCRIBE (SELECT * FROM t)
 
+# This is optimizer panicing due to #27999, but we only want to test that the HTTP layer isn't
+# rejecting the syntax. This comment should be deleted but the test kept with updated output when that
+# issue is fixed.
+http
+{"query":"subscribe (select * from v) up to 18446744073709551615"}
+----
+200 OK
+{"results":[{"error":{"message":"internal error: unexpected panic during query optimization","code":"XX000"},"notices":[{"message":"subscribe as of 18446744073709551615 (inclusive) up to the same bound 18446744073709551615 (exclusive) is guaranteed to be empty","code":"00000","severity":"notice"}]}]}
+
 http
 {"query":"copy (select 1) to stdout"}
 ----
