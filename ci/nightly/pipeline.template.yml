@@ -770,6 +770,29 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-txn-wal-toggle
+        label: "Checks + Toggle txn_wal"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          # Seems to require more memory on aarch64
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=TxnWalToggle, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-txn-wal-fencing
+        label: "Checks + txn_wal fencing"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [ --scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID" ]
+
       - id: checks-toggle-persist-batch-columnar-format
         label: "Checks toggling persist batch columnar format"
         depends_on: build-aarch64
