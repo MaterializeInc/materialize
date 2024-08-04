@@ -57,8 +57,20 @@ rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
 mkdir -m 777 "$cores"
 # Max 128 characters, so don't use $PWD which will make it too long
 sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%E.%t"
+# 8 million threads, zippy in release qualification was failing
+sudo sysctl -w kernel.threads-max=8388608
+sudo sysctl -w vm.max_map_count=8388608
+sudo sysctl -w kernel.pid_max=8388608
+sudo sysctl -w fs.file-max=9223372036854775807
+#ulimit -n unlimited
 echo -n "Core pattern: "
 cat /proc/sys/kernel/core_pattern
+cat /proc/meminfo
+ulimit -Sa
+ulimit -Ha
+cat /proc/sys/kernel/threads-max
+cat /proc/sys/vm/max_map_count
+cat /proc/sys/kernel/pid_max
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
