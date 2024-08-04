@@ -88,7 +88,7 @@ use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{simple_query_opt, PostgresError};
+use mz_postgres_util::{simple_query_opt, Client, PostgresError};
 use mz_repr::{Datum, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
@@ -103,7 +103,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
