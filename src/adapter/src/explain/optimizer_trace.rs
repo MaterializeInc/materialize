@@ -81,16 +81,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
                 // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
-                .with(PlanTrace::<UsedIndexes>::new(None))
-                // All optimizer spans are `TRACE` and up. Technically this slows down the system
-                // by skipping the tracing fast path DURING an `EXPLAIN`, but we haven't
-                // seen this be a problem (yet).
-                //
-                // Note that we typically do NOT use global filters like this, preferring
-                // per-layer ones, but we are forced to because per-layer filters
-                // require an `Arc<dyn Subscriber + LookupSpan>`, which isn't a trait
-                // exposed by tracing, for now.
-                .with(tracing::level_filters::LevelFilter::TRACE);
+                .with(PlanTrace::<UsedIndexes>::new(None));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         } else {
@@ -105,8 +96,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
                 .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
                 .with(PlanTrace::<FastPathPlan>::new(None))
-                .with(PlanTrace::<UsedIndexes>::new(None))
-                .with(tracing::level_filters::LevelFilter::TRACE);
+                .with(PlanTrace::<UsedIndexes>::new(None));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         }
