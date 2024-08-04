@@ -530,6 +530,8 @@ mod tests {
             completions: Mutex::new(Completions {
                 from: Vec::new(),
                 select: Vec::new(),
+                create: Vec::new(),
+                drop: Vec::new(),
             }),
         });
 
