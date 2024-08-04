@@ -113,3 +113,18 @@ class Validate(Action):
     def join(self, e: Executor) -> None:
         for check in self.checks:
             check.join_validate(e)
+
+
+class ReadOnly(Action):
+    def __init__(self, scenario: "Scenario", mz_service: str | None = None) -> None:
+        self.checks = scenario.check_objects
+        self.mz_service = mz_service
+
+    def execute(self, e: Executor) -> None:
+        for check in self.checks:
+            print(f"Running readonly() from {check}")
+            check.start_readonly(e, self)
+
+    def join(self, e: Executor) -> None:
+        for check in self.checks:
+            check.join_readonly(e)

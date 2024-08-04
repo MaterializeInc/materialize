@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.checks.actions import Action, Initialize, Manipulate, Validate
+from materialize.checks.actions import Action, Initialize, Manipulate, Validate, ReadOnly
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
@@ -43,6 +43,7 @@ class ZeroDowntimeRestartEntireMz(Scenario):
             Manipulate(self, phase=2, mz_service="mz_2"),
             *wait_ready_and_promote("mz_3"),
             start_mz_read_only(self, deploy_generation=3, mz_service="mz_4"),
+            ReadOnly("mz_4"),
             Validate(self, mz_service="mz_3"),
             *wait_ready_and_promote("mz_4"),
             Validate(self, mz_service="mz_4"),
