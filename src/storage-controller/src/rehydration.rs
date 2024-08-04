@@ -26,6 +26,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
+use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
@@ -496,7 +497,7 @@ where
                         }
                         // uppers contains both ingestions and their exports
                         None if self.uppers.contains_key(id) => continue,
-                        None => panic!("AllowCompaction command for non-existent {id}"),
+                        None => soft_panic_or_log!("AllowCompaction command for non-existent {id}"),
                     }
                 }
             }
@@ -511,7 +512,10 @@ where
                 for (id, new_upper) in list {
                     let reported = match self.uppers.get_mut(&id) {
                         Some(reported) => reported,
-                        None => panic!("Reference to absent collection: {id}"),
+                        None => {
+                            soft_panic_or_log!("Reference to absent collection: {id}");
+                            continue;
+                        }
                     };
                     if PartialOrder::less_than(reported, &new_upper) {
                         reported.clone_from(&new_upper);
