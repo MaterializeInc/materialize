@@ -6094,6 +6094,7 @@ pub static MZ_SHOW_SOURCES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     oid: oid::VIEW_MZ_SHOW_SOURCES_OID,
     column_defs: None,
     sql: "SELECT
+    sources.id,
     sources.name,
     sources.type,
     COALESCE(sources.size, clusters.size) AS size,
@@ -6114,6 +6115,7 @@ pub static MZ_SHOW_SINKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     oid: oid::VIEW_MZ_SHOW_SINKS_OID,
     column_defs: None,
     sql: "SELECT
+        sinks.id,
         sinks.name,
         sinks.type,
         COALESCE(sinks.size, clusters.size) AS size,
@@ -6133,7 +6135,7 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
-    sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
+    sql: "SELECT mviews.id as id, mviews.name, clusters.name AS cluster, schema_id, cluster_id
 FROM mz_catalog.mz_materialized_views AS mviews
 JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
     access: vec![PUBLIC_SELECT],
@@ -6145,6 +6147,7 @@ pub static MZ_SHOW_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     oid: oid::VIEW_MZ_SHOW_INDEXES_OID,
     column_defs: None,
     sql: "SELECT
+    idxs.id AS id,
     idxs.name AS name,
     objs.name AS on,
     clusters.name AS cluster,
