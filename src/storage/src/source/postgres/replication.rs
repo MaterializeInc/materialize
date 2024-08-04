@@ -85,7 +85,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::simple_query_opt;
+use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
@@ -113,7 +113,6 @@ use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
 use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSourceMetrics;
