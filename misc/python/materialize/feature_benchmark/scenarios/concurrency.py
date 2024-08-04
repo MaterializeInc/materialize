@@ -67,15 +67,6 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
             ]
         )
 
-        create_indexes = "\n".join(
-            [
-                f"""
-> CREATE DEFAULT INDEX ON s{s}
-"""
-                for s in sources
-            ]
-        )
-
         selects = "\n".join(
             [
                 f"""
@@ -96,8 +87,6 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 > SELECT 1
   /* A */
 1
-
-{create_indexes}
 
 {selects}
 
