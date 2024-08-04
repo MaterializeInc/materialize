@@ -84,7 +84,7 @@ name   create_sql
 materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = \"plaintext\")"
 
 ! ALTER CONNECTION conn DROP (SECURITY PROTOCOL);
-contains:Broker does not support SSL connections
+contains:SSL handshake failed
 
 ! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), RESET (BROKER);
 contains:cannot both SET and DROP/RESET options BROKER
