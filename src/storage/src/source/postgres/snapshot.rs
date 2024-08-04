@@ -22,7 +22,7 @@
 //! relatable with the LSN numbers we receive from the replication stream. Such point does not
 //! necessarily exist for a normal SQL transaction. To achieve this we must force postgres to
 //! produce a consistent point and let us know of the LSN number of that by creating a replication
-//! slot as the first statement in a transaction.
+//! slot.
 //!
 //! This is a temporary dummy slot that is only used to put our snapshot transaction on a
 //! consistent LSN point. Unfortunately no lighterweight method exists for doing this. See this
@@ -43,14 +43,12 @@
 //!
 //! Creating replication slots is potentially expensive so the code makes is such that all workers
 //! cooperate and reuse one consistent snapshot among them. In order to do so we make use the
-//! "export transaction" feature of postgres. This feature allows one SQL session to create an
-//! identifier for the transaction (a string identifier) it is currently in, which can be used by
-//! other sessions to enter the same "snapshot".
+//! "import snapshot" feature of postgres. This feature allows one SQL session to import the
+//! "snapshot" of the database created by a replication slot.
 //!
 //! We accomplish this by picking one worker at random to function as the transaction leader. The
 //! transaction leader is responsible for starting a SQL session, creating a temporary replication
-//! slot in a transaction, exporting the transaction id, and broadcasting the transaction
-//! information to all other workers via a broadcasted feedback edge.
+//! slot, and broadcasting the snapshot to all other workers via a broadcasted feedback edge.
 //!
 //! During this phase the follower workers are simply waiting to hear on the feedback edge,
 //! effectively synchronizing with the leader. Once all workers have received the snapshot
@@ -327,11 +325,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     ),
                 }
             };
-            // Snapshot leader is already in identified transaction but all other workers need to enter it.
-            if !is_snapshot_leader {
-                trace!(%id, "timely-{worker_id} using snapshot id {snapshot:?}");
-                use_snapshot(&client, &snapshot).await?;
-            }
+
+            trace!(%id, "timely-{worker_id} using snapshot id {snapshot:?}");
+            use_snapshot(&client, &snapshot).await?;
 
             let upstream_info = {
                 let schema_client = connection_config
@@ -535,24 +531,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     )
 }
 
-/// Starts a read-only transaction on the SQL session of `client` at a consistent LSN point by
-/// creating a temporary replication slot. Returns a snapshot identifier that can be imported in
-/// other SQL session and the LSN of the consistent point.
+/// Creates a consistent point using a mechanism appropriate for the server.
+/// Returns a snapshot identifier that can be imported in other SQL session and
+/// the LSN of the consistent point.
 async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), TransientError> {
-    client
-        .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
-        .await?;
-    // A temporary replication slot is the only way to get the tx in a consistent LSN point
+    // A temporary replication slot is the only way to get a consistent point
     let slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
     let query =
         format!("CREATE_REPLICATION_SLOT {slot:?} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT");
     let row = simple_query_opt(client, &query).await?.unwrap();
     let consistent_point: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
-
-    let row = simple_query_opt(client, "SELECT pg_export_snapshot();")
-        .await?
-        .unwrap();
-    let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
+    let snapshot_name: String = row.get("snapshot_name").unwrap().to_string();
 
     // When creating a replication slot postgres returns the LSN of its consistent point, which is
     // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
@@ -562,7 +551,7 @@ async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), Transien
     let consistent_point = u64::from(consistent_point)
         .checked_sub(1)
         .expect("consistent point is always non-zero");
-    Ok((snapshot, MzOffset::from(consistent_point)))
+    Ok((snapshot_name, MzOffset::from(consistent_point)))
 }
 
 /// Starts a read-only transaction on the SQL session of `client` at a the consistent LSN point of
