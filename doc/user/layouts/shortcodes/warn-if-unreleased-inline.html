@@ -6,7 +6,7 @@
 
 {{if not $isReleased}}
 <strong>Unreleased: </strong>This feature will be released in
-<a href="{{$releasePage.RelPermalink}}"><strong>{{$version}}</strong></a>.
+<a href="{{ .Site.BaseURL }}releases#release-notes"><strong>{{$version}}</strong></a>.
 It may not be available in your region yet.
 The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releaseDate}}</strong>.
 {{end}}
