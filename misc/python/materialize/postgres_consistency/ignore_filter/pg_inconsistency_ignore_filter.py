@@ -867,6 +867,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             if query_template.matches_specific_select_or_filter_expression(
                 col_index,
+                partial(matches_fun_by_name, function_name_in_lower_case="floor"),
+                True,
+            ):
+                return YesIgnore("#28801: floor return type")
+
+            if query_template.matches_specific_select_or_filter_expression(
+                col_index,
                 partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
                 True,
             ):
