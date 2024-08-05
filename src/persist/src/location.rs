@@ -370,8 +370,8 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError>;
 
-    /// Return `limit` versions of data stored for this `key` at sequence numbers
-    /// >= `from`, in ascending order of sequence number.
+    /// Return `limit` versions of data stored for this `key` at sequence numbers >= `from`,
+    /// in ascending order of sequence number.
     ///
     /// Returns an empty vec if `from` is greater than the current sequence
     /// number or if there is no data at this key.
