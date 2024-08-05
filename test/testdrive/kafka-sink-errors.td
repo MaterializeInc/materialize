@@ -29,7 +29,7 @@ $ set-arg-default single-replica-cluster=quickstart
   KEY(f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:No such column: f2
+contains:column referenced in KEY does not exist: f2
 
 ! CREATE SINK invalid_legacy_ids
   IN CLUSTER ${arg.single-replica-cluster}
