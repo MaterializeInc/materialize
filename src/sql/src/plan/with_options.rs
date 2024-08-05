@@ -19,7 +19,7 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Ident,
     KafkaBroker, RefreshOptionValue, ReplicaDefinition,
 };
-use mz_storage_types::connections::StringOrSecret;
+use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};

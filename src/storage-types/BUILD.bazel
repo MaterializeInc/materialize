@@ -143,10 +143,11 @@ filegroup(
 	srcs = [
 		"src/controller.proto",
 		"src/collections.proto",
+		"src/connections/aws.proto",
+		"src/connections/string_or_secret.proto",
 		"src/connections.proto",
 		"src/shim.proto",
 		"src/errors.proto",
-		"src/connections/aws.proto",
 		"src/instances.proto",
 		"src/parameters.proto",
 		"src/sinks.proto",

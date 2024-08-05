@@ -75,6 +75,15 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
+    type Aws: Arbitrary
+        + Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
     type Ssh: Arbitrary
         + Clone
         + Debug
@@ -113,6 +122,7 @@ pub struct ReferencedConnection;
 impl ConnectionAccess for ReferencedConnection {
     type Kafka = GlobalId;
     type Pg = GlobalId;
+    type Aws = GlobalId;
     type Ssh = GlobalId;
     type Csr = GlobalId;
     type MySql = GlobalId;
@@ -125,6 +135,7 @@ pub struct InlinedConnection;
 impl ConnectionAccess for InlinedConnection {
     type Kafka = super::KafkaConnection;
     type Pg = super::PostgresConnection;
+    type Aws = super::aws::AwsConnection;
     type Ssh = super::SshConnection;
     type Csr = super::CsrConnection;
     type MySql = super::MySqlConnection;

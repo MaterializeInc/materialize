@@ -67,7 +67,8 @@ use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::connections::{KafkaConnection, StringOrSecret};
+use mz_storage_types::connections::string_or_secret::StringOrSecret;
+use mz_storage_types::connections::KafkaConnection;
 use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection, SourceConnection,

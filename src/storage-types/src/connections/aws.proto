@@ -12,7 +12,7 @@
 syntax = "proto3";
 
 import "repr/src/global_id.proto";
-import "storage-types/src/connections.proto";
+import "storage-types/src/connections/string_or_secret.proto";
 
 package mz_storage_types.connections.aws;
 
@@ -26,12 +26,17 @@ message ProtoAwsConnection {
 }
 
 message ProtoAwsCredentials {
-    mz_storage_types.connections.ProtoStringOrSecret access_key_id = 1;
+    mz_storage_types.connections.string_or_secret.ProtoStringOrSecret access_key_id = 1;
     mz_repr.global_id.ProtoGlobalId secret_access_key = 2;
-    optional mz_storage_types.connections.ProtoStringOrSecret session_token = 3;
+    optional mz_storage_types.connections.string_or_secret.ProtoStringOrSecret session_token = 3;
 }
 
 message ProtoAwsAssumeRole {
     string arn = 1;
     optional string session_name = 2;
+}
+
+message ProtoAwsConnectionReference {
+    mz_repr.global_id.ProtoGlobalId connection_id = 1;
+    ProtoAwsConnection connection = 2;
 }

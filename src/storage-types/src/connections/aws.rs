@@ -25,6 +25,10 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::connections::inline::{
+    ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
+    ReferencedConnection,
+};
 use crate::controller::AlterError;
 use crate::AlterCompatible;
 use crate::{
@@ -437,5 +441,50 @@ impl AwsConnectionValidationError {
             }
             _ => None,
         }
+    }
+}
+
+/// References an AWS connection.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsConnectionReference<C: ConnectionAccess = InlinedConnection> {
+    /// ID of the AWS connection.
+    pub connection_id: GlobalId,
+    /// AWS connection object.
+    pub connection: C::Aws,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
+    for AwsConnectionReference<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> AwsConnectionReference {
+        let AwsConnectionReference {
+            connection,
+            connection_id,
+        } = self;
+
+        AwsConnectionReference {
+            connection: r.resolve_connection(connection).unwrap_aws(),
+            connection_id,
+        }
+    }
+}
+
+impl RustType<ProtoAwsConnectionReference> for AwsConnectionReference<InlinedConnection> {
+    fn into_proto(&self) -> ProtoAwsConnectionReference {
+        ProtoAwsConnectionReference {
+            connection_id: Some(self.connection_id.into_proto()),
+            connection: Some(self.connection.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoAwsConnectionReference) -> Result<Self, TryFromProtoError> {
+        Ok(AwsConnectionReference {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoAwsConnectionReference::connection_id")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoAwsConnectionReference::connection")?,
+        })
     }
 }

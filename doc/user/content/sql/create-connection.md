@@ -147,7 +147,7 @@ To create an AWS connection that will assume the `WarehouseExport` role:
 
 ```mzsql
 CREATE CONNECTION aws_role_assumption TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/WarehouseExport',
+    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/WarehouseExport'
 );
 ```
 {{< /tab >}}
@@ -186,14 +186,15 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 |-------------------------------------------|------------------|------------------------------
 | `BROKER`                                  | `text`           | The Kafka bootstrap server.<br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `BROKERS`                                 | `text[]`         | A comma-separated list of Kafka bootstrap servers.<br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
-| `SECURITY PROTOCOL`                       | `text`           | The security protocol to use: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.<br><br>Defaults to `SASL_SSL` if any `SASL ...` options are specified, otherwise defaults to `SSL`.
-| `SASL MECHANISMS`                         | `text`           | The SASL mechanism to use for authentication: `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`. Despite the name, this option only allows a single mechanism to be specified.<br><br>Required if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
+| `SECURITY PROTOCOL`                       | `text`           | The security protocol to use: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.<br><br>Defaults to `SASL_SSL` if any `SASL ...` options are specified or if the `AWS CONNECTION` option is specified, otherwise defaults to `SSL`.
+| `SASL MECHANISMS`                         | `text`           | The SASL mechanism to use for authentication: `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`. Despite the name, this option only allows a single mechanism to be specified.<br><br>Required if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.<br>Cannot be specified if `AWS CONNECTION` is specified.
 | `SASL USERNAME`                           | secret or `text` | Your SASL username.<br><br>Required and only valid when the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
 | `SASL PASSWORD`                           | secret           | Your SASL password.<br><br>Required and only valid when the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
 | `SSL CERTIFICATE AUTHORITY`               | secret or `text` | The certificate authority (CA) certificate in PEM format. Used to validate the brokers' TLS certificates. If unspecified, uses the system's default CA certificates.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
 | `SSL CERTIFICATE`                         | secret or `text` | Your TLS certificate in PEM format for SSL client authentication. If unspecified, no client authentication is performed.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
 | `SSL KEY`                                 | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid when `SSL CERTIFICATE` is specified.
 | `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
+| `AWS CONNECTION`                          | object name      | An AWS connection to use to perform IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.<br><br>***Private preview.** This option has known performance or stability issues and is under active development.*
 | `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
 | `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | {{< warn-if-unreleased-inline "v0.106" >}} The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
@@ -304,6 +305,23 @@ CREATE CONNECTION kafka_connection TO KAFKA (
     -- Specifying a certificate authority is only required if your cluster's
     -- certificates are not issued by a CA trusted by the Mozilla root store.
     SSL CERTIFICATE AUTHORITY = SECRET ca_cert
+);
+```
+{{< /tab >}}
+
+{{< tab "AWS IAM">}}
+
+{{< private-preview />}}
+
+```mzsql
+CREATE CONNECTION aws_msk TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/MaterializeMSK'
+);
+
+CREATE CONNECTION kafka_msk TO KAFKA (
+    BROKER 'msk.mycorp.com:9092',
+    SECURITY PROTOCOL = 'SASL_SSL',
+    AWS CONNECTION = aws_msk
 );
 ```
 {{< /tab >}}

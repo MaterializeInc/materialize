@@ -776,6 +776,17 @@ version = "0.29.0@git:1e27332856a433235aeba7f82d46d06e3f646b69"
 [[audits.rdkafka]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
+version = "0.29.0@git:302aa0e66bdb695abeef3f963d464eb9148e4099"
+importable = false
+
+[[audits.rdkafka]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.29.0@git:80fffc098a94b81b20f1bb3713ac2f96e622b8e9"
+
+[[audits.rdkafka]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
 version = "0.29.0@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 
 [[audits.rdkafka]]
@@ -792,6 +803,17 @@ version = "4.3.0+1.9.2@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "4.3.0+2.4.0@git:1e27332856a433235aeba7f82d46d06e3f646b69"
+
+[[audits.rdkafka-sys]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.3.0+2.4.0@git:302aa0e66bdb695abeef3f963d464eb9148e4099"
+importable = false
+
+[[audits.rdkafka-sys]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.3.0+2.4.0@git:80fffc098a94b81b20f1bb3713ac2f96e622b8e9"
 
 [[audits.rdkafka-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

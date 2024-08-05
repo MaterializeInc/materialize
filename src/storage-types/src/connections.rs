@@ -51,7 +51,10 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::configuration::StorageConfiguration;
-use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
+use crate::connections::aws::{
+    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+};
+use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
     ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES,
@@ -62,6 +65,7 @@ use crate::AlterCompatible;
 
 pub mod aws;
 pub mod inline;
+pub mod string_or_secret;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
 
@@ -104,72 +108,6 @@ impl SecretsReaderExt for Arc<dyn SecretsReader> {
         async move { sr.read_string(id).await }
             .run_in_task_if(in_task, || "secrets_reader_read".to_string())
             .await
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum StringOrSecret {
-    String(String),
-    Secret(GlobalId),
-}
-
-impl StringOrSecret {
-    /// Gets the value as a string, reading the secret if necessary.
-    pub async fn get_string(
-        &self,
-        in_task: InTask,
-        secrets_reader: &Arc<dyn SecretsReader>,
-    ) -> anyhow::Result<String> {
-        match self {
-            StringOrSecret::String(s) => Ok(s.clone()),
-            StringOrSecret::Secret(id) => secrets_reader.read_string_in_task_if(in_task, *id).await,
-        }
-    }
-
-    /// Asserts that this string or secret is a string and returns its contents.
-    pub fn unwrap_string(&self) -> &str {
-        match self {
-            StringOrSecret::String(s) => s,
-            StringOrSecret::Secret(_) => panic!("StringOrSecret::unwrap_string called on a secret"),
-        }
-    }
-
-    /// Asserts that this string or secret is a secret and returns its global
-    /// ID.
-    pub fn unwrap_secret(&self) -> GlobalId {
-        match self {
-            StringOrSecret::String(_) => panic!("StringOrSecret::unwrap_secret called on a string"),
-            StringOrSecret::Secret(id) => *id,
-        }
-    }
-}
-
-impl RustType<ProtoStringOrSecret> for StringOrSecret {
-    fn into_proto(&self) -> ProtoStringOrSecret {
-        use proto_string_or_secret::Kind;
-        ProtoStringOrSecret {
-            kind: Some(match self {
-                StringOrSecret::String(s) => Kind::String(s.clone()),
-                StringOrSecret::Secret(id) => Kind::Secret(id.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoStringOrSecret) -> Result<Self, TryFromProtoError> {
-        use proto_string_or_secret::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStringOrSecret::kind"))?;
-        Ok(match kind {
-            Kind::String(s) => StringOrSecret::String(s),
-            Kind::Secret(id) => StringOrSecret::Secret(GlobalId::from_proto(id)?),
-        })
-    }
-}
-
-impl<V: std::fmt::Display> From<V> for StringOrSecret {
-    fn from(v: V) -> StringOrSecret {
-        StringOrSecret::String(format!("{}", v))
     }
 }
 
@@ -327,6 +265,13 @@ impl Connection<InlinedConnection> {
         }
     }
 
+    pub fn unwrap_aws(self) -> <InlinedConnection as ConnectionAccess>::Aws {
+        match self {
+            Self::Aws(conn) => conn,
+            o => unreachable!("{o:?} is not an AWS connection"),
+        }
+    }
+
     pub fn unwrap_ssh(self) -> <InlinedConnection as ConnectionAccess>::Ssh {
         match self {
             Self::Ssh(conn) => conn,
@@ -411,10 +356,24 @@ pub struct KafkaTlsConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
-pub struct KafkaSaslConfig {
+pub struct KafkaSaslConfig<C: ConnectionAccess = InlinedConnection> {
     pub mechanism: String,
     pub username: StringOrSecret,
-    pub password: GlobalId,
+    pub password: Option<GlobalId>,
+    pub aws: Option<AwsConnectionReference<C>>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSaslConfig, R>
+    for KafkaSaslConfig<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSaslConfig {
+        KafkaSaslConfig {
+            mechanism: self.mechanism,
+            username: self.username,
+            password: self.password,
+            aws: self.aws.map(|aws| aws.into_inline_connection(&r)),
+        }
+    }
 }
 
 /// Specifies a Kafka broker in a [`KafkaConnection`].
@@ -497,7 +456,7 @@ pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub progress_topic_options: KafkaTopicOptions,
     pub options: BTreeMap<String, StringOrSecret>,
     pub tls: Option<KafkaTlsConfig>,
-    pub sasl: Option<KafkaSaslConfig>,
+    pub sasl: Option<KafkaSaslConfig<C>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
@@ -526,7 +485,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
             default_tunnel: default_tunnel.into_inline_connection(&r),
             options,
             tls,
-            sasl,
+            sasl: sasl.map(|sasl| sasl.into_inline_connection(&r)),
         }
     }
 }
@@ -677,10 +636,9 @@ impl KafkaConnection {
         if let Some(sasl) = &self.sasl {
             options.insert("sasl.mechanisms".into(), (&sasl.mechanism).into());
             options.insert("sasl.username".into(), sasl.username.clone());
-            options.insert(
-                "sasl.password".into(),
-                StringOrSecret::Secret(sasl.password),
-            );
+            if let Some(password) = sasl.password {
+                options.insert("sasl.password".into(), StringOrSecret::Secret(password));
+            }
         }
 
         let mut config = mz_kafka_util::client::create_new_client_config(
@@ -704,6 +662,19 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
+        let aws_config = match self.sasl.as_ref().and_then(|sasl| sasl.aws.as_ref()) {
+            None => None,
+            Some(aws) => Some(
+                aws.connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws.connection_id,
+                        in_task,
+                    )
+                    .await?,
+            ),
+        };
+
         // TODO(roshan): Implement enforcement of external address validation once
         // rdkafka client has been updated to support providing multiple resolved
         // addresses for brokers
@@ -715,6 +686,7 @@ impl KafkaConnection {
                 .ssh_tunnel_manager
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
+            aws_config,
             in_task,
         );
 
@@ -951,7 +923,8 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
         ProtoKafkaConnectionSaslConfig {
             mechanism: self.mechanism.into_proto(),
             username: Some(self.username.into_proto()),
-            password: Some(self.password.into_proto()),
+            password: self.password.into_proto(),
+            aws: self.aws.into_proto(),
         }
     }
 
@@ -961,9 +934,8 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
             username: proto
                 .username
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
-            password: proto
-                .password
-                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
+            password: proto.password.into_rust()?,
+            aws: proto.aws.into_rust()?,
         })
     }
 }
@@ -2088,7 +2060,7 @@ impl AlterCompatible for AwsPrivatelink {
     }
 }
 
-/// Specifies an AWS PrivateLink service for a [`Tunnel`].
+/// Specifies an SSH tunnel connection.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
     /// id of the ssh connection
