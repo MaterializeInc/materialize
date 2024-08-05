@@ -10,6 +10,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use std::fs::File;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistLocation, ShardId};
 use prometheus::Encoder;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
 use tracing::{debug, error, info, info_span, trace, Instrument};
@@ -109,9 +111,13 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
             "serving internal HTTP server on http://{}/metrics",
             args.internal_http_listen_addr
         );
+        let listener = TcpListener::bind(&args.internal_http_listen_addr)
+            .await
+            .expect("can bind");
         mz_ore::task::spawn(
             || "http_server",
-            axum::Server::bind(&args.internal_http_listen_addr).serve(
+            axum::serve(
+                listener,
                 axum::Router::new()
                     .route(
                         "/metrics",
@@ -120,7 +126,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                         }),
                     )
                     .into_make_service(),
-            ),
+            )
+            .into_future(),
         );
     }
 

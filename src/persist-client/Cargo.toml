@@ -55,7 +55,7 @@ once_cell = "1.16.0"
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 sentry-tracing = "0.29.1"
 semver = { version = "1.0.16", features = ["serde"] }
 serde = { version = "1.0.152", features = ["derive", "rc"] }
@@ -65,7 +65,7 @@ thiserror = "1.0.37"
 tokio = { version = "1.38.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics = "0.3.0"
 tokio-stream = "0.1.11"
-tonic = "0.9.2"
+tonic = "0.12.1"
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
@@ -79,8 +79,8 @@ tempfile = "3.8.1"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.11.2"
-tonic-build = "0.9.2"
+prost-build = "0.13.1"
+tonic-build = "0.12.1"
 
 [features]
 default = ["mz-build-tools/default"]

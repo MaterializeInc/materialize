@@ -452,7 +452,7 @@ where
                 }
             }
             Err(e) => {
-                warn!("storage cluster produced error, reconnecting: {e}");
+                warn!("storage cluster produced error, reconnecting: {e:#}");
                 RehydrationTaskState::Rehydrate { location }
             }
         }

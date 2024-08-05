@@ -13,7 +13,8 @@ use askama::Template;
 use axum::http::status::StatusCode;
 use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse};
-use axum::{Json, TypedHeader};
+use axum::Json;
+use axum_extra::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
@@ -79,10 +80,10 @@ macro_rules! make_handle_static {
                 .extension()
                 .and_then(|e| e.to_str())
             {
-                Some("js") => Some(::axum::TypedHeader(::headers::ContentType::from(
+                Some("js") => Some(::axum_extra::TypedHeader(::headers::ContentType::from(
                     ::mime::TEXT_JAVASCRIPT,
                 ))),
-                Some("css") => Some(::axum::TypedHeader(::headers::ContentType::from(
+                Some("css") => Some(::axum_extra::TypedHeader(::headers::ContentType::from(
                     ::mime::TEXT_CSS,
                 ))),
                 None | Some(_) => None,
@@ -174,7 +175,6 @@ where
 mod tests {
     use http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN};
     use http::{HeaderValue, Method, Request, Response};
-    use hyper::Body;
     use tower::{Service, ServiceBuilder, ServiceExt};
     use tower_http::cors::CorsLayer;
 
@@ -183,11 +183,8 @@ mod tests {
         async fn test_request(cors: &CorsLayer, origin: &HeaderValue) -> Option<HeaderValue> {
             let mut service = ServiceBuilder::new()
                 .layer(cors)
-                .service_fn(|_| async { Ok::<_, anyhow::Error>(Response::new(Body::empty())) });
-            let request = Request::builder()
-                .header(ORIGIN, origin)
-                .body(Body::empty())
-                .unwrap();
+                .service_fn(|_| async { Ok::<_, anyhow::Error>(Response::new("")) });
+            let request = Request::builder().header(ORIGIN, origin).body("").unwrap();
             let response = service.ready().await.unwrap().call(request).await.unwrap();
             response.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).cloned()
         }

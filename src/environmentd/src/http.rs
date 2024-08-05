@@ -25,7 +25,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{routing, Extension, Json, Router};
@@ -33,8 +33,10 @@ use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use http::{Method, Request, StatusCode};
-use hyper_openssl::MaybeHttpsStream;
+use http::{Method, StatusCode};
+use hyper_openssl::client::legacy::MaybeHttpsStream;
+use hyper_openssl::SslStream;
+use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session, SessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_frontegg_auth::{Authenticator as FronteggAuthentication, Error as FronteggError};
@@ -56,9 +58,8 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{oneshot, watch};
-use tokio_openssl::SslStream;
 use tower::limit::GlobalConcurrencyLimitLayer;
-use tower::ServiceBuilder;
+use tower::{Service, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
@@ -216,22 +217,24 @@ impl Server for HttpServer {
     fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
         let router = self.router.clone();
         let tls_config = self.tls.clone();
+        let conn = TokioIo::new(conn);
         Box::pin(async {
             let (conn, conn_protocol) = match tls_config {
                 Some(tls_config) => {
                     let mut ssl_stream =
                         SslStream::new(Ssl::new(&tls_config.context.get())?, conn)?;
                     if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                        let _ = ssl_stream.get_mut().shutdown().await;
+                        let _ = ssl_stream.get_mut().inner_mut().shutdown().await;
                         return Err(e.into());
                     }
                     (MaybeHttpsStream::Https(ssl_stream), ConnProtocol::Https)
                 }
                 _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
             };
-            let svc = router.layer(Extension(conn_protocol));
-            let http = hyper::server::conn::Http::new();
-            http.serve_connection(conn, svc)
+            let tower_svc = router.layer(Extension(conn_protocol));
+            let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
+            let http = hyper::server::conn::http1::Builder::new();
+            http.serve_connection(conn, hyper_svc)
                 .with_upgrades()
                 .err_into()
                 .await
@@ -406,7 +409,7 @@ impl InternalHttpServer {
     }
 }
 
-async fn internal_http_auth<B>(mut req: Request<B>, next: Next<B>) -> impl IntoResponse {
+async fn internal_http_auth(mut req: Request, next: Next) -> impl IntoResponse {
     let user_name = req
         .headers()
         .get("x-materialize-user")
@@ -433,9 +436,11 @@ impl Server for InternalHttpServer {
 
     fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
         let router = self.router.clone();
+        let service = hyper::service::service_fn(move |req| router.clone().call(req));
+
         Box::pin(async {
-            let http = hyper::server::conn::Http::new();
-            http.serve_connection(conn, router)
+            let http = hyper::server::conn::http1::Builder::new();
+            http.serve_connection(TokioIo::new(conn), service)
                 .with_upgrades()
                 .err_into()
                 .await
@@ -610,9 +615,9 @@ impl IntoResponse for AuthError {
     }
 }
 
-async fn http_auth<B>(
-    mut req: Request<B>,
-    next: Next<B>,
+async fn http_auth(
+    mut req: Request,
+    next: Next,
     tls_mode: TlsMode,
     frontegg: Option<&FronteggAuthentication>,
 ) -> impl IntoResponse {

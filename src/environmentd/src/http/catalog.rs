@@ -10,7 +10,7 @@
 //! Catalog introspection HTTP endpoints.
 
 use axum::response::IntoResponse;
-use axum::TypedHeader;
+use axum_extra::TypedHeader;
 use headers::ContentType;
 use http::StatusCode;
 

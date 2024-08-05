@@ -122,7 +122,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         500,
         None,
         roles,
-    )?;
+    )
+    .await?;
 
     println!("frontegg-mock listening...");
     println!(" HTTP address: {}", server.base_url);

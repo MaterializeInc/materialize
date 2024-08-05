@@ -162,7 +162,7 @@ where
         let client = self.connect().await;
         match self.run_message_loop(client).await {
             Ok(()) => info!(replica = ?replica_id, "stopped replica task"),
-            Err(error) => warn!(replica = ?replica_id, "replica task failed: {error}"),
+            Err(error) => warn!(replica = ?replica_id, "replica task failed: {error:#}"),
         }
     }
 

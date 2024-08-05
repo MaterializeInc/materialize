@@ -20,11 +20,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use headers::Authorization;
-use hyper::client::HttpConnector;
+use http_body_util::BodyExt;
+use hyper::body::Incoming;
 use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use hyper::http::uri::Scheme;
-use hyper::{body, Body, Request, Response, StatusCode, Uri};
-use hyper_openssl::HttpsConnector;
+use hyper::{Request, Response, StatusCode, Uri};
+use hyper_openssl::client::legacy::HttpsConnector;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
+use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
@@ -232,9 +236,9 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     configure: &Box<
                         dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
                     >,
-                ) -> hyper::Result<Response<Body>> {
-                    hyper::Client::builder()
-                        .build::<_, Body>(make_http_tls(configure))
+                ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
+                    hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+                        .build(make_http_tls(configure))
                         .request({
                             let mut req = Request::post(uri);
                             for (k, v) in headers.iter() {
@@ -244,14 +248,13 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                                 "Content-Type",
                                 HeaderValue::from_static("application/json"),
                             );
-                            req.body(Body::from(json!({ "query": query }).to_string()))
-                                .unwrap()
+                            req.body(json!({ "query": query }).to_string()).unwrap()
                         })
                         .await
                 }
 
                 async fn assert_success_response(
-                    res: hyper::Result<Response<Body>>,
+                    res: Result<Response<Incoming>, hyper_util::client::legacy::Error>,
                     expected_rows: Vec<Vec<String>>,
                 ) {
                     #[derive(Deserialize)]
@@ -262,7 +265,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     struct Response {
                         results: Vec<Result>,
                     }
-                    let body = body::to_bytes(res.unwrap().into_body()).await.unwrap();
+                    let body = res.unwrap().into_body().collect().await.unwrap().to_bytes();
                     let res: Response = serde_json::from_slice(&body).unwrap();
                     assert_eq!(res.results[0].rows, expected_rows)
                 }
@@ -305,11 +308,16 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     Assert::Err(check) => {
                         let (code, message) = match res {
                             Ok(mut res) => {
-                                let body = body::to_bytes(res.body_mut()).await.unwrap();
+                                let body = res.body_mut().collect().await.unwrap().to_bytes();
                                 let body = String::from_utf8_lossy(&body[..]).into_owned();
                                 (Some(res.status()), body)
                             }
-                            Err(e) => (None, e.to_string()),
+                            Err(e) => {
+                                let e: &dyn std::error::Error = &e;
+                                let errors = std::iter::successors(Some(e), |&e| e.source());
+                                let message = errors.map(|e| e.to_string()).join(": ");
+                                (None, message)
+                            }
                         };
                         check(code, message)
                     }
@@ -463,6 +471,7 @@ async fn test_auth_expiry() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -732,6 +741,7 @@ async fn test_auth_base_require_tls_frontegg() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -1601,6 +1611,7 @@ async fn test_auth_admin_non_superuser() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1737,6 +1748,7 @@ async fn test_auth_admin_superuser() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1873,6 +1885,7 @@ async fn test_auth_admin_superuser_revoked() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -1999,6 +2012,7 @@ async fn test_auth_deduplication() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2164,6 +2178,7 @@ async fn test_refresh_task_metrics() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2318,6 +2333,7 @@ async fn test_superuser_can_alter_cluster() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let password_prefix = "mzp_";
@@ -2435,6 +2451,7 @@ async fn test_refresh_dropped_session() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2606,6 +2623,7 @@ async fn test_refresh_dropped_session_lru() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2789,6 +2807,7 @@ async fn test_transient_auth_failures() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -2906,6 +2925,7 @@ async fn test_transient_auth_failure_on_refresh() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(

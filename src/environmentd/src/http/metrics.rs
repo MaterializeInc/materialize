@@ -13,11 +13,9 @@ use std::convert::Infallible;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use axum::extract::MatchedPath;
+use axum::extract::{MatchedPath, Request};
 use axum::response::IntoResponse;
 use futures::Future;
-use http::Request;
-use http_body::Body;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::result::ResultExt;
@@ -94,10 +92,9 @@ pub struct PrometheusService<S> {
     service: S,
 }
 
-impl<S, B> Service<Request<B>> for PrometheusService<S>
+impl<S> Service<Request> for PrometheusService<S>
 where
-    B: Body,
-    S: Service<Request<B>>,
+    S: Service<Request>,
     S::Response: IntoResponse,
     S::Error: Into<Infallible>,
     S::Future: Send,
@@ -113,7 +110,7 @@ where
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, req: Request) -> Self::Future {
         let path = req
             .extensions()
             .get::<MatchedPath>()

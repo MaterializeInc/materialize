@@ -10,7 +10,7 @@
 //! HTTP endpoints for controlling the coordinator and the controllers.
 
 use axum::response::IntoResponse;
-use axum::TypedHeader;
+use axum_extra::TypedHeader;
 use headers::ContentType;
 use http::StatusCode;
 

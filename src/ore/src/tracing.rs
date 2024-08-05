@@ -36,11 +36,12 @@ use std::time::Duration;
 use console_subscriber::ConsoleLayer;
 use derivative::Derivative;
 use http::HeaderMap;
-use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::connect::HttpConnector;
 use once_cell::sync::Lazy;
 use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
+use opentelemetry::trace::TracerProvider;
 use opentelemetry::{global, KeyValue};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::{trace, Resource};
@@ -394,16 +395,17 @@ where
             .tonic()
             .with_channel(channel)
             .with_metadata(MetadataMap::from_headers(otel_config.headers));
-        let batch_config = opentelemetry_sdk::trace::BatchConfig::default()
+        let batch_config = opentelemetry_sdk::trace::BatchConfigBuilder::default()
             .with_max_queue_size(otel_config.max_batch_queue_size)
             .with_max_export_batch_size(otel_config.max_export_batch_size)
             .with_max_concurrent_exports(otel_config.max_concurrent_exports)
             .with_scheduled_delay(otel_config.batch_scheduled_delay)
-            .with_max_export_timeout(otel_config.max_export_timeout);
+            .with_max_export_timeout(otel_config.max_export_timeout)
+            .build();
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
             .with_trace_config(
-                trace::config().with_resource(
+                trace::Config::default().with_resource(
                     // The latter resources win, so if the user specifies
                     // `service.name` in the configuration, it will override the
                     // `service.name` value we configure here.
@@ -417,7 +419,8 @@ where
             .with_exporter(exporter)
             .with_batch_config(batch_config)
             .install_batch(opentelemetry_sdk::runtime::Tokio)
-            .unwrap();
+            .unwrap()
+            .tracer(config.service_name);
 
         // Create our own error handler to:
         //   1. Rate limit the number of error logs. By default the OTel library will emit

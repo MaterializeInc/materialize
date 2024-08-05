@@ -14,9 +14,9 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use http::StatusCode;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::action::{ControlFlow, State};

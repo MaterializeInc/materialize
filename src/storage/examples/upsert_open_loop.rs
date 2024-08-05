@@ -99,6 +99,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use std::collections::BTreeMap;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -122,6 +123,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
@@ -302,9 +304,14 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
             "serving internal HTTP server on http://{}/metrics",
             args.internal_http_listen_addr
         );
+
+        let listener = TcpListener::bind(&args.internal_http_listen_addr)
+            .await
+            .expect("can bind");
         mz_ore::task::spawn(
             || "http_server",
-            axum::Server::bind(&args.internal_http_listen_addr).serve(
+            axum::serve(
+                listener,
                 axum::Router::new()
                     .route(
                         "/metrics",
@@ -313,7 +320,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                         }),
                     )
                     .into_make_service(),
-            ),
+            )
+            .into_future(),
         );
     }
 

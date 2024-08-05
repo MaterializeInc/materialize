@@ -11,11 +11,12 @@ workspace = true
 
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-axum = { version = "0.6.20", features = ["headers"] }
+axum = "0.7.5"
+axum-extra = { version = "0.9.3", features = ["typed-header"] }
 base64 = "0.22.0"
 chrono = { version = "0.4.35", default-features = false, features = ["serde"] }
 clap = { version = "3.2.24", features = ["derive", "env"] }
-hyper = { version = "0.14.23", features = ["http1", "server"] }
+hyper = { version = "1.4.1", features = ["http1", "server"] }
 jsonwebtoken = "9.2.0"
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }

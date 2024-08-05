@@ -813,7 +813,8 @@ impl DateTimeFormat {
 
         let matcher = AhoCorasickBuilder::new()
             .match_kind(aho_corasick::MatchKind::LeftmostLongest)
-            .build(DateTimeToken::patterns());
+            .build(DateTimeToken::patterns())
+            .unwrap_or_else(|e| panic!("automaton build error: {e}"));
 
         let matches: Vec<_> = matcher
             .find_iter(&s)
@@ -821,7 +822,7 @@ impl DateTimeFormat {
                 start: m.start(),
                 end: m.end(),
                 token: DateTimeToken::try_from(
-                    u8::try_from(m.pattern()).expect("match index fits in a u8"),
+                    u8::try_from(m.pattern().as_u32()).expect("match index fits in a u8"),
                 )
                 .expect("match pattern missing"),
             })

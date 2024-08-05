@@ -23,7 +23,7 @@ use std::{iter, thread};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
-use http::{Request, StatusCode};
+use http::Request;
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
@@ -54,7 +54,8 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::ClientConfig;
 use rdkafka_sys::RDKafkaErrorCode;
 use reqwest::blocking::Client;
-use reqwest::{header::CONTENT_TYPE, Url};
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -2027,6 +2028,7 @@ async fn test_max_connections_limits() {
         None,
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
@@ -4341,6 +4343,7 @@ async fn test_cert_reloading() {
         Some(Duration::from_millis(100)),
         None,
     )
+    .await
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(

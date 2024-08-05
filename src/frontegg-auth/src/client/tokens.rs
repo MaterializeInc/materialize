@@ -82,13 +82,14 @@ pub struct ApiTokenResponse {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
     use axum::{routing::post, Router};
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::{assert_err, assert_ok};
-    use reqwest::StatusCode;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use tokio::net::TcpListener;
     use uuid::Uuid;
 
     use super::ApiTokenResponse;
@@ -128,14 +129,10 @@ mod tests {
 
         // Use port 0 to get a dynamically assigned port.
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let tcp = std::net::TcpListener::bind(addr).expect("able to bind");
+        let tcp = TcpListener::bind(addr).await.expect("able to bind");
         let addr = tcp.local_addr().expect("valid addr");
         mz_ore::task::spawn(|| "test-server", async move {
-            axum::Server::from_tcp(tcp)
-                .expect("able to start")
-                .serve(app.into_make_service())
-                .await
-                .unwrap();
+            axum::serve(tcp, app.into_make_service()).await.unwrap();
         });
 
         let client = Client::default();

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![allow(clippy::clone_on_ref_ptr, clippy::disallowed_methods)] // Generated code does this
+#![allow(clippy::as_conversions, clippy::clone_on_ref_ptr)] // Generated code does this
 
 include!(concat!(
     env!("OUT_DIR"),

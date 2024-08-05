@@ -17,7 +17,7 @@ aws-types = "1.1.1"
 bytesize = "1.1.0"
 differential-dataflow = "0.12.0"
 futures = "0.3.25"
-http = "0.2.8"
+http = "1.1.0"
 mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }
 mz-dyncfg = { path = "../dyncfg" }
