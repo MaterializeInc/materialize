@@ -569,6 +569,72 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         any_hydrated
     }
 
+    /// Returns `true` iff all collections have their write frontier (aka.
+    /// upper) within `allowed_lag` of the "live" frontier reported in
+    /// `live_frontiers`. The "live" frontiers are frontiers as reported by a
+    /// currently running `environmentd` deployment, during a 0dt upgrade.
+    ///
+    /// This also returns `true` in case this cluster does not have any
+    /// replicas.
+    pub fn all_collections_caught_up(
+        &self,
+        allowed_lag: T,
+        live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
+    ) -> bool {
+        if self.replicas.is_empty() {
+            return true;
+        }
+
+        let mut all_caught_up = true;
+
+        for (id, collection) in self.collections_iter() {
+            let write_frontier = collection.write_frontier();
+
+            // WIP: Assumes that the String representation remains stable. Is
+            // that okay?
+            let live_write_frontier = match live_frontiers.get(id) {
+                Some(frontier) => frontier,
+                None => {
+                    // The collection didn't previously exist, so consider
+                    // ourselves hydrated as long as our write_ts is > 0.
+                    tracing::info!(?write_frontier, "collection {id} not in live frontiers");
+                    // The collection didn't previously exist, so consider
+                    // ourselves hydrated as long as our write_ts is > 0.
+                    if write_frontier.less_equal(&T::minimum()) {
+                        all_caught_up = false;
+                    }
+                    continue;
+                }
+            };
+
+            // We can't do easy comparisons and subtractions, so we bump up the
+            // write frontier by the allowed lag, and then compare that against
+            // the write frontier.
+            let bumped_write_frontier = write_frontier
+                .iter()
+                .map(|t| t.step_forward_by(&allowed_lag));
+            let bumped_write_frontier = Antichain::from_iter(bumped_write_frontier);
+
+            let within_lag = PartialOrder::less_equal(live_write_frontier, &bumped_write_frontier);
+
+            if !within_lag {
+                // We are not within the allowed lag!
+                //
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-caught-up replicas.
+                tracing::info!(
+                    ?write_frontier,
+                    ?live_write_frontier,
+                    ?allowed_lag,
+                    "collection {id} is not caught up"
+                );
+                all_caught_up = false;
+            }
+        }
+
+        all_caught_up
+    }
+
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:

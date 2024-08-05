@@ -1657,6 +1657,46 @@ where
         }
     }
 
+    async fn snapshot_latest(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
+        let upper = self
+            .persist_monotonic_worker
+            .recent_upper(id)
+            .await
+            .expect("sender hung up")?;
+
+        let res = match upper.as_option() {
+            Some(f) if f > &T::minimum() => {
+                let as_of = f.step_back().unwrap();
+
+                let snapshot = self.snapshot(id, as_of).await.unwrap();
+                snapshot
+                    .into_iter()
+                    .map(|(row, diff)| {
+                        assert!(diff == 1, "snapshot doesn't accumulate to set");
+                        row
+                    })
+                    .collect()
+            }
+            Some(_min) => {
+                // The collection must be empty!
+                Vec::new()
+            }
+            // The collection is closed, we cannot determine a latest read
+            // timestamp based on the upper.
+            _ => {
+                return Err(StorageError::InvalidUsage(
+                    "collection closed, cannot determine a read timestamp based on the upper"
+                        .to_string(),
+                ));
+            }
+        };
+
+        Ok(res)
+    }
+
     async fn snapshot_cursor(
         &mut self,
         id: GlobalId,

@@ -362,6 +362,36 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         result
     }
 
+    /// Returns `true` iff all collections have their write frontier (aka.
+    /// upper) within `allowed_lag` of the "live" frontier reported in
+    /// `live_frontiers`. The "live" frontiers are frontiers as reported by a
+    /// currently running `environmentd` deployment, during a 0dt upgrade.
+    ///
+    /// For this check, zero-replica clusters are always considered caught up.
+    /// Their collections would never normally be considered caught up but it's
+    /// clearly intentional that they have no replicas.
+    pub fn clusters_caught_up(
+        &self,
+        allowed_lag: T,
+        live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
+    ) -> bool {
+        let mut result = true;
+        for (instance_id, i) in &self.instances {
+            let instance_hydrated =
+                i.all_collections_caught_up(allowed_lag.clone(), live_frontiers);
+
+            if !instance_hydrated {
+                result = false;
+
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-hydrated clusters.
+                tracing::info!("cluster {instance_id} is not hydrated");
+            }
+        }
+
+        result
+    }
+
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());

@@ -598,6 +598,13 @@ pub trait StorageController: Debug {
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>;
 
+    /// Returns the snapshot of the contents of the local input named `id` at
+    /// the largest readable `as_of`.
+    async fn snapshot_latest(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<Vec<Row>, StorageError<Self::Timestamp>>;
+
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot_cursor(
         &mut self,
