@@ -550,7 +550,7 @@ impl Coordinator {
         //    struct in `active_conns` and proceeds. The lock is dropped at transaction end in
         //    `clear_transaction` and a message sent to the Coordinator to execute the next queued
         //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
-        //    awaits dequeing caused by the lock being released.
+        //    awaits dequeuing caused by the lock being released.
 
         // Verify that this statement type can be executed in the current
         // transaction state.
@@ -718,12 +718,12 @@ impl Coordinator {
         }
 
         // DDLs must be planned and sequenced serially. We do not rely on PlanValidity checking
-        // variaous IDs because we have incorrectly done that in the past. Attempt to acquire the
+        // various IDs because we have incorrectly done that in the past. Attempt to acquire the
         // ddl lock. The lock is stashed in the ConnMeta which is dropped at transaction end. If
-        // acquired, proceed with sequencing. If not, enque and return. This logic assumes that
+        // acquired, proceed with sequencing. If not, enqueue and return. This logic assumes that
         // Coordinator::clear_transaction is correctly called when session transactions are ended
         // because that function will release the held lock from active_conns.
-        if Self::must_serialize_ddl(&stmt) {
+        if Self::must_serialize_ddl(&stmt, &ctx) {
             if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
                 let prev = self
                     .active_conns
@@ -950,7 +950,7 @@ impl Coordinator {
     }
 
     /// Whether the statement must be serialized and is DDL.
-    fn must_serialize_ddl(stmt: &Statement<Raw>) -> bool {
+    fn must_serialize_ddl(stmt: &Statement<Raw>, ctx: &ExecuteContext) -> bool {
         // Non-DDL is not serialized here.
         if !StatementClassification::from(&*stmt).is_ddl() {
             return false;
@@ -961,6 +961,14 @@ impl Coordinator {
         if Self::must_spawn_purification(stmt) {
             return false;
         }
+
+        // Statements that support multiple DDLs in a single transaction aren't serialized here.
+        // Their operations are serialized when applied to the catalog, guaranteeing that any
+        // off-thread DDLs concurrent with a multiple DDL transaction will have a serial order.
+        if ctx.session.transaction().is_ddl() {
+            return false;
+        }
+
         // Some DDL is exempt. It is not great that we are matching on Statements here because
         // different plans can be produced from the same top-level statement type (i.e., `ALTER
         // CONNECTION ROTATE KEYS`). But the whole point of this is to prevent things from being
@@ -978,11 +986,6 @@ impl Coordinator {
                 false
             }
 
-            // Statements that support multiple DDLs in a single transaction aren't serialized here.
-            // Their operations are serialized when applied to the catalog, guaranteeing that any
-            // off-thread DDLs concurrent with a multiple DDL transaction will have a serial order.
-            Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => false,
-
             // The off-thread work that altering a cluster may do (waiting for replicas to spin-up),
             // does not affect its catalog names or ids and so is safe to not serialize. This could
             // change the set of replicas that exist. For queries that name replicas or use the
@@ -992,7 +995,7 @@ impl Coordinator {
             // users.
             Statement::AlterCluster(_) => false,
 
-            // Everything is must be serialized.
+            // Everything else must be serialized.
             _ => true,
         }
     }
