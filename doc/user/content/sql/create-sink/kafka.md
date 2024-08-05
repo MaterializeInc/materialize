@@ -520,7 +520,7 @@ There are three ways to resolve this error:
   INTO KAFKA CONNECTION kafka_connection (TOPIC 't')
   -- We have outside knowledge that `k` is a unique key of `original_input`, but
   -- Materialize cannot prove this, so we disable its key uniqueness check.
-  KEY k NOT ENFORCED
+  KEY (k) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT;
   ```
 
