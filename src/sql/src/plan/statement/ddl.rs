@@ -54,25 +54,25 @@ use mz_sql_parser::ast::{
     ClusterScheduleOptionValue, ColumnOption, CommentObjectType, CommentStatement,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption,
-    KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    CreateContinuallyInsertStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, Statement, TableConstraint, TableOption, TableOptionName,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -134,14 +134,15 @@ use crate::plan::{
     AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
     AlterSecretPlan, AlterSetClusterPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
     AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    ComputeReplicaIntrospectionConfig, ContinuallyInsert, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateConnectionPlan, CreateContinuallyInsertPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion,
+    MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig,
+    Secret, Sink, Source, Table, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders,
 };
 use crate::plan::{AlterClusterPlanStrategy, AlterSinkPlan, WebhookValidation};
 use crate::session::vars;
@@ -2321,6 +2322,13 @@ pub fn describe_create_materialized_view(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_continually_insert(
+    _: &StatementContext,
+    _: CreateContinuallyInsertStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -2592,6 +2600,110 @@ generate_extracted_config!(
     (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
+
+pub fn plan_create_continually_insert(
+    scx: &StatementContext,
+    mut stmt: CreateContinuallyInsertStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let cluster_id =
+        crate::plan::statement::resolve_cluster_for_continually_insert(scx.catalog, &stmt)?;
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateContinuallyInsert(stmt.clone()))?;
+
+    let partial_name = normalize::unresolved_item_name(stmt.name)?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+    let target_table = scx.get_item_by_resolved_name(&stmt.target_table)?;
+    let retract_from_table = scx.get_item_by_resolved_name(&stmt.retract_from_table)?;
+
+    let query::PlannedRootQuery {
+        mut expr,
+        desc: _, // TODO!
+        finishing,
+        scope: _,
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+    // We get back a trivial finishing, see comment in `plan_view`.
+    assert!(finishing.is_trivial(expr.arity()));
+
+    expr.bind_parameters(params)?;
+
+    // Override the statement-level IfExistsBehavior with Skip if this is
+    // explicitly requested in the PlanContext (the default is `false`).
+    let if_exists = match scx.pcx().map(|pcx| pcx.ignore_if_exists_errors) {
+        Ok(true) => IfExistsBehavior::Skip,
+        _ => stmt.if_exists,
+    };
+
+    let mut replace = None;
+    let mut if_not_exists = false;
+    match if_exists {
+        IfExistsBehavior::Replace => {
+            let if_exists = true;
+            let cascade = false;
+            let replace_id = plan_drop_item(
+                scx,
+                ObjectType::MaterializedView,
+                if_exists,
+                partial_name.into(),
+                cascade,
+            )?;
+            if let Some(id) = replace_id {
+                if expr.depends_on().contains(&id) {
+                    let item = scx.catalog.get_item(&id);
+                    sql_bail!(
+                        "cannot replace materialized view {0}: depended upon by new {0} definition",
+                        scx.catalog.resolve_full_name(item.name())
+                    );
+                }
+                replace = Some(id);
+            }
+        }
+        IfExistsBehavior::Skip => if_not_exists = true,
+        IfExistsBehavior::Error => (),
+    }
+    let drop_ids = replace
+        .map(|id| {
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    // For PostgreSQL compatibility, we need to prevent creating materialized
+    // views when there is an existing object *or* type of the same name.
+    if let (IfExistsBehavior::Error, Ok(item)) =
+        (if_exists, scx.catalog.resolve_item_or_type(&partial_name))
+    {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    Ok(Plan::CreateContinuallyInsert(CreateContinuallyInsertPlan {
+        name,
+        target_table_id: target_table.id(),
+        retract_from_table_id: retract_from_table.id(),
+        continually_insert: ContinuallyInsert {
+            create_sql,
+            expr,
+            cluster_id,
+        },
+        replace,
+        drop_ids,
+        if_not_exists,
+    }))
+}
 
 pub fn describe_create_sink(
     _: &StatementContext,

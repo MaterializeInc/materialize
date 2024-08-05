@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 
+pub mod continual_task_insert;
 pub mod dataflows;
 pub mod dyncfgs;
 pub mod explain;

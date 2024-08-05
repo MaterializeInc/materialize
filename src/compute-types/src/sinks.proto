@@ -38,12 +38,21 @@ message ProtoComputeSinkConnection {
         google.protobuf.Empty subscribe = 1;
         ProtoPersistSinkConnection persist = 2;
         ProtoCopyToS3OneshotSinkConnection copy_to_s3_oneshot = 3;
+        ProtoContinualTaskInsertConnection continual_task_insert = 4;
     }
 }
 
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
+}
+
+message ProtoContinualTaskInsertConnection {
+    mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
+    mz_repr.global_id.ProtoGlobalId target_id = 2;
+    mz_repr.global_id.ProtoGlobalId retract_from_id = 3;
+    mz_storage_types.controller.ProtoCollectionMetadata target_metadata = 4;
+    mz_storage_types.controller.ProtoCollectionMetadata retract_from_metadata = 5;
 }
 
 message ProtoCopyToS3OneshotSinkConnection {

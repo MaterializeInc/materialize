@@ -601,6 +601,33 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateContinuallyInsert(plan::CreateContinuallyInsertPlan {
+            name,
+            target_table_id: _,       // TODO!
+            retract_from_table_id: _, // TODO!
+            continually_insert,
+            replace,
+            drop_ids: _,
+            if_not_exists: _,
+        }) => RbacRequirements {
+            ownership: replace
+                .map(|id| vec![ObjectId::Item(id)])
+                .unwrap_or_default(),
+            privileges: vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(continually_insert.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,

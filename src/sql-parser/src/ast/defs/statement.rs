@@ -54,6 +54,7 @@ pub enum Statement<T: AstInfo> {
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
+    CreateContinuallyInsert(CreateContinuallyInsertStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
@@ -127,6 +128,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
+            Statement::CreateContinuallyInsert(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
@@ -203,6 +205,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSink => "create_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
+        StatementKind::CreateContinuallyInsert => "create_continually_insert",
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
@@ -1383,6 +1386,31 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// `CREATE CONTINUAL TASK`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateContinuallyInsertStatement<T: AstInfo> {
+    pub if_exists: IfExistsBehavior,
+    pub name: UnresolvedItemName,
+    /// The table that we insert into.
+    pub target_table: T::ItemName,
+    /// The table that we retract from when we succesfully ingest.
+    pub retract_from_table: T::ItemName,
+    pub in_cluster: Option<T::ClusterName>,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateContinuallyInsertStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE");
+        if self.if_exists == IfExistsBehavior::Replace {
+            f.write_str(" OR REPLACE");
+        }
+
+        f.write_str(" CONTINUAL TASK");
+    }
+}
+impl_display_t!(CreateContinuallyInsertStatement);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

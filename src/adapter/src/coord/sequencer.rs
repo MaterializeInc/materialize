@@ -212,6 +212,13 @@ impl Coordinator {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
                         .await;
                 }
+                Plan::CreateContinuallyInsert(plan) => {
+                    let result = self
+                        .sequence_create_continually_insert(ctx.session(), plan, resolved_ids)
+                        .await;
+
+                    ctx.retire(result);
+                }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }

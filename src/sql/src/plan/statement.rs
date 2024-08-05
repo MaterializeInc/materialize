@@ -17,9 +17,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_repr::namespaces::is_system_schema;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
-    RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
-    UnresolvedSchemaName,
+    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateContinuallyInsertStatement,
+    CreateMaterializedViewStatement, RawItemName, ShowStatement, StatementKind, TableConstraint,
+    UnresolvedDatabaseName, UnresolvedSchemaName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
@@ -157,6 +157,9 @@ pub fn describe(
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
+        }
+        Statement::CreateContinuallyInsert(stmt) => {
+            ddl::describe_create_continually_insert(&scx, stmt)?
         }
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -342,6 +345,9 @@ pub fn plan(
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
         Statement::CreateMaterializedView(stmt) => {
             ddl::plan_create_materialized_view(scx, stmt, params)
+        }
+        Statement::CreateContinuallyInsert(stmt) => {
+            ddl::plan_create_continually_insert(scx, stmt, params)
         }
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -987,6 +993,16 @@ impl<'a> StatementContext<'a> {
 pub fn resolve_cluster_for_materialized_view<'a>(
     catalog: &'a dyn SessionCatalog,
     stmt: &CreateMaterializedViewStatement<Aug>,
+) -> Result<ClusterId, PlanError> {
+    Ok(match &stmt.in_cluster {
+        None => catalog.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    })
+}
+
+pub fn resolve_cluster_for_continually_insert<'a>(
+    catalog: &'a dyn SessionCatalog,
+    stmt: &CreateContinuallyInsertStatement<Aug>,
 ) -> Result<ClusterId, PlanError> {
     Ok(match &stmt.in_cluster {
         None => catalog.resolve_cluster(None)?.id(),

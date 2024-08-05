@@ -9,6 +9,10 @@
 
 //! Shared types for the `mz-storage*` crates
 
+use std::num::NonZeroI64;
+
+use mz_persist_types::{Codec64, Opaque};
+
 pub mod collections;
 pub mod configuration;
 pub mod connections;
@@ -45,3 +49,37 @@ pub trait AlterCompatible: std::fmt::Debug + PartialEq {
 }
 
 impl AlterCompatible for mz_repr::GlobalId {}
+
+/// A wrapper struct that presents the adapter token to a format that is understandable by persist
+/// and also allows us to differentiate between a token being present versus being set for the
+/// first time.
+// TODO(aljoscha): Make this crate-public again once the remap operator doesn't
+// hold a critical handle anymore.
+#[derive(PartialEq, Clone, Debug)]
+pub struct PersistEpoch(pub Option<NonZeroI64>);
+
+impl Opaque for PersistEpoch {
+    fn initial() -> Self {
+        PersistEpoch(None)
+    }
+}
+
+impl Codec64 for PersistEpoch {
+    fn codec_name() -> String {
+        "PersistEpoch".to_owned()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        self.0.map(NonZeroI64::get).unwrap_or(0).to_le_bytes()
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        Self(NonZeroI64::new(i64::from_le_bytes(buf)))
+    }
+}
+
+impl From<NonZeroI64> for PersistEpoch {
+    fn from(epoch: NonZeroI64) -> Self {
+        Self(Some(epoch))
+    }
+}
