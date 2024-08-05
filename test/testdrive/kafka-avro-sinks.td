@@ -288,7 +288,7 @@ contains:Invalid name. Must start with [A-Za-z_] and subsequently only contain [
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:Repeated column name in sink key: a
+contains:duplicate column referenced in KEY: a
 
 ! CREATE SINK bad_sink
   IN CLUSTER ${arg.single-replica-cluster}

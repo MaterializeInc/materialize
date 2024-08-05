@@ -2689,18 +2689,20 @@ fn plan_sink(
                 let mut uniq = BTreeSet::new();
                 for col in key_columns.iter() {
                     if !uniq.insert(col) {
-                        sql_bail!("Repeated column name in sink key: {}", col);
+                        sql_bail!("duplicate column referenced in KEY: {}", col);
                     }
                 }
                 let indices = key_columns
                     .iter()
                     .map(|col| -> anyhow::Result<usize> {
-                        let name_idx = desc
-                            .get_by_name(col)
-                            .map(|(idx, _type)| idx)
-                            .ok_or_else(|| sql_err!("No such column: {}", col))?;
+                        let name_idx =
+                            desc.get_by_name(col)
+                                .map(|(idx, _type)| idx)
+                                .ok_or_else(|| {
+                                    sql_err!("column referenced in KEY does not exist: {}", col)
+                                })?;
                         if desc.get_unambiguous_name(name_idx).is_none() {
-                            sql_err!("Ambiguous column: {}", col);
+                            sql_err!("column referenced in KEY is ambiguous: {}", col);
                         }
                         Ok(name_idx)
                     })
