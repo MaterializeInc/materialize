@@ -37,7 +37,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::{assert_none, instrument};
+use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
@@ -1803,7 +1803,10 @@ where
                             .try_downgrade(Antichain::new())
                             .expect("must be possible");
                     } else {
-                        panic!("DroppedIds for ID {id} but we have neither ingestion nor export under that ID");
+                        soft_panic_or_log!(
+                            "DroppedIds for ID {id} but we have neither ingestion nor export \
+                             under that ID"
+                        );
                     }
                 }
             }
@@ -1940,7 +1943,7 @@ where
                 } else if client.is_none() {
                     tracing::info!("Compaction command for id {id}, but we don't have a client.");
                 } else {
-                    panic!("Reference to absent collection {id}");
+                    soft_panic_or_log!("Reference to absent collection {id}");
                 };
             }
 
@@ -2615,15 +2618,12 @@ where
                 let ingestion = match &mut collection.extra_state {
                     CollectionStateExtra::Ingestion(ingestion) => ingestion,
                     CollectionStateExtra::None => {
-                        tracing::error!(
-                            ?collection,
-                            ?update,
-                            "trying to update holds for collection which is not an ingestion"
-                        );
                         // WIP: See if this ever panics in ci.
-                        panic!(
-                            "trying to update holds for collection {:?} which is not an ingestion: {:?}", collection, update
+                        soft_panic_or_log!(
+                            "trying to update holds for collection {collection:?} which is not \
+                             an ingestion: {update:?}"
                         );
+                        continue;
                     }
                 };
 
@@ -2683,7 +2683,11 @@ where
                 let ingestion = match &mut collection.extra_state {
                     CollectionStateExtra::Ingestion(ingestion) => ingestion,
                     CollectionStateExtra::None => {
-                        panic!("trying to downgrade read holds for collection which is not an ingestion: {:?}", collection);
+                        soft_panic_or_log!(
+                            "trying to downgrade read holds for collection which is not an \
+                             ingestion: {collection:?}"
+                        );
+                        continue;
                     }
                 };
 

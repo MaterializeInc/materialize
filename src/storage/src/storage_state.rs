@@ -85,6 +85,7 @@ use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
@@ -1071,7 +1072,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // Make sure all the "drop commands" matched up with a source or sink.
         // This is also what the regular handler logic for `AllowCompaction`
         // would do.
-        assert!(
+        soft_assert_or_log!(
             drop_commands.is_empty(),
             "AllowCompaction commands for non-existent IDs {:?}",
             drop_commands
@@ -1242,7 +1243,10 @@ impl StorageState {
                         // reported_frontiers contains both ingestions and their
                         // exports
                         None if self.reported_frontiers.contains_key(&id) => (),
-                        None => panic!("AllowCompaction command for non-existent {id}"),
+                        None => {
+                            soft_panic_or_log!("AllowCompaction command for non-existent {id}");
+                            continue;
+                        }
                     }
 
                     if frontier.is_empty() {
