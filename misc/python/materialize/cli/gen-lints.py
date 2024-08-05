@@ -24,6 +24,12 @@ ALLOW_RUST_LINTS = [
     "unknown_lints",
 ]
 
+ALLOW_RUST_DOC_LINTS = [
+    # Allows us to use footnotes in rustdoc.
+    "unportable_markdown"
+]
+
+
 ALLOW_CLIPPY_LINTS = [
     # The style and complexity lints frustrated too many engineers and caused
     # more bikeshedding than they saved. These lint categories are largely a
@@ -190,6 +196,9 @@ def main() -> None:
         "[workspace.lints.rust]\n",
         *(f'{lint} = "allow"\n' for lint in ALLOW_RUST_LINTS),
         f"unexpected_cfgs = {{ level = \"warn\", check-cfg = ['cfg({CHECK_CFGS})'] }}\n",
+        "\n",
+        "[workspace.lints.rustdoc]\n",
+        *(f'{lint} = "allow"\n' for lint in ALLOW_RUST_DOC_LINTS),
         "\n",
         "[workspace.lints.clippy]\n",
         *(
