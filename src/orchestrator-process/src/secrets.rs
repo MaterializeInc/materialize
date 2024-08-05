@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use mz_repr::GlobalId;
 use mz_secrets::{SecretsController, SecretsReader};
@@ -30,20 +31,29 @@ impl SecretsController for ProcessOrchestrator {
             .write(true)
             .truncate(true)
             .open(file_path)
-            .await?;
-        file.write_all(contents).await?;
-        file.sync_all().await?;
+            .await
+            .with_context(|| format!("writing secret {id}"))?;
+        file.write_all(contents)
+            .await
+            .with_context(|| format!("writing secret {id}"))?;
+        file.sync_all()
+            .await
+            .with_context(|| format!("writing secret {id}"))?;
         Ok(())
     }
 
     async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
-        fs::remove_file(self.secrets_dir.join(id.to_string())).await?;
+        fs::remove_file(self.secrets_dir.join(id.to_string()))
+            .await
+            .with_context(|| format!("deleting secret {id}"))?;
         Ok(())
     }
 
     async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
         let mut ids = Vec::new();
-        let mut entries = fs::read_dir(&self.secrets_dir).await?;
+        let mut entries = fs::read_dir(&self.secrets_dir)
+            .await
+            .context("listing secrets")?;
         while let Some(dir) = entries.next_entry().await? {
             let id: GlobalId = dir.file_name().to_string_lossy().parse()?;
             ids.push(id);
@@ -75,7 +85,9 @@ impl ProcessSecretsReader {
 #[async_trait]
 impl SecretsReader for ProcessSecretsReader {
     async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
-        let contents = fs::read(self.secrets_dir.join(id.to_string())).await?;
+        let contents = fs::read(self.secrets_dir.join(id.to_string()))
+            .await
+            .with_context(|| "reading secret {id}")?;
         Ok(contents)
     }
 }
