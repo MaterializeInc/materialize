@@ -1,5 +1,20 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Added new macro `cleanup_schema` for resetting the target schema during development or testing.
+  The macro drops and recreates the target schema, removing all objects within it.
+  It supports a dry run mode for safely previewing the actions without making changes.
+
+  Example usage:
+  ```sql
+  -- Preview the cleanup without making changes
+  dbt run-operation cleanup_schema --args '{dry_run: true}'
+
+  -- Reset the target schema
+  dbt run-operation cleanup_schema
+  ```
+
 ## 1.8.3 - 2024-07-19
 
 * Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
