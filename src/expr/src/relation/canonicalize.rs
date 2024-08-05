@@ -43,66 +43,11 @@ pub fn canonicalize_equivalences<'a, I>(
     let column_types = input_column_types
         .flat_map(|f| f.clone())
         .collect::<Vec<_>>();
-    // Calculate the number of non-leaves for each expression.
-    let mut to_reduce = equivalences
-        .drain(..)
-        .filter_map(|mut cls| {
-            let mut result = cls
-                .drain(..)
-                .map(|expr| (rank_complexity(&expr), expr))
-                .collect::<Vec<_>>();
-            result.sort();
-            result.dedup();
-            if result.len() > 1 {
-                Some(result)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
 
-    let mut expressions_rewritten = true;
-    while expressions_rewritten {
-        expressions_rewritten = false;
-        for i in 0..to_reduce.len() {
-            // `to_reduce` will be borrowed as immutable, so in order to modify
-            // elements of `to_reduce[i]`, we are going to pop them out of
-            // `to_reduce[i]` and put the modified version in `new_equivalence`,
-            // which will then replace `to_reduce[i]`.
-            let mut new_equivalence = Vec::with_capacity(to_reduce[i].len());
-            while let Some((_, mut popped_expr)) = to_reduce[i].pop() {
-                #[allow(deprecated)]
-                popped_expr.visit_mut_post_nolimit(&mut |e: &mut MirScalarExpr| {
-                    // If a simpler expression can be found that is equivalent
-                    // to e,
-                    if let Some(simpler_e) = to_reduce.iter().find_map(|cls| {
-                        if cls.iter().skip(1).position(|(_, expr)| e == expr).is_some() {
-                            Some(cls[0].1.clone())
-                        } else {
-                            None
-                        }
-                    }) {
-                        // Replace e with the simpler expression.
-                        *e = simpler_e;
-                        expressions_rewritten = true;
-                    }
-                });
-                popped_expr.reduce(&column_types);
-                new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
-            }
-            new_equivalence.sort();
-            new_equivalence.dedup();
-            to_reduce[i] = new_equivalence;
-        }
-    }
-
-    // Map away the complexity rating.
-    *equivalences = to_reduce
-        .drain(..)
-        .map(|mut cls| cls.drain(..).map(|(_, expr)| expr).collect::<Vec<_>>())
-        .collect::<Vec<_>>();
-
-    canonicalize_equivalence_classes(equivalences);
+    let mut equivs = EquivalenceClasses::default();
+    std::mem::swap(&mut equivs.classes, equivalences);
+    equivs.minimize(&Some(column_types));
+    std::mem::swap(&mut equivs.classes, equivalences);
 }
 
 /// Canonicalize only the equivalence classes of a join.
@@ -500,4 +445,422 @@ pub fn get_canonicalizer_map(
         }
     }
     canonicalizer_map
+}
+
+pub use equivalence_classes::EquivalenceClasses;
+
+/// Logic for maintaining equivalence classes of expressions.
+///
+/// "Equivalent" expressions can be freely substituted for one another, and are "equal"
+/// in the Rust sense that their results are always `Datum::eq`, although they are not
+/// necessarily equal in the SQL sense, as they may equivalently produce `Datum::Null`.
+mod equivalence_classes {
+
+    use std::collections::BTreeMap;
+
+    use mz_repr::ColumnType;
+    use crate::{MirScalarExpr, BinaryFunc, UnaryFunc};
+
+    /// A compact representation of classes of expressions that must be equivalent.
+    ///
+    /// Each "class" contains a list of expressions, each of which must be `Eq::eq` equal.
+    /// Ideally, the first element is the "simplest", e.g. a literal or column reference,
+    /// and any other element of that list can be replaced by it.
+    ///
+    /// The classes are meant to be minimized, with each expression as reduced as it can be,
+    /// and all classes sharing an element merged.
+    #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Default, Debug)]
+    pub struct EquivalenceClasses {
+        /// Multiple lists of equivalent expressions, each representing an equivalence class.
+        ///
+        /// The first element should be the "canonical" simplest element, that any other element
+        /// can be replaced by.
+        /// These classes are unified whenever possible, to minimize the number of classes.
+        pub classes: Vec<Vec<MirScalarExpr>>,
+    }
+
+    impl EquivalenceClasses {
+        /// Sorts and deduplicates each class, and the classes themselves.
+        fn tidy(&mut self) {
+            for class in self.classes.iter_mut() {
+                // Remove all literal errors, as they cannot be equated to other things.
+                class.retain(|e| !e.is_literal_err());
+                class.sort_by(|e1, e2| match (e1, e2) {
+                    (MirScalarExpr::Literal(_, _), MirScalarExpr::Literal(_, _)) => e1.cmp(e2),
+                    (MirScalarExpr::Literal(_, _), _) => std::cmp::Ordering::Less,
+                    (_, MirScalarExpr::Literal(_, _)) => std::cmp::Ordering::Greater,
+                    (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => e1.cmp(e2),
+                    (MirScalarExpr::Column(_), _) => std::cmp::Ordering::Less,
+                    (_, MirScalarExpr::Column(_)) => std::cmp::Ordering::Greater,
+                    (x, y) => {
+                        // General expressions should be ordered by their size,
+                        // to ensure we only simplify expressions by substitution.
+                        let x_size = x.size();
+                        let y_size = y.size();
+                        if x_size == y_size {
+                            x.cmp(y)
+                        } else {
+                            x_size.cmp(&y_size)
+                        }
+                    }
+                });
+                class.dedup();
+            }
+            self.classes.retain(|c| c.len() > 1);
+            self.classes.sort();
+            self.classes.dedup();
+        }
+
+        /// Update `self` to maintain the same equivalences which potentially reducing along `Ord::le`.
+        ///
+        /// Informally this means simplifying constraints, removing redundant constraints, and unifying equivalence classes.
+        pub fn minimize(&mut self, columns: &Option<Vec<ColumnType>>) {
+            // Repeatedly, we reduce each of the classes themselves, then unify the classes.
+            // This should strictly reduce complexity, and reach a fixed point.
+            // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
+            self.tidy();
+
+            // We continue as long as any simplification has occurred.
+            // An expression can be simplified, a duplication found, or two classes unified.
+            let mut stable = false;
+            while !stable {
+                stable = self.minimize_once(columns);
+            }
+
+            // TODO: remove these measures once we are more confident about idempotence.
+            let prev = self.clone();
+            self.minimize_once(columns);
+            mz_ore::soft_assert_eq_or_log!(self, &prev, "Equivalences::minimize() not idempotent");
+        }
+
+        /// A single iteration of minimization, which we expect to repeat but benefit from factoring out.
+        fn minimize_once(&mut self, columns: &Option<Vec<ColumnType>>) -> bool {
+            // We are complete unless we experience an expression simplification, or an equivalence class unification.
+            let mut stable = true;
+
+            // 0. Reduce each expression
+            //
+            // This is optional in that `columns` may not be provided (`reduce` requires type information).
+            if let Some(columns) = columns {
+                for class in self.classes.iter_mut() {
+                    for expr in class.iter_mut() {
+                        let prev_expr = expr.clone();
+                        expr.reduce_safely(columns);
+                        if &prev_expr != expr {
+                            stable = false;
+                        }
+                    }
+                }
+            }
+
+            // 1. Reduce each class.
+            //    Each class can be reduced in the context of *other* classes, which are available for substitution.
+            for class_index in 0..self.classes.len() {
+                for index in 0..self.classes[class_index].len() {
+                    let mut cloned = self.classes[class_index][index].clone();
+                    // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
+                    let reduced = self.reduce_child(&mut cloned);
+                    if reduced {
+                        self.classes[class_index][index] = cloned;
+                        stable = false;
+                    }
+                }
+            }
+
+            // 2. Unify classes.
+            //    If the same expression is in two classes, we can unify the classes.
+            //    This element may not be the representative.
+            //    TODO: If all lists are sorted, this could be a linear merge among all.
+            //          They stop being sorted as soon as we make any modification, though.
+            //          But, it would be a fast rejection when faced with lots of data.
+            for index1 in 0..self.classes.len() {
+                for index2 in 0..index1 {
+                    if self.classes[index1]
+                        .iter()
+                        .any(|x| self.classes[index2].iter().any(|y| x == y))
+                    {
+                        let prior = std::mem::take(&mut self.classes[index2]);
+                        self.classes[index1].extend(prior);
+                        stable = false;
+                    }
+                }
+            }
+
+            // 3. Identify idioms
+            //    E.g. If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
+            let mut to_add = Vec::new();
+            for class in self.classes.iter_mut() {
+                if class.iter().any(|c| c.is_literal_true()) {
+                    for expr in class.iter() {
+                        // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
+                        // This substitution replaces a complex expression with several smaller expressions, and cannot
+                        // cycle if we follow that practice.
+                        if let MirScalarExpr::CallBinary {
+                            func: BinaryFunc::Eq,
+                            expr1,
+                            expr2,
+                        } = expr
+                        {
+                            to_add.push(vec![*expr1.clone(), *expr2.clone()]);
+                            to_add.push(vec![
+                                MirScalarExpr::literal_false(),
+                                expr1.clone().call_is_null(),
+                                expr2.clone().call_is_null(),
+                            ]);
+                            stable = false;
+                        }
+                    }
+                    // Remove the more complex form of the expression.
+                    class.retain(|expr| {
+                        if let MirScalarExpr::CallBinary {
+                            func: BinaryFunc::Eq,
+                            ..
+                        } = expr
+                        {
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    for expr in class.iter() {
+                        // If TRUE == NOT(X) then FALSE == X is a simpler form.
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::Not(_),
+                            expr: e,
+                        } = expr
+                        {
+                            to_add.push(vec![MirScalarExpr::literal_false(), (**e).clone()]);
+                            stable = false;
+                        }
+                    }
+                    class.retain(|expr| {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::Not(_),
+                            ..
+                        } = expr
+                        {
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+                if class.iter().any(|c| c.is_literal_false()) {
+                    for expr in class.iter() {
+                        // If FALSE == NOT(X) then TRUE == X is a simpler form.
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::Not(_),
+                            expr: e,
+                        } = expr
+                        {
+                            to_add.push(vec![MirScalarExpr::literal_true(), (**e).clone()]);
+                            stable = false;
+                        }
+                    }
+                    class.retain(|expr| {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::Not(_),
+                            ..
+                        } = expr
+                        {
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+            }
+            self.classes.extend(to_add);
+
+            // Tidy up classes, restore representative.
+            self.tidy();
+
+            stable
+        }
+
+        /// Produce the equivalences present in both inputs.
+        pub fn union(&self, other: &Self) -> Self {
+            // TODO: seems like this could be extended, with similar concepts to localization:
+            //       We may removed non-shared constraints, but ones that remain could take over
+            //       and substitute in to retain more equivalences.
+
+            // For each pair of equivalence classes, their intersection.
+            let mut equivalences = EquivalenceClasses {
+                classes: Vec::new(),
+            };
+            for class1 in self.classes.iter() {
+                for class2 in other.classes.iter() {
+                    let class = class1
+                        .iter()
+                        .filter(|e1| class2.iter().any(|e2| e1 == &e2))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if class.len() > 1 {
+                        equivalences.classes.push(class);
+                    }
+                }
+            }
+            equivalences.minimize(&None);
+            equivalences
+        }
+
+        /// Permutes each expression, looking up each column reference in `permutation` and replacing with what it finds.
+        pub fn permute(&mut self, permutation: &[usize]) {
+            for class in self.classes.iter_mut() {
+                for expr in class.iter_mut() {
+                    expr.permute(permutation);
+                }
+            }
+        }
+
+        /// Subject the constraints to the column projection, reworking and removing equivalences.
+        ///
+        /// This method should also introduce equivalences representing any repeated columns.
+        pub fn project<I>(&mut self, output_columns: I)
+        where
+            I: IntoIterator<Item = usize> + Clone,
+        {
+            // Retain the first instance of each column, and record subsequent instances as duplicates.
+            let mut dupes = Vec::new();
+            let mut remap = BTreeMap::default();
+            for (idx, col) in output_columns.into_iter().enumerate() {
+                if let Some(pos) = remap.get(&col) {
+                    dupes.push((*pos, idx));
+                } else {
+                    remap.insert(col, idx);
+                }
+            }
+
+            // Some expressions may be "localized" in that they only reference columns in `output_columns`.
+            // Many expressions may not be localized, but may reference canonical non-localized expressions
+            // for classes that contain a localized expression; in that case we can "backport" the localized
+            // expression to give expressions referencing the canonical expression a shot at localization.
+            //
+            // Expressions should only contain instances of canonical expressions, and so we shouldn't need
+            // to look any further than backporting those. Backporting should have the property that the simplest
+            // localized expression in each class does not contain any non-localized canonical expressions
+            // (as that would make it non-localized); our backporting of non-localized canonicals with localized
+            // expressions should never fire a second
+
+            // Let's say an expression is "localized" once we are able to rewrite its support in terms of `output_columns`.
+            // Not all expressions can be localized, although some of them may be equivalent to localized expressions.
+            // As we find localized expressions, we can replace uses of their equivalent representative with them,
+            // which may allow further expression localization.
+            // We continue the process until no further classes can be localized.
+
+            // A map from representatives to our first localization of their equivalence class.
+            let mut localized = false;
+            while !localized {
+                localized = true;
+                for class in self.classes.iter_mut() {
+                    if !class[0].support().iter().all(|c| remap.contains_key(c)) {
+                        if let Some(pos) = class
+                            .iter()
+                            .position(|e| e.support().iter().all(|c| remap.contains_key(c)))
+                        {
+                            class.swap(0, pos);
+                            localized = false;
+                        }
+                    }
+                }
+                // attempt to replace representatives with equivalent localizeable expressions.
+                for class_index in 0..self.classes.len() {
+                    for index in 0..self.classes[class_index].len() {
+                        let mut cloned = self.classes[class_index][index].clone();
+                        // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
+                        let reduced = self.reduce_child(&mut cloned);
+                        if reduced {
+                            self.classes[class_index][index] = cloned;
+                        }
+                    }
+                }
+                // NB: Do *not* `self.minimize()`, as we are developing localizable rather than canonical representatives.
+            }
+
+            // Localize all localizable expressions and discard others.
+            for class in self.classes.iter_mut() {
+                class.retain(|e| e.support().iter().all(|c| remap.contains_key(c)));
+                for expr in class.iter_mut() {
+                    expr.permute_map(&remap);
+                }
+            }
+            self.classes.retain(|c| c.len() > 1);
+            // If column repetitions, introduce them as equivalences.
+            // We introduce only the equivalence to the first occurrence, and rely on minimization to collect them.
+            for (col1, col2) in dupes {
+                self.classes.push(vec![
+                    MirScalarExpr::Column(col1),
+                    MirScalarExpr::Column(col2),
+                ]);
+            }
+            self.minimize(&None);
+        }
+
+        /// Perform any exact replacement for `expr`, report if it had an effect.
+        fn replace(&self, expr: &mut MirScalarExpr) -> bool {
+            for class in self.classes.iter() {
+                // TODO: If `class` is sorted We only need to iterate through "simpler" expressions;
+                // we can stop once x > expr.
+                // We need to be careful with that reasoning, as it interferes with self-improvement;
+                // if we are modifying `self` we must restore the invariant before relying on it again.
+                if class[1..].iter().any(|x| x == expr) {
+                    expr.clone_from(&class[0]);
+                    return true;
+                }
+            }
+            false
+        }
+
+        /// Perform any simplification, report if effective.
+        pub fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
+            let mut simplified = false;
+            simplified = simplified || self.reduce_child(expr);
+            simplified = simplified || self.replace(expr);
+            simplified
+        }
+
+        /// Perform any simplification on children, report if effective.
+        pub fn reduce_child(&self, expr: &mut MirScalarExpr) -> bool {
+            let mut simplified = false;
+            match expr {
+                MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                    simplified = self.reduce_expr(expr1) || simplified;
+                    simplified = self.reduce_expr(expr2) || simplified;
+                }
+                MirScalarExpr::CallUnary { expr, .. } => {
+                    simplified = self.reduce_expr(expr) || simplified;
+                }
+                MirScalarExpr::CallVariadic { exprs, .. } => {
+                    for expr in exprs.iter_mut() {
+                        simplified = self.reduce_expr(expr) || simplified;
+                    }
+                }
+                MirScalarExpr::If { cond: _, then, els } => {
+                    // Do not simplify `cond`, as we cannot ensure the simplification
+                    // continues to hold as expressions migrate around.
+                    simplified = self.reduce_expr(then) || simplified;
+                    simplified = self.reduce_expr(els) || simplified;
+                }
+                _ => {}
+            }
+            simplified
+        }
+
+        /// True if any equivalence class contains two distinct non-error literals.
+        pub fn unsatisfiable(&self) -> bool {
+            for class in self.classes.iter() {
+                let mut literal_ok = None;
+                for expr in class.iter() {
+                    if let MirScalarExpr::Literal(Ok(row), _) = expr {
+                        if literal_ok.is_some() && literal_ok != Some(row) {
+                            return true;
+                        } else {
+                            literal_ok = Some(row);
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
 }
