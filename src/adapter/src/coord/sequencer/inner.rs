@@ -4518,7 +4518,7 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn handle_deferred_statement(&mut self) {
         // It is possible Message::DeferredStatementReady was sent but then a session cancellation
-        // was processed, removing the single element from deferred_statements, so it is exepcted
+        // was processed, removing the single element from deferred_statements, so it is expected
         // that this is sometimes empty.
         let Some(DeferredPlanStatement { ctx, ps }) = self.serialized_ddl.pop_front() else {
             return;
