@@ -10,8 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
-use arrow::array::{Array, AsArray, Int32Array, Int64Array, Int64Builder};
-use arrow::datatypes::ArrowNativeType;
+use arrow::array::{Array, AsArray, Int64Array, Int64Builder};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -27,7 +26,8 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::task::JoinHandle;
-use mz_persist::indexed::columnar::ColumnarRecords;
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec64;
@@ -134,58 +134,86 @@ enum ConsolidationPart<T, D> {
 
 #[derive(Debug)]
 struct Columnar<T, D> {
-    records: ColumnarRecords,
+    updates: BlobTraceUpdates,
     _phantom: PhantomData<fn() -> (T, D)>,
 }
 
 impl<T: Codec64, D: Codec64> Columnar<T, D> {
-    fn records(&self) -> &ColumnarRecords {
-        &self.records
+    fn len(&self) -> usize {
+        self.updates.records().len()
     }
 
-    fn len(&self) -> usize {
-        self.records.len()
-    }
     fn get(&self, index: usize) -> Option<(KV, T, D)> {
-        let ((k, v), t, d) = self.records.get(index)?;
+        let ((k, v), t, d) = self.updates.records().get(index)?;
         Some(((k, v), T::decode(t), D::decode(d)))
+    }
+
+    fn interleave(
+        parts: &[&Columnar<T, D>],
+        indices: &[Indices],
+        timestamps: Int64Array,
+        diffs: Int64Array,
+    ) -> Self {
+        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(parts.len());
+        let mut interleave = |get_array: fn(&BlobTraceUpdates) -> &dyn Array| {
+            for part in parts {
+                arrays.push(get_array(&part.updates));
+            }
+            let out =
+                ::arrow::compute::interleave(arrays.as_slice(), indices).expect("valid references");
+            arrays.clear();
+            out
+        };
+        let keys = interleave(|u| u.records().keys()).as_binary().clone();
+        let vals = interleave(|u| u.records().vals()).as_binary().clone();
+        let records = ColumnarRecords::new(keys, vals, timestamps, diffs);
+        let keep_ext = parts.iter().all(|e| e.updates.structured().is_some());
+        let updates = if keep_ext {
+            let key = interleave(|u| &u.structured().unwrap().key);
+            let val = interleave(|u| &u.structured().unwrap().val);
+            BlobTraceUpdates::Both(records, ColumnarRecordsStructuredExt { key, val })
+        } else {
+            BlobTraceUpdates::Row(records)
+        };
+
+        Columnar {
+            updates,
+            _phantom: Default::default(),
+        }
     }
 }
 
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
-    pub(crate) fn from_encoded(part: EncodedPart<T>, force_reconsolidation: bool) -> Self {
+impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
+    pub(crate) fn from_encoded(
+        part: EncodedPart<T>,
+        force_reconsolidation: bool,
+        metrics: &ColumnarMetrics,
+    ) -> Self {
         let reconsolidate = part.maybe_unconsolidated() || force_reconsolidation;
-        let part = part.normalize(&ColumnarMetrics::disconnected());
-        let records = part.records().clone();
-        let records = if reconsolidate {
-            let mut indices: Vec<i32> = (0..i32::usize_as(records.len())).collect();
-            indices.sort_by_key(|i| {
-                let i = i.as_usize();
-                let k = records.keys().value(i);
-                let v = records.vals().value(i);
-                let t = T::decode(records.timestamps().value(i).to_le_bytes());
-                (k, v, t)
-            });
-            let indices = Int32Array::from(indices);
-            let keys = ::arrow::compute::take(records.keys(), &indices, None).expect("ok");
-            let vals = ::arrow::compute::take(records.vals(), &indices, None).expect("ok");
-            let times = ::arrow::compute::take(records.timestamps(), &indices, None).expect("ok");
-            let diffs = ::arrow::compute::take(records.diffs(), &indices, None).expect("ok");
-            ColumnarRecords::new(
-                keys.as_binary().clone(),
-                vals.as_binary().clone(),
-                times.as_primitive().clone(),
-                diffs.as_primitive().clone(),
-            )
+        let updates: Columnar<T, D> = Columnar {
+            updates: part.normalize(metrics),
+            _phantom: Default::default(),
+        };
+        let updates = if reconsolidate {
+            let len = updates.len();
+            let mut tuples: Vec<_> = (0..len).map(|i| (updates.get(i).unwrap(), i)).collect();
+            tuples.sort_by_key(|((kv, t, _d), _i)| (*kv, t.clone()));
+
+            let mut indices = Vec::with_capacity(len);
+            let mut timestamps = Int64Builder::with_capacity(len);
+            let mut diffs = Int64Builder::with_capacity(len);
+            for ((_, t, d), i) in tuples {
+                indices.push((0, i));
+                timestamps.append_value(i64::from_le_bytes(T::encode(&t)));
+                diffs.append_value(i64::from_le_bytes(D::encode(&d)));
+            }
+            Columnar::interleave(&[&updates], &indices, timestamps.finish(), diffs.finish())
         } else {
-            records
+            updates
         };
 
         ConsolidationPart::Encoded {
-            part: Columnar {
-                records,
-                _phantom: Default::default(),
-            },
+            part: updates,
             cursor: 0,
         }
     }
@@ -315,7 +343,7 @@ where
                             &updates,
                             ts_rewrite.as_ref(),
                         );
-                        ConsolidationPart::from_encoded(part, true)
+                        ConsolidationPart::from_encoded(part, true, &self.metrics.columnar)
                     }
                     part => ConsolidationPart::Queued {
                         data: FetchData::Unfetched {
@@ -450,6 +478,7 @@ where
                                 )
                                 .await?,
                             wrong_sort,
+                            &self.metrics.columnar,
                         );
                     }
                     ConsolidationPart::Prefetched {
@@ -461,7 +490,11 @@ where
                             self.metrics.compaction.parts_waited.inc()
                         }
                         self.metrics.consolidation.parts_fetched.inc();
-                        *part = ConsolidationPart::from_encoded(handle.await??, *wrong_sort);
+                        *part = ConsolidationPart::from_encoded(
+                            handle.await??,
+                            *wrong_sort,
+                            &self.metrics.columnar,
+                        );
                     }
                     ConsolidationPart::Encoded { .. } => {}
                 }
@@ -501,12 +534,12 @@ where
     pub(crate) async fn next_chunk(
         &mut self,
         max_len: usize,
-    ) -> anyhow::Result<Option<ColumnarRecords>> {
+    ) -> anyhow::Result<Option<BlobTraceUpdates>> {
         self.trim();
         self.unblock_progress().await?;
         let chunk = self
             .iter()
-            .map(|mut i| i.next_chunk(max_len).records().clone());
+            .map(|mut i| i.next_chunk(max_len).updates.clone());
         Ok(chunk)
     }
 
@@ -743,7 +776,7 @@ where
                     };
                     if consolidates {
                         let (idx1, _, _, d1) = part
-                            .pop(&mut self.parts, self.filter)
+                            .pop(&self.parts, self.filter)
                             .expect("popping from a non-empty iterator");
                         d0.plus_equals(&d1);
                         *idx0 = idx1;
@@ -759,7 +792,7 @@ where
                         }
                     }
 
-                    self.state = part.pop(&mut self.parts, self.filter);
+                    self.state = part.pop(&self.parts, self.filter);
                 }
             } else {
                 if part.last_in_run {
@@ -788,47 +821,12 @@ where
             }
         }
 
-        self.interleave(
+        Columnar::interleave(
+            &self.parts,
             indices.as_slice(),
             Int64Builder::finish(&mut timestamps),
             Int64Builder::finish(&mut diffs),
         )
-    }
-}
-
-impl<'a, T, D> ConsolidatingIter<'a, T, D>
-where
-    T: Timestamp + Codec64,
-    D: Codec64,
-{
-    fn interleave(
-        &self,
-        indices: &[Indices],
-        timestamps: Int64Array,
-        diffs: Int64Array,
-    ) -> Columnar<T, D> {
-        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(self.parts.len());
-        for part in &self.parts {
-            arrays.push(part.records().keys());
-        }
-        let keys =
-            ::arrow::compute::interleave(arrays.as_slice(), indices).expect("valid references");
-        arrays.clear();
-        for part in &self.parts {
-            arrays.push(part.records().vals());
-        }
-        let vals =
-            ::arrow::compute::interleave(arrays.as_slice(), indices).expect("valid references");
-        let records = ColumnarRecords::new(
-            keys.as_binary().clone(),
-            vals.as_binary().clone(),
-            timestamps,
-            diffs,
-        );
-        Columnar {
-            records,
-            _phantom: Default::default(),
-        }
     }
 }
 
@@ -854,7 +852,8 @@ impl<'a, T: Timestamp + Codec64, D: Codec64> Drop for ConsolidatingIter<'a, T, D
         // Make sure to stash any incomplete state in a place where we'll pick it up on the next run.
         // See the comment on `Consolidator` for more on why this is necessary.
         if let Some((idx, _, t, d)) = self.state.take() {
-            let part = self.interleave(
+            let part = Columnar::interleave(
+                &self.parts,
                 &[idx],
                 vec![i64::from_le_bytes(t.encode())].into(),
                 vec![i64::from_le_bytes(d.encode())].into(),
@@ -951,7 +950,14 @@ mod tests {
                                             ),
                                         },
                                     );
-                                    (ConsolidationPart::from_encoded(part, true), 0)
+                                    (
+                                        ConsolidationPart::from_encoded(
+                                            part,
+                                            true,
+                                            &metrics.columnar,
+                                        ),
+                                        0,
+                                    )
                                 })
                                 .collect::<VecDeque<_>>()
                         })

@@ -734,7 +734,10 @@ where
                 break;
             };
             timings.part_fetching += fetch_start.elapsed();
-            for ((k, v), t, d) in updates.iter() {
+            // We now have a full set of consolidated columnar data here, but no way to push it
+            // into the batch builder yet. Instead, iterate over the codec records and push those
+            // in directly.
+            for ((k, v), t, d) in updates.records().iter() {
                 key_vec.clear();
                 key_vec.extend_from_slice(k);
                 val_vec.clear();
