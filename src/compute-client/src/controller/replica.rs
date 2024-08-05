@@ -18,7 +18,7 @@ use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, Tim
 use mz_dyncfg::ConfigSet;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
-use mz_service::client::{GenericClient, Partitioned};
+use mz_service::client::GenericClient;
 use mz_service::params::GrpcClientParameters;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
@@ -33,8 +33,7 @@ use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-type Client<T> =
-    SequentialHydration<Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>, T>;
+type Client<T> = SequentialHydration<T>;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]

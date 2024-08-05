@@ -47,10 +47,12 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::controller::ComputeControllerTimestamp;
@@ -64,9 +66,11 @@ type Token = Arc<()>;
 
 /// A client enforcing sequential dataflow hydration.
 #[derive(Debug)]
-pub(super) struct SequentialHydration<C, T> {
-    /// The wrapped client.
-    client: C,
+pub(super) struct SequentialHydration<T> {
+    /// A sender for commands to the wrapped client.
+    command_tx: mpsc::UnboundedSender<ComputeCommand<T>>,
+    /// A receiver for responses from the wrapped client.
+    response_rx: mpsc::UnboundedReceiver<Result<ComputeResponse<T>, anyhow::Error>>,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
     /// Tracked metrics.
@@ -84,22 +88,35 @@ pub(super) struct SequentialHydration<C, T> {
     /// Useful to efficiently determine how many collections are currently in the process of
     /// hydration, and thus how much capacity is available.
     hydration_token: Token,
+    /// Handle to the forwarder task, to abort it when `SequentialHydration` is dropped.
+    _forwarder_task: AbortOnDropHandle<()>,
 }
 
-impl<C, T> SequentialHydration<C, T>
+impl<T> SequentialHydration<T>
 where
-    C: ComputeClient<T>,
     T: ComputeControllerTimestamp,
 {
     /// Create a new `SequentialHydration` client.
-    pub fn new(client: C, dyncfg: Arc<ConfigSet>, metrics: ReplicaMetrics) -> Self {
+    pub fn new<C>(client: C, dyncfg: Arc<ConfigSet>, metrics: ReplicaMetrics) -> Self
+    where
+        C: ComputeClient<T> + 'static,
+    {
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (response_tx, response_rx) = mpsc::unbounded_channel();
+        let forwarder = mz_ore::task::spawn(
+            || "sequential_hydration:forwarder",
+            forward_messages(client, command_rx, response_tx),
+        );
+
         Self {
-            client,
+            command_tx,
+            response_rx,
             dyncfg,
             metrics,
             collections: Default::default(),
             hydration_queue: Default::default(),
             hydration_token: Default::default(),
+            _forwarder_task: forwarder.abort_on_drop(),
         }
     }
 
@@ -109,7 +126,7 @@ where
     }
 
     /// Absorb a command and send resulting commands to the wrapped client.
-    async fn absorb_command(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    fn absorb_command(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         // Whether to forward this command to the wrapped client.
         let mut forward = true;
 
@@ -144,15 +161,15 @@ where
         }
 
         if forward {
-            self.client.send(cmd).await?;
+            self.command_tx.send(cmd)?;
         }
 
         // Schedule collections that are ready now.
-        self.hydrate_collections().await
+        self.hydrate_collections()
     }
 
     /// Observe a response and send resulting commands to the wrapped client.
-    async fn observe_response(&mut self, resp: &ComputeResponse<T>) -> Result<(), anyhow::Error> {
+    fn observe_response(&mut self, resp: &ComputeResponse<T>) -> Result<(), anyhow::Error> {
         if let ComputeResponse::Frontiers(
             id,
             FrontiersResponse {
@@ -181,13 +198,13 @@ where
                         State::QueuedForHydration => {
                             // We are holding back the `Schedule` command for this collection. Send
                             // it now.
-                            self.send(ComputeCommand::Schedule(*id)).await?;
+                            self.command_tx.send(ComputeCommand::Schedule(*id))?;
                         }
                         State::Hydrating(token) => {
                             // We freed some hydration capacity and may be able to start hydrating
                             // new collections.
                             drop(token);
-                            self.hydrate_collections().await?;
+                            self.hydrate_collections()?;
                         }
                     }
                 } else {
@@ -195,11 +212,12 @@ where
                 }
             }
         }
+
         Ok(())
     }
 
     /// Allow hydration based on the available capacity.
-    async fn hydrate_collections(&mut self) -> Result<(), anyhow::Error> {
+    fn hydrate_collections(&mut self) -> Result<(), anyhow::Error> {
         let capacity = HYDRATION_CONCURRENCY.get(&self.dyncfg);
         while self.hydration_count() < capacity {
             let Some(id) = self.hydration_queue.pop_front() else {
@@ -212,7 +230,7 @@ where
             };
 
             debug!(%id, "starting collection hydration");
-            self.client.send(ComputeCommand::Schedule(id)).await?;
+            self.command_tx.send(ComputeCommand::Schedule(id))?;
 
             let token = Arc::clone(&self.hydration_token);
             collection.set_hydrating(token);
@@ -226,21 +244,23 @@ where
 }
 
 #[async_trait]
-impl<C, T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for SequentialHydration<C, T>
+impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for SequentialHydration<T>
 where
-    C: ComputeClient<T>,
     T: ComputeControllerTimestamp,
 {
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        self.absorb_command(cmd).await
+        self.absorb_command(cmd)
     }
 
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-        let resp = self.client.recv().await?;
-        if let Some(response) = &resp {
-            self.observe_response(response).await?;
+        match self.response_rx.recv().await {
+            Some(Ok(response)) => {
+                self.observe_response(&response)?;
+                Ok(Some(response))
+            }
+            Some(Err(error)) => Err(error), // client error
+            None => Ok(None),               // client disconnected
         }
-        Ok(resp)
     }
 }
 
@@ -284,4 +304,51 @@ enum State {
     QueuedForHydration,
     /// Collection is hydrating and waiting for hydration to complete.
     Hydrating(Token),
+}
+
+/// Forward messages between a pair of channels and a [`ComputeClient`].
+///
+/// This functions is run in its own task and exists to allow `SequentialHydration::recv` to be
+/// cancel safe even though it needs to send commands to the wrapped client, which isn't cancel
+/// safe.
+async fn forward_messages<C, T>(
+    mut client: C,
+    mut rx: mpsc::UnboundedReceiver<ComputeCommand<T>>,
+    tx: mpsc::UnboundedSender<Result<ComputeResponse<T>, anyhow::Error>>,
+) where
+    C: ComputeClient<T>,
+{
+    loop {
+        tokio::select! {
+            command = rx.recv() => {
+                let Some(command) = command else {
+                    break; // `SequentialHydration` dropped
+                };
+                if let Err(error) = client.send(command).await {
+                    tracing::error!("error on send");
+                    // Client produced an unrecoverable error.
+                    let _ = tx.send(Err(error));
+                    break;
+                }
+            }
+            response = client.recv() => {
+                let response = match response {
+                    Ok(Some(response)) => response,
+                    Ok(None) => {
+                        tracing::error!("client disconnect");
+                        break; // client disconnected
+                    }
+                    Err(error) => {
+                        tracing::error!("error on receive");
+                        // Client produced an unrecoverable error.
+                        let _ = tx.send(Err(error));
+                        break;
+                    }
+                };
+                if tx.send(Ok(response)).is_err() {
+                    break; // `SequentialHydration` dropped
+                }
+            }
+        }
+    }
 }
