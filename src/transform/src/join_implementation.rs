@@ -174,6 +174,57 @@ impl JoinImplementation {
                     equivalences,
                     input_types.iter().map(|t| &t.column_types),
                 );
+
+                // For each pair of inputs, project to the union of their columns, in order to find
+                // equivalences that might allow them to be joined. This is a bit of a hack, but it
+                // is needed as long as the rest of the implementation is "canonicalization-unaware".
+                // The rest of code does not perform the equivalent of `EquivalenceClasses::project`,
+                // and misses some opportunities that are indirectly evident from the equivalences.
+                let mut equivs = crate::analysis::equivalences::EquivalenceClasses::default();
+                std::mem::swap(equivalences, &mut equivs.classes);
+                let mut new_classes = Vec::new();
+                for (index1, input1) in input_types.iter().enumerate() {
+                    for (index2, input2) in input_types.iter().enumerate() {
+                        let mut columns: Vec<usize> = Vec::with_capacity(
+                            input1.column_types.len() + input2.column_types.len(),
+                        );
+                        let prior_arity1 = input_types[..index1]
+                            .iter()
+                            .map(|t| t.column_types.len())
+                            .sum::<usize>();
+                        let prior_arity2 = input_types[..index2]
+                            .iter()
+                            .map(|t| t.column_types.len())
+                            .sum::<usize>();
+                        columns.extend(prior_arity1..prior_arity1 + input1.column_types.len());
+                        columns.extend(prior_arity2..prior_arity2 + input1.column_types.len());
+
+                        let mut new_equivs = equivs.clone();
+                        new_equivs.project(columns.iter().cloned());
+                        new_equivs.permute(&columns);
+
+                        new_classes.extend(new_equivs.classes);
+                    }
+                }
+                equivs.classes.extend(new_classes);
+                let mut stable = false;
+                while !stable {
+                    stable = true;
+                    for index1 in 0..equivs.classes.len() {
+                        for index2 in 0..index1 {
+                            if equivs.classes[index1]
+                                .iter()
+                                .any(|x| equivs.classes[index2].iter().any(|y| x == y))
+                            {
+                                let prior = std::mem::take(&mut equivs.classes[index2]);
+                                equivs.classes[index1].extend(prior);
+                                stable = false;
+                            }
+                        }
+                    }
+                }
+                equivs.tidy();
+                std::mem::swap(equivalences, &mut equivs.classes);
             }
 
             // Common information of broad utility.

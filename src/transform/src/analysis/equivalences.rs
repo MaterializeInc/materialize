@@ -276,7 +276,7 @@ pub struct EquivalenceClasses {
 
 impl EquivalenceClasses {
     /// Sorts and deduplicates each class, and the classes themselves.
-    fn tidy(&mut self) {
+    pub fn tidy(&mut self) {
         for class in self.classes.iter_mut() {
             // Remove all literal errors, as they cannot be equated to other things.
             class.retain(|e| !e.is_literal_err());
