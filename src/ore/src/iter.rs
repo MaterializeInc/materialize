@@ -60,6 +60,27 @@ where
 
         ExactSize { inner: self, len }
     }
+
+    /// Wrap this iterator with one that yields a tuple of the iterator element and the extra
+    /// value on each iteration. The extra value is cloned for each but the last `Some` element
+    /// returned.
+    ///
+    /// This is useful to provide an owned extra value to each iteration, but only clone it
+    /// when necessary.
+    ///
+    /// NOTE: this will immediately consume the next element of the iterator
+    /// internally to determine if the extra value should be cloned.
+    ///
+    /// NOTE: Once the iterator starts producing `None` values, the extra value will be consumed
+    /// and no longer be available. This should not be used for iterators that may produce
+    /// `Some` values after producing `None`.
+    fn repeat_clone<A: Clone>(mut self, extra_val: A) -> RepeatClone<Self, A> {
+        RepeatClone {
+            next: self.next(),
+            iter: self,
+            extra_val: Some(extra_val),
+        }
+    }
 }
 
 impl<I> IteratorExt for I where I: Iterator {}
@@ -85,6 +106,37 @@ impl<I: Iterator> Iterator for ExactSize<I> {
 }
 
 impl<I: Iterator> ExactSizeIterator for ExactSize<I> {}
+
+/// Iterator type returned by [`IteratorExt::repeat_clone`].
+#[derive(Debug)]
+pub struct RepeatClone<I: Iterator, A> {
+    iter: I,
+    next: Option<I::Item>,
+    extra_val: Option<A>,
+}
+
+impl<I: Iterator, A: Clone> Iterator for RepeatClone<I, A> {
+    type Item = (I::Item, A);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Store the next element and retrieve the current one to return.
+        let cur_next = std::mem::replace(&mut self.next, self.iter.next());
+
+        // Clone the extra_val only if there is an item to return on the next call to `next`.
+        let val = if self.next.is_some() {
+            self.extra_val.as_ref().cloned()
+        } else {
+            self.extra_val.take()
+        };
+
+        // We should always return a value if there is a current element.
+        match (cur_next, val) {
+            (Some(cur_next), Some(val)) => Some((cur_next, val)),
+            (None, _) => None,
+            (Some(_), None) => unreachable!("RepeatClone invariant violated"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
