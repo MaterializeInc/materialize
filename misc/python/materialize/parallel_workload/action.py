@@ -787,11 +787,14 @@ class AlterKafkaSinkFromAction(Action):
                 return False
             else:
                 # multi column formats require at least as many columns as before
+                # columns also have to be of the same type, see #28726
                 new_object = self.rng.choice(
                     [
                         o
                         for o in exe.db.db_objects_without_views()
                         if len(o.columns) >= len(old_object.columns)
+                        and [c.data_type for c in o.columns[: len(old_object.columns)]]
+                        == [c.data_type for c in old_object.columns]
                     ]
                 )
             sink.base_object = new_object
@@ -2208,8 +2211,7 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
-        # TODO(def-): Enable when #28726 is fixed
-        # (AlterKafkaSinkFromAction, 8),
+        (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,
