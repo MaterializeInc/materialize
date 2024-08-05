@@ -37,7 +37,7 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mz_version import MzVersion
-from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import get_default_system_parameters
 
 
 class EnvironmentdService(K8sService):
@@ -255,7 +255,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
     def env_vars(self) -> list[V1EnvVar]:
 
-        system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
+        system_parameter_defaults = get_default_system_parameters()
 
         if self.log_filter:
             system_parameter_defaults["log_filter"] = self.log_filter

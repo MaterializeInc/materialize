@@ -9,7 +9,7 @@
 
 
 from materialize.mzcompose import (
-    DEFAULT_SYSTEM_PARAMETERS,
+    get_default_system_parameters,
 )
 from materialize.mzcompose.service import (
     Service,
@@ -30,7 +30,8 @@ class SqlLogicTest(Service):
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="
             + ";".join(
-                f"{key}={value}" for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+                f"{key}={value}"
+                for key, value in get_default_system_parameters().items()
             )
         ]
 

@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 
-from copy import copy
 from enum import Enum
 
 from materialize.mz_version import MzVersion
@@ -16,8 +15,7 @@ from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_MZ_VOLUMES,
-    DEFAULT_SYSTEM_PARAMETERS,
-    version_dependent_system_parameters,
+    get_default_system_parameters,
 )
 from materialize.mzcompose.service import (
     Service,
@@ -101,16 +99,9 @@ class Materialized(Service):
             image_version = MzVersion.parse_mz(image.split(":")[1])
 
         if system_parameter_defaults is None:
-            # Has to be copied so we later don't modify the
-            # DEFAULT_SYSTEM_PARAMETERS dictionary
-            system_parameter_defaults = copy(DEFAULT_SYSTEM_PARAMETERS)
-
-            if not system_parameter_version:
-                system_parameter_version = image_version
-            if system_parameter_version:
-                system_parameter_defaults.update(
-                    version_dependent_system_parameters(system_parameter_version)
-                )
+            system_parameter_defaults = get_default_system_parameters(
+                system_parameter_version or image_version
+            )
 
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)

@@ -19,7 +19,7 @@ from collections import Counter, defaultdict
 
 import pg8000
 
-from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
@@ -499,7 +499,7 @@ def main() -> int:
     with system_conn.cursor() as cur:
         # TODO: Currently the same as mzcompose default settings, add
         # more settings and shuffle them
-        for key, value in DEFAULT_SYSTEM_PARAMETERS.items():
+        for key, value in get_default_system_parameters().items():
             cur.execute(f"ALTER SYSTEM SET {key} = '{value}'")
     system_conn.close()
 

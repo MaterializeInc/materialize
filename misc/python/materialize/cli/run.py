@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 import psutil
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
-from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import get_default_system_parameters
 from materialize.ui import UIError
 from materialize.xcompile import Arch
 
@@ -273,7 +273,8 @@ def main() -> int:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
             formatted_params = [
-                f"{key}={value}" for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+                f"{key}={value}"
+                for key, value in get_default_system_parameters().items()
             ]
             env["MZ_SYSTEM_PARAMETER_DEFAULT"] = ";".join(formatted_params)
             db = urlparse(args.postgres).path.removeprefix("/")
