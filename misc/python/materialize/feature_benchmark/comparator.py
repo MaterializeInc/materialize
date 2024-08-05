@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
 from typing import Generic, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType, MeasurementUnit
@@ -29,13 +28,13 @@ class Comparator(Generic[T]):
         self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
         self.version: ScenarioVersion | None = None
 
-    def append(self, point: T, unit: MeasurementUnit) -> None:
+    def append(self, point: T, unit: MeasurementUnit, aggregation_name: str) -> None:
         if self._unit == MeasurementUnit.UNKNOWN:
             self._unit = unit
         else:
             assert (
                 self._unit == unit
-            ), f"Mix of units in {self.name}: {self._unit} and {unit}"
+            ), f"Mix of units in {self.name}: {self._unit} and {unit} in {aggregation_name}"
 
         self._points.append(point)
 
