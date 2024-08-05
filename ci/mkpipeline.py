@@ -53,7 +53,7 @@ from .deploy.deploy_util import rust_version
 # trying to capture that.)
 CI_GLUE_GLOBS = ["bin", "ci"]
 
-DEFAULT_AGENT = "hetzner-aarch64-4cpu-8gb"
+DEFAULT_AGENT = "linux-aarch64-small"
 
 
 def steps(pipeline: Any) -> Iterator[dict[str, Any]]:

@@ -25,6 +25,7 @@ steps:
   - group: Builds
     key: builds
     steps:
+      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
       - id: build-x86_64
         label: Build x86_64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -97,7 +98,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
@@ -132,7 +133,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 10
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
 
@@ -181,7 +182,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
 
@@ -194,7 +195,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 20
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
 
@@ -213,7 +214,7 @@ steps:
         timeout_in_minutes: 30
         agents:
           # hugo: command not found
-          queue: hetzner-x86-64-4cpu-8gb
+          queue: linux-x86_64-small
         coverage: skip
         sanitizer: skip
 
@@ -238,7 +239,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 15
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
 
@@ -263,7 +264,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
     agents:
-      # Because of scratch-aws-access
       queue: builder-linux-aarch64
 
   - id: testdrive
@@ -273,10 +273,11 @@ steps:
     inputs: [test/testdrive]
     parallelism: 8
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: linux-aarch64
 
   - id: cluster-tests
     label: Cluster tests %N
@@ -288,7 +289,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: linux-aarch64
 
   - id: sqllogictest-fast
     label: Fast SQL logic tests %N
@@ -301,7 +302,7 @@ steps:
           composition: sqllogictest
           run: fast-tests
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - id: restarts
     label: Restart test
@@ -311,7 +312,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from docs)
@@ -322,7 +323,7 @@ steps:
           composition: legacy-upgrade
           args: ["--versions-source=docs"]
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - group: "Debezium tests"
     key: debezium-tests
@@ -337,7 +338,7 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
       - id: debezium-sql-server
         label: Debezium SQL Server tests
@@ -350,7 +351,7 @@ steps:
               run: sql-server
         agents:
           # too slow to run emulated on aarch64, SQL Server's docker image is not yet available for aarch64 natively yet: https://github.com/microsoft/mssql-docker/issues/802
-          queue: hetzner-x86-64-4cpu-8gb
+          queue: linux-x86_64-small
 
       - id: debezium-mysql
         label: Debezium MySQL tests
@@ -362,7 +363,7 @@ steps:
               composition: debezium
               run: mysql
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
   - group: "MySQL tests"
     key: mysql-tests
@@ -378,7 +379,7 @@ steps:
               composition: mysql-cdc
               args: ["--mysql-version=8.4.0"]
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
       - id: mysql-cdc-resumption
         label: MySQL CDC resumption tests %N
@@ -390,7 +391,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
       - id: mysql-rtr
         label: MySQL RTR tests
@@ -401,7 +402,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
   - group: "Postgres tests"
     key: postgres-tests
@@ -415,7 +416,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
@@ -428,7 +429,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
       - id: pg-rtr
         label: Postgres RTR tests
@@ -439,7 +440,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
   - group: "Connection tests"
     key: connection-tests
@@ -453,7 +454,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64
 
       - id: fivetran-destination-tests
         label: Fivetran Destination tests
@@ -464,7 +465,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: fivetran-destination
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
   - group: "Copy to S3 tests"
     key: copy-to-s3-tests
@@ -479,7 +480,7 @@ steps:
               composition: copy-to-s3
               run: ci
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
   - group: "Kafka tests"
     key: kafka-tests
@@ -492,7 +493,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64
 
       - id: kafka-auth
         label: Kafka auth test
@@ -503,7 +504,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
       - id: kafka-exactly-once
         label: Kafka exactly-once tests
@@ -513,7 +514,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
       - id: kafka-rtr
         label: Kafka RTR tests
@@ -525,7 +526,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: linux-aarch64-small
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -533,7 +534,7 @@ steps:
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -549,7 +550,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -566,7 +567,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 4
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -591,10 +592,11 @@ steps:
               --exitfirst,
               -m,
               "not long and not node_recovery",
+              --aws-region=us-east-1,
               test/cloudtest/,
             ]
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: linux-aarch64
     sanitizer: skip
 
   - id: source-sink-errors
@@ -603,7 +605,7 @@ steps:
     parallelism: 2
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
@@ -613,7 +615,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: backup-restore
@@ -632,7 +634,7 @@ steps:
             ]
     coverage: skip
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
@@ -645,7 +647,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
     # TODO: #28046 (!! AllowCompaction not found for materialized view with id ['User(11)'])
     retry:
       automatic:
@@ -660,7 +662,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - id: cluster-isolation
     label: Cluster isolation test
@@ -671,7 +673,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - id: chbench-demo
     label: chbench smoke test
@@ -683,7 +685,7 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - id: metabase-demo
     label: Metabase smoke test
@@ -694,7 +696,7 @@ steps:
           composition: metabase
     agents:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
-      queue: hetzner-x86-64-4cpu-8gb
+      queue: linux-x86_64-small
 
   - id: dbt-materialize
     label: dbt-materialize tests
@@ -704,14 +706,14 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - id: storage-usage
     label: "Storage Usage Table Test"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
@@ -725,7 +727,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: tracing
     agents:
-      # Requires BUILDKITE_SENTRY_DSN
       queue: linux-aarch64-small
 
   - id: 0dt
@@ -736,7 +737,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: 0dt
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: linux-aarch64
 
   - id: skip-version-upgrade
     label: "Skip Version Upgrade"
@@ -747,7 +748,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: skip-version-upgrade
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64-small
 
   - id: deploy-website
     label: Deploy website
@@ -848,7 +849,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: linux-aarch64-medium
     coverage: only
 
   - wait: ~
