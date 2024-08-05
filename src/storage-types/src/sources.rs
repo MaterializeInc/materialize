@@ -2047,6 +2047,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_client::schema::backward_compatible;
     use mz_persist_types::parquet::EncodingConfig;
     use mz_repr::{arb_datum_for_scalar, ProtoRelationDesc, ScalarType};
     use proptest::prelude::*;
@@ -2147,7 +2148,7 @@ mod tests {
         // Encode to Parquet.
         let mut buf = Vec::new();
         let fields = Fields::from(vec![Field::new("k", col.data_type().clone(), false)]);
-        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col)];
+        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col.clone())];
         mz_persist_types::parquet::encode_arrays(&mut buf, fields, arrays, config).unwrap();
 
         // Decode from Parquet.
@@ -2183,6 +2184,15 @@ mod tests {
         let encoded_schema = SourceData::encode_schema(&desc);
         let roundtrip_desc = SourceData::decode_schema(&encoded_schema);
         assert_eq!(desc, roundtrip_desc);
+
+        // Verify that the RelationDesc is backward compatible with itself (this
+        // mostly checks for `unimplemented!` type panics).
+        let migrate_fn =
+            mz_persist_client::schema::backward_compatible::<SourceData, _>(&desc, &desc);
+        let migrate_fn = migrate_fn.expect("should be backward compatible with self");
+        // Also verify that the Fn doesn't do anything wonky.
+        let migrated = migrate_fn(Arc::new(col.clone()));
+        assert_eq!(col.data_type(), migrated.data_type());
     }
 
     #[mz_ore::test]
@@ -2206,6 +2216,37 @@ mod tests {
 
         proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), strat))| {
             roundtrip_source_data(desc, source_datas, &config);
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn backward_compatible_migrate() {
+        fn testcase(old: &RelationDesc, new: &RelationDesc, datas: &[SourceData]) {
+            let Some(migrate_fn) = backward_compatible::<SourceData, _>(old, new) else {
+                return;
+            };
+            let mut encoder = Schema2::<SourceData>::encoder(old).expect("valid schema");
+            for data in datas {
+                encoder.append(data);
+            }
+            let (old, _) = encoder.finish();
+            let (new, _) = Schema2::<SourceData>::encoder(new)
+                .expect("valid schema")
+                .finish();
+            let old: Arc<dyn Array> = Arc::new(old);
+            let new: Arc<dyn Array> = Arc::new(new);
+            let migrated = migrate_fn(Arc::clone(&old));
+            assert_eq!(migrated.data_type(), new.data_type());
+        }
+
+        let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&old), 2)
+                .prop_map(move |datas| (old.clone(), new.clone(), datas))
+        });
+
+        proptest!(|((old, new, datas) in strat)| {
+            testcase(&old, &new, &datas);
         });
     }
 

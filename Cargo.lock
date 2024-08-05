@@ -6726,6 +6726,7 @@ dependencies = [
  "mz-mysql-util",
  "mz-ore",
  "mz-persist",
+ "mz-persist-client",
  "mz-persist-types",
  "mz-pgcopy",
  "mz-postgres-util",

@@ -77,6 +77,7 @@ base64 = "0.13.1"
 criterion = { version = "0.4.0" }
 insta = { version = "1.32", features = ["json"] }
 mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
 rand = "0.8.5"
 
 [build-dependencies]
