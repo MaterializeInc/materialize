@@ -87,7 +87,7 @@ impl SecretsReader for ProcessSecretsReader {
     async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
         let contents = fs::read(self.secrets_dir.join(id.to_string()))
             .await
-            .with_context(|| "reading secret {id}")?;
+            .with_context(|| format!("reading secret {id}"))?;
         Ok(contents)
     }
 }
