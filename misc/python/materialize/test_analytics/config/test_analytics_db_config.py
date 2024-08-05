@@ -30,9 +30,15 @@ def create_test_analytics_config(c: Composition) -> MzDbConfig:
 def create_test_analytics_config_with_hostname(hostname: str) -> MzDbConfig:
     username = os.getenv("PRODUCTION_ANALYTICS_USERNAME", "infra+bot@materialize.com")
     app_password = os.getenv("PRODUCTION_ANALYTICS_APP_PASSWORD", None)
-    return create_test_analytics_config_with_credentials(
+    config = create_test_analytics_config_with_credentials(
         hostname, username, app_password
     )
+
+    if hostname == "unknown":
+        print("Disabling test-analytics, host is unknown")
+        config.enabled = False
+
+    return config
 
 
 def create_test_analytics_config_with_credentials(
