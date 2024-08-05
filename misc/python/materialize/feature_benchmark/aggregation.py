@@ -37,6 +37,9 @@ class Aggregation:
     def func(self) -> Callable:
         raise NotImplementedError
 
+    def name(self) -> str:
+        return self.__class__.__name__
+
 
 class MinAggregation(Aggregation):
     def func(self) -> Callable:

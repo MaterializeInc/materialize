@@ -260,7 +260,11 @@ def run_one_scenario(
                 scenario_version = benchmark.create_scenario_instance().version()
                 for aggregation, comparator in zip(aggregations, comparators):
                     comparator.set_scenario_version(scenario_version)
-                    comparator.append(aggregation.aggregate(), aggregation.unit())
+                    comparator.append(
+                        aggregation.aggregate(),
+                        aggregation.unit(),
+                        aggregation.name(),
+                    )
 
         c.kill("cockroach", "materialized", "clusterd", "testdrive")
         c.rm("cockroach", "materialized", "clusterd", "testdrive")
