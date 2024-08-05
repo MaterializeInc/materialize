@@ -15,9 +15,6 @@ from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError, InterfaceError
 
-from materialize.output_consistency.common.configuration import (
-    ConsistencyTestConfiguration,
-)
 from materialize.output_consistency.output.output_printer import OutputPrinter
 
 
@@ -57,6 +54,18 @@ class SqlExecutor:
 
     def query_version(self) -> str:
         raise NotImplementedError
+
+    def before_query_execution(self) -> None:
+        pass
+
+    def after_query_execution(self) -> None:
+        pass
+
+    def before_new_tx(self):
+        pass
+
+    def after_new_tx(self):
+        pass
 
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
@@ -139,12 +148,14 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
 class MzDatabaseSqlExecutor(PgWireDatabaseSqlExecutor):
     def __init__(
         self,
-        connection: Connection,
+        default_connection: Connection,
+        mz_system_connection: Connection,
         use_autocommit: bool,
         output_printer: OutputPrinter,
         name: str,
     ):
-        super().__init__(connection, use_autocommit, output_printer, name)
+        super().__init__(default_connection, use_autocommit, output_printer, name)
+        self.mz_system_connection = mz_system_connection
 
     def query_version(self) -> str:
         return self.query("SELECT mz_version();")[0][0]
@@ -176,23 +187,3 @@ class DryRunSqlExecutor(SqlExecutor):
 
     def query_version(self) -> str:
         return "(dry-run)"
-
-
-def create_sql_executor(
-    config: ConsistencyTestConfiguration,
-    connection: Connection,
-    output_printer: OutputPrinter,
-    name: str,
-    is_mz: bool = True,
-) -> SqlExecutor:
-    if config.dry_run:
-        return DryRunSqlExecutor(output_printer, name)
-
-    if is_mz:
-        return MzDatabaseSqlExecutor(
-            connection, config.use_autocommit, output_printer, name
-        )
-
-    return PgWireDatabaseSqlExecutor(
-        connection, config.use_autocommit, output_printer, name
-    )

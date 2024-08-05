@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 
 from materialize.mzcompose.test_result import TestFailureDetails
@@ -59,6 +61,28 @@ class DbOperationOrFunctionStats:
             f"{success_experienced_info}"
         )
 
+    def merge(self, other: DbOperationOrFunctionStats) -> None:
+        self.count_top_level_expression_generated = (
+            self.count_top_level_expression_generated
+            + other.count_top_level_expression_generated
+        )
+        self.count_nested_expression_generated = (
+            self.count_nested_expression_generated
+            + other.count_nested_expression_generated
+        )
+        self.count_expression_generation_failed = (
+            self.count_expression_generation_failed
+            + other.count_expression_generation_failed
+        )
+        self.count_included_in_executed_queries = (
+            self.count_included_in_executed_queries
+            + other.count_included_in_executed_queries
+        )
+        self.count_included_in_successfully_executed_queries = (
+            self.count_included_in_successfully_executed_queries
+            + other.count_included_in_successfully_executed_queries
+        )
+
 
 @dataclass
 class DbOperationVariant:
@@ -94,6 +118,53 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
 
     def __post_init__(self):
         self.mode = "LIVE_DATABASE" if not self.dry_run else "DRY_RUN"
+
+    def merge(self, other: ConsistencyTestSummary) -> None:
+        assert self.dry_run == other.dry_run
+        assert self.mode == other.mode
+
+        self.count_executed_query_templates = (
+            self.count_executed_query_templates + other.count_executed_query_templates
+        )
+        self.count_successful_query_templates = (
+            self.count_successful_query_templates
+            + other.count_successful_query_templates
+        )
+        self.count_ignored_error_query_templates = (
+            self.count_ignored_error_query_templates
+            + other.count_ignored_error_query_templates
+        )
+        self.count_with_warning_query_templates = (
+            self.count_with_warning_query_templates
+            + other.count_with_warning_query_templates
+        )
+        self.failures.extend(other.failures)
+
+        for operation_variant, other_stats in other.stats_by_operation_variant.items():
+            stats = self.stats_by_operation_variant.get(operation_variant)
+            if stats is None:
+                self.stats_by_operation_variant[operation_variant] = other_stats
+            else:
+                stats.merge(other_stats)
+
+        self.count_available_data_types = max(
+            self.count_available_data_types, other.count_available_data_types
+        )
+        self.count_available_op_variants = max(
+            self.count_available_op_variants, other.count_available_op_variants
+        )
+        self.count_predefined_queries = max(
+            self.count_predefined_queries, other.count_predefined_queries
+        )
+
+        self.count_generated_select_expressions = (
+            self.count_generated_select_expressions
+            + other.count_generated_select_expressions
+        )
+        self.count_ignored_select_expressions = (
+            self.count_ignored_select_expressions
+            + other.count_ignored_select_expressions
+        )
 
     def add_failures(self, failures: list[TestFailureDetails]):
         self.failures.extend(failures)

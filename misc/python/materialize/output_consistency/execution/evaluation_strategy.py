@@ -29,6 +29,13 @@ from materialize.output_consistency.selection.selection import (
     TableColumnByNameSelection,
 )
 
+EVALUATION_STRATEGY_NAME_DFR = "dataflow_rendering"
+EVALUATION_STRATEGY_NAME_CTF = "constant_folding"
+INTERNAL_EVALUATION_STRATEGY_NAMES = [
+    EVALUATION_STRATEGY_NAME_DFR,
+    EVALUATION_STRATEGY_NAME_CTF,
+]
+
 
 class EvaluationStrategyKey(Enum):
     DUMMY = 1
@@ -61,6 +68,7 @@ class EvaluationStrategy:
         self.object_name_base = object_name_base
         self.simple_db_object_name = simple_db_object_name
         self.sql_adjuster = sql_adjuster
+        self.additional_setup_info: str | None = None
 
     def generate_sources(
         self,
@@ -308,3 +316,28 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         )
 
         return [create_view_statement]
+
+
+def create_internal_evaluation_strategy_twice(
+    evaluation_strategy_name: str,
+) -> list[EvaluationStrategy]:
+    strategies: list[EvaluationStrategy]
+
+    if evaluation_strategy_name == EVALUATION_STRATEGY_NAME_DFR:
+        strategies = [DataFlowRenderingEvaluation(), DataFlowRenderingEvaluation()]
+        strategies[1].identifier = EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB
+        return strategies
+
+    if evaluation_strategy_name == EVALUATION_STRATEGY_NAME_CTF:
+        strategies = [ConstantFoldingEvaluation(), ConstantFoldingEvaluation()]
+        strategies[1].identifier = EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB
+        return strategies
+
+    raise RuntimeError(f"Unexpected strategy name: { evaluation_strategy_name}")
+
+
+def is_other_db_evaluation_strategy(evaluation_key: EvaluationStrategyKey) -> bool:
+    return evaluation_key in {
+        EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB,
+        EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB,
+    }
