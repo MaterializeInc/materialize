@@ -650,7 +650,7 @@ async fn handle_delete_user(
 async fn handle_get_users_v3(
     State(context): State<Arc<Context>>,
     Query(query): Query<UsersV3Query>,
-) -> Result<Json<UsersV3Response>, StatusCode> {
+) -> Result<Json<UsersV3Response>, (StatusCode, Json<ErrorResponse>)> {
     let users = context.users.lock().unwrap();
     let role_mapping: BTreeMap<String, UserRole> = context
         .roles
@@ -668,6 +668,9 @@ async fn handle_get_users_v3(
                 && query.ids.as_ref().map_or(true, |ids| {
                     ids.split(',').any(|id| id == user.id.to_string())
                 })
+                && query.tenant_id.as_ref().map_or(true, |q_tenant_id| {
+                    &user.tenant_id == q_tenant_id || query.include_sub_tenants.unwrap_or(false)
+                })
         })
         .map(|(_, user)| UserResponse {
             id: user.id,
@@ -681,13 +684,37 @@ async fn handle_get_users_v3(
 
     // Sort users if sort_by is provided
     if let Some(sort_by) = &query.sort_by {
+        let sort_by = SortBy::try_from(sort_by.as_str()).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    errors: vec!["_sortBy must be a valid enum value".to_string()],
+                }),
+            )
+        })?;
+
+        let order = query
+            .order
+            .as_deref()
+            .map(Order::try_from)
+            .transpose()
+            .map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        errors: vec![
+                            "_order must be one of the following values: ASC, DESC".to_string()
+                        ],
+                    }),
+                )
+            })?;
+
         filtered_users.sort_by(|a, b| {
-            let cmp = match sort_by.as_str() {
-                "email" => a.email.cmp(&b.email),
-                "id" => a.id.cmp(&b.id),
-                _ => std::cmp::Ordering::Equal,
+            let cmp = match sort_by {
+                SortBy::Email => a.email.cmp(&b.email),
+                SortBy::Id => a.id.cmp(&b.id),
             };
-            if query.order.as_deref() == Some("desc") {
+            if order == Some(Order::DESC) {
                 cmp.reverse()
             } else {
                 cmp
@@ -1504,6 +1531,10 @@ struct UsersV3Query {
     sort_by: Option<String>,
     #[serde(rename = "_order")]
     order: Option<String>,
+    #[serde(rename = "_tenantId")]
+    tenant_id: Option<Uuid>,
+    #[serde(rename = "_includeSubTenants")]
+    include_sub_tenants: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -1798,6 +1829,47 @@ struct AddUsersToGroupParams {
 struct RemoveUsersFromGroupParams {
     #[serde(rename = "userIds")]
     user_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    errors: Vec<String>,
+}
+
+#[derive(Debug, PartialEq)]
+enum SortBy {
+    Email,
+    Id,
+}
+
+#[derive(Debug, PartialEq)]
+enum Order {
+    ASC,
+    DESC,
+}
+
+impl TryFrom<&str> for Order {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "ASC" => Ok(Order::ASC),
+            "DESC" => Ok(Order::DESC),
+            _ => Err(format!("'{}' is not a valid order option", value)),
+        }
+    }
+}
+
+impl TryFrom<&str> for SortBy {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "email" => Ok(SortBy::Email),
+            "id" => Ok(SortBy::Id),
+            _ => Err(format!("'{}' is not a valid sort option", value)),
+        }
+    }
 }
 
 impl From<SSOConfigStorage> for SSOConfigResponse {
