@@ -15,12 +15,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
@@ -45,10 +45,12 @@ const GROUP_PATH: &str = "/frontegg/identity/resources/groups/v1/:id";
 const GROUP_ROLES_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/roles";
 const GROUP_USERS_PATH: &str = "/frontegg/identity/resources/groups/v1/:id/users";
 const GROUP_PATH_WITH_SLASH: &str = "/frontegg/identity/resources/groups/v1/:id/";
+const MEMBERS_PATH: &str = "/frontegg/team/resources/members/v1";
 const USERS_ME_PATH: &str = "/identity/resources/users/v2/me";
 const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
 const USER_PATH: &str = "/identity/resources/users/v1/:id";
 const USER_CREATE_PATH: &str = "/identity/resources/users/v2";
+const USERS_V3_PATH: &str = "/identity/resources/users/v3";
 const ROLES_PATH: &str = "/identity/resources/roles/v2";
 const SCIM_CONFIGURATIONS_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2";
 const SCIM_CONFIGURATION_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2/:id";
@@ -163,6 +165,8 @@ impl FronteggMockServer {
             .route(USERS_API_TOKENS_PATH, post(handle_post_user_api_token))
             .route(USER_PATH, get(handle_get_user).delete(handle_delete_user))
             .route(USER_CREATE_PATH, post(handle_create_user))
+            .route(USERS_V3_PATH, get(handle_get_users_v3))
+            .route(MEMBERS_PATH, put(handle_update_user_roles))
             .route(ROLES_PATH, get(handle_roles_request))
             .route(
                 SSO_CONFIGS_PATH,
@@ -641,6 +645,130 @@ async fn handle_delete_user(
         StatusCode::OK
     } else {
         StatusCode::NOT_FOUND
+    }
+}
+
+// https://docs.frontegg.com/reference/userscontrollerv3_getusers
+async fn handle_get_users_v3(
+    State(context): State<Arc<Context>>,
+    Query(query): Query<UsersV3Query>,
+) -> Result<Json<UsersV3Response>, (StatusCode, Json<ErrorResponse>)> {
+    let users = context.users.lock().unwrap();
+    let role_mapping: BTreeMap<String, UserRole> = context
+        .roles
+        .iter()
+        .map(|role| (role.id.clone(), role.clone()))
+        .collect();
+
+    let mut filtered_users: Vec<UserResponse> = users
+        .iter()
+        .filter(|(email, user)| {
+            query
+                .email
+                .as_ref()
+                .map_or(true, |q_email| *email == q_email)
+                && query.ids.as_ref().map_or(true, |ids| {
+                    ids.split(',').any(|id| id == user.id.to_string())
+                })
+                && query.tenant_id.as_ref().map_or(true, |q_tenant_id| {
+                    &user.tenant_id == q_tenant_id || query.include_sub_tenants.unwrap_or(false)
+                })
+        })
+        .map(|(_, user)| UserResponse {
+            id: user.id,
+            email: user.email.clone(),
+            verified: user.verified.unwrap_or(true),
+            metadata: user.metadata.clone().unwrap_or_default(),
+            provider: user.auth_provider.clone().unwrap_or_default(),
+            roles: get_user_roles(&user.roles, &role_mapping),
+        })
+        .collect();
+
+    // Sort users if sort_by is provided
+    if let Some(sort_by) = &query.sort_by {
+        let sort_by = SortBy::try_from(sort_by.as_str()).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    errors: vec!["_sortBy must be a valid enum value".to_string()],
+                }),
+            )
+        })?;
+
+        let order = query
+            .order
+            .as_deref()
+            .map(Order::try_from)
+            .transpose()
+            .map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        errors: vec![
+                            "_order must be one of the following values: ASC, DESC".to_string()
+                        ],
+                    }),
+                )
+            })?;
+
+        filtered_users.sort_by(|a, b| {
+            let cmp = match sort_by {
+                SortBy::Email => a.email.cmp(&b.email),
+                SortBy::Id => a.id.cmp(&b.id),
+            };
+            if order == Some(Order::DESC) {
+                cmp.reverse()
+            } else {
+                cmp
+            }
+        });
+    }
+
+    let total_items = filtered_users.len();
+
+    // Apply pagination
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(total_items);
+    filtered_users = filtered_users
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect();
+
+    Ok(Json(UsersV3Response {
+        items: filtered_users,
+        _metadata: UsersV3Metadata { total_items },
+    }))
+}
+
+async fn handle_update_user_roles(
+    State(context): State<Arc<Context>>,
+    Json(request): Json<UpdateUserRolesRequest>,
+) -> Result<Json<UserResponse>, StatusCode> {
+    let mut users = context.users.lock().unwrap();
+    let role_mapping: BTreeMap<String, UserRole> = context
+        .roles
+        .iter()
+        .map(|role| (role.id.clone(), role.clone()))
+        .collect();
+
+    if let Some(user) = users.get_mut(&request.email) {
+        user.roles.clone_from(&request.role_ids);
+
+        let updated_roles = get_user_roles(&user.roles, &role_mapping);
+
+        let user_response = UserResponse {
+            id: user.id,
+            email: user.email.clone(),
+            verified: user.verified.unwrap_or(true),
+            metadata: user.metadata.clone().unwrap_or_default(),
+            provider: user.auth_provider.clone().unwrap_or_default(),
+            roles: updated_roles,
+        };
+
+        Ok(Json(user_response))
+    } else {
+        Err(StatusCode::NOT_FOUND)
     }
 }
 
@@ -1386,6 +1514,43 @@ struct UserRolesMetadata {
 }
 
 #[derive(Deserialize)]
+struct UpdateUserRolesRequest {
+    email: String,
+    #[serde(rename = "roleIds")]
+    role_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct UsersV3Query {
+    #[serde(rename = "_email")]
+    email: Option<String>,
+    #[serde(rename = "_limit")]
+    limit: Option<usize>,
+    #[serde(rename = "_offset")]
+    offset: Option<usize>,
+    ids: Option<String>,
+    #[serde(rename = "_sortBy")]
+    sort_by: Option<String>,
+    #[serde(rename = "_order")]
+    order: Option<String>,
+    #[serde(rename = "_tenantId")]
+    tenant_id: Option<Uuid>,
+    #[serde(rename = "_includeSubTenants")]
+    include_sub_tenants: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct UsersV3Response {
+    items: Vec<UserResponse>,
+    _metadata: UsersV3Metadata,
+}
+
+#[derive(Serialize)]
+struct UsersV3Metadata {
+    total_items: usize,
+}
+
+#[derive(Deserialize)]
 pub struct SSOConfigCreateRequest {
     #[serde(default)]
     pub enabled: bool,
@@ -1666,6 +1831,47 @@ struct AddUsersToGroupParams {
 struct RemoveUsersFromGroupParams {
     #[serde(rename = "userIds")]
     user_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    errors: Vec<String>,
+}
+
+#[derive(Debug, PartialEq)]
+enum SortBy {
+    Email,
+    Id,
+}
+
+#[derive(Debug, PartialEq)]
+enum Order {
+    ASC,
+    DESC,
+}
+
+impl TryFrom<&str> for Order {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "ASC" => Ok(Order::ASC),
+            "DESC" => Ok(Order::DESC),
+            _ => Err(format!("'{}' is not a valid order option", value)),
+        }
+    }
+}
+
+impl TryFrom<&str> for SortBy {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "email" => Ok(SortBy::Email),
+            "id" => Ok(SortBy::Id),
+            _ => Err(format!("'{}' is not a valid sort option", value)),
+        }
+    }
 }
 
 impl From<SSOConfigStorage> for SSOConfigResponse {
