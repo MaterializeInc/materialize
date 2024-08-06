@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_promote(wait=False, poll_interval=15, dry_run=False) %}
+{% macro deploy_promote(wait=False, poll_interval=15, lag_tolerance='1s', dry_run=False) %}
 {#
   Performs atomic deployment of current dbt targets to production,
   based on the deployment configuration specified in the dbt_project.yml file.
@@ -27,6 +27,7 @@
       Defaults to false. It is recommended you call `deploy_await` manually and
       run additional validation checks before promoting a deployment to production.
   - `poll_interval` (integer): The interval, in seconds, between each readiness check.
+  - `lag_tolerance` (string): The maximum acceptable lag duration. Default is '1s' (1 second).
   - `dry_run` (boolean, optional): When True, prints out the commands that would
     be executed as part of the deployment workflow (without executing them).
 
@@ -71,7 +72,7 @@
 {% endfor %}
 
 {% if wait %}
-    {{ deploy_await(poll_interval) }}
+    {{ deploy_await(poll_interval, lag_tolerance) }}
 {% endif %}
 
 {% if not dry_run %}

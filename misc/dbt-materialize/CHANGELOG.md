@@ -1,5 +1,19 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Add `application_name` to the connection parameters [#28813](https://github.com/MaterializeInc/materialize/pull/28813).
+
+* Add `lag_tolerance` argument to the `deploy_promote` operation [#28831](https://github.com/MaterializeInc/materialize/issues/28831).
+  - Allows users to specify a custom maximum acceptable lag duration when waiting for deployment readiness
+  - Default value is '1s' (1 second)
+  - Can be used in combination with `wait: true` and `poll_interval`
+  - Example usage:
+    ```bash
+    dbt run-operation deploy_await --args '{lag_tolerance: "5s"}'
+    dbt run-operation deploy_promote --args '{wait: true, poll_interval: 30, lag_tolerance: "5s"}'
+    ```
+
 ## 1.8.3 - 2024-07-19
 
 * Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.

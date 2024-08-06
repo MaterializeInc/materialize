@@ -13,13 +13,14 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_await(poll_interval=15) %}
+{% macro deploy_await(poll_interval=15, lag_tolerance='1s') %}
 {#
   Waits for all objects within the deployment clusters to be fully hydrated,
   polling the cluster's readiness status at a specified interval.
 
   ## Arguments
   - `poll_interval` (integer): The interval, in seconds, between each readiness check.
+  - `lag_tolerance` (string): The maximum acceptable lag time for the cluster to be considered ready.
 
   ## Returns
   None: This macro does not return a value but will halt execution until the specified
@@ -39,6 +40,6 @@
 
 {% for cluster in clusters %}
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-    {{ await_cluster_ready(deploy_cluster, poll_interval) }}
+    {{ await_cluster_ready(deploy_cluster, poll_interval, lag_tolerance) }}
 {% endfor %}
 {% endmacro %}

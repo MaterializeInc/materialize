@@ -365,17 +365,27 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
    hydrate before you can safely cut over. Use the `run-operation` command
    to invoke the [`deploy_await`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_await.sql)
    macro, which periodically polls the cluster readiness status, and waits for all
-   objects to have a **lag of less than 1 second** to return successfully.
+   objects to be fully hydrated and have a lag less than the specified tolerance.
 
     ```bash
     dbt run-operation deploy_await
     ```
 
-    The default poll interval is `15` seconds, but can be configured to a
-    different value by passing the `poll_interval=<value>` argument in the macro
-    invocation.
+    By default, `deploy_await` waits for all objects to have a **lag of less than 1 second**
+    before returning successfully. You can customize this behavior with the following arguments:
 
-1. Once `deploy_await` returns successfully, you can manually run tests against
+    - `poll_interval`: The time (in seconds) between each readiness check. Default is 15 seconds.
+    - `lag_tolerance`: The maximum acceptable lag duration. Default is '1s' (1 second).
+
+    Example usage with custom values:
+
+    ```bash
+    dbt run-operation deploy_await --args '{poll_interval: 30, lag_tolerance: "5s"}'
+    ```
+
+    This example sets the poll interval to 30 seconds and the lag tolerance to 5 seconds.
+
+2. Once `deploy_await` returns successfully, you can manually run tests against
    the new deployment environment to validate the results.
 
 #### Cutover and cleanup
@@ -397,13 +407,28 @@ environment before cutting over.
 
     ```bash
     # Do a dry run to validate the sequence of commands to execute
-    dbt run-operation deploy_promote --args 'dry_run: True'
+    dbt run-operation deploy_promote --args '{dry_run: True}'
     ```
 
     ```bash
     # Promote the deployment environment to production
     dbt run-operation deploy_promote
     ```
+
+   You can customize the behavior of `deploy_promote` with the following arguments:
+
+   - `wait`: If set to `true`, waits for the deployment to be fully hydrated before promoting. Default is `false`.
+   - `poll_interval`: The time (in seconds) between each readiness check when `wait` is `true`. Default is 15 seconds.
+   - `lag_tolerance`: The maximum acceptable lag duration when `wait` is `true`. Default is '1s' (1 second).
+   - `dry_run`: When `true`, prints out the commands that would be executed without actually performing the swap. Default is `false`.
+
+   Example usage with custom values:
+
+    ```bash
+    dbt run-operation deploy_promote --args '{wait: true, poll_interval: 30, lag_tolerance: "5s"}'
+    ```
+
+   This example waits for the deployment to be ready, checking every 30 seconds, and considers it ready when the lag is less than 5 seconds.
 
     {{< note >}}The `deploy_promote` operation might fail if objects are
     concurrently modified by a different session. If this occurs, re-run the
