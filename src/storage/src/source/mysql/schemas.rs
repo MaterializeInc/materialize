@@ -10,24 +10,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
-use mz_mysql_util::{schema_info, MySqlError, MySqlTableDesc, QualifiedTableRef, SchemaRequest};
+use mz_mysql_util::{schema_info, MySqlError, SchemaRequest};
 
-use super::{DefiniteError, MySqlTableName, SubsourceInfo};
+use super::{DefiniteError, MySqlTableName, SourceOutputInfo};
 
-/// Given a list of tables and their expected schemas, retrieve the current schema for each table
-/// and verify they are compatible with the expected schema.
+/// Given a map of tables and the expected schemas of their outputs, retrieve the current
+/// schema for each and verify they are compatible with the expected schema.
 ///
-/// Returns a vec of tables that have incompatible schema changes.
-pub(super) async fn verify_schemas<'a, Q>(
+/// Returns a vec of outputs that have incompatible schema changes.
+pub(super) async fn verify_schemas<'a, Q, I>(
     conn: &mut Q,
-    expected: &[(&'a MySqlTableName, &SubsourceInfo)],
-) -> Result<Vec<(&'a MySqlTableName, DefiniteError)>, MySqlError>
+    expected: BTreeMap<&'a MySqlTableName, I>,
+) -> Result<Vec<(&'a SourceOutputInfo, DefiniteError)>, MySqlError>
 where
     Q: Queryable,
+    I: IntoIterator<Item = &'a SourceOutputInfo>,
 {
-    let (text_column_map, ignore_column_map) = map_columns(expected);
-
-    // Get the current schema for each requested table from mysql
     let cur_schemas: BTreeMap<_, _> = schema_info(
         conn,
         &SchemaRequest::Tables(
@@ -36,8 +34,6 @@ where
                 .map(|(f, _)| (f.0.as_str(), f.1.as_str()))
                 .collect(),
         ),
-        &text_column_map,
-        &ignore_column_map,
     )
     .await?
     .into_iter()
@@ -51,60 +47,36 @@ where
 
     Ok(expected
         .into_iter()
-        .filter_map(|(table, info)| {
-            if let Err(err) = verify_schema(table, &info.desc, &cur_schemas) {
-                Some((*table, err))
-            } else {
-                None
-            }
+        .flat_map(|(table, outputs)| {
+            // For each output for this upstream table, verify that the existing output
+            // desc is compatible with the new desc.
+            outputs
+                .into_iter()
+                .filter_map(|output| match &cur_schemas.get(table) {
+                    None => Some((output, DefiniteError::TableDropped(table.to_string()))),
+                    Some(schema) => {
+                        let new_desc = (*schema).clone().to_desc(
+                            Some(&BTreeSet::from_iter(
+                                output.text_columns.iter().map(|s| s.as_str()),
+                            )),
+                            Some(&BTreeSet::from_iter(
+                                output.ignore_columns.iter().map(|s| s.as_str()),
+                            )),
+                        );
+                        match new_desc {
+                            Ok(desc) => match output.desc.determine_compatibility(&desc) {
+                                Ok(()) => None,
+                                Err(err) => Some((
+                                    output,
+                                    DefiniteError::IncompatibleSchema(err.to_string()),
+                                )),
+                            },
+                            Err(err) => {
+                                Some((output, DefiniteError::IncompatibleSchema(err.to_string())))
+                            }
+                        }
+                    }
+                })
         })
         .collect())
-}
-
-/// Ensures that the specified table is still compatible with the current upstream schema
-/// and that it has not been dropped.
-fn verify_schema(
-    table: &MySqlTableName,
-    expected_desc: &MySqlTableDesc,
-    upstream_info: &BTreeMap<MySqlTableName, MySqlTableDesc>,
-) -> Result<(), DefiniteError> {
-    let current_desc = upstream_info
-        .get(table)
-        .ok_or_else(|| DefiniteError::TableDropped(table.to_string()))?;
-
-    match expected_desc.determine_compatibility(current_desc) {
-        Ok(()) => Ok(()),
-        Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
-    }
-}
-
-fn map_columns<'a>(
-    tables: &'a [(&'a MySqlTableName, &SubsourceInfo)],
-) -> (
-    BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
-    BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
-) {
-    let mut text_column_map = BTreeMap::new();
-    let mut ignore_column_map = BTreeMap::new();
-    for (table, info) in tables {
-        if !info.text_columns.is_empty() {
-            text_column_map.insert(
-                QualifiedTableRef {
-                    schema_name: &table.0,
-                    table_name: &table.1,
-                },
-                info.text_columns.iter().map(|s| s.as_str()).collect(),
-            );
-        }
-        if !info.ignore_columns.is_empty() {
-            ignore_column_map.insert(
-                QualifiedTableRef {
-                    schema_name: &table.0,
-                    table_name: &table.1,
-                },
-                info.ignore_columns.iter().map(|s| s.as_str()).collect(),
-            );
-        }
-    }
-    (text_column_map, ignore_column_map)
 }
