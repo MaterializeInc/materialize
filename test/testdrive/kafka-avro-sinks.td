@@ -198,6 +198,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-
 $ kafka-verify-data format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
+> SELECT key_format, value_format, format FROM mz_sinks WHERE name = 'namespace_key_value_sink'
+avro avro avro
+
 # Test setting the compatibility level for both topics
 > CREATE MATERIALIZED VIEW compat_level_data (a, b) AS SELECT * FROM (VALUES (1, 2));
 
@@ -242,6 +245,10 @@ $ schema-registry-verify schema-type=avro subject=testdrive-mixed-format-sink-${
 
 $ kafka-verify-data key-format=json value-format=avro sink=materialize.public.mixed_format_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
+
+> SELECT key_format, value_format, format FROM mz_sinks WHERE name = 'mixed_format_sink'
+json avro key-json-value-avro
+
 
 # Test a sink over a view whose column names are not directly usable as
 # Avro schema names.

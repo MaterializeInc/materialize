@@ -448,7 +448,9 @@ Field            | Type     | Meaning
 `connection_id`  | [`text`] | The ID of the connection associated with the sink, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
 `size`           | [`text`] | The size of the sink.
 `envelope_type`  | [`text`] | The [envelope](/sql/create-sink/kafka/#envelopes) of the sink: `upsert`, or `debezium`.
-`format`         | [`text`] | The [format](/sql/create-sink/kafka/#formats) of the sink's output: `avro` or `json`.
+`format`         | [`text`] | *Deprecated* The [format](/sql/create-sink/kafka/#formats) of the sink's output: `avro`, `json`, `text`, or `bytes`.
+`key_format`     | [`text`] | The [format](/sql/create-sink/kafka/#formats) of the sinks's key, if any: `avro`, `json`, `bytes`, `text`, or `NULL`.
+`value_format`   | [`text`] | The [format](/sql/create-sink/kafka/#formats) of the sink's values: `avro`, `json`, `text`, or `bytes`.
 `cluster_id`     | [`text`] | The ID of the cluster maintaining the sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`] | The role ID of the owner of the sink. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `create_sql`     | [`text`] | The `CREATE` SQL statement for the sink.
