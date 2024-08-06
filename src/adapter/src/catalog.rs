@@ -584,6 +584,15 @@ impl Catalog {
             .err_into()
     }
 
+    /// Get the next user item ID without allocating it.
+    pub async fn get_next_user_item_id(&self) -> Result<u64, Error> {
+        self.storage()
+            .await
+            .get_next_user_item_id()
+            .await
+            .err_into()
+    }
+
     #[cfg(test)]
     pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
         use mz_ore::collections::CollectionExt;
@@ -593,6 +602,15 @@ impl Catalog {
             .await
             .maybe_terminate("allocating system ids")
             .map(|ids| ids.into_element())
+            .err_into()
+    }
+
+    /// Get the next system item ID without allocating it.
+    pub async fn get_next_system_item_id(&self) -> Result<u64, Error> {
+        self.storage()
+            .await
+            .get_next_system_item_id()
+            .await
             .err_into()
     }
 

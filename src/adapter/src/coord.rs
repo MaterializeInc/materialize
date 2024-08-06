@@ -2190,37 +2190,65 @@ impl Coordinator {
             self.bootstrap_tables(&entries, builtin_table_updates).await
         };
 
-        // Destructure Self so we can do some concurrent work.
-        let Self {
-            secrets_controller,
-            catalog,
-            ..
-        } = self;
-
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
-        let secrets_cleanup_fut = async move {
-            match secrets_controller.list().await {
-                Ok(controller_secrets) => {
-                    // Fetch all IDs from the catalog to future-proof against other
-                    // things using secrets. Today, SECRET and CONNECTION objects use
-                    // secrets_controller.ensure, but more things could in the future
-                    // that would be easy to miss adding here.
-                    let catalog_ids: BTreeSet<GlobalId> =
-                        catalog.entries().map(|entry| entry.id()).collect();
-                    let controller_secrets: BTreeSet<GlobalId> =
-                        controller_secrets.into_iter().collect();
-                    let orphaned = controller_secrets.difference(&catalog_ids);
-                    for id in orphaned {
-                        info!("coordinator init: deleting orphaned secret {id}");
-                        fail_point!("orphan_secrets");
-                        if let Err(e) = secrets_controller.delete(*id).await {
-                            warn!("Dropping orphaned secret has encountered an error: {}", e);
+        let secrets_cleanup_fut = {
+            // Destructure Self so we can selectively move fields into the async
+            // task.
+            let Self {
+                secrets_controller,
+                catalog,
+                ..
+            } = self;
+
+            let next_user_item_id = catalog.get_next_user_item_id().await?;
+            let next_system_item_id = catalog.get_next_system_item_id().await?;
+            let read_only = self.controller.read_only();
+
+            async move {
+                if read_only {
+                    info!("coordinator init: not cleaning up orphaned secrets while in read-only mode");
+                    return;
+                }
+                info!("coordinator init: cleaning up orphaned secrets");
+
+                match secrets_controller.list().await {
+                    Ok(controller_secrets) => {
+                        // Fetch all IDs from the catalog to future-proof against other
+                        // things using secrets. Today, SECRET and CONNECTION objects use
+                        // secrets_controller.ensure, but more things could in the future
+                        // that would be easy to miss adding here.
+                        let catalog_ids: BTreeSet<GlobalId> =
+                            catalog.entries().map(|entry| entry.id()).collect();
+                        let controller_secrets: BTreeSet<GlobalId> =
+                            controller_secrets.into_iter().collect();
+                        let orphaned = controller_secrets.difference(&catalog_ids);
+                        for id in orphaned {
+                            let id_too_large = match id {
+                                GlobalId::System(id) => *id >= next_system_item_id,
+                                GlobalId::User(id) => *id >= next_user_item_id,
+                                GlobalId::Transient(_) | GlobalId::Explain => false,
+                            };
+                            if id_too_large {
+                                info!(
+                                    %next_user_item_id, %next_system_item_id,
+                                    "coordinator init: not deleting orphaned secret {id} that was likely created by a newer deploy generation"
+                                );
+                            } else {
+                                info!("coordinator init: deleting orphaned secret {id}");
+                                fail_point!("orphan_secrets");
+                                if let Err(e) = secrets_controller.delete(*id).await {
+                                    warn!(
+                                        "Dropping orphaned secret has encountered an error: {}",
+                                        e
+                                    );
+                                }
+                            }
                         }
                     }
+                    Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
                 }
-                Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
             }
         };
 

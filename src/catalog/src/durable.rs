@@ -206,6 +206,16 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Get the next ID of `id_type`, without allocating it.
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError>;
 
+    /// Get the next user ID without allocating it.
+    async fn get_next_user_item_id(&mut self) -> Result<u64, CatalogError> {
+        self.get_next_id(USER_ITEM_ALLOC_KEY).await
+    }
+
+    /// Get the next system ID without allocating it.
+    async fn get_next_system_item_id(&mut self) -> Result<u64, CatalogError> {
+        self.get_next_id(SYSTEM_ITEM_ALLOC_KEY).await
+    }
+
     /// Get the next system replica id without allocating it.
     async fn get_next_system_replica_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(SYSTEM_REPLICA_ID_ALLOC_KEY).await
