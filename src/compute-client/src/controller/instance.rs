@@ -537,36 +537,41 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         );
     }
 
-    /// Returns `true` iff all collections are hydrated on at least one replica.
+    /// Returns `true` iff all collections are hydrated on at least one
+    /// (possibly different) replica.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
-    pub fn any_replica_hydrated(&self) -> bool {
+    pub fn all_collections_hydrated(&self) -> bool {
         if self.replicas.is_empty() {
             return true;
         }
 
-        let mut any_hydrated = false;
-        for (replica_id, replica_state) in self.replicas.iter() {
-            let mut replica_hydrated = true;
+        let mut all_hydrated = true;
 
-            for collection in replica_state.collections.values() {
-                if !collection.hydrated() {
-                    replica_hydrated = false;
+        for (id, _collection) in self.collections_iter() {
+            let mut collection_hydrated = false;
+            for replica_state in self.replicas.values() {
+                let collection_state = replica_state
+                    .collections
+                    .get(id)
+                    .expect("missing collection state");
 
-                    tracing::info!("replica {replica_id} is not hydrated");
+                if collection_state.hydrated() {
+                    collection_hydrated = true;
                     break;
                 }
             }
 
-            if replica_hydrated {
-                any_hydrated = true;
+            if !collection_hydrated {
+                tracing::info!("collection {id} is not hydrated on any replica");
+                all_hydrated = false;
                 // We continue with our loop instead of breaking out early, so
                 // that we log all non-hydrated replicas.
             }
         }
 
-        any_hydrated
+        all_hydrated
     }
 
     /// Returns `true` iff all collections have their write frontier (aka.

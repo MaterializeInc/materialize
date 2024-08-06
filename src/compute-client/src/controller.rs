@@ -348,7 +348,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     pub fn clusters_hydrated(&self) -> bool {
         let mut result = true;
         for (instance_id, i) in &self.instances {
-            let instance_hydrated = i.any_replica_hydrated();
+            let instance_hydrated = i.all_collections_hydrated();
 
             if !instance_hydrated {
                 result = false;
