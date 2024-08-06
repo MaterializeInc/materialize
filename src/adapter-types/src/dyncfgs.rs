@@ -40,7 +40,7 @@ pub const WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL: Config<Duration> = Confi
 
 pub const ENABLE_0DT_CAUGHT_UP_CHECK: Config<bool> = Config::new(
     "enable_0dt_caught_up_check",
-    false,
+    true,
     "Whether to determine rehydration using a more complicated method that compares collection write frontiers against an allowed lag behind wall-clock time.",
 );
 
