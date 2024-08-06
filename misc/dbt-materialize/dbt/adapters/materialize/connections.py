@@ -24,6 +24,8 @@ from dbt_common.semver import versions_compatible
 from dbt.adapters.events.logging import AdapterLogger
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 
+from .__version__ import version as __version__
+
 # If you bump this version, bump it in README.md too.
 SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
@@ -59,6 +61,7 @@ psycopg2.connect = connect
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
     cluster: Optional[str] = "quickstart"
+    application_name: Optional[str] = f"dbt-materialize v{__version__}"
 
     @property
     def type(self):
@@ -77,6 +80,7 @@ class MaterializeCredentials(PostgresCredentials):
             "connect_timeout",
             "search_path",
             "retries",
+            "application_name",
         )
 
 
