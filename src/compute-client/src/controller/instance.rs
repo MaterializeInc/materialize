@@ -537,17 +537,25 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         );
     }
 
-    /// Returns `true` iff all collections are hydrated on at least one replica.
+    /// Returns `true` iff all collections are hydrated on at least one of the
+    /// filtered replicas.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
-    pub fn any_replica_hydrated(&self) -> bool {
+    pub fn any_replicas_hydrated(&self, filter_replica_ids: Option<Vec<ReplicaId>>) -> bool {
         if self.replicas.is_empty() {
             return true;
         }
 
         let mut any_hydrated = false;
-        for (replica_id, replica_state) in self.replicas.iter() {
+        for (replica_id, replica_state) in
+            self.replicas
+                .iter()
+                .filter(|(id, _)| match filter_replica_ids {
+                    None => true,
+                    Some(ref ids) => ids.contains(id),
+                })
+        {
             let mut replica_hydrated = true;
 
             for collection in replica_state.collections.values() {
@@ -567,6 +575,14 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         any_hydrated
+    }
+
+    /// Returns `true` iff all collections are hydrated on at least one replica.
+    ///
+    /// This also returns `true` in case this cluster does not have any
+    /// replicas.
+    pub fn any_replica_hydrated(&self) -> bool {
+        self.any_replicas_hydrated(None)
     }
 
     /// Clean up collection state that is not needed anymore.

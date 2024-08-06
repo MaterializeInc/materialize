@@ -230,6 +230,7 @@ pub enum AdapterError {
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
     ReadOnly,
+    AlterClusterTimeout,
 }
 
 impl AdapterError {
@@ -413,6 +414,9 @@ impl AdapterError {
             Self::SubsourceAlreadyReferredTo { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             },
+            AdapterError::AlterClusterTimeout=> Some(
+                "Consider increasing the timeout duration in the alter cluster statement.".into(),
+            ),
             _ => None,
         }
     }
@@ -546,6 +550,7 @@ impl AdapterError {
             // In read-only mode all transactions are implicitly read-only
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
+            AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
         }
     }
 
@@ -773,6 +778,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::UserSessionsDisallowed => write!(f, "login blocked"),
             AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
+            AdapterError::AlterClusterTimeout => {
+                write!(f, "canceling statement due to provided timeout being met")
+            }
         }
     }
 }

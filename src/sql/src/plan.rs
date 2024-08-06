@@ -1652,29 +1652,29 @@ pub enum AlterClusterPlanStrategy {
     None,
     For(Duration),
     UntilCaughtUp {
-        on_timeout: ContinueOrAbort,
+        on_timeout: OnTimeoutAction,
         timeout: Duration,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ContinueOrAbort {
+pub enum OnTimeoutAction {
     Continue,
     Abort,
 }
 
-impl Default for ContinueOrAbort {
+impl Default for OnTimeoutAction {
     fn default() -> Self {
         Self::Abort
     }
 }
 
-impl TryFrom<&str> for ContinueOrAbort {
+impl TryFrom<&str> for OnTimeoutAction {
     type Error = PlanError;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "continue" => Ok(Self::Continue),
-            "abort" => Ok(Self::Abort),
+        match value.to_uppercase().as_str() {
+            "CONTINUE" => Ok(Self::Continue),
+            "ABORT" => Ok(Self::Abort),
             _ => Err(PlanError::Unstructured(
                 "Valid options are CONTINUE, ABORT".into(),
             )),
@@ -1702,13 +1702,13 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
                         None => Err(PlanError::TimeoutRequired)?,
                     },
                     on_timeout: match extracted.on_timeout {
-                        Some(v) => ContinueOrAbort::try_from(v.as_str()).map_err(|e| {
+                        Some(v) => OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
                             PlanError::InvalidOptionValue {
                                 option_name: "ON TIMEOUT".into(),
                                 err: Box::new(e),
                             }
                         })?,
-                        None => ContinueOrAbort::default(),
+                        None => OnTimeoutAction::default(),
                     },
                 }
             }
