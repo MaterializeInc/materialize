@@ -529,12 +529,14 @@ DROP SOURCE counter;
 
 Because `SUBSCRIBE` requests happen over the network, these connections might
 get disrupted for both expected and unexpected reasons. You can adjust the
-[history retention period](/releases/v0.99/#sql) for
-the objects a subscription depends on, and then use [`AS OF`](#as-of) to pick
-up where you left off on connection drops—this ensures that no data is lost
+[history retention
+period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
+for the objects a subscription depends on, and then use [`AS OF`](#as-of) to
+pick up where you left off on connection drops—this ensures that no data is lost
 in the subscription process, and avoids the need for re-snapshotting the data.
 
-To learn more about durable subscriptions, see [release notes](/releases/v0.99/#sql).
+For more information, see [durable
+subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 ## Privileges
 

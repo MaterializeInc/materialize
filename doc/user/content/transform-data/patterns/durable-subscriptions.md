@@ -72,13 +72,6 @@ When you decrease the history retention period for an object:
 
 See also [Considerations](#considerations).
 
-#### Clean-up
-
-The history retention period represents the minimum amount of historical data
-guaranteed to be retained by Materialize. History clean-up is processed in the
-background, so older history may be accessible for the period of time between
-when it falls outside the retention period and when it is cleaned up.
-
 ### Set history retention period
 
 {{< note >}}
@@ -186,6 +179,14 @@ object will lead to increased resource utilization in Materialize.
   or materialized view directly powering the subscription, rather than all the
   way through the dependency chain from the source to the index or materialized
   view.
+
+#### Clean-up
+
+The history retention period represents the minimum amount of historical data
+guaranteed to be retained by Materialize. History clean-up is processed in the
+background, so older history may be accessible for the period of time between
+when it falls outside the retention period and when it is cleaned up.
+
 
 ## Enabling durable subscriptions in your application
 
