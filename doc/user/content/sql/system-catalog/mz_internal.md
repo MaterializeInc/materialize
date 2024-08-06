@@ -315,7 +315,8 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 The `mz_history_retention_strategies` describes the history retention strategies
 for tables, sources, indexes, materialized views that are configured with a
-[history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period).
+[history retention
+period](/transform-data/patterns/durable-subscriptions/#history-retention-period).
 
 <!-- RELATION_SPEC mz_internal.mz_history_retention_strategies -->
 | Field | Type | Meaning |
