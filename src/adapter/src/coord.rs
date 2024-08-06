@@ -3439,13 +3439,19 @@ impl Coordinator {
                     .try_into()
                     .expect("must fit into u64");
 
-                let compute_hydrated = self
+                let compute_caught_up = self
                     .controller
                     .compute
                     .clusters_caught_up(allowed_lag.into(), &live_collection_frontiers);
-                tracing::info!(%compute_hydrated, "checked caught-up status of collections");
 
-                if compute_hydrated {
+                // We also check that we're "hydrated", meaning all collections
+                // have reported an upper at _some_ frontier. This acts as a
+                // back-stop to the case where `mz_cluster_replica_frontiers` is
+                // migrated and we report `0` for a collection frontier.
+                let compute_hydrated = self.controller.compute.clusters_hydrated();
+                tracing::info!(%compute_caught_up, %compute_hydrated, "checked caught-up status of collections");
+
+                if compute_caught_up && compute_hydrated {
                     let trigger = self
                         .clusters_hydrated_trigger
                         .take()
