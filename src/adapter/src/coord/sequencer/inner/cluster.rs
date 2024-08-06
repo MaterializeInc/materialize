@@ -8,14 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
-use crate::coord::sequencer::cluster::{FinalizationNeeded, PENDING_REPLICA_SUFFIX};
+use crate::coord::sequencer::cluster::{NeedsFinalization, PENDING_REPLICA_SUFFIX};
 use crate::coord::{
-    AlterCluster, ClusterStage, Coordinator, FinalizeAlterCluster, Message, PlanValidity,
-    StageResult, Staged,
+    AlterCluster, AlterClusterFinalize, AlterClusterWaitForHydrated, ClusterStage, Coordinator,
+    Message, PlanValidity, StageResult, Staged,
 };
 use crate::{session::Session, AdapterError, ExecuteContext, ExecuteResponse};
+use itertools::Itertools;
+use maplit::btreeset;
 use mz_catalog::memory::objects::{
     ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
 };
@@ -24,8 +27,8 @@ use mz_controller_types::DEFAULT_REPLICA_LOGGING_INTERVAL;
 use mz_ore::instrument;
 use mz_sql::ast::{Ident, QualifiedReplica};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan;
-use mz_sql::plan::AlterClusterPlan;
+use mz_sql::plan::{self, AlterClusterPlanStrategy};
+use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
 use tracing::{debug, Instrument, Span};
 
@@ -37,6 +40,7 @@ impl Staged for ClusterStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Alter(stage) => &mut stage.validity,
+            Self::WaitForHydrated(stage) => &mut stage.validity,
             Self::Finalize(stage) => &mut stage.validity,
         }
     }
@@ -49,12 +53,31 @@ impl Staged for ClusterStage {
         match self {
             Self::Alter(stage) => {
                 coord
-                    .sequence_alter_cluster(ctx.session(), stage.plan.clone(), stage.validity)
+                    .sequence_alter_cluster_stage(ctx.session(), stage.plan.clone(), stage.validity)
+                    .await
+            }
+            Self::WaitForHydrated(stage) => {
+                let AlterClusterWaitForHydrated {
+                    validity,
+                    plan,
+                    new_config,
+                    timeout_time,
+                    on_timeout,
+                } = stage;
+                coord
+                    .check_if_pending_replicas_hydrated_stage(
+                        ctx.session(),
+                        plan,
+                        new_config,
+                        timeout_time,
+                        on_timeout,
+                        validity,
+                    )
                     .await
             }
             Self::Finalize(stage) => {
                 coord
-                    .finalize_alter_cluster_managed_to_managed(
+                    .finalize_alter_cluster_stage(
                         ctx.session(),
                         stage.plan.clone(),
                         stage.new_config.clone(),
@@ -104,7 +127,7 @@ impl Coordinator {
         Ok(ClusterStage::Alter(AlterCluster { validity, plan }))
     }
 
-    pub(super) async fn sequence_alter_cluster(
+    pub(super) async fn sequence_alter_cluster_stage(
         &mut self,
         session: &Session,
         plan: plan::AlterClusterPlan,
@@ -119,7 +142,8 @@ impl Coordinator {
 
         use mz_catalog::memory::objects::ClusterVariant::*;
         use mz_sql::plan::AlterOptionParameter::*;
-        let config = self.catalog.get_cluster(cluster_id).config.clone();
+        let cluster = self.catalog.get_cluster(cluster_id);
+        let config = cluster.config.clone();
         let mut new_config = config.clone();
 
         match (&new_config.variant, &options.managed) {
@@ -243,7 +267,7 @@ impl Coordinator {
                     )
                     .await?;
                 return match alter_followup {
-                    FinalizationNeeded::In(duration) => {
+                    NeedsFinalization::Yes => {
                         // For non backgrounded graceful alters,
                         // store the cluster_id in the ConnMeta
                         // to allow for cancellation.
@@ -252,23 +276,43 @@ impl Coordinator {
                             .expect("There must be an active connection")
                             .pending_cluster_alters
                             .insert(cluster_id.clone());
-                        let span = Span::current();
                         let new_config_managed = new_config_managed.clone();
-                        Ok(StageResult::Handle(mz_ore::task::spawn(
-                            || "Finalize Alter Cluster",
-                            async move {
-                                tokio::time::sleep(duration).await;
-                                let stage = ClusterStage::Finalize(FinalizeAlterCluster {
-                                    validity,
-                                    plan,
-                                    new_config: new_config_managed,
-                                });
-                                Ok(Box::new(stage))
+                        match &strategy {
+                            AlterClusterPlanStrategy::None => {
+                                return Err(AdapterError::Internal("AlterClusterPlanStrategy must not be None if NeedsFinalization is Yes".into()))
                             }
-                            .instrument(span),
-                        )))
+                            AlterClusterPlanStrategy::For(ref duration) => {
+                                let span = Span::current();
+                                let plan = plan.clone();
+                                let duration = duration.clone().to_owned();
+                                Ok(StageResult::Handle(mz_ore::task::spawn(
+                                    || "Finalize Alter Cluster",
+                                    async move {
+                                        tokio::time::sleep(duration).await;
+                                        let stage = ClusterStage::Finalize(AlterClusterFinalize {
+                                            validity,
+                                            plan,
+                                            new_config: new_config_managed,
+                                        });
+                                        Ok(Box::new(stage))
+                                    }
+                                    .instrument(span),
+                                )))
+                            }
+                            AlterClusterPlanStrategy::UntilReady{timeout, on_timeout} => {
+                                Ok(StageResult::Immediate(Box::new(
+                                    ClusterStage::WaitForHydrated(AlterClusterWaitForHydrated{
+                                        validity,
+                                        plan: plan.clone(),
+                                        new_config: new_config_managed.clone(),
+                                        timeout_time: Instant::now() + timeout.to_owned(),
+                                        on_timeout: on_timeout.to_owned(),
+                                    }),
+                                )))
+                            }
+                        }
                     }
-                    FinalizationNeeded::False => Ok(StageResult::Response(
+                    NeedsFinalization::No => Ok(StageResult::Response(
                         ExecuteResponse::AlteredObject(ObjectType::Cluster),
                     )),
                 };
@@ -305,7 +349,7 @@ impl Coordinator {
         )))
     }
 
-    pub(crate) async fn finalize_alter_cluster_managed_to_managed(
+    pub(crate) async fn finalize_alter_cluster_stage(
         &mut self,
         session: &Session,
         AlterClusterPlan {
@@ -427,5 +471,103 @@ impl Coordinator {
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
         )))
+    }
+
+    async fn check_if_pending_replicas_hydrated_stage(
+        &mut self,
+        session: &Session,
+        plan: AlterClusterPlan,
+        new_config: ClusterVariantManaged,
+        timeout_time: Instant,
+        on_timeout: OnTimeoutAction,
+        validity: PlanValidity,
+    ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
+        // wait and re-signal wait for hydrated if not hydrated
+        let cluster = self.catalog.get_cluster(plan.id);
+        let pending_replicas = cluster
+            .replicas()
+            .filter_map(|r| {
+                if r.config.location.pending() {
+                    Some(r.replica_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
+        // Check For timeout
+        if Instant::now() > timeout_time {
+            // Timed out handle timeout action
+            match on_timeout {
+                OnTimeoutAction::Rollback => {
+                    self.active_conns
+                        .get_mut(session.conn_id())
+                        .expect("There must be an active connection")
+                        .pending_cluster_alters
+                        .remove(&cluster.id);
+                    self.drop_reconfiguration_replicas(btreeset!(cluster.id))
+                        .await?;
+                    return Err(AdapterError::AlterClusterTimeout);
+                }
+                OnTimeoutAction::Commit => {
+                    let span = Span::current();
+                    let poll_duration = self
+                        .catalog
+                        .system_config()
+                        .cluster_alter_check_ready_interval()
+                        .clone();
+                    return Ok(StageResult::Handle(mz_ore::task::spawn(
+                        || "Finalize Alter Cluster",
+                        async move {
+                            tokio::time::sleep(poll_duration).await;
+                            let stage = ClusterStage::Finalize(AlterClusterFinalize {
+                                validity,
+                                plan,
+                                new_config,
+                            });
+                            Ok(Box::new(stage))
+                        }
+                        .instrument(span),
+                    )));
+                }
+            }
+        }
+        let hydrated = match self
+            .controller
+            .compute
+            .all_collections_hydrated_for_replicas(cluster.id, pending_replicas)
+        {
+            Err(e) => {
+                return Err(AdapterError::internal("Failed to check hydration", e));
+            }
+            Ok(b) => b,
+        };
+        if hydrated {
+            // We're done
+            Ok(StageResult::Immediate(Box::new(ClusterStage::Finalize(
+                AlterClusterFinalize {
+                    validity,
+                    plan,
+                    new_config,
+                },
+            ))))
+        } else {
+            // Check later
+            let span = Span::current();
+            Ok(StageResult::Handle(mz_ore::task::spawn(
+                || "Finalize Alter Cluster",
+                async move {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let stage = ClusterStage::WaitForHydrated(AlterClusterWaitForHydrated {
+                        validity,
+                        plan,
+                        new_config,
+                        timeout_time,
+                        on_timeout,
+                    });
+                    Ok(Box::new(stage))
+                }
+                .instrument(span),
+            )))
+        }
     }
 }

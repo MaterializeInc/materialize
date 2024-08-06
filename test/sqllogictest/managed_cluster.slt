@@ -447,5 +447,23 @@ ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
 statement ok
 DROP CLUSTER foo
 
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER foo (SIZE '1')
+
+statement ok
+ALTER CLUSTER foo set (SIZE '2') WITH (WAIT FOR '0s')
+
+statement ok
+ALTER CLUSTER foo set (SIZE '4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT') )
+
+statement ok
+ALTER CLUSTER foo set (SIZE '4') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
+
 # Restore pristine server state
 reset-server

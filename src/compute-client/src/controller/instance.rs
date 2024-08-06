@@ -43,7 +43,9 @@ use timely::PartialOrder;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::controller::error::{CollectionMissing, ERROR_TARGET_REPLICA_FAILED};
+use crate::controller::error::{
+    CollectionMissing, HydrationCheckBadTarget, ERROR_TARGET_REPLICA_FAILED,
+};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
@@ -534,17 +536,33 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         );
     }
 
-    /// Returns `true` iff all (non-transient) collections are hydrated on at
-    /// least one (possibly different) replica.
+    /// Returns `true` iff each (non-transient) collection is hydrated on at
+    /// least one replica.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
-    pub fn all_collections_hydrated(&self) -> bool {
+    pub fn all_collections_hydrated_on_replicas(
+        &self,
+        target_replica_ids: Option<Vec<ReplicaId>>,
+    ) -> Result<bool, HydrationCheckBadTarget> {
         if self.replicas.is_empty() {
-            return true;
+            return Ok(true);
         }
-
         let mut all_hydrated = true;
+        let target_replicas: BTreeSet<ReplicaId> = self
+            .replicas
+            .keys()
+            .filter_map(|id| match target_replica_ids {
+                None => Some(id.clone()),
+                Some(ref ids) if ids.contains(id) => Some(id.clone()),
+                Some(_) => None,
+            })
+            .collect();
+        if let Some(targets) = target_replica_ids {
+            if target_replicas.is_empty() {
+                return Err(HydrationCheckBadTarget(targets));
+            }
+        }
 
         for (id, _collection) in self.collections_iter() {
             if id.is_transient() {
@@ -555,6 +573,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
             let mut collection_hydrated = false;
             for replica_state in self.replicas.values() {
+                if !target_replicas.contains(&replica_state.id) {
+                    continue;
+                }
                 let collection_state = replica_state
                     .collections
                     .get(id)
@@ -574,7 +595,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             }
         }
 
-        all_hydrated
+        Ok(all_hydrated)
     }
 
     /// Returns `true` iff all (non-transient) collections have their write
@@ -648,6 +669,15 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         all_caught_up
+    }
+
+    /// Returns `true` iff all collections are hydrated on at least one replica.
+    ///
+    /// This also returns `true` in case this cluster does not have any
+    /// replicas.
+    pub fn all_collections_hydrated(&self) -> bool {
+        self.all_collections_hydrated_on_replicas(None)
+            .expect("Cannot error if target_replica_ids is None")
     }
 
     /// Clean up collection state that is not needed anymore.

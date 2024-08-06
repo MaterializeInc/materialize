@@ -1268,6 +1268,7 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALWAYS_USE_DISK,
+            &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
             &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -2141,6 +2142,10 @@ impl SystemVars {
 
     pub fn cluster_always_use_disk(&self) -> bool {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
+    }
+
+    pub fn cluster_alter_check_ready_interval(&self) -> Duration {
+        *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
     }
 
     pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
