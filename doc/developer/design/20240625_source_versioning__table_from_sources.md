@@ -112,10 +112,13 @@ We will allow more than one table to reference the same external upstream refere
 using a potentially different set of columns. This allows a user to handle an upstream
 schema change by creating a new table for the same upstream table and then performing
 a blue-green swap operation to switch their downstream dependencies to the new table,
-and then drop the old one.
+and then drop the old one. While we could also enable multiple subsources to
+reference the same external upstream reference, we will instead continue to restrict this
+to provide an incentive for users to opt-in to the migration to tables and allow us
+to deprecate subsources sooner.
 
 The existing options to `CREATE SOURCE` for Postgres & MySQL sources that specify
-which tables to ingest (`FOR ALL TABLES`, `FOR SCHEMAS` and `FOR TABLES`) will be
+automatic subsources to create (`FOR ALL TABLES`, `FOR SCHEMAS` and `FOR TABLES`) will be
 removed. Instead, all upstream tables to ingest from this source will need to be
 explicitly referenced in a `CREATE TABLE` statement. While this may seem controversial,
 more often than not these options cause upstream data that does not need to be
@@ -123,45 +126,59 @@ brought into Materialize to be ingested, and by using explicit statements for ea
 table to be ingested it makes Materialize configuration much more amenable to
 object<->state mappings in tools like dbt and Terraform.
 
-We can eventually reintroduce syntactic sugar to perform a similar function to
-`FOR ALL TABLES` and `FOR SCHEMAS` if necessary, or introduce a new SQL command
-that returns all known upstream tables and columns for a source.
+We will instead introduce a SQL statement to return all known upstream tables
+similar for a given source, optionally filtered by schema(s). This will allow
+the web console to expose a guided 'create source' workflow for users where
+they can select from a list of upstream tables and the console can generate
+the appropriate `CREATE TABLE .. FROM SOURCE` statements for those selected.
 
 ### Implementation Plan
 
 1. Separate the planning of _sources_ and _subsources_ such that sources are fully
-   planned before any linked subsources. Part of this work has been prototyped in:
-   https://github.com/MaterializeInc/materialize/pull/27320
-   Update: completed in https://github.com/MaterializeInc/materialize/pull/28310
+   planned before any linked subsources.
+   **Update: completed in [PR](https://github.com/MaterializeInc/materialize/pull/28310)**
 
 2. Update the CREATE TABLE statement to allow creation of a read-only table
    with a reference to a source and an upstream-reference:
    (`CREATE TABLE <new_table> FROM SOURCE <source> (upstream_reference)`)
-   Update: statement introduced in https://github.com/MaterializeInc/materialize/pull/28125
+   **Update: statement introduced in [PR](https://github.com/MaterializeInc/materialize/pull/28125)**
 
-3. Update the underlying `SourceDesc`/`IngestionDesc` and
+3. Copy subsource-specific details stored on `CREATE SOURCE` statement options to their
+   relevant subsource statements.
+   **Update: completed in [PR](https://github.com/MaterializeInc/materialize/pull/28493)**
+
+4. Update the underlying `SourceDesc`/`IngestionDesc` and
    `SourceExport`/`IngestionExport` structs to include each export's specific
    details and options on its own struct, rather than using an implicit mapping into
    the top-level source's options.
-   This may involve moving options such as `TEXT COLUMNS` to be stored on subsource
-   statements rather than top-level source statements instead.
+   **Update: open [PR](https://github.com/MaterializeInc/materialize/pull/28503)**
 
-4. Implement planning for `CREATE TABLE .. FROM SOURCE` to include a purification
+5. Update the source rendering operators to handle the new structures and allow
+   outputting the same upstream table to more than one souce export.
+   **Update: open PRs: [MySQL](https://github.com/MaterializeInc/materialize/pull/28671) [Postgres](https://github.com/MaterializeInc/materialize/pull/28676)**
+
+6. Implement planning for `CREATE TABLE .. FROM SOURCE` and include a purification
    step akin to the purification for `ALTER SOURCE .. ADD SUBSOURCE`. This will verify
    the upstream permissions, schema, etc for the newly added source-fed table.
 
-5. Update the storage controller to use both _subsources_ and _read-only tables_
+7. Update the storage controller to use both _subsources_ and _read-only tables_
    as _source_exports_ for existing multi-output sources (postgres & mysql).
 
-6. Update the source rendering operators to handle the new structures and allow
-   outputting the same upstream table to more than one souce export.
+8. Update introspection tables to expose details of source-fed tables
+   (`CREATE TABLE .. FROM SOURCE` tables)
 
-7. Migrate existing sources to the new source model (make all sources 'multi-output' sources)
-   and preserve the original names tied to each collection such that downstream object
-   references don't need to change.
+9. Add a new SQL command that returns all possible known upstream tables and columns for a source.
 
-8. Remove subsource purification logic from `purify_create_source`, subsource statement parsing,
-   and related planning code.
+10. Implement an opt-in migration using a feature-flag to convert subsources to tables
+    for existing multi-output sources (Postgres, MySQL, Load Generators)
+
+11. Restructure kafak source planning and rendering to use source_export structure and allow
+    multiple source-exports for a given kafka topic
+
+12. Implement an opt-in migration for kafka sources to be converted to table structure
+
+13. Remove subsource purification logic from `purify_create_source`, subsource statement parsing,
+    and related planning code.
 
 ### Core Implementation Details
 
@@ -185,12 +202,8 @@ We would update the `CREATE TABLE` statement to be able to optionally reference 
 source and reference using `FROM SOURCE <source> (REFERENCE <upstream reference>)`:
 
 ```sql
-CREATE TABLE <name> (<cols>) FROM SOURCE <source_name> (REFERENCE = <upstream name>)
+CREATE TABLE <name> FROM SOURCE <source_name> (REFERENCE = <upstream name>) WITH (TEXT COLUMNS = (..), ..)
 ```
-
-`<cols>` can be optionally specified by the user to request a subset of the upstream table's
-columns, but will not be permitted to include user-specified column types, since these will
-be determined by the upstream source details.
 
 A new `CreateTableFromSource` statement will be introduced that includes the source reference
 `T::ItemName` and the external reference `UnresolvedItemName`.
@@ -308,7 +321,7 @@ corresponds to the same index of the upstream table in the source's upstream `de
 Since the top-level source `details` will no longer contain the `tables` field, the
 output index will be determined by the ordering of the `IngestionDescription::source_exports` `BTreeMap`. Each `SourceExport` will output its own stream from the ingestion using
 the `details` it contains. It will be up to each source implementation to map the
-relevant upstream table to the correct `SourceExport`s using their `external_reference`.
+relevant upstream table to the correct `SourceExport`s using the `ExportDetails`.
 
 The `build_ingestion_dataflow` method then demuxes the output collection of
 each source by each `output_index` and pushes each data stream to the appropriate
