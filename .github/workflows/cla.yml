@@ -47,10 +47,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_TOKEN }}
         with:
-          path-to-signatures: signatures.v1.json
-          path-to-document: https://github.com/MaterializeInc/cla/blob/main/cla.md
-          branch: main
-          allowlist: materialize-bot,materialize-bot-monitoring,dependabot[bot]
-
           remote-organization-name: MaterializeInc
           remote-repository-name: cla
+          branch: main
+          path-to-signatures: signatures.v1.json
+          path-to-document: https://github.com/MaterializeInc/cla/blob/main/cla.md
+          allowlist: materialize-bot,materialize-bot-monitoring,dependabot[bot]
+          custom-notsigned-prcomment: Thank you for your submission! We really appreciate it. Like many source-available projects, we require that you sign our [Contributor License Agreement]($pathToCLADocument) (CLA) before we can accept your contribution.
+          custom-pr-sign-comment: I have read the Contributor License Agreement (CLA) and I hereby sign the CLA.
+          custom-allsigned-prcomment: All contributors have signed the CLA.
+          lock-pullrequest-aftermerge: true
