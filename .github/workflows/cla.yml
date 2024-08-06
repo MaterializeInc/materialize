@@ -47,7 +47,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_TOKEN }}
         with:
-          path-to-signatures: signatures/version1/signatures.json
+          path-to-signatures: signatures.v1.json
           path-to-document: https://github.com/MaterializeInc/cla/blob/main/cla.md
           branch: main
           allowlist: materialize-bot,materialize-bot-monitoring,dependabot[bot]
