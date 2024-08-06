@@ -453,10 +453,42 @@ impl EquivalencePropagation {
                 );
             }
             MirRelationExpr::TopK {
-                input, group_key, ..
+                input,
+                group_key,
+                order_key,
+                limit,
+                ..
             } => {
-                // TODO: Update `limit` expressions, but only if we update `group_key` at the same time.
-                //       It is important to both or neither, to ensure that `limit` only references columns in `group_key`.
+                // Apply input equivalences to `limit`, `group_key`, and `order_key`.
+                // `limit` is optimized, but it is important that it track reflect the 
+                // optimizations applied to `group_key` as it ust reference those columns.
+                // The two keys can have column references optimized, and any that are
+                // equivalent to literals can be removed.
+                let input_equivalences = derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                if let Some(input_equivalences) = input_equivalences {
+                    if let Some(expr) = limit {
+                        input_equivalences.reduce_expr(expr);
+                    }
+                    group_key.retain(|col| {
+                        let mut col = MirScalarExpr::Column(*col);
+                        input_equivalences.reduce_expr(&mut col);
+                        !col.is_literal()
+                    });
+                    for column in group_key.iter_mut() {
+                        input_equivalences.reduce_column(column);
+                    }
+                    order_key.retain(|ent| {
+                        let mut col = MirScalarExpr::Column(ent.column);
+                        input_equivalences.reduce_expr(&mut col);
+                        !col.is_literal()
+                    });
+                    for entry in order_key.iter_mut() {
+                        input_equivalences.reduce_column(&mut entry.column);
+                    }
+                }
 
                 // Discard equivalences among non-key columns, as it is not correct that `input` may drop rows
                 // that violate constraints among non-key columns without affecting the result.

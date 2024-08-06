@@ -657,4 +657,21 @@ impl EquivalenceClasses {
         }
         false
     }
+
+    /// Replace `index` with a smaller equivalent column index, if one exists.
+    pub fn reduce_column(&self, index: &mut usize) {
+        for class in self.classes.iter() {
+            if let Some(pos) = class
+                .iter()
+                .position(|e| e == &MirScalarExpr::Column(*index))
+            {
+                if let Some(expr) = class[..pos].iter().find(|e| e.is_column()) {
+                    if let MirScalarExpr::Column(col) = expr {
+                        *index = *col;
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
