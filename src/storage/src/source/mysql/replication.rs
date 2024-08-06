@@ -26,17 +26,17 @@
 //! # Resumption
 //!
 //! When the dataflow is resumed, the MySQL replication stream is started from the GTID frontier
-//! of the minimum frontier across all subsources. This is compared against the GTID set that may
-//! still be obtained from the MySQL server, using the @@GTID_PURGED value in MySQL to determine
-//! GTIDs that are no longer available in the binlog and to put the source in an error state if
-//! we cannot resume from the GTID frontier.
+//! of the minimum frontier across all source outputs. This is compared against the GTID set that
+//! may still be obtained from the MySQL server, using the @@GTID_PURGED value in MySQL to
+//! determine GTIDs that are no longer available in the binlog and to put the source in an error
+//! state if we cannot resume from the GTID frontier.
 //!
 //! # Rewinds
 //!
-//! The replication stream may be resumed from a point before the snapshot for a specific table
+//! The replication stream may be resumed from a point before the snapshot for a specific output
 //! occurs. To avoid double-counting updates that were present in the snapshot, we store a map
 //! of pending rewinds that we've received from the snapshot operator, and when we see updates
-//! for a table that were present in the snapshot, we negate the snapshot update
+//! for an output that were present in the snapshot, we negate the snapshot update
 //! (at the minimum timestamp) and send it again at the correct GTID.
 
 use std::collections::BTreeMap;
@@ -81,7 +81,7 @@ use crate::source::RawSourceCreationConfig;
 
 use super::{
     return_definite_error, validate_mysql_repl_settings, DefiniteError, ReplicationError,
-    RewindRequest, SubsourceInfo, TransientError,
+    RewindRequest, SourceOutputInfo, TransientError,
 };
 
 mod context;
@@ -104,7 +104,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     scope: G,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    subsources: Vec<SubsourceInfo>,
+    source_outputs: Vec<SourceOutputInfo>,
     rewind_stream: &Stream<G, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
@@ -119,7 +119,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
     let (mut data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    // Captures DefiniteErrors that affect the entire source, including all subsources
+    // Captures DefiniteErrors that affect the entire source, including all outputs
     let (mut definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
     let mut rewind_input = builder.new_input_for(
@@ -128,12 +128,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         &data_output,
     );
 
-    let output_indexes = subsources
+    let output_indexes = source_outputs
         .iter()
-        .map(|subsource| subsource.output_index)
+        .map(|output| output.output_index)
         .collect_vec();
 
-    metrics.tables.set(u64::cast_from(subsources.len()));
+    metrics.tables.set(u64::cast_from(source_outputs.len()));
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
@@ -191,16 +191,18 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
             trace!(%id, "timely-{worker_id} replication binlog frontier: {binlog_frontier:?}");
 
+            // upstream-table-name: Vec<SourceOutputInfo> since multiple
+            // outputs can refer to the same table
             let mut table_info = BTreeMap::new();
-            let mut subsource_uppers = Vec::new();
+            let mut output_uppers = Vec::new();
 
-            // Calculate the lowest frontier across all subsources, which represents the point which
+            // Calculate the lowest frontier across all outputs, which represents the point which
             // we should start replication from.
             let min_frontier = Antichain::from_elem(GtidPartition::minimum());
-            for subsource in subsources.into_iter() {
-                // If a subsource is resuming at the minimum frontier then its snapshot
+            for output in source_outputs.into_iter() {
+                // If an output is resuming at the minimum frontier then its snapshot
                 // has not yet been committed.
-                // We need to resume from a frontier before the subsource's snapshot frontier
+                // We need to resume from a frontier before the output's snapshot frontier
                 // to ensure we don't miss updates that happen after the snapshot was taken.
                 //
                 // This also ensures that tables created as part of the same CREATE SOURCE
@@ -209,29 +211,30 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 //
                 // We've chosen the frontier beyond the GTID Set recorded
                 // during purification as this resume point.
-                if &subsource.resume_upper == &min_frontier {
-                    subsource_uppers.push(subsource.initial_gtid_set.clone());
+                if &output.resume_upper == &min_frontier {
+                    output_uppers.push(output.initial_gtid_set.clone());
                 } else {
-                    subsource_uppers.push(subsource.resume_upper.clone());
+                    output_uppers.push(output.resume_upper.clone());
                 }
 
-                // TODO(roshan): Refactor this when we allow multiple source_exports to ingest
-                // the same table in https://github.com/MaterializeInc/materialize/issues/28435
-                table_info.insert(subsource.name.clone(), subsource);
+                table_info
+                    .entry(output.table_name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(output);
             }
-            let resume_upper = match subsource_uppers.len() {
+            let resume_upper = match output_uppers.len() {
                 0 => {
-                    // If there are no subsources to replicate then we will just be updating the
+                    // If there are no outputs to replicate then we will just be updating the
                     // source progress collection. In this case we can just start from the head of
                     // the binlog to avoid wasting time on old events.
-                    trace!(%id, "timely-{worker_id} replication reader found no subsources \
+                    trace!(%id, "timely-{worker_id} replication reader found no outputs \
                                  to replicate, using latest gtid_executed as resume_upper");
                     let executed_gtid_set =
                         query_sys_var(&mut conn, "global.gtid_executed").await?;
 
                     gtid_set_frontier(&executed_gtid_set)?
                 }
-                _ => Antichain::from_iter(subsource_uppers.into_iter().flatten()),
+                _ => Antichain::from_iter(output_uppers.into_iter().flatten()),
             };
 
             // Validate that we can actually resume from this upper.
@@ -277,7 +280,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         };
                         // If the snapshot point is the same as the resume point then we don't need to rewind
                         if resume_upper != req.snapshot_upper {
-                            rewinds.insert(req.table.clone(), (caps.clone(), req));
+                            rewinds.insert(req.output_index.clone(), (caps.clone(), req));
                         }
                     }
                 }

@@ -28,7 +28,7 @@ pub use replication::{
 };
 
 pub mod schemas;
-pub use schemas::{schema_info, QualifiedTableRef, SchemaRequest};
+pub use schemas::{schema_info, MySqlTableSchema, QualifiedTableRef, SchemaRequest};
 
 pub mod privileges;
 pub use privileges::validate_source_privileges;
