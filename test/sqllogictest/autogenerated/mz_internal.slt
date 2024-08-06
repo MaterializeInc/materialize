@@ -215,6 +215,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  topic            text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_dependencies' ORDER BY position
+----
+1  object_id  text
+2  dependency_id  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_lag' ORDER BY position
 ----
 1  object_id  text
@@ -587,6 +593,7 @@ mz_history_retention_strategies
 mz_hydration_statuses
 mz_internal_cluster_replicas
 mz_kafka_sources
+mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
