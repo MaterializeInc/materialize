@@ -3,69 +3,108 @@ title: "Usage & billing"
 description: "Understand the billing model of Materialize, and learn best practices for cost control."
 menu:
   main:
-    parent: "administration"
-    weight: 10
+    parent: "manage"
+    weight: 50
 ---
 
-From the [Materialize console](https://console.materialize.com/) (`Admin` > `Usage &
-Billing`), administrators can access their invoice. The invoice provides
-Compute and Storage usage and cost information.
+{{< note >}}
+Access to usage and billing requires **administrator** privileges.
+{{</ note >}}
 
-## Cost factors
+Materialize determines billing based on your storage and compute usage.
 
-Various factors can affect your costs, including (but not limited to):
+## Invoice
 
-- Each [replica for a cluster](/sql/create-cluster/#credit-usage). To see the
-  number of replicas for your clusters, click on `Clusters` in the console,
+From the [Materialize console](https://console.materialize.com/) (`Admin` >
+`Usage & Billing`), administrators can access their invoice. The invoice
+provides Compute and Storage usage and cost information.
 
-- Creating a [materialized view](/concepts/views/#materialized-views) as
-  materialized view creation executes the underlying query and stores the
-  results to durable storage, and materialized views incrementally updates
-  results as inputs change. To see the views in a cluster, in the console's
-  `Clusters` view, select the cluster to inspect, and click on the `Materialized
-  Views` tab.
+## Storage
 
-  {{< note >}}
+In Materialize, storage is roughly proportional to the size of your source
+datasets plus the size of materialized views, with some overhead from
+uncompacted previous values of data and system metrics.
 
-  For more information on how incremental computations can lower the cost of
-  freshness, see [How Materialized can lower the cost of freshness for data
-  teams](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation).
+Most data in Materialize is continually compacted. As such, the total state stored in Materialize tends to grow at a rate that is more similar to OLTP databases than traditional cloud data warehouses.
 
-  {{< /note >}}
+## Compute
 
-- Creating [indexes on a view](/concepts/indexes/) as index creation executes
-  the underlying query, and indexes maintain and, as inputs change,
-  incrementally update view results in memory.
+In Materialize, [clusters](/concepts/clusters/) are pools of compute resources
+(CPU, memory, and, optionally, scratch disk space) for running your workloads;
+such as maintaining up-to-date results while also providing strong [consistency
+guarantees](/get-started/isolation-level/). The credit usage for a cluster is
+measured at a one second granularity for each cluster replica.
 
-  {{< note >}}
+To help users select the correct cluster size for their workload, Materialize
+uses cluster size names that are based on the compute credit, specifically,
+"centicredits" or `cc` (1/100th of a compute credit). For example, cluster size
+of `25cc` is equivalent to 0.25 compute credits/hour and cluster size of
+`200cc` is equivalent to 2 compute credits/hour. Larger clusters can process data faster and handle larger data volumes.
 
-  For more information on how incremental computations can lower the cost of
-  freshness, see [How Materialized can lower the cost of freshness for data
-  team](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation).
+{{< tip >}}
+You can resize a cluster at any time, even while the cluster is running, to respond to changes in your workload.
+{{</ tip >}}
 
-  {{< /note >}}
+Clusters are always "on". However, you can adjust the number of replicas that
+are associated with a cluster. See [Compute cost
+factors](#compute-cost-factors) for more information on compute costs for replicas.
 
-  To see the indexes in a cluster, in the console's `Clusters` view, select the
-  cluster to inspect, and click on the `Indexes` tab.
+### Compute cost factors
 
-- Maintaining [sources](/concepts/sources/). To see the sources for a cluster,
-  in the console's `Clusters` view, select the cluster to inspect, and click on
-  the `Sources` tab.
+{{< note >}}
+  Materialize provides up-to-date results while also providing
+  strong [consistency guarantees](/get-started/isolation-level/), including
+  strict serializability (the default level). Materialize maintains these
+  up-to-date results via incrementally maintained
+  [indexes](/concepts/indexes/) and incrementally maintained [materialized
+  views](/concepts/views) that perform computation upon insert/update/delete. That is:
 
-- Maintaining [sinks](/concepts/sinks/). To see the sinks for a cluster, in the
-  console's `Clusters` view, select the cluster to inspect, and click on the
-  `Sinks` tab.
+  - Materialize performs work on "writes"; i.e., Materialize updates the results
+    when data is ingested.
 
-- Executing [`SELECT`](/sql/select/) and [`SUBSCRIBE`](/sql/subscribe/)
-  statements.  To see your query history, in the console, under `Monitoring`,
-  select `Query History`.
+  - Materialize performs **no** work on "reads" from these objects; i.e.,
+    [`SELECT`s](/sql/select/) from these objects, including ad-hoc queries, are
+    free.
 
-## Cost reductions
+  - Materialize is always "on".
+
+{{</ note >}}
+
+Factors that contribute to compute usage include:
+
+| Factor | Notes       |
+|-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Each [replica for a cluster](/sql/create-cluster/#replication-factor). | The credit usage for a cluster is measured at a one second granularity for each cluster replica. For a cluster replica, its credit usage begins when it is provisioned and ends when it is deprovisioned. |
+| [Indexes](/concepts/indexes/) and [materialized views](/concepts/views) | As data changes (insert/update/delete), [indexes](/concepts/indexes/) and [materialized views](/concepts/views) perform incremental updates to provide up-to-date results. That is: <br>• Indexes and materialized views perform work on "writes"<br>• Indexes and materialized views perform **no** work on "reads" from these objects; i.e., [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) from these objects are **free**. |
+| [Sources](/concepts/sources/) | Depends. |
+| [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/)  |• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that do not use indexes and materialized views perform work. <br>• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that use indexes and materialized views are **free**.|
+| [Sinks](/concepts/sinks/) | Only small CPU/memory costs.|
+
+### Compute cost reductions
 
 Some considerations for lowering costs:
 
-- Create a view and an index rather than a materialized view.  See
-  [Views](/concepts/views/).
+- [Optimize queries](/transform-data/optimization/).
 
-- Avoid creating unnecessary indexes. That is, create indexes appropriate
-  for your use cases. See [Optimization](/transform-data/optimization/).
+- Avoid creating unnecessary indexes. For example,
+
+  - If you have created various views to act as the building blocks for a view
+    from which you will serve the results, indexing the serving view only may
+    be sufficient.
+
+  - In Materialize, underlying data structure that is being maintained for an
+    index (or a materialized view) can be reused by other views/queries. As
+    such, an existing index may be sufficient to support your queries.
+
+- For <redb>development</redb> clusters, you can set your replicas to zero when
+  not using your <redb>development</redb> clusters.
+
+## Additional references
+
+- https://materialize.com/pricing/
+
+- [How Materialized can lower the cost of freshness for data teams](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation)
+
+<style>
+redb { color: Red; font-weight: 500; }
+</style>
