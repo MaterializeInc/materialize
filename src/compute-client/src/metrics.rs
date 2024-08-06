@@ -169,7 +169,7 @@ impl ComputeControllerMetrics {
                 help: "A histogram of the second-by-second lag of the dataflow frontier relative to \
                        wallclock time.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
-                buckets: vec![1., 2., 5., 30.],
+                buckets: vec![1., 2., 5., 10., 30.],
             )),
         }
     }
