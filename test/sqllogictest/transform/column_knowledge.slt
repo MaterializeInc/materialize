@@ -205,18 +205,17 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
 ----
 Explained Query:
-  Map (123) // { arity: 1 }
-    CrossJoin type=differential // { arity: 0 }
-      implementation
-        %0:t1[×]Uef » %1:t2[×]Uef
-      ArrangeBy keys=[[]] // { arity: 0 }
-        Project () // { arity: 0 }
-          Filter (#0 = 123) // { arity: 2 }
-            ReadStorage materialize.public.t1 // { arity: 2 }
-      ArrangeBy keys=[[]] // { arity: 0 }
-        Project () // { arity: 0 }
-          Filter (#0 = 123) // { arity: 2 }
-            ReadStorage materialize.public.t2 // { arity: 2 }
+  CrossJoin type=differential // { arity: 1 }
+    implementation
+      %0:t1[×]Uef » %1:t2[×]Uef
+    ArrangeBy keys=[[]] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        Filter (#0 = 123) // { arity: 2 }
+          ReadStorage materialize.public.t1 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 0 }
+      Project () // { arity: 0 }
+        Filter (#0 = 123) // { arity: 2 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 123))
@@ -238,34 +237,36 @@ Explained Query:
   Return // { arity: 1 }
     CrossJoin type=differential // { arity: 1 }
       implementation
-        %0:l1[×]Uef » %1[×]Uef
-      Get l1 // { arity: 0 }
+        %0:l2[×]Uef » %1[×]Uef
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Get l2 // { arity: 0 }
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }
-          Get l2 // { arity: 1 }
+          Get l1 // { arity: 1 }
           Map (null) // { arity: 1 }
             Union // { arity: 0 }
               Negate // { arity: 0 }
                 Project () // { arity: 0 }
-                  Get l2 // { arity: 1 }
-              Get l0 // { arity: 0 }
+                  Get l1 // { arity: 1 }
+              Get l2 // { arity: 0 }
   With
     cte l2 =
+      Project () // { arity: 0 }
+        Get l0 // { arity: 2 }
+    cte l1 =
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %0:l1[×]Uef » %1:t1[×]Uef
-        Get l1 // { arity: 0 }
+          %0:l0[×]Uef » %1:t1[×]Uef
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0) // { arity: 1 }
+            Get l0 // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
             Filter (#0 = 123) // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
-    cte l1 =
-      ArrangeBy keys=[[]] // { arity: 0 }
-        Get l0 // { arity: 0 }
     cte l0 =
-      Project () // { arity: 0 }
-        Filter (#0 = 123) // { arity: 2 }
-          ReadStorage materialize.public.t2 // { arity: 2 }
+      Filter (#0 = 123) // { arity: 2 }
+        ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 123))
@@ -382,16 +383,17 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND t1.f1 = 123;
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 3 }
-    implementation
-      %0:t1[×]Uef » %1:t2[×]Uef
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Filter (#0 = 123) // { arity: 2 }
-        ReadStorage materialize.public.t1 // { arity: 2 }
-    ArrangeBy keys=[[]] // { arity: 1 }
-      Project (#0) // { arity: 1 }
+  Project (#0, #1, #0) // { arity: 3 }
+    CrossJoin type=differential // { arity: 2 }
+      implementation
+        %0:t1[×]Uef » %1:t2[×]Uef
+      ArrangeBy keys=[[]] // { arity: 2 }
         Filter (#0 = 123) // { arity: 2 }
-          ReadStorage materialize.public.t2 // { arity: 2 }
+          ReadStorage materialize.public.t1 // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Project () // { arity: 0 }
+          Filter (#0 = 123) // { arity: 2 }
+            ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 123))

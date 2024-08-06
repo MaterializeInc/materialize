@@ -318,7 +318,7 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_ser
 ----
 Explained Query:
   Return // { arity: 5 }
-    Project (#0..=#2, #1, #3) // { arity: 5 }
+    Project (#0..=#2, #1, #0) // { arity: 5 }
       Filter (#0 = #3) // { arity: 4 }
         FlatMap generate_series(#0, #1, 1) // { arity: 4 }
           Project (#0..=#2) // { arity: 3 }

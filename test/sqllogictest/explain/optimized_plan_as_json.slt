@@ -3307,228 +3307,221 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                       "body": {
                         "Union": {
                           "base": {
-                            "Map": {
+                            "Project": {
                               "input": {
-                                "Union": {
-                                  "base": {
-                                    "Negate": {
-                                      "input": {
-                                        "Project": {
+                                "Map": {
+                                  "input": {
+                                    "Union": {
+                                      "base": {
+                                        "Negate": {
                                           "input": {
-                                            "Join": {
-                                              "inputs": [
-                                                {
-                                                  "Get": {
-                                                    "id": {
-                                                      "Local": 2
+                                            "Project": {
+                                              "input": {
+                                                "Join": {
+                                                  "inputs": [
+                                                    {
+                                                      "Get": {
+                                                        "id": {
+                                                          "Local": 2
+                                                        },
+                                                        "typ": {
+                                                          "column_types": [
+                                                            {
+                                                              "scalar_type": "Int32",
+                                                              "nullable": false
+                                                            }
+                                                          ],
+                                                          "keys": []
+                                                        },
+                                                        "access_strategy": "UnknownOrLocal"
+                                                      }
                                                     },
-                                                    "typ": {
-                                                      "column_types": [
-                                                        {
-                                                          "scalar_type": "Int32",
-                                                          "nullable": false
-                                                        }
-                                                      ],
-                                                      "keys": []
-                                                    },
-                                                    "access_strategy": "UnknownOrLocal"
-                                                  }
-                                                },
-                                                {
-                                                  "ArrangeBy": {
-                                                    "input": {
-                                                      "Reduce": {
+                                                    {
+                                                      "ArrangeBy": {
                                                         "input": {
-                                                          "Project": {
+                                                          "Reduce": {
                                                             "input": {
-                                                              "Get": {
-                                                                "id": {
-                                                                  "Local": 3
-                                                                },
-                                                                "typ": {
-                                                                  "column_types": [
-                                                                    {
-                                                                      "scalar_type": "Int32",
-                                                                      "nullable": true
+                                                              "Project": {
+                                                                "input": {
+                                                                  "Get": {
+                                                                    "id": {
+                                                                      "Local": 3
                                                                     },
-                                                                    {
-                                                                      "scalar_type": "Int32",
-                                                                      "nullable": false
+                                                                    "typ": {
+                                                                      "column_types": [
+                                                                        {
+                                                                          "scalar_type": "Int32",
+                                                                          "nullable": true
+                                                                        },
+                                                                        {
+                                                                          "scalar_type": "Int32",
+                                                                          "nullable": false
+                                                                        },
+                                                                        {
+                                                                          "scalar_type": "Int32",
+                                                                          "nullable": true
+                                                                        }
+                                                                      ],
+                                                                      "keys": []
                                                                     },
-                                                                    {
-                                                                      "scalar_type": "Int32",
-                                                                      "nullable": true
-                                                                    }
-                                                                  ],
-                                                                  "keys": []
+                                                                    "access_strategy": "UnknownOrLocal"
+                                                                  }
                                                                 },
-                                                                "access_strategy": "UnknownOrLocal"
+                                                                "outputs": [
+                                                                  1
+                                                                ]
                                                               }
                                                             },
-                                                            "outputs": [
-                                                              1
-                                                            ]
+                                                            "group_key": [
+                                                              {
+                                                                "Column": 0
+                                                              }
+                                                            ],
+                                                            "aggregates": [],
+                                                            "monotonic": false,
+                                                            "expected_group_size": null
                                                           }
                                                         },
-                                                        "group_key": [
+                                                        "keys": [
+                                                          [
+                                                            {
+                                                              "Column": 0
+                                                            }
+                                                          ]
+                                                        ]
+                                                      }
+                                                    }
+                                                  ],
+                                                  "equivalences": [
+                                                    [
+                                                      {
+                                                        "Column": 0
+                                                      },
+                                                      {
+                                                        "Column": 1
+                                                      }
+                                                    ]
+                                                  ],
+                                                  "implementation": {
+                                                    "Differential": [
+                                                      [
+                                                        1,
+                                                        [
                                                           {
                                                             "Column": 0
                                                           }
                                                         ],
-                                                        "aggregates": [],
-                                                        "monotonic": false,
-                                                        "expected_group_size": null
-                                                      }
-                                                    },
-                                                    "keys": [
-                                                      [
                                                         {
-                                                          "Column": 0
+                                                          "unique_key": true,
+                                                          "key_length": 1,
+                                                          "arranged": true,
+                                                          "cardinality": null,
+                                                          "filters": {
+                                                            "literal_equality": false,
+                                                            "like": false,
+                                                            "is_null": false,
+                                                            "literal_inequality": 0,
+                                                            "any_filter": false
+                                                          },
+                                                          "input": 1
                                                         }
+                                                      ],
+                                                      [
+                                                        [
+                                                          0,
+                                                          [
+                                                            {
+                                                              "Column": 0
+                                                            }
+                                                          ],
+                                                          {
+                                                            "unique_key": false,
+                                                            "key_length": 1,
+                                                            "arranged": false,
+                                                            "cardinality": null,
+                                                            "filters": {
+                                                              "literal_equality": false,
+                                                              "like": false,
+                                                              "is_null": false,
+                                                              "literal_inequality": 0,
+                                                              "any_filter": false
+                                                            },
+                                                            "input": 0
+                                                          }
+                                                        ]
                                                       ]
                                                     ]
                                                   }
                                                 }
-                                              ],
-                                              "equivalences": [
-                                                [
-                                                  {
-                                                    "Column": 0
-                                                  },
-                                                  {
-                                                    "Column": 1
-                                                  }
-                                                ]
-                                              ],
-                                              "implementation": {
-                                                "Differential": [
-                                                  [
-                                                    1,
-                                                    [
-                                                      {
-                                                        "Column": 0
-                                                      }
-                                                    ],
-                                                    {
-                                                      "unique_key": true,
-                                                      "key_length": 1,
-                                                      "arranged": true,
-                                                      "cardinality": null,
-                                                      "filters": {
-                                                        "literal_equality": false,
-                                                        "like": false,
-                                                        "is_null": false,
-                                                        "literal_inequality": 0,
-                                                        "any_filter": false
-                                                      },
-                                                      "input": 1
-                                                    }
-                                                  ],
-                                                  [
-                                                    [
-                                                      0,
-                                                      [
-                                                        {
-                                                          "Column": 0
-                                                        }
-                                                      ],
-                                                      {
-                                                        "unique_key": false,
-                                                        "key_length": 1,
-                                                        "arranged": false,
-                                                        "cardinality": null,
-                                                        "filters": {
-                                                          "literal_equality": false,
-                                                          "like": false,
-                                                          "is_null": false,
-                                                          "literal_inequality": 0,
-                                                          "any_filter": false
-                                                        },
-                                                        "input": 0
-                                                      }
-                                                    ]
-                                                  ]
-                                                ]
-                                              }
-                                            }
-                                          },
-                                          "outputs": []
-                                        }
-                                      }
-                                    }
-                                  },
-                                  "inputs": [
-                                    {
-                                      "Project": {
-                                        "input": {
-                                          "Get": {
-                                            "id": {
-                                              "Global": {
-                                                "User": 1
-                                              }
-                                            },
-                                            "typ": {
-                                              "column_types": [
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": true
-                                                },
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": true
-                                                }
-                                              ],
-                                              "keys": []
-                                            },
-                                            "access_strategy": {
-                                              "Index": [
-                                                [
-                                                  {
-                                                    "User": 4
-                                                  },
-                                                  "FullScan"
-                                                ]
-                                              ]
+                                              },
+                                              "outputs": []
                                             }
                                           }
+                                        }
+                                      },
+                                      "inputs": [
+                                        {
+                                          "Project": {
+                                            "input": {
+                                              "Get": {
+                                                "id": {
+                                                  "Global": {
+                                                    "User": 1
+                                                  }
+                                                },
+                                                "typ": {
+                                                  "column_types": [
+                                                    {
+                                                      "scalar_type": "Int32",
+                                                      "nullable": true
+                                                    },
+                                                    {
+                                                      "scalar_type": "Int32",
+                                                      "nullable": true
+                                                    }
+                                                  ],
+                                                  "keys": []
+                                                },
+                                                "access_strategy": {
+                                                  "Index": [
+                                                    [
+                                                      {
+                                                        "User": 4
+                                                      },
+                                                      "FullScan"
+                                                    ]
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            "outputs": []
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "scalars": [
+                                    {
+                                      "Literal": [
+                                        {
+                                          "Ok": {
+                                            "data": [
+                                              0
+                                            ]
+                                          }
                                         },
-                                        "outputs": []
-                                      }
+                                        {
+                                          "scalar_type": "Int32",
+                                          "nullable": true
+                                        }
+                                      ]
                                     }
                                   ]
                                 }
                               },
-                              "scalars": [
-                                {
-                                  "Literal": [
-                                    {
-                                      "Ok": {
-                                        "data": [
-                                          0
-                                        ]
-                                      }
-                                    },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": true
-                                    }
-                                  ]
-                                },
-                                {
-                                  "Literal": [
-                                    {
-                                      "Ok": {
-                                        "data": [
-                                          0
-                                        ]
-                                      }
-                                    },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": true
-                                    }
-                                  ]
-                                }
+                              "outputs": [
+                                0,
+                                0
                               ]
                             }
                           },
