@@ -252,7 +252,13 @@ where
         self.absorb_command(cmd)
     }
 
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        // `mpsc::UnboundedReceiver::recv` is documented as cancel safe.
         match self.response_rx.recv().await {
             Some(Ok(response)) => {
                 self.observe_response(&response)?;
