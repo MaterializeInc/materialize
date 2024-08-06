@@ -1125,18 +1125,24 @@ where
                 };
                 !truncate_t
             });
-            let filter = FilterBuilder::new(&filter).optimize().build();
-            let do_filter = |array: &dyn Array| filter.filter(array).expect("valid filter len");
-            let keys = realloc_array(do_filter(records.keys()).as_binary(), metrics);
-            let values = realloc_array(do_filter(records.vals()).as_binary(), metrics);
-            let timestamps = realloc_array(do_filter(records.timestamps()).as_primitive(), metrics);
-            let diffs = realloc_array(do_filter(records.diffs()).as_primitive(), metrics);
-            let records = ColumnarRecords::new(keys, values, timestamps, diffs);
-            let ext = ext.map(|ext| ColumnarRecordsStructuredExt {
-                key: realloc_any(&do_filter(&ext.key), metrics),
-                val: realloc_any(&do_filter(&ext.val), metrics),
-            });
-            (records, ext)
+            if filter.false_count() == 0 {
+                // If we're not filtering anything in practice, skip filtering and reallocating.
+                (records, ext)
+            } else {
+                let filter = FilterBuilder::new(&filter).optimize().build();
+                let do_filter = |array: &dyn Array| filter.filter(array).expect("valid filter len");
+                let keys = realloc_array(do_filter(records.keys()).as_binary(), metrics);
+                let values = realloc_array(do_filter(records.vals()).as_binary(), metrics);
+                let timestamps =
+                    realloc_array(do_filter(records.timestamps()).as_primitive(), metrics);
+                let diffs = realloc_array(do_filter(records.diffs()).as_primitive(), metrics);
+                let records = ColumnarRecords::new(keys, values, timestamps, diffs);
+                let ext = ext.map(|ext| ColumnarRecordsStructuredExt {
+                    key: realloc_any(&do_filter(&ext.key), metrics),
+                    val: realloc_any(&do_filter(&ext.val), metrics),
+                });
+                (records, ext)
+            }
         } else {
             (records, ext)
         };
