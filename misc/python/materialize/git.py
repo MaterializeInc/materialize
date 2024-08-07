@@ -21,6 +21,8 @@ from materialize.util import YesNoOnce
 
 VERSION_TYPE = TypeVar("VERSION_TYPE", bound=TypedVersionBase)
 
+MATERIALIZE_REMOTE_URL = "https://github.com/MaterializeInc/materialize"
+
 fetched_tags_in_remotes: set[str | None] = set()
 
 
@@ -93,7 +95,7 @@ def get_version_tags(
     version_type: type[VERSION_TYPE],
     newest_first: bool = True,
     fetch: bool = True,
-    remote_url: str = "https://github.com/MaterializeInc/materialize",
+    remote_url: str = MATERIALIZE_REMOTE_URL,
 ) -> list[VERSION_TYPE]:
     """List all the version-like tags in the repo
 
@@ -258,7 +260,7 @@ def try_get_remote_name_by_url(url: str) -> str | None:
 
 
 def get_remote(
-    url: str = "https://github.com/MaterializeInc/materialize",
+    url: str = MATERIALIZE_REMOTE_URL,
     default_remote_name: str = "origin",
 ) -> str:
     # Alternative syntax
@@ -285,7 +287,16 @@ def is_on_release_version() -> bool:
     return any(MzVersion.is_valid_version_string(git_tag) for git_tag in git_tags)
 
 
-def contains_commit(commit_sha: str, target: str = "HEAD") -> bool:
+def contains_commit(
+    commit_sha: str,
+    target: str = "HEAD",
+    fetch: bool = False,
+    remote_url: str = MATERIALIZE_REMOTE_URL,
+) -> bool:
+    if fetch:
+        remote = get_remote(remote_url)
+        _fetch(remote=remote)
+        target = f"{remote}/{target}"
     command = ["git", "merge-base", "--is-ancestor", commit_sha, target]
     return_code = spawn.run_and_get_return_code(command)
     return return_code == 0
