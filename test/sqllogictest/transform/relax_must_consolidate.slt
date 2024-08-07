@@ -42,25 +42,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -104,25 +101,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -164,25 +158,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -237,25 +228,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -310,25 +298,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -398,25 +383,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       Get::Arrangement l1
         project=(#1, #0)
         map=(5)
         key=
         raw=false
         arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l1
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l1
+          project=(#1, #2)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Constant
+        - (null, null)
   With
     cte l1 =
       Reduce::Hierarchical
@@ -503,25 +485,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       Get::Arrangement l0
         project=(#1, #0)
         map=(5)
         key=
         raw=false
         arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#1, #2)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -584,25 +563,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -647,25 +623,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -749,25 +722,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l1
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l1
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l1
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l1 =
       Reduce::Hierarchical
@@ -837,25 +807,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -901,25 +868,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -1025,25 +989,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Mfp
-        project=(#0)
-        map=(null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#1)
+          map=(null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Constant
+        - (null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -1095,25 +1056,22 @@ FROM (
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Mfp
-        project=(#0)
-        map=(null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#1)
+          map=(null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Constant
+        - (null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -1163,25 +1121,22 @@ FROM input;
 Explained Query:
   Return
     Return
-      Union
+      Union consolidate_output=true
         ArrangeBy
           input_key=[]
           raw=true
           Get::PassArrangements l1
             raw=false
             arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-        Mfp
-          project=(#0)
-          map=(null)
-          Union consolidate_output=true
-            Negate
-              Get::Arrangement l1
-                project=()
-                key=
-                raw=false
-                arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-            Constant
-              - ()
+        Negate
+          Get::Arrangement l1
+            project=(#1)
+            map=(null)
+            key=
+            raw=false
+            arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+        Constant
+          - (null)
     With
       cte l1 =
         Reduce::Hierarchical
