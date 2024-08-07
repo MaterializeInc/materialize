@@ -4,7 +4,6 @@ description: "Learn more about Materialize"
 disable_list: true
 aliases:
   - /overview/what-is-materialize/
-  - /overview/
 menu:
   main:
     parent: get-started
