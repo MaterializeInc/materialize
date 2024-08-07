@@ -115,8 +115,16 @@ def workflow_secrets_manager(c: Composition) -> None:
         },
     ]
 
+    # Use up IDs u1 and u2 so we can test behavior with orphaned secrets.
+    c.up("materialized")
+    c.sql("CREATE TABLE t ()")
+    c.sql("DROP TABLE t")
+    c.sql("CREATE TABLE t ()")
+    c.sql("DROP TABLE t")
+    c.stop("materialized")
+
     # Create an orphaned secret that should get deleted when starting environmentd.
-    orphan_1_name = f"/user-managed/{DEFAULT_MZ_ENVIRONMENT_ID}/u1234"
+    orphan_1_name = f"/user-managed/{DEFAULT_MZ_ENVIRONMENT_ID}/u1"
     sm_client.create_secret(
         Name=orphan_1_name,
         KmsKeyId=KMS_KEY_ALIAS_NAME,
@@ -124,7 +132,7 @@ def workflow_secrets_manager(c: Composition) -> None:
         Tags=expected_tags,
     )
     # Create an orphaned secret without the correct tags, so it should be ignored.
-    orphan_2_name = f"/user-managed/{DEFAULT_MZ_ENVIRONMENT_ID}/u5678"
+    orphan_2_name = f"/user-managed/{DEFAULT_MZ_ENVIRONMENT_ID}/u2"
     sm_client.create_secret(
         Name=orphan_2_name,
         KmsKeyId=KMS_KEY_ALIAS_NAME,
@@ -186,26 +194,33 @@ def workflow_secrets_manager(c: Composition) -> None:
     secrets = list_secrets()
 
     # New secret should exist with specified contents
-    assert secret_name("u1") in secrets
-    assert b"s3cret" == get_secret_value("u1")
+    assert secret_name("u3") in secrets
+    assert b"s3cret" == get_secret_value("u3")
 
     # Secrets should have expected tags
-    secret_u1 = secrets[secret_name("u1")]
+    secret_u3 = secrets[secret_name("u3")]
     for tag in expected_tags:
-        assert tag in secret_u1["Tags"]
+        assert tag in secret_u3["Tags"]
 
     # Check that alter secret gets reflected in Secrets Manager
     c.sql("ALTER SECRET secret AS 'tops3cret'")
-    assert b"tops3cret" == get_secret_value("u1")
+    assert b"tops3cret" == get_secret_value("u3")
 
     # Rename should not change the contents in Secrets Manager
     c.sql("ALTER SECRET secret RENAME TO renamed_secret")
-    assert b"tops3cret" == get_secret_value("u1")
+    assert b"tops3cret" == get_secret_value("u3")
+
+    # Ensure secret still exists after a restart (i.e., test that orphaned
+    # cleanup doesn't fire incorrectly).
+    c.stop("materialized")
+    c.up("materialized")
+    secrets = list_secrets()
+    assert secret_name("u3") in secrets
 
     c.sql("DROP SECRET renamed_secret")
     # Check that the file has been deleted from Secrets Manager
     secrets = list_secrets()
-    assert secret_name("u1") not in secrets
+    assert secret_name("u3") not in secrets
 
 
 def workflow_aws_connection(c: Composition) -> None:
