@@ -59,6 +59,7 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_AGGREGATION,
     TAG_JSONB_TO_TEXT,
+    TAG_JSONB_VALUE_ACCESS,
 )
 from materialize.output_consistency.input_data.operations.record_operations_provider import (
     TAG_RECORD_CREATION,
@@ -579,6 +580,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore("#28141: jsonb_object_agg with non-scalar key")
+
+        if query_template.matches_any_expression(
+            partial(
+                is_operation_tagged,
+                tag=TAG_JSONB_VALUE_ACCESS,
+            ),
+            True,
+        ):
+            return YesIgnore("Different evaluation order")
 
         return NoIgnore()
 

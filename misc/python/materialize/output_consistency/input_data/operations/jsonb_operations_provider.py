@@ -47,12 +47,14 @@ JSONB_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TAG_JSONB_TO_TEXT = "jsonb_to_text"
 TAG_JSONB_AGGREGATION = "jsonb_aggregation"
+TAG_JSONB_VALUE_ACCESS = "jsonb_value_access"
 
 JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ -> $",
         [JsonbOperationParam(), JSON_FIELD_NAME_PARAM],
         JsonbReturnTypeSpec(),
+        tags={TAG_JSONB_VALUE_ACCESS},
     )
 )
 JSONB_OPERATION_TYPES.append(
@@ -60,6 +62,7 @@ JSONB_OPERATION_TYPES.append(
         "$ -> $",
         [JsonbOperationParam(), JSON_FIELD_INDEX_PARAM],
         JsonbReturnTypeSpec(),
+        tags={TAG_JSONB_VALUE_ACCESS},
     )
 )
 JSONB_OPERATION_TYPES.append(
@@ -67,7 +70,7 @@ JSONB_OPERATION_TYPES.append(
         "$ ->> $",
         [JsonbOperationParam(), JSON_FIELD_NAME_PARAM],
         StringReturnTypeSpec(),
-        tags={TAG_JSONB_TO_TEXT},
+        tags={TAG_JSONB_TO_TEXT, TAG_JSONB_VALUE_ACCESS},
     )
 )
 JSONB_OPERATION_TYPES.append(
@@ -75,7 +78,7 @@ JSONB_OPERATION_TYPES.append(
         "$ ->> $",
         [JsonbOperationParam(), JSON_FIELD_INDEX_PARAM],
         StringReturnTypeSpec(),
-        tags={TAG_JSONB_TO_TEXT},
+        tags={TAG_JSONB_TO_TEXT, TAG_JSONB_VALUE_ACCESS},
     )
 )
 JSONB_OPERATION_TYPES.append(
@@ -83,6 +86,7 @@ JSONB_OPERATION_TYPES.append(
         "$ #> $",
         [JsonbOperationParam(), JSON_PATH_PARAM],
         JsonbReturnTypeSpec(),
+        tags={TAG_JSONB_VALUE_ACCESS},
     )
 )
 JSONB_OPERATION_TYPES.append(
@@ -90,7 +94,7 @@ JSONB_OPERATION_TYPES.append(
         "$ #>> $",
         [JsonbOperationParam(), JSON_PATH_PARAM],
         StringReturnTypeSpec(),
-        tags={TAG_JSONB_TO_TEXT},
+        tags={TAG_JSONB_TO_TEXT, TAG_JSONB_VALUE_ACCESS},
     )
 )
 JSONB_OPERATION_TYPES.append(
