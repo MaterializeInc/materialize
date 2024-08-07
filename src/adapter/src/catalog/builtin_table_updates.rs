@@ -1272,7 +1272,10 @@ impl CatalogState {
             .ast;
 
         let envelope = sink.envelope();
-        let format = sink.format();
+
+        // The combined format string is used for the deprecated `format` column.
+        let combined_format = sink.combined_format();
+        let (key_format, value_format) = sink.formats();
 
         updates.push(BuiltinTableUpdate {
             id: &*MZ_SINKS,
@@ -1286,7 +1289,9 @@ impl CatalogState {
                 // size column now deprecated w/o linked clusters
                 Datum::Null,
                 Datum::from(envelope),
-                Datum::from(format.as_ref()),
+                Datum::from(combined_format.as_ref()),
+                Datum::from(key_format),
+                Datum::String(value_format),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&sink.create_sql),

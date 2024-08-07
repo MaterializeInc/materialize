@@ -309,10 +309,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 7  size  text
 8  envelope_type  text
 9  format  text
-10  cluster_id  text
-11  owner_id  text
-12  create_sql  text
-13  redacted_create_sql  text
+10  key_format  text
+11  value_format  text
+12  cluster_id  text
+13  owner_id  text
+14  create_sql  text
+15  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sources' ORDER BY position

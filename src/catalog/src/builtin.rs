@@ -2219,7 +2219,11 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
+        // This `format` column is deprecated and replaced by the `key_format` and `value_format` columns
+        // below. This should be removed in the future.
         .with_column("format", ScalarType::String.nullable(false))
+        .with_column("key_format", ScalarType::String.nullable(true))
+        .with_column("value_format", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("create_sql", ScalarType::String.nullable(false))

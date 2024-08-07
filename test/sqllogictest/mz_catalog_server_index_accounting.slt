@@ -520,6 +520,7 @@ mz_sinks  create_sql
 mz_sinks  envelope_type
 mz_sinks  format
 mz_sinks  id
+mz_sinks  key_format
 mz_sinks  name
 mz_sinks  oid
 mz_sinks  owner_id
@@ -527,6 +528,7 @@ mz_sinks  redacted_create_sql
 mz_sinks  schema_id
 mz_sinks  size
 mz_sinks  type
+mz_sinks  value_format
 mz_source_statistics  bytes_indexed
 mz_source_statistics  bytes_received
 mz_source_statistics  id
