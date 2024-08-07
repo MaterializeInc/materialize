@@ -54,7 +54,7 @@ struct RecordFormat {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum DecodedValue {
     Avro(DebugValue),
     Json(serde_json::Value),
@@ -67,11 +67,12 @@ enum Topic {
     Named(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Record<A> {
     headers: Vec<String>,
     key: Option<A>,
     value: Option<A>,
+    partition: Option<i32>,
 }
 
 async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<String, anyhow::Error> {
@@ -228,6 +229,7 @@ pub async fn run_verify_data(
                     headers,
                     key: message.key().map(|b| b.to_owned()),
                     value: message.payload().map(|b| b.to_owned()),
+                    partition: Some(message.partition()),
                 });
             }
             Some(Err(e)) => {
@@ -373,6 +375,7 @@ fn decode_messages(
             headers: record.headers.clone(),
             key,
             value,
+            partition: record.partition,
         });
     }
 
@@ -390,7 +393,8 @@ fn parse_expected_messages(
 
     for msg in expected_messages {
         let (headers, content) = split_headers(&msg, header_keys.len())?;
-        let mut deserializer = serde_json::Deserializer::from_str(content).into_iter();
+        let mut content = content.as_bytes();
+        let mut deserializer = serde_json::Deserializer::from_reader(&mut content).into_iter();
 
         let key = if format.requires_key {
             let key: serde_json::Value = deserializer
@@ -428,15 +432,24 @@ fn parse_expected_messages(
             },
         };
 
-        ensure!(
-            deserializer.next().is_none(),
-            "at most two records per expect line"
-        );
+        let content =
+            str::from_utf8(content).context("internal error: contents were previously a string")?;
+        let partition = match content.trim().split_once("=") {
+            None if content.trim() != "" => bail!("unexpected cruft at end of line: {content}"),
+            None => None,
+            Some((label, partition)) => {
+                if label != "partition" {
+                    bail!("partition expectation has unexpected label: {label}")
+                }
+                Some(partition.parse().context("parsing expected partition")?)
+            }
+        };
 
         expected.push(Record {
             headers,
             key,
             value,
+            partition,
         });
     }
 
@@ -451,7 +464,7 @@ fn verify_with_partial_search<A>(
     partial_search: bool,
 ) -> Result<(), anyhow::Error>
 where
-    A: Debug,
+    A: Debug + Clone,
 {
     let mut expected = expected.iter();
     let mut actual = actual.iter();
@@ -464,6 +477,10 @@ where
         let i = index.next().expect("known to exist");
         match (expected_item, actual_item) {
             (Some(e), Some(a)) => {
+                let mut a = a.clone();
+                if e.partition.is_none() {
+                    a.partition = None;
+                }
                 let e_str = format!("{:#?}", e);
                 let a_str = match &regex {
                     Some(regex) => regex
