@@ -20,6 +20,7 @@ from materialize.data_ingest.executor import (
 )
 from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -52,6 +53,7 @@ SERVICES = [
         ports=["16875:6875"],
         external_minio=True,
         external_cockroach=True,
+        system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
         additional_system_parameter_defaults={"enable_table_keys": "true"},
         sanity_restart=False,
     ),
@@ -60,6 +62,7 @@ SERVICES = [
         ports=["26875:6875"],
         external_minio=True,
         external_cockroach=True,
+        system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
         additional_system_parameter_defaults={"enable_table_keys": "true"},
         sanity_restart=False,
     ),

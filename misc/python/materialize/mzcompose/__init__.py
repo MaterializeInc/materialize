@@ -40,7 +40,9 @@ DEFAULT_MZ_VOLUMES = [
 ]
 
 
-def get_default_system_parameters(version: MzVersion | None = None) -> dict[str, Any]:
+def get_default_system_parameters(
+    version: MzVersion | None = None, zero_downtime: bool = False
+) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
     clusterd processes have reached a specific version (or higher)
     """
@@ -67,9 +69,9 @@ def get_default_system_parameters(version: MzVersion | None = None) -> dict[str,
         "allow_real_time_recency": "true",
         "cluster_always_use_disk": "true",
         "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
-        "compute_hydration_concurrency": 2,
+        "compute_hydration_concurrency": "2",
         "disk_cluster_replicas_default": "true",
-        "enable_0dt_deployment": "true",
+        "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_alter_swap": "true",
         "enable_assert_not_null": "true",
         "enable_columnation_lgalloc": "true",
@@ -111,8 +113,8 @@ def get_default_system_parameters(version: MzVersion | None = None) -> dict[str,
         "persist_stats_audit_percent": "100",
         "persist_txn_tables": "lazy",  # removed, but keep value for older versions
         "persist_use_critical_since_catalog": "true",
-        "persist_use_critical_since_snapshot": "false",  # Disabled because of 0dt upgrades, TODO: reenable
-        "persist_use_critical_since_source": "false",  # Disabled because of 0dt upgrades, TODO: reenable
+        "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
+        "persist_use_critical_since_source": "false" if zero_downtime else "true",
         "persist_part_decode_format": "row_with_validate",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",

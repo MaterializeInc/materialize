@@ -21,6 +21,7 @@ from materialize.zippy.framework import (
     ActionFactory,
     Capabilities,
     Capability,
+    Mz0dtDeployBaseAction,
     State,
 )
 from materialize.zippy.minio_capabilities import MinioIsRunning
@@ -83,6 +84,7 @@ class MzStart(Action):
                 external_minio=True,
                 external_cockroach=True,
                 deploy_generation=state.deploy_generation,
+                system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
                 additional_system_parameter_defaults=self.additional_system_parameter_defaults,
@@ -158,6 +160,7 @@ class MzRestart(Action):
                 external_minio=True,
                 external_cockroach=True,
                 deploy_generation=state.deploy_generation,
+                system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
             )
@@ -166,7 +169,7 @@ class MzRestart(Action):
             c.up(state.mz_service)
 
 
-class Mz0dtDeploy(Action):
+class Mz0dtDeploy(Mz0dtDeployBaseAction):
     """Switches Mz to a new deployment using 0dt."""
 
     @classmethod
@@ -188,6 +191,7 @@ class Mz0dtDeploy(Action):
                 external_minio=True,
                 external_cockroach=True,
                 deploy_generation=state.deploy_generation,
+                system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,

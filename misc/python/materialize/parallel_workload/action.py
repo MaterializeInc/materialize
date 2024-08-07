@@ -27,6 +27,7 @@ import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -1614,6 +1615,9 @@ class ZeroDowntimeDeployAction(Action):
                 ports=ports,
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
+                system_parameter_defaults=get_default_system_parameters(
+                    zero_downtime=True
+                ),
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
             ),

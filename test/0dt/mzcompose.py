@@ -13,6 +13,7 @@ from textwrap import dedent
 from pg8000.exceptions import InterfaceError
 
 from materialize import buildkite
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -26,6 +27,8 @@ from materialize.ui import CommandFailureCausedUIError
 
 DEFAULT_TIMEOUT = "300s"
 
+SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters(zero_downtime=True)
+
 SERVICES = [
     MySql(),
     Postgres(),
@@ -37,12 +40,14 @@ SERVICES = [
         name="mz_old",
         sanity_restart=False,
         deploy_generation=0,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         external_cockroach=True,
     ),
     Materialized(
         name="mz_new",
         sanity_restart=False,
         deploy_generation=1,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         restart="on-failure",
         external_cockroach=True,
     ),
@@ -197,7 +202,12 @@ def workflow_read_only(c: Composition) -> None:
     # Restart in a new deploy generation, which will cause Materialize to
     # boot in read-only mode.
     with c.override(
-        Materialized(name="mz_old", deploy_generation=1, external_cockroach=True)
+        Materialized(
+            name="mz_old",
+            deploy_generation=1,
+            external_cockroach=True,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        )
     ):
         c.up("mz_old")
 
@@ -274,6 +284,7 @@ def workflow_read_only(c: Composition) -> None:
                 """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
             ],
             deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             external_cockroach=True,
         )
     ):
@@ -829,6 +840,7 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
         Materialized(
             name="mz_old",
             deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             external_cockroach=True,
             force_migrations="all",
         )
@@ -859,6 +871,7 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
                 """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
             ],
             deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             external_cockroach=True,
             force_migrations="all",
         )
