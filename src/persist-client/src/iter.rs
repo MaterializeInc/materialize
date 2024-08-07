@@ -116,6 +116,31 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     }
 }
 
+/// Indices into a part. For most parts, all we need is a single index to the current entry...
+/// but for parts that have never been consolidated, this would return entries in the "wrong"
+/// order, and it's expensive to re-sort the columnar data. Instead, we sort a list of indices
+/// and then use this helper to hand them out in the correct order.
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Default)]
+struct PartIndices {
+    sorted_indices: VecDeque<usize>,
+    next_index: usize,
+}
+
+impl PartIndices {
+    fn index(&self) -> usize {
+        self.sorted_indices
+            .front()
+            .copied()
+            .unwrap_or(self.next_index)
+    }
+
+    fn inc(&mut self) {
+        if self.sorted_indices.pop_front().is_none() {
+            self.next_index += 1;
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ConsolidationPart<T, D> {
     Queued {
@@ -128,7 +153,7 @@ enum ConsolidationPart<T, D> {
     },
     Encoded {
         part: Columnar<T, D>,
-        cursor: usize,
+        cursor: PartIndices,
     },
 }
 
@@ -194,27 +219,23 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
             updates: part.normalize(metrics),
             _phantom: Default::default(),
         };
-        let updates = if reconsolidate {
+        let cursor = if reconsolidate {
             let len = updates.len();
-            let mut tuples: Vec<_> = (0..len).map(|i| (updates.get(i).unwrap(), i)).collect();
-            tuples.sort_by_key(|((kv, t, _d), _i)| (*kv, t.clone()));
+            let mut indices: Vec<_> = (0..len).collect();
 
-            let mut indices = Vec::with_capacity(len);
-            let mut timestamps = Int64Builder::with_capacity(len);
-            let mut diffs = Int64Builder::with_capacity(len);
-            for ((_, t, d), i) in tuples {
-                indices.push((0, i));
-                timestamps.append_value(i64::from_le_bytes(T::encode(&t)));
-                diffs.append_value(i64::from_le_bytes(D::encode(&d)));
+            indices.sort_by_key(|i| updates.get(*i).map(|(kv, t, _d)| (kv, t)));
+
+            PartIndices {
+                sorted_indices: indices.into(),
+                next_index: len,
             }
-            Columnar::interleave(&[&updates], &indices, timestamps.finish(), diffs.finish())
         } else {
-            updates
+            PartIndices::default()
         };
 
         ConsolidationPart::Encoded {
             part: updates,
-            cursor: 0,
+            cursor,
         }
     }
 
@@ -225,7 +246,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
                 Some(((key_lower.as_slice(), &[]), T::minimum()))
             }
             ConsolidationPart::Encoded { part, cursor } => {
-                let (kv, t, _d) = part.get(*cursor)?;
+                let (kv, t, _d) = part.get(cursor.index())?;
                 Some((kv, t))
             }
         }
@@ -235,7 +256,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
     /// valid record.
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            ConsolidationPart::Encoded { part, cursor, .. } => *cursor >= part.len(),
+            ConsolidationPart::Encoded { part, cursor, .. } => cursor.index() >= part.len(),
             ConsolidationPart::Queued { .. } | ConsolidationPart::Prefetched { .. } => false,
         }
     }
@@ -405,7 +426,10 @@ where
         // of any run, it should be fully processed by the next consolidation step.
         if let Some(part) = self.drop_stash.take() {
             self.runs.push(VecDeque::from_iter([(
-                ConsolidationPart::Encoded { part, cursor: 0 },
+                ConsolidationPart::Encoded {
+                    part,
+                    cursor: PartIndices::default(),
+                },
                 0,
             )]));
         }
@@ -659,7 +683,7 @@ struct PartRef<'a, T: Timestamp, D> {
     /// The index of the next row within that part.
     /// This is a mutable pointer to long-lived state; we must only advance this index once
     /// we've rolled any rows before this index into our state.
-    row_index: &'a mut usize,
+    row_index: &'a mut PartIndices,
     /// Whether / not the iterator for the part is the last in its run, or whether there may be
     /// iterators for the same part in the future.
     last_in_run: bool,
@@ -668,14 +692,14 @@ struct PartRef<'a, T: Timestamp, D> {
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T, D> {
     fn update_peek(&mut self, part: &'a Columnar<T, D>, filter: &FetchBatchFilter<T>) {
-        let mut peek = part.get(*self.row_index);
+        let mut peek = part.get(self.row_index.index());
         while let Some((_kv, t, _d)) = &mut peek {
             let keep = filter.filter_ts(t);
             if keep {
                 break;
             } else {
-                *self.row_index += 1;
-                peek = part.get(*self.row_index);
+                self.row_index.inc();
+                peek = part.get(self.row_index.index());
             }
         }
         self.next_kvt = Reverse(peek);
@@ -688,8 +712,8 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
     ) -> Option<(Indices, KV<'a>, T, D)> {
         let part = &from[self.part_index];
         let Reverse(popped) = mem::take(&mut self.next_kvt);
-        let indices = (self.part_index, *self.row_index);
-        *self.row_index += 1;
+        let indices = (self.part_index, self.row_index.index());
+        self.row_index.inc();
         self.update_peek(part, filter);
         let (kv, t, d) = popped?;
         Some((indices, kv, t, d))
@@ -728,7 +752,7 @@ where
         }
     }
 
-    fn push(&mut self, iter: &'a Columnar<T, D>, index: &'a mut usize, last_in_run: bool) {
+    fn push(&mut self, iter: &'a Columnar<T, D>, index: &'a mut PartIndices, last_in_run: bool) {
         let mut part_ref = PartRef {
             next_kvt: Reverse(None),
             part_index: self.parts.len(),
