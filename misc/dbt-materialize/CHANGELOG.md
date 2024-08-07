@@ -2,17 +2,20 @@
 
 ## Unreleased
 
-* Add `application_name` to the connection parameters [#28813](https://github.com/MaterializeInc/materialize/pull/28813).
+* Include the dbt version in the `application_name` connection parameter [#28813](https://github.com/MaterializeInc/materialize/pull/28813).
 
-* Add `lag_tolerance` argument to the `deploy_promote` operation [#28831](https://github.com/MaterializeInc/materialize/issues/28831).
-  - Allows users to specify a custom maximum acceptable lag duration when waiting for deployment readiness
-  - Default value is '1s' (1 second)
-  - Can be used in combination with `wait: true` and `poll_interval`
-  - Example usage:
-    ```bash
-    dbt run-operation deploy_await --args '{lag_tolerance: "5s"}'
-    dbt run-operation deploy_promote --args '{wait: true, poll_interval: 30, lag_tolerance: "5s"}'
-    ```
+* Allow users to override the maximum lag threshold in [blue/green deployment
+  macros](https://materialize.com/docs/manage/dbt/development-workflows/#bluegreen-deployments)
+  using the new `lag_threshold` argument.
+
+  **Example**
+  ```bash
+  dbt run-operation deploy_await --args '{lag_threshold: "5s"}'
+  dbt run-operation deploy_promote --args '{wait: true, poll_interval: 30, lag_threshold: "5s"}'
+  ```
+
+  **We do not recommend** changing the default value of the `lag_threshold`
+  (`1s`), unless prompted by the Materialize team.
 
 ## 1.8.3 - 2024-07-19
 
