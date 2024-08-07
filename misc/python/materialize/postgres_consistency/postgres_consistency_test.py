@@ -132,8 +132,11 @@ def main() -> int:
 
     try:
         mz_db_user = "materialize"
+        mz_system_user = "mz_system"
         mz_connection = connect(args.mz_host, args.mz_port, mz_db_user)
-        mz_system_connection = connect(args.mz_host, args.mz_system_port, mz_db_user)
+        mz_system_connection = connect(
+            args.mz_host, args.mz_system_port, mz_system_user
+        )
 
         pg_db_user = "postgres"
         test.pg_connection = connect(
