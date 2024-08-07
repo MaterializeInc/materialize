@@ -13,10 +13,10 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro await_cluster_ready(cluster, poll_interval=15, lag_tolerance='1s') %}
+{% macro await_cluster_ready(cluster, poll_interval=15, lag_threshold='1s') %}
 
 {% for i in range(1, 100000) %}
-    {% if is_cluster_ready(cluster, lag_tolerance) %}
+    {% if is_cluster_ready(cluster, lag_threshold) %}
         {{ return(true) }}
     {% endif %}
     -- Hydration takes time. Be a good

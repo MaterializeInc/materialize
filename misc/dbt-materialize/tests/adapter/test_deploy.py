@@ -617,43 +617,43 @@ class TestLagTolerance:
         project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
 
-    def test_deploy_await_custom_lag_tolerance(self, project):
+    def test_deploy_await_custom_lag_threshold(self, project):
         run_dbt(["run-operation", "deploy_init"])
         result = run_dbt(
             [
                 "run-operation",
                 "deploy_await",
                 "--args",
-                "{poll_interval: 5, lag_tolerance: '5s'}",
+                "{poll_interval: 5, lag_threshold: '5s'}",
             ]
         )
         assert len(result) > 0 and result[0].status == "success"
 
-    def test_deploy_promote_custom_lag_tolerance(self, project):
+    def test_deploy_promote_custom_lag_threshold(self, project):
         run_dbt(["run-operation", "deploy_init"])
         result = run_dbt(
             [
                 "run-operation",
                 "deploy_promote",
                 "--args",
-                "{wait: true, poll_interval: 5, lag_tolerance: '5s'}",
+                "{wait: true, poll_interval: 5, lag_threshold: '5s'}",
             ]
         )
         assert len(result) > 0 and result[0].status == "success"
 
-    def test_default_lag_tolerance(self, project):
+    def test_default_lag_threshold(self, project):
         run_dbt(["run-operation", "deploy_init"])
         result = run_dbt(["run-operation", "deploy_await"])
         assert len(result) > 0 and result[0].status == "success"
 
-    def test_large_lag_tolerance(self, project):
+    def test_large_lag_threshold(self, project):
         run_dbt(["run-operation", "deploy_init"])
         result = run_dbt(
             [
                 "run-operation",
                 "deploy_await",
                 "--args",
-                "{poll_interval: 5, lag_tolerance: '1h'}",
+                "{poll_interval: 5, lag_threshold: '1h'}",
             ]
         )
         assert len(result) > 0 and result[0].status == "success"

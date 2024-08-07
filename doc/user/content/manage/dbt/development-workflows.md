@@ -419,7 +419,7 @@ environment before cutting over.
 
     Argument                             | Default   | Description
     -------------------------------------|-----------|--------------------------------------------------
-    `dry_run`                            | `false`   | Whether to print out the sequence of commands that dbt will execute for validation, without actually promoting the deployment.
+    `dry_run`                            | `false`   | Whether to print out the sequence of commands that dbt will execute without actually promoting the deployment, for validation.
     `wait`                               | `false`   | Whether to wait for all objects in the deployment environment to fully hydrate before promoting the deployment. We recommend setting this argument to `true` if you skip the [validation](#validation) step.
     `poll_interval`                      | `15s`     | When `wait` is set to `true`, the time (in seconds) between each cluster readiness check.
     `lag_threshold`                      | `1s`      | When `wait` is set to `true`, the maximum lag threshold, which determines when all objects in the environment are considered hydrated and it's safe to perform the cutover step.
