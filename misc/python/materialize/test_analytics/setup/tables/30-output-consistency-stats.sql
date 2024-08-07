@@ -21,3 +21,5 @@ CREATE TABLE output_consistency_stats (
    count_available_ops UINT4 NOT NULL,
    count_used_ops UINT4 NOT NULL
 );
+
+GRANT SELECT, INSERT, UPDATE ON TABLE output_consistency_stats TO "hetzner-ci";

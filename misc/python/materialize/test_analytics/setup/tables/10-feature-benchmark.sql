@@ -33,3 +33,6 @@ CREATE TABLE feature_benchmark_discarded_result (
    memory_mz DOUBLE,
    memory_clusterd DOUBLE
 );
+
+GRANT SELECT, INSERT, UPDATE ON TABLE feature_benchmark_result TO "hetzner-ci";
+GRANT SELECT, INSERT, UPDATE ON TABLE feature_benchmark_discarded_result TO "hetzner-ci";

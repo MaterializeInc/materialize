@@ -107,3 +107,5 @@ SELECT * FROM (
     ON build.build_id = build_job.build_id AND build.branch = 'main' AND is_latest_retry = TRUE
 ) WHERE row_number <= 5
 ;
+
+GRANT SELECT ON TABLE mv_recent_build_job_success_on_main_v2 TO "hetzner-ci";

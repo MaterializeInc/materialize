@@ -10,7 +10,7 @@ from pathlib import Path
 
 from materialize import MZ_ROOT
 
-FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.1.0"
+FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.2.0"
 FEATURE_BENCHMARK_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 
 FEATURE_BENCHMARK_FRAMEWORK_DIR = Path(__file__).resolve().parent
@@ -25,7 +25,7 @@ SHA256_OF_FRAMEWORK["*"] = (
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
 SHA256_BY_SCENARIO_FILE: dict[str, str] = {}
 SHA256_BY_SCENARIO_FILE["benchmark_main.py"] = (
-    "fd65a33c37f2364a5ae10273d6d95779aac1ac562030d7fa47030bcb423e379e"
+    "19828980fc01d988b2bc61d1982725938cc51ae40e93054f19b88952d19b5a83"
 )
 SHA256_BY_SCENARIO_FILE["concurrency.py"] = (
     "2e9c149c136b83b3853abc923a1adbdaf55a998ab4557712f8424c8b16f2adb1"

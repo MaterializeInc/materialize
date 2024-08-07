@@ -25,3 +25,5 @@ VALUES
     6,
     FALSE
 );
+
+GRANT SELECT ON TABLE config TO "hetzner-ci";

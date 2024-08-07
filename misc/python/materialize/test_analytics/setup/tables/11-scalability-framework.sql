@@ -19,3 +19,5 @@ CREATE TABLE scalability_framework_result (
    count INT,
    tps DOUBLE
 );
+
+GRANT SELECT, INSERT, UPDATE ON TABLE scalability_framework_result TO "hetzner-ci";

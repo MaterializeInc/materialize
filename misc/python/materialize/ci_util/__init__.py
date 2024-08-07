@@ -49,7 +49,9 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
         return
     ui.section(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
     suite = suite.upper().replace("-", "_")
-    token = os.environ[f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}"]
+    token = os.getenv(f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}")
+    if not token:
+        return
     try:
         res = requests.post(
             "https://analytics-api.buildkite.com/v1/uploads",

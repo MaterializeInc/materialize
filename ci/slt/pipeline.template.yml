@@ -22,7 +22,7 @@ steps:
     timeout_in_minutes: 180
     parallelism: 10
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -33,7 +33,7 @@ steps:
     timeout_in_minutes: 180
     parallelism: 10
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest

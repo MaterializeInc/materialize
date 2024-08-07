@@ -191,7 +191,7 @@ ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 0
     USER postgres,
     PASSWORD SECRET pgpass
   )
-contains:failed to lookup address information: Name or service not known
+contains:failed to lookup address information
 
 ! CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,

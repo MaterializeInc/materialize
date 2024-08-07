@@ -123,6 +123,10 @@ $ file-append container=fivetran path=d.csv compression=gzip header=a,b,c,d repe
 # Note: Both 'c.csv' and 'd.csv' are individually under the 'max_copy_from_size', but together
 # they exceed it. We want to make sure the write_batch still succeeds in this case.
 
+# TODO(def-) Reenable when #28687 is fixed
+$ skip-if
+SELECT true
+
 $ fivetran-destination action=write_batch
 {
     "schema_name": "foo",

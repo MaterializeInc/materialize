@@ -179,6 +179,8 @@ def workflow_silent_connection_drop(
             ],
         ),
     ):
+        c.kill("postgres")
+        c.rm("postgres", destroy_volumes=True)
         c.up("materialized", "postgres")
 
         pg_conn = pg8000.connect(
