@@ -80,7 +80,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
-use crossbeam_channel::TryRecvError;
+use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
@@ -388,7 +388,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// how commands flow from the controller and through the workers.
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
         // At this point, all workers are still reading from the command flow.
-        self.reconcile(&command_rx);
+        if self.reconcile(&command_rx).is_err() {
+            return;
+        }
 
         let mut disconnected = false;
 
@@ -817,38 +819,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     /// Extract commands until `InitializationComplete`, and make the worker
     /// reflect those commands. If the worker can not be made to reflect the
-    /// commands, exit the process.
-    ///
-    /// This method is meant to be a function of the commands received thus far
-    /// (as recorded in the compute state command history) and the new commands
-    /// from `command_rx`. It should not be a function of other characteristics,
-    /// like whether the worker has managed to respond to a peek or not. Some
-    /// effort goes in to narrowing our view to only the existing commands we
-    /// can be sure are live at all other workers.
-    ///
-    /// The methodology here is to drain `command_rx` until an
-    /// `InitializationComplete`, at which point the prior commands are
-    /// "reconciled" in. Reconciliation takes each goal dataflow and looks for
-    /// an existing "compatible" dataflow (per `compatible()`) it can repurpose,
-    /// with some additional tests to be sure that we can cut over from one to
-    /// the other (no additional compaction, no tails/sinks). With any
-    /// connections established, old orphaned dataflows are allow to compact
-    /// away, and any new dataflows are created from scratch. "Kept" dataflows
-    /// are allowed to compact up to any new `as_of`.
-    ///
-    /// Some additional tidying happens, e.g. cleaning up reported frontiers.
-    /// subscribe response buffer. We will need to be vigilant with future
-    /// modifications to `StorageState` to line up changes there with clean
-    /// resets here.
-    fn reconcile(&mut self, command_rx: &CommandReceiver) {
+    /// commands, return an error.
+    fn reconcile(&mut self, command_rx: &CommandReceiver) -> Result<(), RecvError> {
         // To initialize the connection, we want to drain all commands until we
         // receive a `StorageCommand::InitializationComplete` command to form a
         // target command state.
         let mut commands = vec![];
-        while let Ok(command) = command_rx.recv() {
-            match command {
+        loop {
+            match command_rx.recv()? {
                 StorageCommand::InitializationComplete => break,
-                _ => commands.push(command),
+                command => commands.push(command),
             }
         }
 
@@ -1067,6 +1047,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         for command in commands {
             self.storage_state.handle_storage_command(command);
         }
+
+        Ok(())
     }
 }
 
