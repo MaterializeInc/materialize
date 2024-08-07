@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_promote(wait=False, poll_interval=15, dry_run=False) %}
+{% macro deploy_promote(wait=False, poll_interval=15, lag_threshold='1s', dry_run=False) %}
 {#
   Performs atomic deployment of current dbt targets to production,
   based on the deployment configuration specified in the dbt_project.yml file.
@@ -24,11 +24,16 @@
 
   ## Arguments
   - `wait` (boolean, optional): Waits for the deployment to be fully hydrated.
-      Defaults to false. It is recommended you call `deploy_await` manually and
-      run additional validation checks before promoting a deployment to production.
-  - `poll_interval` (integer): The interval, in seconds, between each readiness check.
-  - `dry_run` (boolean, optional): When True, prints out the commands that would
-    be executed as part of the deployment workflow (without executing them).
+    Defaults to false. We recommend calling `deploy_await` manually and running
+    additional validation checks before promoting a deployment.
+  - `poll_interval` (integer): The interval, in seconds, between each readiness
+    check. Default: '15s'.
+  - `lag_threshold` (string): The maximum lag threshold, which determines when
+    all objects in the environment are considered hydrated and it''s safe to
+    perform the cutover step. Default: '1s'.
+  - `dry_run` (boolean, optional): When `true`, prints out the sequence of
+    commands dbt would execute without actually promoting the deployment, for
+    validation.
 
   ## Returns
   None: This macro performs deployment actions but does not return a value.
@@ -71,7 +76,7 @@
 {% endfor %}
 
 {% if wait %}
-    {{ deploy_await(poll_interval) }}
+    {{ deploy_await(poll_interval, lag_threshold) }}
 {% endif %}
 
 {% if not dry_run %}

@@ -361,21 +361,27 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 
 <br>
 
-1. After deploying the changes, the objects in the deployment cluster need to fully
-   hydrate before you can safely cut over. Use the `run-operation` command
+1. After deploying the changes, the objects in the deployment cluster need to
+   fully hydrate before you can safely cut over. Use the `run-operation` command
    to invoke the [`deploy_await`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_await.sql)
    macro, which periodically polls the cluster readiness status, and waits for all
-   objects to have a **lag of less than 1 second** to return successfully.
+   objects to meet a minimum lag threshold to return successfully.
 
     ```bash
-    dbt run-operation deploy_await
+    dbt run-operation deploy_await #--args '{poll_interval: 30, lag_threshold: "5s"}'
     ```
 
-    The default poll interval is `15` seconds, but can be configured to a
-    different value by passing the `poll_interval=<value>` argument in the macro
-    invocation.
+    By default, `deploy_await` polls for cluster readiness every **15 seconds**,
+    and waits for all objects in the deployment environment to have a lag
+    of **less than 1 second** before returning successfully. To override the
+    default values, you can pass the following arguments to the macro:
 
-1. Once `deploy_await` returns successfully, you can manually run tests against
+    Argument                             | Default   | Description
+    -------------------------------------|-----------|--------------------------------------------------
+    `poll_interval`                      | `15s`     | The time (in seconds) between each cluster readiness check.
+    `lag_threshold`                      | `1s`      | The maximum lag threshold, which determines when all objects in the environment are considered hydrated and it's safe to perform the cutover step. **We do not recommend** changing the default value, unless prompted by the Materialize team.
+
+2. Once `deploy_await` returns successfully, you can manually run tests against
    the new deployment environment to validate the results.
 
 #### Cutover and cleanup
@@ -397,13 +403,26 @@ environment before cutting over.
 
     ```bash
     # Do a dry run to validate the sequence of commands to execute
-    dbt run-operation deploy_promote --args 'dry_run: True'
+    dbt run-operation deploy_promote --args '{dry_run: true}'
     ```
 
     ```bash
     # Promote the deployment environment to production
-    dbt run-operation deploy_promote
+    dbt run-operation deploy_promote #--args '{wait: true, poll_interval: 30, lag_threshold: "5s"}'
     ```
+
+    By default, `deploy_promote` **does not** wait for all objects to be
+    hydrated — we recommend carefully [validating](#validation) the results of
+    the deployed changes in the deployment environment before running this
+    operation, or setting `--args '{wait: true}'`. To override the default
+    values, you can pass the following arguments to the macro:
+
+    Argument                             | Default   | Description
+    -------------------------------------|-----------|--------------------------------------------------
+    `dry_run`                            | `false`   | Whether to print out the sequence of commands that dbt will execute without actually promoting the deployment, for validation.
+    `wait`                               | `false`   | Whether to wait for all objects in the deployment environment to fully hydrate before promoting the deployment. We recommend setting this argument to `true` if you skip the [validation](#validation) step.
+    `poll_interval`                      | `15s`     | When `wait` is set to `true`, the time (in seconds) between each cluster readiness check.
+    `lag_threshold`                      | `1s`      | When `wait` is set to `true`, the maximum lag threshold, which determines when all objects in the environment are considered hydrated and it's safe to perform the cutover step.
 
     {{< note >}}The `deploy_promote` operation might fail if objects are
     concurrently modified by a different session. If this occurs, re-run the

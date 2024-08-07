@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro is_cluster_ready(cluster=target.cluster|default(none)) %}
+{% macro is_cluster_ready(cluster=target.cluster|default(none), lag_threshold='1s') %}
 
 {% if cluster is none %}
     {{ exceptions.raise_compiler_error("No cluster specified and no default cluster found in target profile. " ~ current_target_name) }}
@@ -103,7 +103,7 @@ ready_dataflows AS (
     FROM dataflows
     JOIN mz_internal.mz_hydration_statuses AS h USING (object_id, replica_id)
     LEFT JOIN mz_internal.mz_materialization_lag AS l USING (object_id)
-    WHERE h.hydrated AND (l.local_lag <= '1s' OR l.local_lag IS NULL)
+    WHERE h.hydrated AND (l.local_lag <= {{ dbt.string_literal(lag_threshold) }} OR l.local_lag IS NULL)
 ),
 
 pending_dataflows AS (

@@ -1,5 +1,22 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Include the dbt version in the `application_name` connection parameter [#28813](https://github.com/MaterializeInc/materialize/pull/28813).
+
+* Allow users to override the maximum lag threshold in [blue/green deployment
+  macros](https://materialize.com/docs/manage/dbt/development-workflows/#bluegreen-deployments)
+  using the new `lag_threshold` argument.
+
+  **Example**
+  ```bash
+  dbt run-operation deploy_await --args '{lag_threshold: "5s"}'
+  dbt run-operation deploy_promote --args '{wait: true, poll_interval: 30, lag_threshold: "5s"}'
+  ```
+
+  **We do not recommend** changing the default value of the `lag_threshold`
+  (`1s`), unless prompted by the Materialize team.
+
 ## 1.8.3 - 2024-07-19
 
 * Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
