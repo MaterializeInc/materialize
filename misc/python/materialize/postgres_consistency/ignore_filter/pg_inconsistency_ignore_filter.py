@@ -706,6 +706,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#28240: infinity to decimal")
 
+        if "invalid regular expression flag: n" in mz_error_msg:
+            return YesIgnore("#28805: regex n flag")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(

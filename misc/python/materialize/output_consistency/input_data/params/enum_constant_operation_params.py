@@ -60,7 +60,7 @@ REGEX_PARAM = EnumConstantOperationParam(
 )
 
 REGEX_FLAG_PARAM = EnumConstantOperationParam(
-    ["i", "g"], add_quotes=True, optional=True
+    ["i", "g", "n"], add_quotes=True, optional=True
 )
 
 STRING_TRIM_SPEC_PARAM = EnumConstantOperationParam(
