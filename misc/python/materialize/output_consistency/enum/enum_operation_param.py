@@ -47,11 +47,12 @@ class EnumConstantOperationParam(OperationParam):
             self.invalid_value = None
 
         self.add_null_value = add_null_value
+        null_value = "NULL"
         if add_null_value:
             # NULL value must be at the beginning
             self.values.insert(
                 _INDEX_OF_NULL_VALUE,
-                "NULL",
+                null_value,
             )
 
         self.add_quotes = add_quotes
@@ -61,6 +62,16 @@ class EnumConstantOperationParam(OperationParam):
 
         for value in self.values:
             self.characteristics_per_value[value] = set()
+
+        if add_invalid_value:
+            self.characteristics_per_value[invalid_value].add(
+                ExpressionCharacteristics.ENUM_INVALID
+            )
+
+        if add_null_value:
+            self.characteristics_per_value[null_value].add(
+                ExpressionCharacteristics.NULL
+            )
 
         self.tags = tags
 
