@@ -40,8 +40,8 @@ class TestdriveBase:
             materialize_internal_url
             or "postgres://mz_system@environmentd:6877/materialize"
         )
-        self.kafka_addr = kafka_addr or "redpanda:9092"
-        self.schema_registry_url = schema_registry_url or "http://redpanda:8081"
+        self.kafka_addr = kafka_addr or "redpanda.default:9092"
+        self.schema_registry_url = schema_registry_url or "http://redpanda.default:8081"
         self.aws_endpoint = "http://minio-service.default:9000"
 
     def run(
