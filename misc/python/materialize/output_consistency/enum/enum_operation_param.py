@@ -55,9 +55,13 @@ class EnumConstantOperationParam(OperationParam):
             )
 
         self.add_quotes = add_quotes
-        self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
-            set() for _ in self.values
-        ]
+        self.characteristics_per_value: dict[str, set[ExpressionCharacteristics]] = (
+            dict()
+        )
+
+        for value in self.values:
+            self.characteristics_per_value[value] = set()
+
         self.tags = tags
 
     def supports_type(
@@ -70,7 +74,7 @@ class EnumConstantOperationParam(OperationParam):
             0 <= index < len(self.values)
         ), f"Index {index} out of range in list with {len(self.values)} values: {self.values}"
         value = self.values[index]
-        characteristics = self.characteristics_per_index[index]
+        characteristics = self.characteristics_per_value[value]
 
         quote_value = self.add_quotes
         if self.add_null_value and index == 0:
