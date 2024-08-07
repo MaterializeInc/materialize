@@ -1100,6 +1100,17 @@ steps:
               composition: version-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding", "--other-tag=common-ancestor"]
 
+      - id: output-consistency-feature-flags-dfr
+        label: "Output consistency (feature-flags for DFR)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 58
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: feature-flag-consistency
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering"]
+
 
   - group: SQLsmith
     key: sqlsmith-group
