@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # We will create a topic with 100 partitions and we create two sinks that
-# publishe a single record 4 times, each time with a different Avro schema id
+# published a single record 4 times, each time with a different Avro schema id
 # due to changed comments.
 #
 # With the v0 partitioning scheme this will almost certainly lead to at
@@ -44,6 +44,7 @@ ALTER SYSTEM SET default_sink_partition_strategy = 'v0';
 # v0 Scheme - Execution 1
 > COMMENT ON COLUMN data.key IS 'v01';
 > CREATE SINK v0
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -56,6 +57,7 @@ $ kafka-verify-data format=avro sink=materialize.public.v0
 # v0 Scheme - Execution 2
 > COMMENT ON COLUMN data.key IS 'v02';
 > CREATE SINK v0
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -68,6 +70,7 @@ $ kafka-verify-data format=avro sink=materialize.public.v0
 # v0 Scheme - Execution 3
 > COMMENT ON COLUMN data.key IS 'v03';
 > CREATE SINK v0
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -80,6 +83,7 @@ $ kafka-verify-data format=avro sink=materialize.public.v0
 # v0 Scheme - Execution 4
 > COMMENT ON COLUMN data.key IS 'v04';
 > CREATE SINK v0
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -100,6 +104,7 @@ ALTER SYSTEM SET default_sink_partition_strategy = 'v1';
 # v1 Scheme - Execution 1
 > COMMENT ON COLUMN data.key IS 'v11';
 > CREATE SINK v1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -112,6 +117,7 @@ $ kafka-verify-data format=avro sink=materialize.public.v1
 # v1 Scheme - Execution 2
 > COMMENT ON COLUMN data.key IS 'v12';
 > CREATE SINK v1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -124,6 +130,7 @@ $ kafka-verify-data format=avro sink=materialize.public.v1
 # v1 Scheme - Execution 3
 > COMMENT ON COLUMN data.key IS 'v13';
 > CREATE SINK v1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -136,6 +143,7 @@ $ kafka-verify-data format=avro sink=materialize.public.v1
 # v1 Scheme - Execution 4
 > COMMENT ON COLUMN data.key IS 'v14';
 > CREATE SINK v1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   KEY (key) NOT ENFORCED
@@ -148,6 +156,7 @@ $ kafka-verify-data format=avro sink=materialize.public.v1
 # Now we will ingest the raw data and confirm that the v0 scheme moved
 # records around and that the v1 scheme used a single partition.
 > CREATE SOURCE sink_verify
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION
