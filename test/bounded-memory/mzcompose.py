@@ -7,9 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import math
+import docker
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
+from threading import Event
 
 from materialize.buildkite import shard_list
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -1106,24 +1109,46 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
             )
 
-            run_scenario(
+            max_memory = run_scenario(
                 c,
                 scenario,
                 materialized_memory=scenario.materialized_memory,
                 clusterd_memory=scenario.clusterd_memory,
             )
+            print(f"+++ Scenario {scenario.name} used clusterd_memory={max_memory}")
+
+
+def measure_max_memory(container_id, measurement_finished):
+    client = docker.from_env()
+    container = client.containers.get(container_id)
+    stats = container.stats(decode=True, stream=True)
+
+    max_usage = 0
+    while not measurement_finished.is_set():
+        memory_stats = next(stats)["memory_stats"]
+        if memory_stats:
+            max_usage = max(max_usage, memory_stats["usage"])
+    return max_usage
 
 
 def run_scenario(
     c: Composition, scenario: Scenario, materialized_memory: str, clusterd_memory: str
-) -> None:
+) -> int:
     c.down(destroy_volumes=True)
 
-    with c.override(
-        Materialized(memory=materialized_memory),
-        Clusterd(memory=clusterd_memory),
+    with (
+        ThreadPoolExecutor(max_workers=1) as executor,
+        c.override(
+            Materialized(memory=materialized_memory),
+            Clusterd(memory=clusterd_memory),
+        ),
     ):
         c.up("redpanda", "materialized", "postgres", "mysql", "clusterd")
+
+        measurement_finished = Event()
+        max_memory = executor.submit(
+            measure_max_memory, c.container_id("clusterd"), measurement_finished
+        )
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1152,6 +1177,9 @@ def run_scenario(
         c.up("materialized", "clusterd")
 
         c.testdrive(scenario.post_restart, args=[testdrive_timeout_arg])
+
+        measurement_finished.set()
+        return max_memory.result()
 
 
 def try_run_scenario(
