@@ -68,6 +68,39 @@ impl crate::Transform for EquivalencePropagation {
             &mut get_equivalences,
         );
 
+        // Literal columns at the root can be projected away and replaced with a constant.
+        // This removes an apparent demand for the column, and may allow the column to be pruned.
+        // We should follow with MFP normalization, as we may be stacking the MFP to implement
+        // this action atop the same MFP only recently installed, and we needn't duplicate it.
+        let arity = *derived.value::<Arity>().expect("Arity required");
+        let equivs = derived
+            .value::<Equivalences>()
+            .expect("Equivalences required");
+        let mut literal_columns = Vec::new();
+        if let Some(equivs) = equivs {
+            for column in 0..arity {
+                let mut expr = MirScalarExpr::Column(column);
+                equivs.reduce_expr(&mut expr);
+                if expr.is_literal() {
+                    literal_columns.push((column, expr));
+                }
+            }
+        }
+        // The result can be a bit messy, and in particular may have MFPs in a `Let::body` that we don't want to compound.
+        if !literal_columns.is_empty() {
+            let mut columns = (0..arity).collect::<Vec<_>>();
+            for (index, (column, _)) in literal_columns.iter().enumerate() {
+                columns[*column] = arity + index;
+            }
+            let scalars = literal_columns
+                .into_iter()
+                .map(|(_column, expr)| expr)
+                .collect::<Vec<_>>();
+            *relation = relation.take_dangerous().map(scalars).project(columns);
+            crate::normalize_lets::normalize_lets(relation, ctx.features)?;
+            crate::canonicalize_mfp::CanonicalizeMfp.action(relation)?;
+        }
+
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
@@ -460,7 +493,7 @@ impl EquivalencePropagation {
                 ..
             } => {
                 // Apply input equivalences to `limit`, `group_key`, and `order_key`.
-                // `limit` is optimized, but it is important that it track reflect the 
+                // `limit` is optimized, but it is important that it track reflect the
                 // optimizations applied to `group_key` as it ust reference those columns.
                 // The two keys can have column references optimized, and any that are
                 // equivalent to literals can be removed.
