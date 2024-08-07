@@ -249,21 +249,22 @@ EXPLAIN WITH(arity, join implementations) SELECT *
 ----
 Explained Query:
   Return // { arity: 15 }
-    Project (#0..=#9, #4, #5, #12..=#14) // { arity: 15 }
-      Join on=(#4 = #10 AND #5 = #11) type=delta // { arity: 15 }
-        implementation
-          %0:lineitem » %1:orders[#2, #3]KKe » %2:customer[×]e
-          %1:orders » %0:lineitem[#4, #5]KKf » %2:customer[×]e
-          %2:customer » %1:orders[×]e » %0:lineitem[#4, #5]KKf
-        ArrangeBy keys=[[#4, #5]] // { arity: 8 }
-          Filter (date_to_timestamp(#7) = (#5 + 6 days)) // { arity: 8 }
-            ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
-        ArrangeBy keys=[[], [#2, #3]] // { arity: 4 }
-          Project (#0..=#3) // { arity: 4 }
-            ReadIndex on=materialize.public.orders fk_orders_custkey=[lookup values=<Get l0>] // { arity: 5 }
-        ArrangeBy keys=[[]] // { arity: 3 }
-          Project (#0..=#2) // { arity: 3 }
-            ReadIndex on=materialize.public.customer pk_customer_custkey=[lookup values=<Get l0>] // { arity: 4 }
+    Project (#0..=#8, #13, #4, #5, #14, #11, #12) // { arity: 15 }
+      Map (229, 229) // { arity: 15 }
+        Join on=(#4 = #9 AND #5 = #10) type=delta // { arity: 13 }
+          implementation
+            %0:lineitem » %1:orders[#1, #2]KKe » %2:customer[×]e
+            %1:orders » %0:lineitem[#4, #5]KKf » %2:customer[×]e
+            %2:customer » %1:orders[×]e » %0:lineitem[#4, #5]KKf
+          ArrangeBy keys=[[#4, #5]] // { arity: 8 }
+            Filter (date_to_timestamp(#7) = (#5 + 6 days)) // { arity: 8 }
+              ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
+          ArrangeBy keys=[[], [#1, #2]] // { arity: 3 }
+            Project (#0, #2, #3) // { arity: 3 }
+              ReadIndex on=materialize.public.orders fk_orders_custkey=[lookup values=<Get l0>] // { arity: 5 }
+          ArrangeBy keys=[[]] // { arity: 2 }
+            Project (#1, #2) // { arity: 2 }
+              ReadIndex on=materialize.public.customer pk_customer_custkey=[lookup values=<Get l0>] // { arity: 4 }
   With
     cte l0 =
       ArrangeBy keys=[[#0]] // { arity: 1 }
