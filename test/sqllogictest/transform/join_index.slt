@@ -35,15 +35,19 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) select * from foo inner join bar on foo.a = bar.a where foo.a = 1
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 4 }
-    implementation
-      %0:foo[×]ef » %1:bar[×]ef
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Filter (#0 = 1) // { arity: 2 }
-        ReadStorage materialize.public.foo // { arity: 2 }
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Filter (#0 = 1) // { arity: 2 }
-        ReadStorage materialize.public.bar // { arity: 2 }
+  Project (#2, #0, #3, #1) // { arity: 4 }
+    Map (1, 1) // { arity: 4 }
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          %0:foo[×]ef » %1:bar[×]ef
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Filter (#0 = 1) // { arity: 2 }
+              ReadStorage materialize.public.foo // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Filter (#0 = 1) // { arity: 2 }
+              ReadStorage materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((#0 = 1))
@@ -104,15 +108,19 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) select * from (select * from foo where a = 1) filtered_foo, bar where filtered_foo.a = bar.a
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 4 }
-    implementation
-      %0:foo[×]ef » %1:bar[×]ef
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Filter (#0 = 1) // { arity: 2 }
-        ReadStorage materialize.public.foo // { arity: 2 }
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Filter (#0 = 1) // { arity: 2 }
-        ReadStorage materialize.public.bar // { arity: 2 }
+  Project (#2, #0, #3, #1) // { arity: 4 }
+    Map (1, 1) // { arity: 4 }
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          %0:foo[×]ef » %1:bar[×]ef
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Filter (#0 = 1) // { arity: 2 }
+              ReadStorage materialize.public.foo // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Filter (#0 = 1) // { arity: 2 }
+              ReadStorage materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((#0 = 1))
@@ -696,19 +704,20 @@ t0.s LIKE 'a%'
 ;
 ----
 Explained Query:
-  Project (#0..=#14, #0, #16..=#27, #29, #30, #0, #32..=#42) // { arity: 42 }
-    Filter like["a%"](#13) // { arity: 43 }
-      Join on=(#0 = #15 = #31) type=delta // { arity: 43 }
-        implementation
-          %0:big » %1:big[#1]KAe » %2:big[#2]KA
-          %1:big » %0:big[#0]KAlf » %2:big[#2]KA
-          %2:big » %1:big[#1]KAe » %0:big[#0]KAlf
-        ArrangeBy keys=[[#0]] // { arity: 14 }
-          ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
-        ArrangeBy keys=[[#1]] // { arity: 15 }
-          ReadIndex on=materialize.public.big big_idx_y=[lookup value=(42)] // { arity: 15 }
-        ArrangeBy keys=[[#2]] // { arity: 14 }
-          ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
+  Project (#0..=#14, #0, #16..=#25, #43, #27, #29, #30, #0, #32..=#42) // { arity: 42 }
+    Filter like["a%"](#13) // { arity: 44 }
+      Map (42) // { arity: 44 }
+        Join on=(#0 = #15 = #31) type=delta // { arity: 43 }
+          implementation
+            %0:big » %1:big[#1]KAe » %2:big[#2]KA
+            %1:big » %0:big[#0]KAlf » %2:big[#2]KA
+            %2:big » %1:big[#1]KAe » %0:big[#0]KAlf
+          ArrangeBy keys=[[#0]] // { arity: 14 }
+            ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
+          ArrangeBy keys=[[#1]] // { arity: 15 }
+            ReadIndex on=materialize.public.big big_idx_y=[lookup value=(42)] // { arity: 15 }
+          ArrangeBy keys=[[#2]] // { arity: 14 }
+            ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
 
 Used Indexes:
   - materialize.public.big_idx_a (delta join 1st input (full scan))

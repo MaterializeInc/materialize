@@ -796,9 +796,9 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 Explained Query:
-  Project (#2, #1, #0) // { arity: 3 }
+  Project (#1, #2, #0) // { arity: 3 }
     Filter (0 = integer_to_bigint(#0)) // { arity: 3 }
-      Map (0, 123) // { arity: 3 }
+      Map (123, 0) // { arity: 3 }
         ReadStorage materialize.public.t1 // { arity: 1 }
 
 Source materialize.public.t1
