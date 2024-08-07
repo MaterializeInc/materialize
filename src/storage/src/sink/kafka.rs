@@ -99,7 +99,8 @@ use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
+    StorageSinkDesc,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -179,6 +180,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             &encoded,
             sink_id,
             self.clone(),
+            sink.partition_strategy.clone(),
             storage_state.storage_configuration.clone(),
             sink,
             metrics,
@@ -210,6 +212,10 @@ struct TransactionalProducer {
     progress_key: ProgressKey,
     /// The version of this sink, used to fence out previous versions from writing.
     sink_version: u64,
+    /// The strategy to partition the data with.
+    partition_strategy: SinkPartitionStrategy,
+    /// The number of partitions in the target topic.
+    partition_count: u64,
     /// The underlying Kafka producer.
     producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
     /// A handle to the metrics associated with this sink.
@@ -231,11 +237,12 @@ impl TransactionalProducer {
     async fn new(
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
+        partition_strategy: SinkPartitionStrategy,
         storage_configuration: &StorageConfiguration,
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
         sink_version: u64,
-    ) -> Result<Self, ContextCreationError> {
+    ) -> Result<(Self, Antichain<mz_repr::Timestamp>), ContextCreationError> {
         let client_id = connection.client_id(
             storage_configuration.config_set(),
             &storage_configuration.connection_context,
@@ -279,7 +286,10 @@ impl TransactionalProducer {
 
         let stats_receiver = ctx.subscribe_statistics();
         let task_name = format!("kafka_sink_metrics_collector:{sink_id}");
-        task::spawn(|| &task_name, collect_statistics(stats_receiver, metrics));
+        task::spawn(
+            || &task_name,
+            collect_statistics(stats_receiver, Arc::clone(&metrics)),
+        );
 
         let producer: BaseProducer<_> = connection
             .connection
@@ -289,9 +299,12 @@ impl TransactionalProducer {
         let task_name = format!("kafka_sink_producer:{sink_id}");
         let progress_key = ProgressKey::new(sink_id);
 
-        let producer = Self {
+        let mut producer = Self {
             task_name,
             data_topic: connection.topic.clone(),
+            partition_strategy,
+            // partition count is fixed up later when we query the broker for metadata
+            partition_count: 0,
             progress_topic: connection
                 .progress_topic(&storage_configuration.connection_context)
                 .into_owned(),
@@ -309,7 +322,54 @@ impl TransactionalProducer {
             .spawn_blocking(move |p| p.init_transactions(timeout))
             .await?;
 
-        Ok(producer)
+        // We have just called init_transactions, which means that we have fenced out all previous
+        // transactional producers, making it safe to determine the resume upper.
+        let progress = determine_sink_progress(
+            sink_id,
+            connection,
+            storage_configuration,
+            Arc::clone(&metrics),
+        )
+        .await?;
+
+        let resume_upper = match progress {
+            Some(progress) => {
+                if sink_version < progress.version {
+                    return Err(ContextCreationError::Other(anyhow!(
+                        "Fenced off by newer version of the sink. ours={} theirs={}",
+                        sink_version,
+                        progress.version
+                    )));
+                }
+                progress.frontier
+            }
+            None => {
+                mz_storage_client::sink::ensure_kafka_topic(
+                    connection,
+                    storage_configuration,
+                    &connection.topic,
+                    &connection.topic_options,
+                )
+                .await?;
+                Antichain::from_elem(Timestamp::minimum())
+            }
+        };
+
+        // At this point the topic must exist and so we can query for its metadata.
+        let meta = producer.fetch_metadata().await?;
+        match meta.topics().iter().find(|t| t.name() == &connection.topic) {
+            Some(topic) => {
+                producer.partition_count = u64::cast_from(topic.partitions().len());
+                metrics.partition_count.set(producer.partition_count);
+            }
+            None => {
+                return Err(
+                    anyhow!("sink progress data exists, but sink data topic is missing").into(),
+                );
+            }
+        }
+
+        Ok((producer, resume_upper))
     }
 
     /// Runs the blocking operation `f` on the producer in the tokio threadpool and checks for SSH
@@ -369,12 +429,20 @@ impl TransactionalProducer {
                 value: header.value.as_ref(),
             });
         }
+
+        let partition = match self.partition_strategy {
+            SinkPartitionStrategy::V0 => None,
+            SinkPartitionStrategy::V1 => {
+                Some(i32::try_from(message.hash % self.partition_count).unwrap())
+            }
+        };
+
         let record = BaseRecord {
             topic: &self.data_topic,
             key: message.key.as_ref(),
             payload: message.value.as_ref(),
             headers: Some(headers),
-            partition: None,
+            partition,
             timestamp: None,
             delivery_opaque: (),
         };
@@ -492,6 +560,8 @@ async fn collect_statistics(
 /// A message to produce to Kafka.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct KafkaMessage {
+    /// A hash of the key that can be used for partitioning.
+    hash: u64,
     /// The message key.
     key: Option<Vec<u8>>,
     /// The message value.
@@ -519,6 +589,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     input: &Collection<G, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
+    partition_strategy: SinkPartitionStrategy,
     storage_configuration: StorageConfiguration,
     sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
     metrics: KafkaSinkMetrics,
@@ -549,57 +620,16 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
 
             let metrics = Arc::new(metrics);
 
-            let mut producer = TransactionalProducer::new(
+            let (mut producer, resume_upper) = TransactionalProducer::new(
                 sink_id,
                 &connection,
+                partition_strategy,
                 &storage_configuration,
                 Arc::clone(&metrics),
                 statistics,
                 sink_version,
             )
             .await?;
-            // Instantiating the transactional producer fences out all previous ones, making it
-            // safe to determine the resume upper.
-            let progress = determine_sink_progress(
-                sink_id,
-                &connection,
-                &storage_configuration,
-                Arc::clone(&metrics),
-            )
-            .await?;
-
-            let resume_upper = match progress {
-                Some(progress) => {
-                    if sink_version < progress.version {
-                        return Err(ContextCreationError::Other(anyhow!(
-                            "Fenced off by newer version of the sink. ours={} theirs={}",
-                            sink_version,
-                            progress.version
-                        )));
-                    }
-                    progress.frontier
-                }
-                None => {
-                    mz_storage_client::sink::ensure_kafka_topic(
-                        &connection,
-                        &storage_configuration,
-                        &connection.topic,
-                        &connection.topic_options,
-                    )
-                    .await?;
-                    Antichain::from_elem(Timestamp::minimum())
-                }
-            };
-
-            // At this point the topic must exist and so we can query for its metadata.
-            let meta = producer.fetch_metadata().await?;
-            match meta.topics().iter().find(|t| t.name() == &connection.topic) {
-                Some(topic) => {
-                    let partition_count = u64::cast_from(topic.partitions().len());
-                    metrics.partition_count.set(partition_count);
-                }
-                None => return Err(anyhow!("sink data topic is missing").into()),
-            }
 
             // The input has overcompacted if
             let overcompacted =
@@ -1244,14 +1274,19 @@ fn encode_collection<G: Scope>(
                             (Some(i), Some(v)) => encode_headers(v.iter().nth(i).unwrap()),
                             _ => vec![],
                         };
-                        let key = key.map(|key| {
-                            key_encoder
-                                .as_ref()
-                                .expect("key present")
-                                .encode_unchecked(key)
-                        });
+                        let (hash, key) = match key {
+                            Some(key) => {
+                                let (hash, key_enc) = key_encoder
+                                    .as_ref()
+                                    .expect("key present")
+                                    .encode_hashed_unchecked(key);
+                                (hash, Some(key_enc))
+                            }
+                            None => (0, None)
+                        };
                         let value = value.map(|value| value_encoder.encode_unchecked(value));
                         let message = KafkaMessage {
+                            hash,
                             key,
                             value,
                             headers,

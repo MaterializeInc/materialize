@@ -660,11 +660,11 @@ CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
                ^
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = true, VERSION = 42)
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = true, VERSION = 42, PARTITION STRATEGY = 'v0')
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true, VERSION = 42)
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true, VERSION = 42, PARTITION STRATEGY = 'v0')
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Bytes)), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }, CreateSinkOption { name: Version, value: Some(Value(Number("42"))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Bytes)), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }, CreateSinkOption { name: Version, value: Some(Value(Number("42"))) }, CreateSinkOption { name: PartitionStrategy, value: Some(Value(String("v0"))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = false)
@@ -1535,21 +1535,21 @@ ALTER MATERIALIZED VIEW name SET (property = true)
 parse-statement
 ALTER SINK name SET (property = true)
 ----
-error: Expected one of SNAPSHOT or VERSION, found identifier "property"
+error: Expected one of PARTITION or SNAPSHOT or VERSION, found identifier "property"
 ALTER SINK name SET (property = true)
                      ^
 
 parse-statement
 ALTER SINK IF EXISTS name SET (SIZE LARGE)
 ----
-error: Expected one of SNAPSHOT or VERSION, found SIZE
+error: Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
 ALTER SINK IF EXISTS name SET (SIZE LARGE)
                                ^
 
 parse-statement
 ALTER SINK name RESET (SIZE)
 ----
-error: Expected one of SNAPSHOT or VERSION, found SIZE
+error: Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
 ALTER SINK name RESET (SIZE)
                        ^
 

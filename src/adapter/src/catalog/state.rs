@@ -938,6 +938,7 @@ impl CatalogState {
                 create_sql: sink.create_sql,
                 from: sink.from,
                 connection: sink.connection,
+                partition_strategy: sink.partition_strategy,
                 envelope: sink.envelope,
                 version: sink.version,
                 with_snapshot,

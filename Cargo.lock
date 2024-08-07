@@ -5282,6 +5282,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-reflect",
+ "seahash",
  "serde_json",
  "timely",
  "tokio",

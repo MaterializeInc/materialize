@@ -50,7 +50,9 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{
+    S3SinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
+};
 use mz_storage_types::sources::{SourceDesc, Timeline};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -1467,6 +1469,7 @@ pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
     pub connection: StorageSinkConnection<ReferencedConnection>,
+    pub partition_strategy: SinkPartitionStrategy,
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub version: u64,

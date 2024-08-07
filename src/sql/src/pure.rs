@@ -19,6 +19,7 @@ use std::sync::Arc;
 use crate::ast::AlterSourceAddSubsourceOption;
 use anyhow::anyhow;
 use itertools::Itertools;
+use mz_adapter_types::dyncfgs;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
@@ -37,14 +38,15 @@ use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
-    CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, Ident,
-    KafkaSourceConfigOption, KafkaSourceConfigOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement, UnresolvedItemName,
+    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOption,
+    CreateSinkOptionName, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
+    CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function,
+    FunctionArgs, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName,
+    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
+    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement,
+    UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -422,7 +424,7 @@ async fn purify_create_sink(
         if_not_exists: _,
         from: _,
         envelope: _,
-    } = &create_sink_stmt;
+    } = &mut create_sink_stmt;
 
     // The list of options that the user is allowed to specify.
     const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
@@ -436,6 +438,13 @@ async fn purify_create_sink(
             op.name.to_ast_string(),
         )
     }
+
+    let default_strategy =
+        dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY.get(catalog.system_vars().dyncfgs());
+    with_options.push(CreateSinkOption {
+        name: CreateSinkOptionName::PartitionStrategy,
+        value: Some(WithOptionValue::Value(Value::String(default_strategy))),
+    });
 
     match &connection {
         CreateSinkConnection::Kafka {

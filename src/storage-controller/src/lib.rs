@@ -1231,6 +1231,7 @@ where
                 envelope: new_description.sink.envelope,
                 as_of: new_description.sink.as_of,
                 version: new_description.sink.version,
+                partition_strategy: new_description.sink.partition_strategy,
                 status_id,
                 from_storage_metadata,
                 with_snapshot: new_description.sink.with_snapshot,
@@ -1303,6 +1304,7 @@ where
                     connection: new_export_description.sink.connection.clone(),
                     envelope: new_export_description.sink.envelope,
                     with_snapshot: new_export_description.sink.with_snapshot,
+                    partition_strategy: new_export_description.sink.partition_strategy.clone(),
                     version: new_export_description.sink.version,
                     // Here we are about to send a RunSinkCommand with the current read capaibility
                     // held by this sink. However, clusters are already running a version of the
@@ -3714,6 +3716,7 @@ where
                 envelope: description.sink.envelope,
                 as_of: description.sink.as_of.clone(),
                 version: description.sink.version,
+                partition_strategy: description.sink.partition_strategy.clone(),
                 status_id,
                 from_storage_metadata,
                 with_snapshot: description.sink.with_snapshot,

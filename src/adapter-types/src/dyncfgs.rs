@@ -64,6 +64,14 @@ pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Dura
     "Enable plan insights fast path clusters calculation if the optimize step took less than this duration.",
 );
 
+/// Whether the default sink partitioning strategy for an environment should be 'v1'. When set to
+/// false the strategy defaults to 'v0'.
+pub const DEFAULT_SINK_PARTITION_STRATEGY: Config<&str> = Config::new(
+    "default_sink_partition_strategy",
+    "v0",
+    "The default sink partitioning strategy for an environment. It defaults to 'v0'.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -74,4 +82,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
+        .add(&DEFAULT_SINK_PARTITION_STRATEGY)
 }
