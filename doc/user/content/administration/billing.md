@@ -25,7 +25,10 @@ In Materialize, storage is roughly proportional to the size of your source
 datasets plus the size of materialized views, with some overhead from
 uncompacted previous values of data and system metrics.
 
-Most data in Materialize is continually compacted. As such, the total state stored in Materialize tends to grow at a rate that is more similar to OLTP databases than traditional cloud data warehouses.
+With the exception of Append-only sources, most data in Materialize is
+continually compacted. As such, the total state stored in Materialize tends to
+grow at a rate that is more similar to OLTP databases than traditional cloud
+data warehouses.
 
 ## Compute
 
