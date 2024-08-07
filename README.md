@@ -32,7 +32,7 @@ multi-active replication, **horizontal scalability**, by seamlessly scaling
 dataflows across multiple machines, and **near infinite storage**, by
 leveraging cloud object storage (e.g., Amazon S3).
 
-We support a large fraction of PostgreSQL, and are actively working on supporting more built-in PostgreSQL functions. Please file an issue if something doesn't work as expected!
+We support a large fraction of PostgreSQL features, and are actively working on supporting more built-in PostgreSQL functions. Please file an issue if something doesn't work as expected!
 
 ## Get data in
 
@@ -144,7 +144,7 @@ including links to their source repositories.
 
 Materialize is primarily written in Rust.
 
-Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://dev.materialize.com/api/rust/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
+Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://dev.materialize.com/api/rust/>.
 
 Contributions are welcome. Prospective code contributors might find the [D-good
 for external
