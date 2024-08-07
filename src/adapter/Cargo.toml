@@ -43,6 +43,7 @@ mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }
 mz-controller-types = { path = "../controller-types" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }

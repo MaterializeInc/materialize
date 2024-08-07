@@ -14,6 +14,7 @@ use mz_adapter_types::dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY;
 use mz_catalog::durable::Item;
 use mz_catalog::memory::objects::{StateDiff, StateUpdate};
 use mz_catalog::{durable::Transaction, memory::objects::StateUpdateKind};
+use mz_dyncfg::ConfigSet;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
@@ -23,7 +24,6 @@ use mz_sql::ast::{
     CreateSinkOption, CreateSinkOptionName, CreateSourceStatement, UnresolvedItemName, Value,
     WithOptionValue,
 };
-use mz_sql::catalog::SessionCatalog;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
@@ -114,6 +114,7 @@ pub(crate) async fn migrate(
 
     rewrite_ast_items(tx, |_tx, _id, stmt, all_items_and_statements| {
         let _catalog_version = catalog_version.clone();
+        let configs = state.system_config().dyncfgs().clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
             //
@@ -123,6 +124,7 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+            ast_rewrite_create_sink_partition_strategy(&configs, stmt)?;
             ast_rewrite_create_subsource_options(stmt, all_items_and_statements)?;
             Ok(())
         })
@@ -146,7 +148,7 @@ pub(crate) async fn migrate(
 
     let conn_cat = state.for_system_session();
 
-    rewrite_items(tx, &conn_cat, |_tx, conn_cat, _id, stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
         let _catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item, post-planning AST migrations below. Most
@@ -163,7 +165,6 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
-            ast_rewrite_create_sink_partition_strategy(conn_cat, stmt)?;
             Ok(())
         })
     })
@@ -508,7 +509,7 @@ fn ast_rewrite_create_subsource_options(
 }
 
 fn ast_rewrite_create_sink_partition_strategy(
-    cat: &ConnCatalog<'_>,
+    configs: &ConfigSet,
     stmt: &mut Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     let Statement::CreateSink(stmt) = stmt else {
@@ -520,7 +521,7 @@ fn ast_rewrite_create_sink_partition_strategy(
         .iter()
         .any(|op| op.name == CreateSinkOptionName::PartitionStrategy)
     {
-        let default_strategy = DEFAULT_SINK_PARTITION_STRATEGY.get(cat.system_vars().dyncfgs());
+        let default_strategy = DEFAULT_SINK_PARTITION_STRATEGY.get(configs);
         stmt.with_options.push(CreateSinkOption {
             name: CreateSinkOptionName::PartitionStrategy,
             value: Some(WithOptionValue::Value(Value::String(default_strategy))),
