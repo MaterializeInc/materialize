@@ -71,7 +71,7 @@ STRING_TRIM_SPEC_PARAM = EnumConstantOperationParam(
 REPETITIONS_PARAM = EnumConstantOperationParam(
     ["0", "1", "2", "10", "100", "-2"], add_quotes=False
 )
-REPETITIONS_PARAM.characteristics_per_index[REPETITIONS_PARAM.values.index("-2")].add(
+REPETITIONS_PARAM.characteristics_per_value["-2"].add(
     ExpressionCharacteristics.NEGATIVE
 )
 

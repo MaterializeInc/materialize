@@ -49,3 +49,5 @@ class ExpressionCharacteristics(Enum):
     MAP_WITH_DUP_KEYS = 161
     LIST_WITH_DUP_ENTRIES = 162
     ARRAY_WITH_DUP_ENTRIES = 163
+
+    ENUM_INVALID = 170

@@ -47,17 +47,32 @@ class EnumConstantOperationParam(OperationParam):
             self.invalid_value = None
 
         self.add_null_value = add_null_value
+        null_value = "NULL"
         if add_null_value:
             # NULL value must be at the beginning
             self.values.insert(
                 _INDEX_OF_NULL_VALUE,
-                "NULL",
+                null_value,
             )
 
         self.add_quotes = add_quotes
-        self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
-            set() for _ in self.values
-        ]
+        self.characteristics_per_value: dict[str, set[ExpressionCharacteristics]] = (
+            dict()
+        )
+
+        for value in self.values:
+            self.characteristics_per_value[value] = set()
+
+        if add_invalid_value:
+            self.characteristics_per_value[invalid_value].add(
+                ExpressionCharacteristics.ENUM_INVALID
+            )
+
+        if add_null_value:
+            self.characteristics_per_value[null_value].add(
+                ExpressionCharacteristics.NULL
+            )
+
         self.tags = tags
 
     def supports_type(
@@ -70,7 +85,7 @@ class EnumConstantOperationParam(OperationParam):
             0 <= index < len(self.values)
         ), f"Index {index} out of range in list with {len(self.values)} values: {self.values}"
         value = self.values[index]
-        characteristics = self.characteristics_per_index[index]
+        characteristics = self.characteristics_per_value[value]
 
         quote_value = self.add_quotes
         if self.add_null_value and index == 0:
