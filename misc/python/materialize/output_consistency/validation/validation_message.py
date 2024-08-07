@@ -13,6 +13,10 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
     EvaluationStrategyKey,
 )
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.query.query_result import QueryExecution
 
 
@@ -97,8 +101,7 @@ class ValidationError(ValidationMessage):
         details2: ValidationErrorDetails,
         description: str | None = None,
         col_index: int | None = None,
-        concerned_expression_str: str | None = None,
-        concerned_expression_hash: int | None = None,
+        concerned_expression: Expression | None = None,
         location: str | None = None,
     ):
         super().__init__(message, description)
@@ -107,8 +110,16 @@ class ValidationError(ValidationMessage):
         self.details1 = details1
         self.details2 = details2
         self.col_index = col_index
-        self.concerned_expression_str = concerned_expression_str
-        self.concerned_expression_hash = concerned_expression_hash
+
+        if concerned_expression is not None:
+            self.concerned_expression_str = concerned_expression.to_sql(
+                SqlDialectAdjuster(), True
+            )
+            self.concerned_expression_hash = concerned_expression.hash()
+        else:
+            self.concerned_expression_str = None
+            self.concerned_expression_hash = None
+
         self.location = location
 
     def get_details_by_strategy_key(
@@ -122,6 +133,11 @@ class ValidationError(ValidationMessage):
     def __str__(self) -> str:
         error_desc = f" ({self.description})" if self.description else ""
         location_desc = f" at {self.location}" if self.location is not None else ""
+        expression_desc = (
+            f"\nExpression: {self.concerned_expression_str}"
+            if self.concerned_expression_str is not None
+            else ""
+        )
 
         strategy1_desc = f" ({self.details1.strategy})"
         strategy2_desc = f" ({self.details2.strategy})"
@@ -146,4 +162,4 @@ class ValidationError(ValidationMessage):
             if self.concerned_expression_hash is not None
             else ""
         )
-        return f"{self.error_type}: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}{expression_hash}"
+        return f"{self.error_type}: {self.message}{location_desc}{error_desc}.{expression_desc}{value_and_strategy_desc}{sql_desc}{expression_hash}"

@@ -11,9 +11,6 @@ from decimal import Decimal
 from typing import Any, cast
 
 from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
-from materialize.output_consistency.execution.sql_dialect_adjuster import (
-    SqlDialectAdjuster,
-)
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
@@ -104,6 +101,8 @@ class ResultComparator:
         validation_outcome: ValidationOutcome,
     ) -> None:
         if outcome1.successful != outcome2.successful:
+            expression = self._expression_if_only_one_in_query(query_execution)
+
             validation_outcome.add_error(
                 self.ignore_filter,
                 ValidationError(
@@ -130,6 +129,7 @@ class ResultComparator:
                             else None
                         ),
                     ),
+                    concerned_expression=expression,
                 ),
             )
             return
@@ -184,6 +184,8 @@ class ResultComparator:
         num_rows2 = len(result2.result_rows)
 
         if num_rows1 != num_rows2:
+            expression = self._expression_if_only_one_in_query(query_execution)
+
             validation_outcome.add_error(
                 self.ignore_filter,
                 ValidationError(
@@ -196,6 +198,7 @@ class ResultComparator:
                     details2=ValidationErrorDetails(
                         strategy=result2.strategy, value=str(num_rows2), sql=result2.sql
                     ),
+                    concerned_expression=expression,
                 ),
             )
 
@@ -214,6 +217,8 @@ class ResultComparator:
         )
 
         if norm_error_message_1 != norm_error_message_2:
+            expression = self._expression_if_only_one_in_query(query_execution)
+
             validation_outcome.add_error(
                 self.ignore_filter,
                 ValidationError(
@@ -232,6 +237,7 @@ class ResultComparator:
                         sql=failure2.sql,
                         sql_error=failure2.error_message,
                     ),
+                    concerned_expression=expression,
                 ),
             )
 
@@ -336,7 +342,6 @@ class ResultComparator:
             result_value1 = result1.result_rows[row_index][col_index]
             result_value2 = result2.result_rows[row_index][col_index]
             expression = query_execution.query_template.select_expressions[col_index]
-            expression_as_sql = expression.to_sql(SqlDialectAdjuster(), True)
 
             if not self.is_value_equal(result_value1, result_value2, expression):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
@@ -363,9 +368,8 @@ class ResultComparator:
                         strategy=result2.strategy, value=result_value2, sql=result2.sql
                     ),
                     col_index=col_index,
-                    concerned_expression_str=expression_as_sql,
-                    concerned_expression_hash=expression.hash(),
-                    location=f"row index {row_index}, column index {col_index} ('{expression_as_sql}')",
+                    concerned_expression=expression,
+                    location=f"row index {row_index}, column index {col_index}",
                 ),
             )
 
@@ -397,6 +401,8 @@ class ResultComparator:
         if explain_plan1 == explain_plan2:
             return
 
+        expression = self._expression_if_only_one_in_query(query_execution)
+
         validation_outcome.add_error(
             self.ignore_filter,
             ValidationError(
@@ -409,6 +415,7 @@ class ResultComparator:
                 details2=ValidationErrorDetails(
                     strategy=outcome2.strategy, value=explain_plan2, sql=outcome2.sql
                 ),
+                concerned_expression=expression,
             ),
         )
 
@@ -492,3 +499,11 @@ class ResultComparator:
 
     def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
         return False
+
+    def _expression_if_only_one_in_query(
+        self, query_execution: QueryExecution
+    ) -> Expression | None:
+        if len(query_execution.query_template.select_expressions) == 1:
+            return query_execution.query_template.select_expressions[0]
+
+        return None
