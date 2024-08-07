@@ -566,6 +566,8 @@ mod explain {
 
         type Dot = UnsupportedFormat;
 
+        type Syntax = UnsupportedFormat;
+
         fn explain_text(
             &'a mut self,
             context: &'a Self::Context,

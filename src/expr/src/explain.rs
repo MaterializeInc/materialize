@@ -34,6 +34,7 @@ pub use crate::explain::text::{
 };
 
 mod json;
+mod syntax;
 mod text;
 
 /// Explain context shared by all [`mz_repr::explain::Explain`]
@@ -180,6 +181,8 @@ impl<'a> Explain<'a> for MirRelationExpr {
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
+
+    type Syntax = ExplainSinglePlan<'a, MirRelationExpr>;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_single_plan(context)
