@@ -21,8 +21,9 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::VisitMut;
 use mz_sql::ast::{
-    CreateSinkOption, CreateSinkOptionName, CreateSourceStatement, UnresolvedItemName, Value,
-    WithOptionValue,
+    CreateSinkConnection, CreateSinkOption, CreateSinkOptionName, CreateSinkStatement,
+    CreateSourceStatement, KafkaSinkConfigOption, KafkaSinkConfigOptionName, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
@@ -113,7 +114,7 @@ pub(crate) async fn migrate(
     );
 
     rewrite_ast_items(tx, |_tx, _id, stmt, all_items_and_statements| {
-        let _catalog_version = catalog_version.clone();
+        let catalog_version = catalog_version.clone();
         let configs = state.system_config().dyncfgs().clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
@@ -126,6 +127,9 @@ pub(crate) async fn migrate(
             // arbitrary changes to the catalog.
             ast_rewrite_create_sink_partition_strategy(&configs, stmt)?;
             ast_rewrite_create_subsource_options(stmt, all_items_and_statements)?;
+            if catalog_version < Version::parse("0.112.0-dev").expect("known to be valid") {
+                ast_rewrite_create_sink_default_compression(stmt)?;
+            }
             Ok(())
         })
     })
@@ -526,6 +530,32 @@ fn ast_rewrite_create_sink_partition_strategy(
             name: CreateSinkOptionName::PartitionStrategy,
             value: Some(WithOptionValue::Value(Value::String(default_strategy))),
         });
+    }
+
+    Ok(())
+}
+
+/// Inject `COMPRESSION TYPE = NONE` into existing sinks, to preserve the
+/// default compression type for sinks pre-v112.
+fn ast_rewrite_create_sink_default_compression(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    match stmt {
+        Statement::CreateSink(CreateSinkStatement {
+            connection: CreateSinkConnection::Kafka { options, .. },
+            ..
+        }) => {
+            if !options
+                .iter()
+                .any(|op| op.name == KafkaSinkConfigOptionName::CompressionType)
+            {
+                options.push(KafkaSinkConfigOption {
+                    name: KafkaSinkConfigOptionName::CompressionType,
+                    value: Some(WithOptionValue::Value(Value::String("none".into()))),
+                });
+            }
+        }
+        _ => (),
     }
 
     Ok(())

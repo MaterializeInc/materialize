@@ -49,7 +49,7 @@ generate_extracted_config!(
     (
         CompressionType,
         KafkaSinkCompressionType,
-        Default(KafkaSinkCompressionType::None)
+        Default(KafkaSinkCompressionType::Lz4)
     ),
     (ProgressGroupIdPrefix, String),
     (TransactionalIdPrefix, String),
