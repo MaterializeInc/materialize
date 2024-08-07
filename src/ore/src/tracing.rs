@@ -522,7 +522,7 @@ where
                 sentry_config.dsn,
                 sentry::ClientOptions {
                     attach_stacktrace: true,
-                    release: Some(config.build_version.into()),
+                    release: Some(format!("materialize@{0}", config.build_version).into()),
                     environment: sentry_config.environment.map(Into::into),
                     integrations: vec![Arc::new(DebugImagesIntegration::new())],
                     ..Default::default()
