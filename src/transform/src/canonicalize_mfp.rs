@@ -65,6 +65,18 @@ impl CanonicalizeMfp {
         if let MirRelationExpr::Negate { input } = relation {
             Self::rebuild_mfp(mfp, &mut **input);
             relation.try_visit_mut_children(|e| self.action(e))?;
+        } else if let MirRelationExpr::Union { base, inputs } = relation {
+            for input in inputs.iter_mut() {
+                Self::rebuild_mfp(mfp.clone(), input);
+            }
+            Self::rebuild_mfp(mfp, &mut **base);
+            relation.try_visit_mut_children(|e| self.action(e))?;
+        } else if let MirRelationExpr::Let { body, .. } = relation {
+            Self::rebuild_mfp(mfp, &mut **body);
+            relation.try_visit_mut_children(|e| self.action(e))?;
+        } else if let MirRelationExpr::LetRec { body, .. } = relation {
+            Self::rebuild_mfp(mfp, &mut **body);
+            relation.try_visit_mut_children(|e| self.action(e))?;
         } else {
             relation.try_visit_mut_children(|e| self.action(e))?;
             Self::rebuild_mfp(mfp, relation);
