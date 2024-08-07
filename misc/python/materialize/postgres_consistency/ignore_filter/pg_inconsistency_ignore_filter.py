@@ -1012,6 +1012,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 "pg_typeof(pg_typeof(...)) returns regtype in pg but text in mz"
             )
 
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index, partial(matches_op_by_pattern, pattern="$ / $"), True
+        ):
+            return YesIgnore("#28852: numeric return type inconsistency")
+
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(
