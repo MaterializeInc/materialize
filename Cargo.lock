@@ -4183,6 +4183,7 @@ dependencies = [
  "mz-compute-types",
  "mz-controller",
  "mz-controller-types",
+ "mz-dyncfg",
  "mz-expr",
  "mz-kafka-util",
  "mz-mysql-util",
