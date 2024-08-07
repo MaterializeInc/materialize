@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -20,6 +21,8 @@ use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType, Tag};
 use aws_sdk_secretsmanager::Client;
 use mz_repr::GlobalId;
 use mz_secrets::{SecretsController, SecretsReader};
+use tracing::info;
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct AwsSecretsController {
@@ -209,15 +212,23 @@ impl AwsSecretsClient {
 #[async_trait]
 impl SecretsReader for AwsSecretsClient {
     async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
-        Ok(self
-            .client
-            .get_secret_value()
-            .secret_id(self.secret_name(id))
-            .send()
-            .await?
-            .secret_binary()
-            .ok_or_else(|| anyhow!("internal error: secret missing secret_binary field"))?
-            .to_owned()
-            .into_inner())
+        let op_id = Uuid::new_v4();
+        info!(secret_id = %id, %op_id, "reading secret from AWS");
+        let start = Instant::now();
+        let secret = async {
+            Ok(self
+                .client
+                .get_secret_value()
+                .secret_id(self.secret_name(id))
+                .send()
+                .await?
+                .secret_binary()
+                .ok_or_else(|| anyhow!("internal error: secret missing secret_binary field"))?
+                .to_owned()
+                .into_inner())
+        }
+        .await;
+        info!(%op_id, success = %secret.is_ok(), "secret read in {:?}", start.elapsed());
+        secret
     }
 }
