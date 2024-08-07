@@ -37,7 +37,7 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 [`text`](text) | `string` | Unicode string | Variable | Named | `'foo'`
 [`time`](time) | | Time without date | 4 | Named | `TIME '01:23:45'`
 [`uint2`](uint) | | Small unsigned integer | 2 | Named | `123`
-[`uint4`](uint) | `uint` | Unsigned integer | 4 | Named | `123`
+[`uint4`](uint) | | Unsigned integer | 4 | Named | `123`
 [`uint8`](uint) | | Large unsigned integer | 8 | Named | `123`
 [`timestamp`](timestamp) | | Date and time | 8 | Named | `TIMESTAMP '2007-02-01 15:04:05'`
 [`timestamp with time zone`](timestamp) | `timestamp with time zone` | Date and time with timezone | 8 | Named | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
