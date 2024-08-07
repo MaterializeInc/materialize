@@ -4400,6 +4400,8 @@ pub enum ExplainFormat {
     Text,
     Json,
     Dot,
+    /// SQL syntax format (disassembly)
+    Syntax,
 }
 
 impl AstDisplay for ExplainFormat {
@@ -4408,6 +4410,7 @@ impl AstDisplay for ExplainFormat {
             Self::Text => f.write_str("TEXT"),
             Self::Json => f.write_str("JSON"),
             Self::Dot => f.write_str("DOT"),
+            Self::Syntax => f.write_str("SYNTAX"),
         }
     }
 }

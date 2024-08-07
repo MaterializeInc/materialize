@@ -11,7 +11,7 @@
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_repr::explain::{Explain, ExplainError};
+use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
 
 use crate::explain::Explainable;
 
@@ -23,6 +23,8 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
     type Json = <DataflowDescription<Plan> as Explain<'a>>::Json;
 
     type Dot = <DataflowDescription<Plan> as Explain<'a>>::Dot;
+
+    type Syntax = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.0.explain_text(context)
