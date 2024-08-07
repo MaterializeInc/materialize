@@ -1,4 +1,3 @@
-
 # cargo-vet audits file
 
 [criteria.maintained-and-necessary]
@@ -341,7 +340,7 @@ version = "23.5.26"
 [[audits.flatcontainer]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.4.1"
+version = "0.5.0"
 
 [[audits.fluent-uri]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
