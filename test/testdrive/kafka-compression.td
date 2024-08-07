@@ -99,10 +99,10 @@ world
   FORMAT JSON ENVELOPE UPSERT
 contains:invalid COMPRESSION TYPE: pied-piper
 
-> CREATE CLUSTER none_sink_implicit_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER lz4_sink_implicit_cluster SIZE '${arg.default-storage-size}';
 
-> CREATE SINK none_sink_implicit
-  IN CLUSTER none_sink_implicit_cluster
+> CREATE SINK lz4_sink_implicit
+  IN CLUSTER lz4_sink_implicit_cluster
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'none')
   KEY (a) NOT ENFORCED
@@ -156,7 +156,7 @@ contains:invalid COMPRESSION TYPE: pied-piper
 # The Kafka APIs do not make it possible to assess whether the compression
 # actually took place, so we settle for just validating that the data is
 # readable.
-$ kafka-verify-data format=json key=false sink=materialize.public.none_sink_implicit
+$ kafka-verify-data format=json key=false sink=materialize.public.lz4_sink_implicit
 {"a": "hello"}
 {"a": "world"}
 {"a": "hello"}
