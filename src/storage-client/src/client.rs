@@ -38,7 +38,7 @@ use timely::PartialOrder;
 use tonic::{Request, Status as TonicStatus, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
-use crate::metrics::RehydratingStorageClientMetrics;
+use crate::metrics::ReplicaMetrics;
 use crate::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
@@ -68,7 +68,7 @@ pub enum StorageProtoServiceTypes {}
 impl ProtoServiceTypes for StorageProtoServiceTypes {
     type PC = ProtoStorageCommand;
     type PR = ProtoStorageResponse;
-    type STATS = RehydratingStorageClientMetrics;
+    type STATS = ReplicaMetrics;
     const URL: &'static str = "/mz_storage_client.client.ProtoStorage/CommandResponseStream";
 }
 
@@ -112,6 +112,20 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
     RunSinks(Vec<RunSinkCommand<T>>),
+}
+
+impl<T> StorageCommand<T> {
+    /// Returns whether this command instructs the installation of storage objects.
+    pub fn installs_objects(&self) -> bool {
+        use StorageCommand::*;
+        match self {
+            CreateTimely { .. }
+            | InitializationComplete
+            | UpdateConfiguration(_)
+            | AllowCompaction(_) => false,
+            RunIngestions(_) | RunSinks(_) => true,
+        }
+    }
 }
 
 /// A command that starts ingesting the given ingestion description
