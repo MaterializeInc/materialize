@@ -9,10 +9,9 @@
 
 //! Types related to postgres sources
 
-use itertools::Itertools;
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 use proptest::prelude::any;
@@ -235,7 +234,7 @@ pub struct PostgresSourceExportDetails {
     #[proptest(
         strategy = "proptest::collection::vec((any::<CastType>(), any::<MirScalarExpr>()), 0..4)"
     )]
-    pub table_cast: Vec<(CastType, MirScalarExpr)>,
+    pub column_casts: Vec<(CastType, MirScalarExpr)>,
     pub table: PostgresTableDesc,
 }
 
@@ -243,46 +242,49 @@ impl AlterCompatible for PostgresSourceExportDetails {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // compatibility checks are performed against the upstream table in the source
         // render operators instead
+        let Self {
+            column_casts: _,
+            table: _,
+        } = self;
         Ok(())
     }
 }
 
 impl RustType<ProtoPostgresSourceExportDetails> for PostgresSourceExportDetails {
     fn into_proto(&self) -> ProtoPostgresSourceExportDetails {
-        let mut column_casts = Vec::with_capacity(self.table_cast.len());
-        let mut column_cast_types = Vec::with_capacity(self.table_cast.len());
+        let mut column_casts = Vec::with_capacity(self.column_casts.len());
 
-        for (table_cast_col_type, table_cast_col) in self.table_cast.iter() {
-            column_casts.push(table_cast_col.into_proto());
-            column_cast_types.push(table_cast_col_type.into_proto());
+        for (col_type, cast) in self.column_casts.iter() {
+            column_casts.push(ProtoPostgresColumnCast {
+                cast: Some(cast.into_proto()),
+                cast_type: Some(col_type.into_proto()),
+            });
         }
 
         ProtoPostgresSourceExportDetails {
             table: Some(self.table.into_proto()),
-            table_cast: Some(ProtoPostgresTableCast {
-                column_casts,
-                column_cast_types,
-            }),
+            column_casts,
         }
     }
 
     fn from_proto(proto: ProtoPostgresSourceExportDetails) -> Result<Self, TryFromProtoError> {
         let mut column_casts = vec![];
-        if let Some(table_cast) = proto.table_cast {
-            for (cast, cast_type) in table_cast
-                .column_casts
-                .into_iter()
-                .zip_eq(table_cast.column_cast_types.into_iter())
-            {
-                column_casts.push((cast_type.into_rust()?, cast.into_rust()?));
-            }
+        for column_cast in proto.column_casts.into_iter() {
+            column_casts.push((
+                column_cast
+                    .cast_type
+                    .into_rust_if_some("ProtoPostgresColumnCast::cast_type")?,
+                column_cast
+                    .cast
+                    .into_rust_if_some("ProtoPostgresColumnCast::cast")?,
+            ));
         }
 
         Ok(PostgresSourceExportDetails {
             table: proto
                 .table
                 .into_rust_if_some("ProtoPostgresSourceExportDetails::table")?,
-            table_cast: column_casts,
+            column_casts,
         })
     }
 }

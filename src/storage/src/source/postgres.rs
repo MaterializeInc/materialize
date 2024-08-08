@@ -169,7 +169,7 @@ impl SourceRender for PostgresSourceConnection {
 
             let desc = details.table.clone();
 
-            let casts = details.table_cast.clone();
+            let casts = details.column_casts.clone();
             let exists =
                 table_info.insert(desc.oid, (*ingestion_output, desc.clone(), casts.clone()));
 

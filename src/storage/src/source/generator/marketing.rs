@@ -14,7 +14,9 @@ use std::{
 
 use mz_ore::now::to_datetime;
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorView};
+use mz_storage_types::sources::load_generator::{
+    Event, Generator, LoadGeneratorOutput, MarketingView,
+};
 use mz_storage_types::sources::MzOffset;
 use rand::{distributions::Standard, rngs::SmallRng, Rng, SeedableRng};
 
@@ -32,13 +34,14 @@ impl Generator for Marketing {
         now: mz_ore::now::NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorView, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>)>
+    {
         let mut rng: SmallRng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
         let mut counter = 0;
 
         let mut future_updates = FutureUpdates::default();
-        let mut pending: Vec<(LoadGeneratorView, Row, i64)> = CUSTOMERS
+        let mut pending: Vec<(MarketingView, Row, i64)> = CUSTOMERS
             .into_iter()
             .enumerate()
             .map(|(id, email)| {
@@ -49,7 +52,7 @@ impl Generator for Marketing {
                 packer.push(Datum::String(email));
                 packer.push(Datum::Int64(rng.gen_range(5_000_000..10_000_000i64)));
 
-                (LoadGeneratorView::Customers, customer, 1)
+                (MarketingView::Customers, customer, 1)
             })
             .collect();
 
@@ -75,7 +78,7 @@ impl Generator for Marketing {
                             .expect("timestamp must fit"),
                     ));
 
-                    pending.push((LoadGeneratorView::Impressions, impression, 1));
+                    pending.push((MarketingView::Impressions, impression, 1));
 
                     // 1 in 10 impressions have a click. Making us the
                     // most successful marketing organization in the world.
@@ -92,7 +95,7 @@ impl Generator for Marketing {
                                 .expect("timestamp must fit"),
                         ));
 
-                        future_updates.insert(click_time, (LoadGeneratorView::Clicks, click, 1));
+                        future_updates.insert(click_time, (MarketingView::Clicks, click, 1));
                     }
 
                     let mut updates = future_updates.retrieve(now());
@@ -110,7 +113,7 @@ impl Generator for Marketing {
                             conversion_amount: None,
                         };
 
-                        pending.push((LoadGeneratorView::Leads, lead.to_row(), 1));
+                        pending.push((MarketingView::Leads, lead.to_row(), 1));
 
                         // a highly scientific statistical model
                         // predicting the likelyhood of a conversion
@@ -133,7 +136,7 @@ impl Generator for Marketing {
                         ));
                         packer.push(Datum::Float64(score.into()));
 
-                        pending.push((LoadGeneratorView::ConversionPredictions, prediction, 1));
+                        pending.push((MarketingView::ConversionPredictions, prediction, 1));
 
                         let mut sent_coupon = false;
                         if !label && bucket == EXPERIMENT {
@@ -152,7 +155,7 @@ impl Generator for Marketing {
                             ));
                             packer.push(Datum::Int64(amount));
 
-                            pending.push((LoadGeneratorView::Coupons, coupon, 1));
+                            pending.push((MarketingView::Coupons, coupon, 1));
                         }
 
                         // Decide if a lead will convert. We assume our model is fairly
@@ -166,26 +169,30 @@ impl Generator for Marketing {
                         if converted {
                             let converted_at = now() + rng.gen_range(1..30);
 
-                            future_updates.insert(
-                                converted_at,
-                                (LoadGeneratorView::Leads, lead.to_row(), -1),
-                            );
+                            future_updates
+                                .insert(converted_at, (MarketingView::Leads, lead.to_row(), -1));
 
                             lead.converted_at = Some(converted_at);
                             lead.conversion_amount = Some(rng.gen_range(1000..25000));
 
                             future_updates
-                                .insert(converted_at, (LoadGeneratorView::Leads, lead.to_row(), 1));
+                                .insert(converted_at, (MarketingView::Leads, lead.to_row(), 1));
                         }
                     }
                 }
 
                 pending.pop().map(|(output, row, diff)| {
-                    let msg = (output, Event::Message(MzOffset::from(offset), (row, diff)));
+                    let msg = (
+                        LoadGeneratorOutput::Marketing(output),
+                        Event::Message(MzOffset::from(offset), (row, diff)),
+                    );
 
                     let progress = if pending.is_empty() {
                         offset += 1;
-                        Some((output, Event::Progress(Some(MzOffset::from(offset)))))
+                        Some((
+                            LoadGeneratorOutput::Marketing(output),
+                            Event::Progress(Some(MzOffset::from(offset))),
+                        ))
                     } else {
                         None
                     };
@@ -292,12 +299,12 @@ const CUSTOMERS: &[&str] = &[
 
 #[derive(Default)]
 struct FutureUpdates {
-    updates: BTreeMap<u64, Vec<(LoadGeneratorView, Row, i64)>>,
+    updates: BTreeMap<u64, Vec<(MarketingView, Row, i64)>>,
 }
 
 impl FutureUpdates {
     /// Schedules a row to be output at a certain time
-    fn insert(&mut self, time: u64, update: (LoadGeneratorView, Row, i64)) {
+    fn insert(&mut self, time: u64, update: (MarketingView, Row, i64)) {
         match self.updates.entry(time) {
             Entry::Vacant(v) => {
                 v.insert(vec![update]);
@@ -310,7 +317,7 @@ impl FutureUpdates {
 
     /// Returns all rows that are scheduled to be output
     /// at or before a certain time.
-    fn retrieve(&mut self, time: u64) -> Vec<(LoadGeneratorView, Row, i64)> {
+    fn retrieve(&mut self, time: u64) -> Vec<(MarketingView, Row, i64)> {
         let mut updates = vec![];
         while let Some(e) = self.updates.first_entry() {
             if *e.key() > time {

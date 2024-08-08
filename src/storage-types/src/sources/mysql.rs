@@ -276,6 +276,12 @@ impl AlterCompatible for MySqlSourceExportDetails {
     ) -> Result<(), crate::controller::AlterError> {
         // compatibility checks are performed against the upstream table in the source
         // render operators instead
+        let Self {
+            table: _,
+            initial_gtid_set: _,
+            text_columns: _,
+            ignore_columns: _,
+        } = self;
         Ok(())
     }
 }

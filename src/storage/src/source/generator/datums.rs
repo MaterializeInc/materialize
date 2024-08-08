@@ -11,7 +11,7 @@ use std::iter;
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row, ScalarType};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorView};
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use mz_storage_types::sources::MzOffset;
 
 pub struct Datums {}
@@ -25,7 +25,8 @@ impl Generator for Datums {
         _: NowFn,
         _seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorView, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>)>
+    {
         let typs = ScalarType::enumerate();
         let mut datums: Vec<Vec<Datum>> = typs
             .iter()
@@ -59,7 +60,7 @@ impl Generator for Datums {
                     packer.push(d[idx]);
                 }
                 let msg = (
-                    LoadGeneratorView::Default,
+                    LoadGeneratorOutput::Default,
                     Event::Message(MzOffset::from(offset), (row, 1)),
                 );
 
@@ -67,7 +68,7 @@ impl Generator for Datums {
                 let progress = if idx == len {
                     offset += 1;
                     Some((
-                        LoadGeneratorView::Default,
+                        LoadGeneratorOutput::Default,
                         Event::Progress(Some(MzOffset::from(offset))),
                     ))
                 } else {

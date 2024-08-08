@@ -17,8 +17,8 @@ use futures::StreamExt;
 use mz_repr::Row;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
-    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LoadGeneratorView,
+    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput,
+    LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -194,7 +194,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     for (_, export) in config.source_exports.iter() {
         let output_type = match &export.details {
             SourceExportDetails::LoadGenerator(details) => details.output,
-            SourceExportDetails::None => LoadGeneratorView::Default,
+            SourceExportDetails::None => LoadGeneratorOutput::Default,
             _ => panic!("unexpected source export details: {:?}", export.details),
         };
         output_map

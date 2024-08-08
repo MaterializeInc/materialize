@@ -1380,7 +1380,7 @@ pub fn plan_create_subsource(
         let details = match details {
             SourceExportStatementDetails::Postgres { table } => {
                 SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                    table_cast: crate::pure::postgres::generate_table_cast(
+                    column_casts: crate::pure::postgres::generate_column_casts(
                         scx,
                         &table,
                         &text_columns,
@@ -1402,9 +1402,9 @@ pub fn plan_create_subsource(
             }),
             SourceExportStatementDetails::LoadGenerator => {
                 SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    // get the table from the external reference to figure out which output this
-                    // subsource is for
-                    output: external_reference.0[2].as_str().into(),
+                    output: mz_storage_types::sources::load_generator::external_reference_to_output(
+                        &external_reference,
+                    ),
                 })
             }
         };
@@ -1639,7 +1639,7 @@ pub(crate) fn load_generator_ast_to_generator(
     };
 
     let mut available_subsources = BTreeMap::new();
-    for (name, desc) in load_generator.views().into_iter() {
+    for (name, desc) in load_generator.views() {
         let name = FullItemName {
             database: RawDatabaseSpecifier::Name(
                 mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),

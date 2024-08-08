@@ -24,9 +24,9 @@ message ProtoCastType {
     }
 }
 
-message ProtoPostgresTableCast {
-    repeated mz_expr.scalar.ProtoMirScalarExpr column_casts = 1;
-    repeated ProtoCastType column_cast_types = 2;
+message ProtoPostgresColumnCast {
+    mz_expr.scalar.ProtoMirScalarExpr cast = 1;
+    ProtoCastType cast_type = 2;
 }
 
 message ProtoPostgresSourceConnection {
@@ -49,7 +49,7 @@ message ProtoPostgresSourcePublicationDetails {
 
 message ProtoPostgresSourceExportDetails {
     mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
-    ProtoPostgresTableCast table_cast = 2;
+    repeated ProtoPostgresColumnCast column_casts = 2;
 }
 
 // NOTE: this message is encoded and stored as part of a source export

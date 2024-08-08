@@ -9,7 +9,7 @@
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorView};
+use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 use mz_storage_types::sources::MzOffset;
 
 pub struct Counter {
@@ -27,7 +27,8 @@ impl Generator for Counter {
         _now: NowFn,
         _seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorView, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>)>
+    {
         let max_cardinality = self.max_cardinality;
 
         Box::new(
@@ -46,7 +47,7 @@ impl Generator for Counter {
                             let retracted_value = i64::try_from(offset - max + 1).unwrap();
                             let row = Row::pack_slice(&[Datum::Int64(retracted_value)]);
                             Some((
-                                LoadGeneratorView::Default,
+                                LoadGeneratorOutput::Default,
                                 Event::Message(MzOffset::from(offset), (row, -1)),
                             ))
                         }
@@ -57,11 +58,11 @@ impl Generator for Counter {
                     let row = Row::pack_slice(&[Datum::Int64(inserted_value)]);
                     let insertion = [
                         (
-                            LoadGeneratorView::Default,
+                            LoadGeneratorOutput::Default,
                             Event::Message(MzOffset::from(offset), (row, 1)),
                         ),
                         (
-                            LoadGeneratorView::Default,
+                            LoadGeneratorOutput::Default,
                             Event::Progress(Some(MzOffset::from(offset + 1))),
                         ),
                     ];

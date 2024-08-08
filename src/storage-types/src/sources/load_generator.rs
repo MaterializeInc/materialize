@@ -12,9 +12,10 @@
 use std::time::Duration;
 
 use mz_ore::now::NowFn;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::UnresolvedItemName;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -150,6 +151,23 @@ pub enum LoadGenerator {
 }
 
 pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
+
+/// Returns the view of a load-generator source given an external reference
+/// from a source-export statement, which is generated during purification
+/// by the `load_generator_ast_to_generator` function such that the
+/// external reference is (LOAD_GENERATOR_DATABASE_NAME, LoadGenerator::schema_name(), view_name)
+pub fn external_reference_to_output(
+    external_reference: &UnresolvedItemName,
+) -> LoadGeneratorOutput {
+    let inner = &external_reference.0;
+    assert_eq!(inner[0].as_str(), LOAD_GENERATOR_DATABASE_NAME);
+    match inner[1].as_str() {
+        "auction" => LoadGeneratorOutput::Auction(AuctionView::from(inner[2].as_str())),
+        "marketing" => LoadGeneratorOutput::Marketing(MarketingView::from(inner[2].as_str())),
+        "tpch" => LoadGeneratorOutput::Tpch(TpchView::from(inner[2].as_str())),
+        _ => LoadGeneratorOutput::Default,
+    }
+}
 
 impl LoadGenerator {
     pub fn schema_name(&self) -> &'static str {
@@ -425,26 +443,35 @@ impl LoadGenerator {
 // such that the source dataflow can output data to the correct
 // data output for a source-export using this view
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
-pub enum LoadGeneratorView {
+pub enum LoadGeneratorOutput {
     // Used for outputting to the primary source output
     Default,
+    Auction(AuctionView),
+    Marketing(MarketingView),
+    Tpch(TpchView),
+}
 
-    // Auction tables
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+pub enum AuctionView {
     Organizations,
     Users,
     Accounts,
     Auctions,
     Bids,
+}
 
-    // Marketing tables
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+pub enum MarketingView {
     Customers,
     Impressions,
     Clicks,
     Leads,
     Coupons,
     ConversionPredictions,
+}
 
-    // Tpch tables
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+pub enum TpchView {
     Supplier,
     Part,
     Partsupp,
@@ -457,93 +484,176 @@ pub enum LoadGeneratorView {
 
 /// Map from the table-names output by the `LoadGenerator::views()` method to the
 /// appropriate LoadGeneratorOutput enum variant
-impl From<&str> for LoadGeneratorView {
+impl From<&str> for AuctionView {
     fn from(s: &str) -> Self {
         match s {
-            "default" => LoadGeneratorView::Default,
-            "organizations" => LoadGeneratorView::Organizations,
-            "users" => LoadGeneratorView::Users,
-            "accounts" => LoadGeneratorView::Accounts,
-            "auctions" => LoadGeneratorView::Auctions,
-            "bids" => LoadGeneratorView::Bids,
-            "customers" => LoadGeneratorView::Customers,
-            "impressions" => LoadGeneratorView::Impressions,
-            "clicks" => LoadGeneratorView::Clicks,
-            "leads" => LoadGeneratorView::Leads,
-            "coupons" => LoadGeneratorView::Coupons,
-            "conversion_predictions" => LoadGeneratorView::ConversionPredictions,
-            "supplier" => LoadGeneratorView::Supplier,
-            "part" => LoadGeneratorView::Part,
-            "partsupp" => LoadGeneratorView::Partsupp,
-            "customer" => LoadGeneratorView::Customer,
-            "orders" => LoadGeneratorView::Orders,
-            "lineitem" => LoadGeneratorView::Lineitem,
-            "nation" => LoadGeneratorView::Nation,
-            "region" => LoadGeneratorView::Region,
+            "organizations" => AuctionView::Organizations,
+            "users" => AuctionView::Users,
+            "accounts" => AuctionView::Accounts,
+            "auctions" => AuctionView::Auctions,
+            "bids" => AuctionView::Bids,
             _ => panic!("unexpected load generator output name: {}", s),
         }
     }
 }
 
-impl RustType<ProtoLoadGeneratorOutput> for LoadGeneratorView {
-    fn into_proto(&self) -> ProtoLoadGeneratorOutput {
+impl From<&str> for MarketingView {
+    fn from(s: &str) -> Self {
+        match s {
+            "customers" => MarketingView::Customers,
+            "impressions" => MarketingView::Impressions,
+            "clicks" => MarketingView::Clicks,
+            "leads" => MarketingView::Leads,
+            "coupons" => MarketingView::Coupons,
+            "conversion_predictions" => MarketingView::ConversionPredictions,
+            _ => panic!("unexpected load generator output name: {}", s),
+        }
+    }
+}
+
+impl From<&str> for TpchView {
+    fn from(s: &str) -> Self {
+        match s {
+            "supplier" => TpchView::Supplier,
+            "part" => TpchView::Part,
+            "partsupp" => TpchView::Partsupp,
+            "customer" => TpchView::Customer,
+            "orders" => TpchView::Orders,
+            "lineitem" => TpchView::Lineitem,
+            "nation" => TpchView::Nation,
+            "region" => TpchView::Region,
+            _ => panic!("unexpected load generator output name: {}", s),
+        }
+    }
+}
+
+impl RustType<ProtoLoadGeneratorAuctionOutput> for AuctionView {
+    fn into_proto(&self) -> ProtoLoadGeneratorAuctionOutput {
         match self {
-            LoadGeneratorView::Default => ProtoLoadGeneratorOutput::Default,
-            LoadGeneratorView::Organizations => ProtoLoadGeneratorOutput::Organizations,
-            LoadGeneratorView::Users => ProtoLoadGeneratorOutput::Users,
-            LoadGeneratorView::Accounts => ProtoLoadGeneratorOutput::Accounts,
-            LoadGeneratorView::Auctions => ProtoLoadGeneratorOutput::Auctions,
-            LoadGeneratorView::Bids => ProtoLoadGeneratorOutput::Bids,
-            LoadGeneratorView::Customers => ProtoLoadGeneratorOutput::Customers,
-            LoadGeneratorView::Impressions => ProtoLoadGeneratorOutput::Impressions,
-            LoadGeneratorView::Clicks => ProtoLoadGeneratorOutput::Clicks,
-            LoadGeneratorView::Leads => ProtoLoadGeneratorOutput::Leads,
-            LoadGeneratorView::Coupons => ProtoLoadGeneratorOutput::Coupons,
-            LoadGeneratorView::ConversionPredictions => {
-                ProtoLoadGeneratorOutput::ConversionPredictions
-            }
-            LoadGeneratorView::Supplier => ProtoLoadGeneratorOutput::Supplier,
-            LoadGeneratorView::Part => ProtoLoadGeneratorOutput::Part,
-            LoadGeneratorView::Partsupp => ProtoLoadGeneratorOutput::Partsupp,
-            LoadGeneratorView::Customer => ProtoLoadGeneratorOutput::Customer,
-            LoadGeneratorView::Orders => ProtoLoadGeneratorOutput::Orders,
-            LoadGeneratorView::Lineitem => ProtoLoadGeneratorOutput::Lineitem,
-            LoadGeneratorView::Nation => ProtoLoadGeneratorOutput::Nation,
-            LoadGeneratorView::Region => ProtoLoadGeneratorOutput::Region,
+            AuctionView::Organizations => ProtoLoadGeneratorAuctionOutput::Organizations,
+            AuctionView::Users => ProtoLoadGeneratorAuctionOutput::Users,
+            AuctionView::Accounts => ProtoLoadGeneratorAuctionOutput::Accounts,
+            AuctionView::Auctions => ProtoLoadGeneratorAuctionOutput::Auctions,
+            AuctionView::Bids => ProtoLoadGeneratorAuctionOutput::Bids,
         }
     }
 
-    fn from_proto(proto: ProtoLoadGeneratorOutput) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoLoadGeneratorAuctionOutput) -> Result<Self, TryFromProtoError> {
         Ok(match proto {
-            ProtoLoadGeneratorOutput::Default => LoadGeneratorView::Default,
-            ProtoLoadGeneratorOutput::Organizations => LoadGeneratorView::Organizations,
-            ProtoLoadGeneratorOutput::Users => LoadGeneratorView::Users,
-            ProtoLoadGeneratorOutput::Accounts => LoadGeneratorView::Accounts,
-            ProtoLoadGeneratorOutput::Auctions => LoadGeneratorView::Auctions,
-            ProtoLoadGeneratorOutput::Bids => LoadGeneratorView::Bids,
-            ProtoLoadGeneratorOutput::Customers => LoadGeneratorView::Customers,
-            ProtoLoadGeneratorOutput::Impressions => LoadGeneratorView::Impressions,
-            ProtoLoadGeneratorOutput::Clicks => LoadGeneratorView::Clicks,
-            ProtoLoadGeneratorOutput::Leads => LoadGeneratorView::Leads,
-            ProtoLoadGeneratorOutput::Coupons => LoadGeneratorView::Coupons,
-            ProtoLoadGeneratorOutput::ConversionPredictions => {
-                LoadGeneratorView::ConversionPredictions
+            ProtoLoadGeneratorAuctionOutput::Organizations => AuctionView::Organizations,
+            ProtoLoadGeneratorAuctionOutput::Users => AuctionView::Users,
+            ProtoLoadGeneratorAuctionOutput::Accounts => AuctionView::Accounts,
+            ProtoLoadGeneratorAuctionOutput::Auctions => AuctionView::Auctions,
+            ProtoLoadGeneratorAuctionOutput::Bids => AuctionView::Bids,
+        })
+    }
+}
+
+impl RustType<ProtoLoadGeneratorMarketingOutput> for MarketingView {
+    fn into_proto(&self) -> ProtoLoadGeneratorMarketingOutput {
+        match self {
+            MarketingView::Customers => ProtoLoadGeneratorMarketingOutput::Customers,
+            MarketingView::Impressions => ProtoLoadGeneratorMarketingOutput::Impressions,
+            MarketingView::Clicks => ProtoLoadGeneratorMarketingOutput::Clicks,
+            MarketingView::Leads => ProtoLoadGeneratorMarketingOutput::Leads,
+            MarketingView::Coupons => ProtoLoadGeneratorMarketingOutput::Coupons,
+            MarketingView::ConversionPredictions => {
+                ProtoLoadGeneratorMarketingOutput::ConversionPredictions
             }
-            ProtoLoadGeneratorOutput::Supplier => LoadGeneratorView::Supplier,
-            ProtoLoadGeneratorOutput::Part => LoadGeneratorView::Part,
-            ProtoLoadGeneratorOutput::Partsupp => LoadGeneratorView::Partsupp,
-            ProtoLoadGeneratorOutput::Customer => LoadGeneratorView::Customer,
-            ProtoLoadGeneratorOutput::Orders => LoadGeneratorView::Orders,
-            ProtoLoadGeneratorOutput::Lineitem => LoadGeneratorView::Lineitem,
-            ProtoLoadGeneratorOutput::Nation => LoadGeneratorView::Nation,
-            ProtoLoadGeneratorOutput::Region => LoadGeneratorView::Region,
+        }
+    }
+
+    fn from_proto(proto: ProtoLoadGeneratorMarketingOutput) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            ProtoLoadGeneratorMarketingOutput::Customers => MarketingView::Customers,
+            ProtoLoadGeneratorMarketingOutput::Impressions => MarketingView::Impressions,
+            ProtoLoadGeneratorMarketingOutput::Clicks => MarketingView::Clicks,
+            ProtoLoadGeneratorMarketingOutput::Leads => MarketingView::Leads,
+            ProtoLoadGeneratorMarketingOutput::Coupons => MarketingView::Coupons,
+            ProtoLoadGeneratorMarketingOutput::ConversionPredictions => {
+                MarketingView::ConversionPredictions
+            }
+        })
+    }
+}
+
+impl RustType<ProtoLoadGeneratorTpchOutput> for TpchView {
+    fn into_proto(&self) -> ProtoLoadGeneratorTpchOutput {
+        match self {
+            TpchView::Supplier => ProtoLoadGeneratorTpchOutput::Supplier,
+            TpchView::Part => ProtoLoadGeneratorTpchOutput::Part,
+            TpchView::Partsupp => ProtoLoadGeneratorTpchOutput::Partsupp,
+            TpchView::Customer => ProtoLoadGeneratorTpchOutput::Customer,
+            TpchView::Orders => ProtoLoadGeneratorTpchOutput::Orders,
+            TpchView::Lineitem => ProtoLoadGeneratorTpchOutput::Lineitem,
+            TpchView::Nation => ProtoLoadGeneratorTpchOutput::Nation,
+            TpchView::Region => ProtoLoadGeneratorTpchOutput::Region,
+        }
+    }
+
+    fn from_proto(proto: ProtoLoadGeneratorTpchOutput) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            ProtoLoadGeneratorTpchOutput::Supplier => TpchView::Supplier,
+            ProtoLoadGeneratorTpchOutput::Part => TpchView::Part,
+            ProtoLoadGeneratorTpchOutput::Partsupp => TpchView::Partsupp,
+            ProtoLoadGeneratorTpchOutput::Customer => TpchView::Customer,
+            ProtoLoadGeneratorTpchOutput::Orders => TpchView::Orders,
+            ProtoLoadGeneratorTpchOutput::Lineitem => TpchView::Lineitem,
+            ProtoLoadGeneratorTpchOutput::Nation => TpchView::Nation,
+            ProtoLoadGeneratorTpchOutput::Region => TpchView::Region,
+        })
+    }
+}
+
+impl RustType<ProtoLoadGeneratorOutput> for LoadGeneratorOutput {
+    fn into_proto(&self) -> ProtoLoadGeneratorOutput {
+        use proto_load_generator_output::Kind;
+        let kind = match self {
+            LoadGeneratorOutput::Default => Kind::Default(()),
+            LoadGeneratorOutput::Auction(view) => Kind::Auction(view.into_proto().into()),
+            LoadGeneratorOutput::Marketing(view) => Kind::Marketing(view.into_proto().into()),
+            LoadGeneratorOutput::Tpch(view) => Kind::Tpch(view.into_proto().into()),
+        };
+        ProtoLoadGeneratorOutput { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoLoadGeneratorOutput) -> Result<Self, TryFromProtoError> {
+        use proto_load_generator_output::Kind;
+        Ok(match proto.kind {
+            Some(Kind::Default(())) => LoadGeneratorOutput::Default,
+            Some(Kind::Auction(view)) => LoadGeneratorOutput::Auction(
+                ProtoLoadGeneratorAuctionOutput::try_from(view)
+                    .map_err(|_| {
+                        TryFromProtoError::unknown_enum_variant("ProtoLoadGeneratorAuctionOutput")
+                    })?
+                    .into_rust()?,
+            ),
+            Some(Kind::Marketing(view)) => LoadGeneratorOutput::Marketing(
+                ProtoLoadGeneratorMarketingOutput::try_from(view)
+                    .map_err(|_| {
+                        TryFromProtoError::unknown_enum_variant("ProtoLoadGeneratorMarketingOutput")
+                    })?
+                    .into_rust()?,
+            ),
+            Some(Kind::Tpch(view)) => LoadGeneratorOutput::Tpch(
+                ProtoLoadGeneratorTpchOutput::try_from(view)
+                    .map_err(|_| {
+                        TryFromProtoError::unknown_enum_variant("ProtoLoadGeneratorTpchOutput")
+                    })?
+                    .into_rust()?,
+            ),
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoLoadGeneratorOutput::kind",
+                ))
+            }
         })
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct LoadGeneratorSourceExportDetails {
-    pub output: LoadGeneratorView,
+    pub output: LoadGeneratorOutput,
 }
 
 impl RustType<ProtoLoadGeneratorSourceExportDetails> for LoadGeneratorSourceExportDetails {
@@ -555,16 +665,17 @@ impl RustType<ProtoLoadGeneratorSourceExportDetails> for LoadGeneratorSourceExpo
 
     fn from_proto(proto: ProtoLoadGeneratorSourceExportDetails) -> Result<Self, TryFromProtoError> {
         Ok(LoadGeneratorSourceExportDetails {
-            output: ProtoLoadGeneratorOutput::try_from(proto.output)
-                .map_err(|_| TryFromProtoError::unknown_enum_variant("ProtoLoadGeneratorOutput"))?
-                .into_rust()?,
+            output: proto
+                .output
+                .into_rust_if_some("ProtoLoadGeneratorSourceExportDetails::output")?,
         })
     }
 }
 
 impl AlterCompatible for LoadGeneratorSourceExportDetails {
     fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
-        if self.output != other.output {
+        let Self { output } = self;
+        if output != &other.output {
             tracing::warn!(
                 "LoadGeneratorSourceExportDetails incompatible at output:\nself:\n{:#?}\n\nother\n{:#?}",
                 self,
@@ -583,7 +694,7 @@ pub trait Generator {
         now: NowFn,
         seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<dyn Iterator<Item = (LoadGeneratorView, Event<Option<MzOffset>, (Row, i64)>)>>;
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, i64)>)>>;
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {

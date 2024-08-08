@@ -476,7 +476,7 @@ pub(super) async fn purify_source_exports(
     })
 }
 
-pub(crate) fn generate_table_cast(
+pub(crate) fn generate_column_casts(
     scx: &StatementContext,
     table: &PostgresTableDesc,
     text_columns: &Vec<Ident>,
