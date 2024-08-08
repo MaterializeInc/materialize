@@ -23,7 +23,6 @@ use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
-use mz_dyncfg::ConfigSet;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
@@ -106,7 +105,6 @@ pub struct Client {
     metrics: Metrics,
     environment_id: EnvironmentId,
     segment_client: Option<mz_segment::Client>,
-    configs: ConfigSet,
 }
 
 impl Client {
@@ -117,7 +115,6 @@ impl Client {
         now: NowFn,
         environment_id: EnvironmentId,
         segment_client: Option<mz_segment::Client>,
-        configs: ConfigSet,
     ) -> Client {
         // Connection ids are 32 bits and have 3 parts.
         // 1. MSB bit is always 0 because these are interpreted as an i32, and it is possible some
@@ -135,7 +132,6 @@ impl Client {
             metrics,
             environment_id,
             segment_client,
-            configs,
         }
     }
 
@@ -393,11 +389,6 @@ Issue a SQL query to get started. Need help?
     /// The current time according to the [`Client`].
     pub fn now(&self) -> DateTime<Utc> {
         to_datetime((self.now)())
-    }
-
-    /// Returns the dynamic configurations associated with the adapter layer.
-    pub fn configs(&self) -> &ConfigSet {
-        &self.configs
     }
 
     /// Get a metadata and a channel that can be used to append to a webhook source.

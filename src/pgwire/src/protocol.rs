@@ -26,10 +26,10 @@ use mz_adapter::{
     verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
     PeekResponseUnary, RowsFuture,
 };
-use mz_adapter_types::dyncfgs::LOG_PGWIRE_CONNECTION_STATUS;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
+use mz_ore::option::OptionExt;
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
@@ -51,7 +51,7 @@ use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, debug_span, info, warn, Instrument};
+use tracing::{debug, debug_span, warn, Instrument};
 
 use crate::codec::FramedConn;
 use crate::message::{self, BackendMessage};
@@ -133,7 +133,6 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
     let conn_uuid = params.remove(CONN_UUID_KEY);
-    let log_connection_status = LOG_PGWIRE_CONNECTION_STATUS.get(adapter_client.configs());
 
     if internal {
         // The internal server can only be used to connect to the internal users.
@@ -288,7 +287,7 @@ where
         txn_needs_commit: false,
     };
 
-        debug!(conn_uuid = %conn_uuid.display_or("<none>"), "starting new pgwire connection in adapter");
+    debug!(conn_uuid = %conn_uuid.display_or("<none>"), "starting new pgwire connection in adapter");
 
     select! {
         r = machine.run() => {
