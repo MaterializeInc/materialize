@@ -1864,6 +1864,43 @@ pub struct ClusterOption<T: AstInfo> {
 impl_display_for_with_option!(ClusterOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClusterAlterUntilCaughtUpOptionName {
+    /// The `Wait` option.
+    Timeout,
+    OnTimeout,
+}
+
+impl AstDisplay for ClusterAlterUntilCaughtUpOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Timeout => f.write_str("TIMEOUT"),
+            Self::OnTimeout => f.write_str("ON TIMEOUT"),
+        }
+    }
+}
+
+impl WithOptionName for ClusterAlterUntilCaughtUpOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterAlterUntilCaughtUpOptionName::Timeout
+            | ClusterAlterUntilCaughtUpOptionName::OnTimeout => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ClusterAlterUntilCaughtUpOption<T: AstInfo> {
+    pub name: ClusterAlterUntilCaughtUpOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(ClusterAlterUntilCaughtUpOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClusterAlterOptionName {
     /// The `Wait` option.
     Wait,
@@ -1872,7 +1909,7 @@ pub enum ClusterAlterOptionName {
 impl AstDisplay for ClusterAlterOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterAlterOptionName::Wait => f.write_str("WAIT"),
+            Self::Wait => f.write_str("WAIT"),
         }
     }
 }
@@ -1891,16 +1928,22 @@ impl WithOptionName for ClusterAlterOptionName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ClusterAlterOptionValue {
+pub enum ClusterAlterOptionValue<T: AstInfo> {
     For(Value),
+    UntilCaughtUp(Vec<ClusterAlterUntilCaughtUpOption<T>>),
 }
 
-impl AstDisplay for ClusterAlterOptionValue {
+impl<T: AstInfo> AstDisplay for ClusterAlterOptionValue<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             ClusterAlterOptionValue::For(duration) => {
                 f.write_str("FOR ");
                 f.write_node(duration);
+            }
+            ClusterAlterOptionValue::UntilCaughtUp(options) => {
+                f.write_str("UNTIL CAUGHT UP (");
+                f.write_node(&display::comma_separated(options));
+                f.write_str(")");
             }
         }
     }
@@ -3721,7 +3764,7 @@ pub enum WithOptionValue<T: AstInfo> {
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
-    ClusterAlterStrategy(ClusterAlterOptionValue),
+    ClusterAlterStrategy(ClusterAlterOptionValue<T>),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {

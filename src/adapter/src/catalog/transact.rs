@@ -167,6 +167,11 @@ pub enum Op {
         name: String,
         config: ClusterConfig,
     },
+    UpdateClusterReplicaConfig {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        config: ReplicaConfig,
+    },
     UpdateItem {
         id: GlobalId,
         name: QualifiedItemName,
@@ -1911,6 +1916,24 @@ impl Catalog {
                         id: id.to_string(),
                         name,
                     }),
+                )?;
+            }
+            Op::UpdateClusterReplicaConfig {
+                replica_id,
+                cluster_id,
+                config,
+            } => {
+                let replica = state.get_cluster_replica(cluster_id, replica_id).to_owned();
+                info!("update replica {}", replica.name);
+                tx.update_cluster_replica(
+                    replica_id,
+                    mz_catalog::durable::ClusterReplica {
+                        cluster_id: cluster_id.into(),
+                        replica_id,
+                        name: replica.name.clone(),
+                        config: config.clone().into(),
+                        owner_id: replica.owner_id,
+                    },
                 )?;
             }
             Op::UpdateItem { id, name, to_item } => {

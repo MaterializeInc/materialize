@@ -1819,6 +1819,14 @@ ALTER CLUSTER cluster SET (SIZE = '1') WITH (WAIT = FOR '1s')
 =>
 AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }], with_options: [ClusterAlterOption { name: Wait, value: Some(ClusterAlterStrategy(For(String("1s")))) }] } })
 
+
+parse-statement
+ALTER CLUSTER cluster SET (SIZE '1') WITH ( WAIT UNTIL CAUGHT UP ( TIMEOUT '1s', ON TIMEOUT = 'CONTINUE' ) )
+----
+ALTER CLUSTER cluster SET (SIZE = '1') WITH (WAIT = UNTIL CAUGHT UP (TIMEOUT = '1s', ON TIMEOUT = 'CONTINUE'))
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }], with_options: [ClusterAlterOption { name: Wait, value: Some(ClusterAlterStrategy(UntilCaughtUp([ClusterAlterUntilCaughtUpOption { name: Timeout, value: Some(Value(String("1s"))) }, ClusterAlterUntilCaughtUpOption { name: OnTimeout, value: Some(Value(String("CONTINUE"))) }]))) }] } })
+
 parse-statement
 ALTER CLUSTER IF EXISTS cluster SET (MANAGED)
 ----

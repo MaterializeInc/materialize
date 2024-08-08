@@ -237,6 +237,15 @@ The `mz_internal_cluster_replicas` table lists the replicas that are created and
 |------------|----------|-------------------------------------------------------------------------------------------------------------|
 | id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
 
+## `mz_unstable_cluster_replicas`
+
+The `mz_unstable_cluster_replicas` table lists the replicas that were created during managed cluster alter statement that has not yet finished. The configurations of these replica may differ from the cluster's configuration.
+
+<!-- RELATION_SPEC mz_internal.mz_unstable_cluster_replicas -->
+| Field      | Type     | Meaning                                                                                                     |
+|------------|----------|-------------------------------------------------------------------------------------------------------------|
+| id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
+
 ## `mz_comments`
 
 The `mz_comments` table stores optional comments (descriptions) for objects in the database.

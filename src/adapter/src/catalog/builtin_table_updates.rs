@@ -26,8 +26,8 @@ use mz_catalog::builtin::{
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_POSTGRES_SOURCE_TABLES,
     MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS,
     MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA,
+    MZ_UNSTABLE_CLUSTER_REPLICAS, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -359,7 +359,7 @@ impl CatalogState {
         let id = cluster.replica_id(name).expect("Must exist");
         let replica = cluster.replica(id).expect("Must exist");
 
-        let (size, disk, az, internal) = match &replica.config.location {
+        let (size, disk, az, internal, pending) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
             // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -369,8 +369,14 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
-                pending: _,
-            }) => (Some(&**size), Some(*disk), Some(az.as_str()), *internal),
+                pending,
+            }) => (
+                Some(&**size),
+                Some(*disk),
+                Some(az.as_str()),
+                *internal,
+                *pending,
+            ),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zones: _,
@@ -378,9 +384,9 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
-                pending: _,
-            }) => (Some(&**size), Some(*disk), None, *internal),
-            _ => (None, None, None, false),
+                pending,
+            }) => (Some(&**size), Some(*disk), None, *internal, *pending),
+            _ => (None, None, None, false, false),
         };
 
         let cluster_replica_update = BuiltinTableUpdate {
@@ -402,6 +408,15 @@ impl CatalogState {
         if internal {
             let update = BuiltinTableUpdate {
                 id: &*MZ_INTERNAL_CLUSTER_REPLICAS,
+                row: Row::pack_slice(&[Datum::String(&id.to_string())]),
+                diff,
+            };
+            updates.push(update);
+        }
+
+        if pending {
+            let update = BuiltinTableUpdate {
+                id: &*MZ_UNSTABLE_CLUSTER_REPLICAS,
                 row: Row::pack_slice(&[Datum::String(&id.to_string())]),
                 diff,
             };

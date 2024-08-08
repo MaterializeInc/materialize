@@ -597,6 +597,10 @@ mz_type_pg_metadata
 BASE TABLE
 materialize
 mz_internal
+mz_unstable_cluster_replicas
+BASE TABLE
+materialize
+mz_internal
 mz_webhook_sources
 BASE TABLE
 materialize

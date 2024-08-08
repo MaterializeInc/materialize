@@ -22,7 +22,7 @@ import psycopg
 import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
-from pg8000.exceptions import DatabaseError
+from pg8000.exceptions import DatabaseError, InterfaceError
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -120,7 +120,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         );
 
         GRANT ALL ON CLUSTER cluster1 TO materialize;
-    """,
+        """,
         port=6877,
         user="mz_system",
     )
@@ -4442,4 +4442,138 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                 true
                 """
             )
+        )
+
+
+def workflow_test_graceful_reconfigure(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests gracefully reconfiguring a managed cluster
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd1")
+        c.sql(
+            """
+            ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+
+            DROP CLUSTER IF EXISTS cluster1 CASCADE;
+            DROP TABLE IF EXISTS t CASCADE;
+
+            CREATE CLUSTER cluster1 ( SIZE = '1');
+
+            SET CLUSTER = cluster1;
+
+            -- now let's give it another go with user-defined objects
+            CREATE TABLE t (a int);
+            CREATE DEFAULT INDEX ON t;
+            INSERT INTO t VALUES (42);
+            GRANT ALL ON CLUSTER cluster1 TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        replicas = c.sql_query(
+            """
+            SELECT mz_cluster_replicas.name
+            FROM mz_cluster_replicas, mz_clusters WHERE
+            mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
+            """
+        )
+        assert replicas == (
+            ["r1"],
+        ), f"Cluster should only have one replica prior to alter, found {replicas}"
+
+        replicas = c.sql_query(
+            """
+            SELECT cr.name
+            FROM mz_internal.mz_unstable_cluster_replicas ur
+            INNER join mz_cluster_replicas cr ON cr.id=ur.id
+            INNER join mz_clusters c ON c.id=cr.cluster_id
+            WHERE c.name = 'cluster1';
+            """
+        )
+        assert (
+            len(replicas) == 0
+        ), f"Cluster should only have no pending replica prior to alter, found {replicas}"
+
+        def gracefully_alter():
+            try:
+                c.sql(
+                    """
+                    ALTER CLUSTER cluster1 SET (SIZE = '2') WITH ( WAIT FOR '10s')
+                    """,
+                    port=6877,
+                    user="mz_system",
+                )
+            except InterfaceError:
+                # We expect the network to drop during this
+                pass
+
+        # Run a reconfigure
+        thread = Thread(target=gracefully_alter)
+        thread.start()
+        time.sleep(3)
+
+        # Validate that there is a pending replica
+        assert (
+            c.sql_query(
+                """
+            SELECT mz_cluster_replicas.name
+            FROM mz_cluster_replicas, mz_clusters WHERE
+            mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
+            """
+            )
+            == (["r1"], ["r1-pending"])
+        )
+        replicas = c.sql_query(
+            """
+            SELECT cr.name
+            FROM mz_internal.mz_unstable_cluster_replicas ur
+            INNER join mz_cluster_replicas cr ON cr.id=ur.id
+            INNER join mz_clusters c ON c.id=cr.cluster_id
+            WHERE c.name = 'cluster1';
+            """
+        )
+        assert (
+            len(replicas) == 1
+        ), "pending replica should be in mz_unstable_cluster_replicas"
+
+        # Restart environmentd
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Ensure there is no pending replica
+        replicas = c.sql_query(
+            """
+            SELECT mz_cluster_replicas.name
+            FROM mz_cluster_replicas, mz_clusters
+            WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
+            AND mz_clusters.name='cluster1';
+            """
+        )
+        assert replicas == (
+            ["r1"],
+        ), f"Expected one non pending replica, found {replicas}"
+
+        # Ensure the cluster config did not change
+        assert (
+            c.sql_query(
+                """
+            SELECT size FROM mz_clusters WHERE name='cluster1';
+            """
+            )
+            == (["1"],)
+        )
+        c.sql(
+            """
+            ALTER SYSTEM RESET enable_graceful_cluster_reconfiguration;
+            """,
+            port=6877,
+            user="mz_system",
         )

@@ -97,7 +97,8 @@ use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Source,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
+    DataSourceDesc, Source,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::InstanceMissing;
@@ -128,7 +129,7 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, OnTimeoutAction, Params, QueryWhen};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
@@ -649,12 +650,30 @@ pub struct ExplainTimestampFinish {
 #[derive(Debug)]
 pub enum ClusterStage {
     Alter(AlterCluster),
+    WaitForHydrated(AlterClusterWaitForHydrated),
+    Finalize(AlterClusterFinalize),
 }
 
 #[derive(Debug)]
 pub struct AlterCluster {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterWaitForHydrated {
+    validity: PlanValidity,
+    plan: plan::AlterClusterPlan,
+    new_config: ClusterVariantManaged,
+    timeout_time: Instant,
+    on_timeout: OnTimeoutAction,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterFinalize {
+    validity: PlanValidity,
+    plan: plan::AlterClusterPlan,
+    new_config: ClusterVariantManaged,
 }
 
 #[derive(Debug)]
@@ -1007,6 +1026,10 @@ pub struct ConnMeta {
     /// Lock for the Coordinator's deferred statements that is dropped on transaction clear.
     #[serde(skip)]
     deferred_lock: Option<OwnedMutexGuard<()>>,
+
+    /// Cluster reconfigurations that will need to be
+    /// cleaned up when the current transaction is cleared
+    pending_cluster_alters: BTreeSet<ClusterId>,
 
     /// Channel on which to send notices to a session.
     #[serde(skip)]

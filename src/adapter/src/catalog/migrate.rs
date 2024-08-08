@@ -571,6 +571,9 @@ pub(crate) fn durable_migrate(
     catalog_add_new_unstable_schemas_v_0_106_0(tx)?;
     catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx);
     catalog_remove_txn_wal_toggle_v_0_109_0(tx)?;
+
+    // Permanent migrations. These are always applied regardless of version and are intended to remain here indefinitely.
+    catalog_remove_pending_replicas(tx)?;
     Ok(())
 }
 
@@ -646,5 +649,19 @@ fn catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx: &mut Trans
 fn catalog_remove_txn_wal_toggle_v_0_109_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
     tx.set_config("persist_txn_tables".to_string(), None)?;
     tx.remove_system_config("persist_txn_tables");
+    Ok(())
+}
+
+/// This migration will purge pending replicas from the catalog. These replicas
+/// were part of an uncompleted cluster reconfiguration and will be cleaned up
+/// by `remove_orphaned_replicas`.
+fn catalog_remove_pending_replicas(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    for replica in tx.get_cluster_replicas() {
+        if let mz_catalog::durable::ReplicaLocation::Managed { pending: true, .. } =
+            replica.config.location
+        {
+            tx.remove_cluster_replica(replica.replica_id)?;
+        }
+    }
     Ok(())
 }
