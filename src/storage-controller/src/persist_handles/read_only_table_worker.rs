@@ -129,6 +129,9 @@ where
         match command {
             PersistTableWriteCmd::Register(_register_ts, ids_handles, tx) => {
                 for (id, write_handle) in ids_handles {
+                    // As of today, we can only migrate builtin (system) tables.
+                    assert!(id.is_system(), "trying to register non-system id {id}");
+
                     let previous = write_handles.insert(id, write_handle);
                     if previous.is_some() {
                         panic!("already registered a WriteHandle for collection {:?}", id);
@@ -249,6 +252,10 @@ async fn advance_uppers<T>(
     let mut all_updates = BTreeMap::default();
 
     for (id, write_handle) in write_handles.iter_mut() {
+        // As of today, we can only migrate builtin (system) tables, and so only
+        // expect to register those in this read-only table worker.
+        assert!(id.is_system(), "trying to register non-system id {id}");
+
         // This business of continually advancing the upper is expensive, but
         // we're a) only doing it when in read-only mode, and b) only doing it
         // for each migrated builtin table, of which there usually aren't many.
