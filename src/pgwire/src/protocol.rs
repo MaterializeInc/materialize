@@ -288,11 +288,7 @@ where
         txn_needs_commit: false,
     };
 
-    if let Some(conn_uuid) = conn_uuid {
-        if log_connection_status {
-            info!(%conn_uuid, "starting new pgwire connection in adapter");
-        }
-    }
+        debug!(conn_uuid = %conn_uuid.display_or("<none>"), "starting new pgwire connection in adapter");
 
     select! {
         r = machine.run() => {
