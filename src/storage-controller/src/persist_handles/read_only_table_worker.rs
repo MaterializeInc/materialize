@@ -11,6 +11,7 @@
 //! that the storage controller needs to hold.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ops::ControlFlow;
 
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
@@ -68,7 +69,7 @@ pub(crate) async fn read_only_mode_table_worker<
         txns_upper_future.boxed()
     };
 
-    loop {
+    let shutdown_reason = loop {
         tokio::select! {
             (handle, upper) = &mut txns_upper_future => {
                 tracing::debug!("new upper from txns shard: {:?}, advancing upper of migrated builtin tables", upper);
@@ -79,8 +80,7 @@ pub(crate) async fn read_only_mode_table_worker<
             }
             cmd = rx.recv() => {
                 let Some(cmd) = cmd else {
-                    tracing::trace!("shutting down read-only table worker because command rx closed");
-                    break;
+                    break "command rx closed".to_string();
                 };
 
                 // Peel off all available commands.
@@ -93,24 +93,29 @@ pub(crate) async fn read_only_mode_table_worker<
                     commands.push_back(cmd);
                 }
 
-                let shutdown = handle_commands(&mut write_handles, commands).await;
+                let result = handle_commands(&mut write_handles, commands).await;
 
-                if shutdown {
-                    tracing::trace!("shutting down read-only table worker because we received a shutdown command");
-                    break;
+                match result {
+                    ControlFlow::Continue(_) => {
+                        continue;
+                    }
+                    ControlFlow::Break(msg) => {
+                        break msg;
+                    }
                 }
 
             }
         }
-    }
+    };
 
-    tracing::info!("PersistTableWriteWorker shutting down");
+    tracing::info!(%shutdown_reason, "PersistTableWriteWorker shutting down");
 }
 
+/// Handles the given commands.
 async fn handle_commands<T>(
     write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
     mut commands: VecDeque<(Span, PersistTableWriteCmd<T>)>,
-) -> bool
+) -> ControlFlow<String>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
@@ -226,7 +231,11 @@ where
         let _ = response.send(result);
     }
 
-    shutdown
+    if shutdown {
+        ControlFlow::Break("received a shutdown command".to_string())
+    } else {
+        ControlFlow::Continue(())
+    }
 }
 
 /// Advances the upper of all registered tables (which are only the migrated
