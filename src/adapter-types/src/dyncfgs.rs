@@ -38,6 +38,18 @@ pub const WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL: Config<Duration> = Confi
     "Interval at which to check cluster hydration status, when doing zero-downtime deployment.",
 );
 
+pub const ENABLE_0DT_CAUGHT_UP_CHECK: Config<bool> = Config::new(
+    "enable_0dt_caught_up_check",
+    true,
+    "Whether to determine rehydration using a more complicated method that compares collection write frontiers against an allowed lag behind wall-clock time.",
+);
+
+pub const WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG: Config<Duration> = Config::new(
+    "with_0dt_caught_up_check_allowed_lag",
+    Duration::from_secs(60),
+    "Maximum allowed lag when determining whether collections are caught up for 0dt deployments.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -79,6 +91,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL)
+        .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
+        .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)

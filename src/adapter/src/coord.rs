@@ -68,7 +68,10 @@
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
+    WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
+};
 use mz_ore::channel::trigger;
 use mz_sql::names::ResolvedIds;
 use mz_sql::session::user::User;
@@ -93,7 +96,7 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC};
+use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_CLUSTER_REPLICA_FRONTIERS};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
@@ -3047,15 +3050,11 @@ impl Coordinator {
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     _ = self.check_clusters_hydrated_interval.tick() => {
-                        if self.clusters_hydrated_trigger.is_some() {
-                            let compute_hydrated = self.controller.compute.clusters_hydrated();
-                            tracing::info!(%compute_hydrated, "checked hydration status of clusters");
-
-                            if compute_hydrated {
-                                let trigger = self.clusters_hydrated_trigger.take().expect("known to exist");
-                                trigger.fire();
-                            }
-                        }
+                        // We do this directly on the main loop instead of
+                        // firing off a message. We are still in read-only mode,
+                        // so optimizing for latency, not blocking the main loop
+                        // is not that important.
+                        self.maybe_check_hydration_status().await;
 
                         continue;
                     },
@@ -3359,6 +3358,119 @@ impl Coordinator {
             ("controller".to_string(), self.controller.dump()?),
         ]);
         Ok(serde_json::Value::Object(map))
+    }
+
+    /// Checks that all clusters/collections are hydrated. If so, this will
+    /// trigger `self.clusters_hydrated_trigger`.
+    ///
+    /// This method is a no-op when the trigger has already been fired.
+    async fn maybe_check_hydration_status(&mut self) {
+        if self.clusters_hydrated_trigger.is_some() {
+            let enable_caught_up_check =
+                ENABLE_0DT_CAUGHT_UP_CHECK.get(self.catalog().system_config().dyncfgs());
+
+            if enable_caught_up_check {
+                let replica_frontier_collection_id = self
+                    .catalog()
+                    .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
+
+                let live_frontiers = self
+                    .controller
+                    .storage
+                    .snapshot_latest(replica_frontier_collection_id)
+                    .await
+                    .expect("can't read mz_cluster_replica_frontiers");
+
+                let live_frontiers = live_frontiers
+                    .into_iter()
+                    .map(|row| {
+                        let mut iter = row.into_iter();
+
+                        let id: GlobalId = iter
+                            .next()
+                            .expect("missing object id")
+                            .unwrap_str()
+                            .parse()
+                            .expect("cannot parse id");
+                        let replica_id = iter
+                            .next()
+                            .expect("missing replica id")
+                            .unwrap_str()
+                            .to_string();
+                        let maybe_upper_ts = iter.next().expect("missing upper_ts");
+                        // The timestamp has a total order, so there can be at
+                        // most one entry in the upper frontier, which is this
+                        // timestamp here. And NULL encodes the empty upper
+                        // frontier.
+                        let upper_frontier = if maybe_upper_ts.is_null() {
+                            Antichain::new()
+                        } else {
+                            let upper_ts = maybe_upper_ts.unwrap_mz_timestamp();
+                            Antichain::from_elem(upper_ts)
+                        };
+
+                        (id, replica_id, upper_frontier)
+                    })
+                    .collect_vec();
+
+                // We care about each collection being hydrated on _some_
+                // replica. We don't check that at least one replica has all
+                // collections of that cluster hydrated.
+                let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
+                    .into_iter()
+                    .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
+                    .into_grouping_map()
+                    .fold(
+                        Antichain::from_elem(Timestamp::minimum()),
+                        |mut acc, _key, upper| {
+                            acc.join_assign(&upper);
+                            acc
+                        },
+                    )
+                    .into_iter()
+                    .collect();
+
+                tracing::debug!(?live_collection_frontiers, "checking re-hydration status");
+
+                let allowed_lag = WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG
+                    .get(self.catalog().system_config().dyncfgs());
+                let allowed_lag: u64 = allowed_lag
+                    .as_millis()
+                    .try_into()
+                    .expect("must fit into u64");
+
+                let compute_caught_up = self
+                    .controller
+                    .compute
+                    .clusters_caught_up(allowed_lag.into(), &live_collection_frontiers);
+
+                // We also check that we're "hydrated", meaning all collections
+                // have reported an upper at _some_ frontier. This acts as a
+                // back-stop to the case where `mz_cluster_replica_frontiers` is
+                // migrated and we report `0` for a collection frontier.
+                let compute_hydrated = self.controller.compute.clusters_hydrated();
+                tracing::info!(%compute_caught_up, %compute_hydrated, "checked caught-up status of collections");
+
+                if compute_caught_up && compute_hydrated {
+                    let trigger = self
+                        .clusters_hydrated_trigger
+                        .take()
+                        .expect("known to exist");
+                    trigger.fire();
+                }
+            } else {
+                let compute_hydrated = self.controller.compute.clusters_hydrated();
+                tracing::info!(%compute_hydrated, "checked hydration status of clusters");
+
+                if compute_hydrated {
+                    let trigger = self
+                        .clusters_hydrated_trigger
+                        .take()
+                        .expect("known to exist");
+                    trigger.fire();
+                }
+            }
+        }
     }
 }
 
