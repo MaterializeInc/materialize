@@ -572,7 +572,7 @@ impl PgwireBalancer {
         }
 
         if LOG_PGWIRE_CONNECTION_STATUS.get(&configs) {
-            info!(%conn.uuid, "starting new pgwire connection in balancer");
+            debug!(conn_uuid = %conn.uuid, "starting new pgwire connection in balancer");
         }
         let prev = params.insert(CONN_UUID_KEY.to_string(), conn.uuid.to_string());
         assert_none!(prev);
