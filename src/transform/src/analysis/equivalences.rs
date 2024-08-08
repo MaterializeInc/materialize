@@ -57,11 +57,23 @@ impl Analysis for Equivalences {
                     let len = row.iter().count();
                     let mut common = Vec::with_capacity(len);
                     common.extend(row.iter().map(Some));
+                    // Prep initial nullability information.
+                    let mut nullable_cols = common
+                        .iter()
+                        .map(|datum| datum == &Some(Datum::Null))
+                        .collect::<Vec<_>>();
 
                     for (row, _cnt) in rows.iter() {
-                        for (datum, common) in row.iter().zip(common.iter_mut()) {
+                        for ((datum, common), nullable) in row
+                            .iter()
+                            .zip(common.iter_mut())
+                            .zip(nullable_cols.iter_mut())
+                        {
                             if Some(datum) != *common {
                                 *common = None;
+                            }
+                            if datum == Datum::Null {
+                                *nullable = true;
                             }
                         }
                     }
@@ -75,6 +87,16 @@ impl Analysis for Equivalences {
                                 ),
                             ]);
                         }
+                    }
+                    // If any columns are non-null, introduce this fact.
+                    if nullable_cols.iter().any(|x| !*x) {
+                        let mut class = vec![MirScalarExpr::literal_false()];
+                        for (index, nullable) in nullable_cols.iter().enumerate() {
+                            if !*nullable {
+                                class.push(MirScalarExpr::column(index).call_is_null());
+                            }
+                        }
+                        equivalences.classes.push(class);
                     }
                 }
                 Some(equivalences)
