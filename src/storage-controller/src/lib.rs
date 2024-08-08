@@ -847,10 +847,7 @@ where
         if !table_registers.is_empty() {
             let register_ts = register_ts
                 .expect("caller should have provided a register_ts when creating a table");
-            // This register call advances the logical upper of the table. The
-            // register call eventually circles that info back to the
-            // controller, but some tests fail if we don't synchronously update
-            // it in create_collections, so just do that now.
+
             self.persist_table_worker
                 .register(register_ts, table_registers)
                 .await
