@@ -70,20 +70,23 @@
 toCSS | fingerprint }}
 <link rel="stylesheet" href="{{ $style.RelPermalink }}" />
 
-{{/* Algolia DocSearch */}} {{if (isset .Params "pagerank")}}
-<meta name="docsearch_pagerank" content="{{ .Params.pagerank }}" />
-{{end}}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@docsearch/css@3" />
-<script src="https://cdn.jsdelivr.net/npm/@docsearch/js@3"></script>
-<script defer>
-  addEventListener("DOMContentLoaded", () => {
-    docsearch({
-      apiKey: "c52bbb10b43c177106333976cfe07e11",
-      appId: "9LF5B9GMOF",
-      indexName: "materialize",
-      container: "#docsearch",
-    });
-  });
+{{/* Kapa.ai */}}
+<script
+  async
+  src="https://widget.kapa.ai/kapa-widget.bundle.js"
+  data-website-id="c9f86179-22af-46ef-8196-289a621ef96c"
+  data-project-name="Materialize"
+  data-project-color="#472E85"
+  data-project-logo="https://avatars.githubusercontent.com/u/47674186?s=200&v=4"
+  data-modal-title="Materialize"
+  data-modal-disclaimer="This AI bot is experimental and might provide inaccurate or incomplete answers. Always consult the official Materialize documentation to verify any answers provided here. You can also switch to the Search mode to perform a search instead.
+
+  Interactions with this AI bot may be monitored or recorded. By submitting your information on this form, you agree to our [website terms](https://materialize.com/site-terms-of-service/) and [privacy policy](https://materialize.com/privacy-policy/)."
+  data-modal-example-questions="Why is my query slow?,How do I check my source's status?"
+  data-search-mode-enabled="true"
+  data-modal-override-open-id="docsearch"
+  data-user-analytics-fingerprint-enabled="true"
+  >
 </script>
 
 {{if hugo.IsProduction}} {{/* Google Analytics */}}

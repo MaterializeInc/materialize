@@ -2,7 +2,9 @@
   {{ $currentPage := . }}
   <nav role="navigation" class="sidebar">
     <ul>
-      <div id="docsearch"></div>
+      <div id="docsearch">
+        <input type="button" value="Ask AI/Search" class="btn-ghost" />
+      </div>
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1">
         <div class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
