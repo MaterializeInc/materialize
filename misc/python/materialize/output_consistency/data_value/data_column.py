@@ -82,7 +82,7 @@ class DataColumn(LeafExpression):
     def get_value_at_row(
         self,
         row_index: int,
-        table_index: int | None = None,
+        table_index: int | None,
     ) -> DataValue:
         """All types need to have the same number of rows, but not all have the same number of distinct values. After
         having iterated through of all values of the given type, begin repeating values but skip the NULL value, which

@@ -67,7 +67,9 @@ class QueryExecutionManager:
                 f"Setup for evaluation strategy '{strategy.name}'"
             )
             executor = self.executors.get_executor(strategy)
-            ddl_statements = strategy.generate_sources(input_data.types_input)
+            ddl_statements = strategy.generate_sources(
+                input_data.types_input, self.config.vertical_join_tables
+            )
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)
