@@ -39,7 +39,7 @@ const KEEPALIVE: TcpKeepalive = TcpKeepalive::new()
     .with_interval(Duration::from_secs(60))
     .with_retries(9);
 
-pub const CONN_UUID_KEY: &str = "CONNECTION_UUID";
+pub const CONN_UUID_KEY: &str = "mz_connection_uuid";
 
 /// A future that handles a connection.
 pub type ConnectionHandler = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send>>;
