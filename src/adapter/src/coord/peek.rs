@@ -280,7 +280,7 @@ fn mfp_to_safe_plan(
     mfp.into_plan()
         .map_err(OptimizerError::Internal)?
         .into_nontemporal()
-        .map_err(|_e| OptimizerError::Internal("OneShot plan has temporal constraints".to_string()))
+        .map_err(|_e| OptimizerError::UnsafeMfpPlan)
 }
 
 fn permute_oneshot_mfp_around_index(

@@ -273,7 +273,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             &mut df_meta,
         );
         // Run global optimization.
-        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.
@@ -298,7 +298,7 @@ impl GlobalMirPlan<Unresolved> {
     /// optimization stage in order to profit from possible single-time
     /// optimizations in the `Plan::finalize_dataflow` call.
     pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
-        // A datalfow description for a `SUBSCRIBE` statement should not have
+        // A dataflow description for a `SUBSCRIBE` statement should not have
         // index exports.
         soft_assert_or_log!(
             self.df_desc.index_exports.is_empty(),

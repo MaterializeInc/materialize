@@ -98,7 +98,7 @@ Rust, with rewrite support. datadriven tests plug into `cargo test` as unit
 or integration tests, but store test data in separate files from the Rust code.
 
 Datadriven is particularly useful when the output to be tested is too large to
-be mantained by hand efficiently. The expected output of tests written with
+be maintained by hand efficiently. The expected output of tests written with
 datadriven can be updated by running them with the `REWRITE` environment
 variable set:
 
