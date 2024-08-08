@@ -205,7 +205,8 @@ mod tests {
     use mz_storage_types::instances::StorageInstanceId;
     use mz_storage_types::sinks::{
         KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
-        KafkaSinkFormatType, MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
+        KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
+        StorageSinkConnection, StorageSinkDesc,
     };
     use mz_storage_types::sources::load_generator::LoadGenerator;
     use mz_storage_types::sources::{
@@ -335,6 +336,7 @@ mod tests {
                 progress_group_id: KafkaIdStyle::Legacy,
                 transactional_id: KafkaIdStyle::Legacy,
             }),
+            partition_strategy: SinkPartitionStrategy::V1,
             with_snapshot: Default::default(),
             version: Default::default(),
             envelope: SinkEnvelope::Upsert,
