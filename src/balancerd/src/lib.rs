@@ -65,7 +65,7 @@ use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tower::Service;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
@@ -571,10 +571,11 @@ impl PgwireBalancer {
             metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
         }
 
+        let conn_uuid = Uuid::new_v4();
         if LOG_PGWIRE_CONNECTION_STATUS.get(&configs) {
-            debug!(conn_uuid = %conn.uuid, "starting new pgwire connection in balancer");
+            debug!(%conn_uuid, "starting new pgwire connection in balancer");
         }
-        let prev = params.insert(CONN_UUID_KEY.to_string(), conn.uuid.to_string());
+        let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
         assert_none!(prev);
 
         let _active_guard = resolved
