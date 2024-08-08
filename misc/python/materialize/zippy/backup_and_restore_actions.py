@@ -31,6 +31,7 @@ class BackupAndRestore(Action):
                 external_minio=True,
                 external_cockroach=True,
                 deploy_generation=state.deploy_generation,
+                system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
             )

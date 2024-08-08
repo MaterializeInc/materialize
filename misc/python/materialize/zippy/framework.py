@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar, Union
 
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 
 if TYPE_CHECKING:
@@ -21,10 +22,14 @@ if TYPE_CHECKING:
 class State:
     mz_service: str
     deploy_generation: int
+    system_parameter_defaults: dict[str, str]
 
-    def __init__(self):
+    def __init__(self, zero_downtime: bool):
         self.mz_service = "materialized"
         self.deploy_generation = 0
+        self.system_parameter_defaults = get_default_system_parameters(
+            zero_downtime=zero_downtime
+        )
 
 
 class Capability:
@@ -147,6 +152,10 @@ class Action:
         return f"--- #{self.seqno}: {self.__class__.__name__}"
 
 
+class Mz0dtDeployBaseAction(Action):
+    pass
+
+
 class ActionFactory:
     """Base class for Action Factories that return parameterized Actions to execute."""
 
@@ -183,7 +192,14 @@ class Test:
         self._actions_with_weight: dict[ActionOrFactory, float] = (
             self._scenario.actions_with_weight()
         )
-        self._state = State()
+        self._state = State(
+            zero_downtime=any(
+                [
+                    isinstance(action, Mz0dtDeployBaseAction)
+                    for action in self._actions_with_weight
+                ]
+            )
+        )
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():

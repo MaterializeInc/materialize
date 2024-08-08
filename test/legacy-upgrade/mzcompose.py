@@ -14,6 +14,7 @@ operational after an upgrade.
 import random
 
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -40,17 +41,9 @@ SERVICES = [
     Postgres(),
     MySql(),
     Cockroach(setup_materialize=True),
-    Materialized(
-        options=list(mz_options.values()),
-        volumes_extra=["secrets:/share/secrets"],
-        external_cockroach=True,
-    ),
-    Materialized(
-        name="materialized2",
-        options=list(mz_options.values()),
-        volumes_extra=["secrets:/share/secrets"],
-        external_cockroach=True,
-    ),
+    # Overridden below
+    Materialized(),
+    Materialized(name="materialized2"),
     # N.B.: we need to use `validate_catalog_store=False` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
     # is no guarantee that HEAD can load an old catalog without running
@@ -141,9 +134,9 @@ def test_upgrade_from_version(
         f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
     )
 
-    additional_system_parameter_defaults = {
-        "enable_0dt_deployment": "true" if zero_downtime else "false",
-    }
+    system_parameter_defaults = get_default_system_parameters(
+        zero_downtime=zero_downtime
+    )
     deploy_generation = 0
 
     # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
@@ -182,14 +175,22 @@ def test_upgrade_from_version(
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
-            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            system_parameter_defaults=system_parameter_defaults,
             deploy_generation=deploy_generation,
             restart="on-failure",
         )
         with c.override(mz_from):
             c.up(mz_service)
     else:
-        c.up(mz_service)
+        mz_from = Materialized(
+            name=mz_service,
+            options=list(mz_options.values()),
+            volumes_extra=["secrets:/share/secrets"],
+            external_cockroach=True,
+            system_parameter_defaults=system_parameter_defaults,
+        )
+        with c.override(mz_from):
+            c.up(mz_service)
 
     if from_version == "current_source" or MzVersion.parse_mz(
         from_version
@@ -243,7 +244,7 @@ def test_upgrade_from_version(
                     ],
                     volumes_extra=["secrets:/share/secrets"],
                     external_cockroach=True,
-                    additional_system_parameter_defaults=additional_system_parameter_defaults,
+                    system_parameter_defaults=system_parameter_defaults,
                     deploy_generation=deploy_generation,
                     restart="on-failure",
                 )
@@ -271,7 +272,7 @@ def test_upgrade_from_version(
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
-        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        system_parameter_defaults=system_parameter_defaults,
         deploy_generation=deploy_generation,
         restart="on-failure",
     )

@@ -17,6 +17,7 @@ from materialize.data_ingest.definition import Definition
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.rowlist import RowList
 from materialize.data_ingest.transaction import Transaction
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -83,6 +84,9 @@ class RestartMz(TransactionDef):
                     ports=ports,
                     external_minio=True,
                     external_cockroach=True,
+                    system_parameter_defaults=get_default_system_parameters(
+                        zero_downtime=True
+                    ),
                     additional_system_parameter_defaults={"enable_table_keys": "true"},
                     deploy_generation=self.workload.deploy_generation,
                     sanity_restart=False,
@@ -127,6 +131,9 @@ class ZeroDowntimeDeploy(TransactionDef):
                     ports=ports,
                     external_minio=True,
                     external_cockroach=True,
+                    system_parameter_defaults=get_default_system_parameters(
+                        zero_downtime=True
+                    ),
                     additional_system_parameter_defaults={"enable_table_keys": "true"},
                     deploy_generation=self.workload.deploy_generation,
                     restart="on-failure",

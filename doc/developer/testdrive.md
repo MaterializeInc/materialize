@@ -108,7 +108,7 @@ $ cargo run --bin testdrive --release -- test/testdrive/TESTFILE.td
 ```
 
 Note that mzcompose has a different default of system parameters in order to
-test more risky features of Materialize, see `DEFAULT_SYSTEM_PARAMETERS` in
+test more risky features of Materialize, see `get_default_system_parameters` in
 [https://github.com/MaterializeInc/materialize/blob/main/misc/python/materialize/mzcompose/__init__.py](mzcompose/__init__.py).
 On the command line specific system parameters can be set using the
 `MZSYSTEM_PARAMETER_DEFAULT` environment variable (`;`-separated).

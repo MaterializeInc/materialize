@@ -1379,7 +1379,7 @@ class Composition:
         mz_service: str = "materialized",
         timeout: int | None = None,
     ) -> None:
-        timeout = timeout or 300
+        timeout = timeout or 420
         print(
             f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
             end="",
