@@ -19,7 +19,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context};
 use derivative::Derivative;
@@ -268,6 +268,9 @@ impl Listeners {
     /// Returns a handle to the server once it is fully booted.
     #[instrument(name = "environmentd::serve")]
     pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
+        let serve_start = Instant::now();
+        info!("startup: envd serve: beginning");
+
         let Listeners {
             sql: (sql_listener, sql_conns),
             http: (http_listener, http_conns),
@@ -316,6 +319,9 @@ impl Listeners {
             mz_server_core::serve(internal_http_conns, internal_http_server, None)
         });
 
+        let catalog_init_start = Instant::now();
+        info!("startup: envd serve: catalog init beginning");
+
         // Get the current timestamp so we can record when we booted.
         let boot_ts = (config.now)();
 
@@ -332,6 +338,13 @@ impl Listeners {
         )
         .await?;
 
+        info!(
+            "startup: envd serve: catalog init complete in {:?}",
+            catalog_init_start.elapsed()
+        );
+
+        let system_param_sync_start = Instant::now();
+        info!("startup: envd serve: system parameter sync beginning");
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
             Some(SystemParameterSyncConfig::new(
@@ -351,6 +364,13 @@ impl Listeners {
             config.config_sync_timeout,
         )
         .await?;
+        info!(
+            "startup: envd serve: system parameter sync complete in {:?}",
+            system_param_sync_start.elapsed()
+        );
+
+        let preflight_checks_start = Instant::now();
+        info!("startup: envd serve: preflight checks beginning");
 
         // Determine whether we should perform a 0dt deployment.
         let enable_0dt_deployment = {
@@ -461,6 +481,14 @@ impl Listeners {
                 deployment::preflight::preflight_legacy(preflight_config).await?;
         };
 
+        info!(
+            "startup: envd serve: preflight checks complete in {:?}",
+            preflight_checks_start.elapsed()
+        );
+
+        let catalog_open_start = Instant::now();
+        info!("startup: envd serve: durable catalog open beginning");
+
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             bootstrap_role: config.bootstrap_role,
@@ -501,6 +529,11 @@ impl Listeners {
 
             adapter_storage
         };
+
+        info!(
+            "startup: envd serve: durable catalog open complete in {:?}",
+            catalog_open_start.elapsed()
+        );
 
         if !config
             .cluster_replica_sizes
@@ -678,6 +711,11 @@ impl Listeners {
                 .ore_catch_unwind(),
             );
         }
+
+        info!(
+            "startup: envd serve: complete in {:?}",
+            serve_start.elapsed()
+        );
 
         Ok(Server {
             sql_listener,
