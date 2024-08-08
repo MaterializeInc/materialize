@@ -476,16 +476,20 @@ class VersionsFromDocs:
     def __init__(self) -> None:
         files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
         self.versions = []
+        current_version = MzVersion.parse_cargo()
         for f in files:
             base = f.stem
             metadata = frontmatter.load(f)
-            if not metadata.get("released", False):
-                continue
 
             current_patch = metadata.get("patch", 0)
 
             for patch in range(current_patch + 1):
                 version = MzVersion.parse_mz(f"{base}.{patch}")
+                # We don't consider the "released:" field since it can be out of
+                # date, instead use any version that is less than our current
+                # version:
+                if version >= current_version:
+                    continue
                 if version not in INVALID_VERSIONS:
                     self.versions.append(version)
 
