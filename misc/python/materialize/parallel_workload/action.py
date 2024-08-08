@@ -2190,8 +2190,7 @@ ddl_action_list = ActionList(
         (DropClusterAction, 2),
         (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 4),
-        # TODO: Reenable when #28166 is fixed
-        # (DropClusterReplicaAction, 4),
+        (DropClusterReplicaAction, 4),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 2),
