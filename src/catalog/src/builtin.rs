@@ -64,6 +64,23 @@ use crate::durable::objects::SystemObjectDescription;
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
 
+/// A sentinel used in place of a fingerprint that indicates that a builtin
+/// object is runtime alterable. Runtime alterable objects don't have meaningful
+/// fingerprints because they may have been intentionally changed by the user
+/// after creation.
+// NOTE(benesch): ideally we'd use a fingerprint type that used a sum type
+// rather than a loosely typed string to represent the runtime alterable
+// state like so:
+//
+//     enum Fingerprint {
+//         SqlText(String),
+//         RuntimeAlterable,
+//     }
+//
+// However, that would entail a complicated migration for the existing system object
+// mapping collection stored on disk.
+pub const RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL: &str = "<RUNTIME-ALTERABLE>";
+
 #[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
@@ -113,6 +130,14 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Func(_) => CatalogItemType::Func,
             Builtin::Index(_) => CatalogItemType::Index,
             Builtin::Connection(_) => CatalogItemType::Connection,
+        }
+    }
+
+    /// Whether the object can be altered at runtime by its owner.
+    pub fn runtime_alterable(&self) -> bool {
+        match self {
+            Builtin::Connection(c) => c.runtime_alterable,
+            _ => false,
         }
     }
 }
@@ -223,6 +248,11 @@ pub struct BuiltinConnection {
     pub sql: &'static str,
     pub access: &'static [MzAclItem],
     pub owner_id: &'static RoleId,
+    /// Whether the object can be altered at runtime by its owner.
+    ///
+    /// Note that when `runtime_alterable` is true, changing the `sql` in future
+    /// versions does not trigger a migration.
+    pub runtime_alterable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -7218,6 +7248,7 @@ pub static MZ_ANALYTICS: BuiltinConnection = BuiltinConnection {
         acl_mode: rbac::all_object_privileges(SystemObjectType::Object(ObjectType::Connection)),
     }],
     owner_id: &MZ_ANALYTICS_ROLE_ID,
+    runtime_alterable: true,
 };
 
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
