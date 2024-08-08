@@ -17,7 +17,7 @@ OUTPUT=$(exec "$(dirname "$0")"/ci-builder run stable "$(dirname "$0")"/mzcompos
 if [[ $OUTPUT == *"CalledProcessError"* ]]; then
   OUTPUT="unknown"
 else
-  # shellcheck disable=SC2181
+  # shellcheck disable=SC2181,SC2319
   if [ $? -eq 0 ]; then
     # Discard all but the last two lines, previous content can be retries when docker pull has problems
     OUTPUT=$(echo "$OUTPUT" | tail -n 2)
