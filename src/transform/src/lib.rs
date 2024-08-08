@@ -36,7 +36,6 @@ use tracing::error;
 pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
-pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
 pub mod dataflow;
@@ -577,7 +576,8 @@ impl Optimizer {
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
             Box::new(fuse_and_collapse()),
-            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
+            // 3. Structure-aware cleanup that needs to happen before "ColumnKnowledge"
+            // (replaced by EquivalencePropagation).
             Box::new(threshold_elision::ThresholdElision),
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
@@ -587,14 +587,13 @@ impl Optimizer {
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(predicate_pushdown::PredicatePushdown::default()),
-                    Box::new(equivalence_propagation::EquivalencePropagation::default()),
                     // Lifts the information `!isnull(col)`
                     Box::new(nonnullable::NonNullable),
                     // Lifts the information `col = literal`
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
-                    Box::new(column_knowledge::ColumnKnowledge::default()),
+                    Box::new(equivalence_propagation::EquivalencePropagation::default()),
                     // Lifts the information `col1 = col2`
                     Box::new(demand::Demand::default()),
                     Box::new(FuseAndCollapse::default()),
@@ -677,7 +676,7 @@ impl Optimizer {
                 name: "fixpoint_physical_01",
                 limit: 100,
                 transforms: vec![
-                    Box::new(column_knowledge::ColumnKnowledge::default()),
+                    Box::new(equivalence_propagation::EquivalencePropagation::default()),
                     Box::new(fold_constants::FoldConstants {
                         limit: Some(FOLD_CONSTANTS_LIMIT),
                     }),
