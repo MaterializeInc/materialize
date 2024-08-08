@@ -208,6 +208,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cockroach/distinct_on.slt",
         "test/sqllogictest/cockroach/subquery_correlated.slt",
         "test/sqllogictest/transform/notice/*.slt",
+        "test/sqllogictest/advent-of-code/2023/*.slt",
     }
 
     tests_without_views = {
