@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::iter;
 use std::time::Duration;
 
 use itertools::max;
@@ -31,6 +33,7 @@ use mz_sql::names::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use once_cell::sync::Lazy;
 
 use crate::builtin::BUILTIN_ROLES;
 use crate::durable::upgrade::CATALOG_VERSION;
@@ -86,6 +89,89 @@ pub const MZ_CATALOG_UNSTABLE_SCHEMA_ID: u64 = 7;
 pub const MZ_INTROSPECTION_SCHEMA_ID: u64 = 8;
 
 const DEFAULT_ALLOCATOR_ID: u64 = 1;
+
+static SYSTEM_SCHEMA_PRIVILEGES: Lazy<Vec<MzAclItem>> = Lazy::new(|| {
+    vec![
+        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
+        MzAclItem {
+            grantee: MZ_SUPPORT_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
+    ]
+});
+
+static MZ_CATALOG_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+    id: SchemaId::System(MZ_CATALOG_SCHEMA_ID),
+    oid: SCHEMA_MZ_CATALOG_OID,
+    database_id: None,
+    name: "mz_catalog".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
+static PG_CATALOG_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+    id: SchemaId::System(PG_CATALOG_SCHEMA_ID),
+    oid: SCHEMA_PG_CATALOG_OID,
+    database_id: None,
+    name: "pg_catalog".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
+static MZ_INTERNAL_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+    id: SchemaId::System(MZ_INTERNAL_SCHEMA_ID),
+    oid: SCHEMA_MZ_INTERNAL_OID,
+    database_id: None,
+    name: "mz_internal".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
+static INFORMATION_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+    id: SchemaId::System(INFORMATION_SCHEMA_ID),
+    oid: SCHEMA_INFORMATION_SCHEMA_OID,
+    database_id: None,
+    name: "information_schema".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
+static MZ_UNSAFE_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+    id: SchemaId::System(MZ_UNSAFE_SCHEMA_ID),
+    oid: SCHEMA_MZ_UNSAFE_OID,
+    database_id: None,
+    name: "mz_unsafe".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
+static MZ_CATALOG_UNSTABLE_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+    id: SchemaId::System(MZ_CATALOG_UNSTABLE_SCHEMA_ID),
+    oid: SCHEMA_MZ_CATALOG_UNSTABLE_OID,
+    database_id: None,
+    name: "mz_catalog_unstable".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
+static MZ_INTROSPECTION_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+    id: SchemaId::System(MZ_INTROSPECTION_SCHEMA_ID),
+    oid: SCHEMA_MZ_INTROSPECTION_OID,
+    database_id: None,
+    name: "mz_introspection".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
+static SYSTEM_SCHEMAS: Lazy<BTreeMap<&str, &Schema>> = Lazy::new(|| {
+    [
+        &*MZ_CATALOG_SCHEMA,
+        &*PG_CATALOG_SCHEMA,
+        &*MZ_INTERNAL_SCHEMA,
+        &*INFORMATION_SCHEMA,
+        &*MZ_UNSAFE_SCHEMA,
+        &*MZ_CATALOG_UNSTABLE_SCHEMA,
+        &*MZ_INTROSPECTION_SCHEMA,
+    ]
+    .into_iter()
+    .map(|s| (&*s.name, s))
+    .collect()
+});
 
 /// Initializes the Catalog with some default objects.
 #[mz_ore::instrument]
@@ -354,72 +440,6 @@ pub(crate) async fn initialize(
         ));
     }
 
-    let schema_privileges = vec![
-        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
-        MzAclItem {
-            grantee: MZ_SUPPORT_ROLE_ID,
-            grantor: MZ_SYSTEM_ROLE_ID,
-            acl_mode: AclMode::USAGE,
-        },
-        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
-    ];
-
-    let mz_catalog_schema = Schema {
-        id: SchemaId::System(MZ_CATALOG_SCHEMA_ID),
-        oid: SCHEMA_MZ_CATALOG_OID,
-        database_id: None,
-        name: "mz_catalog".to_string(),
-        owner_id: MZ_SYSTEM_ROLE_ID,
-        privileges: schema_privileges.clone(),
-    };
-    let pg_catalog_schema = Schema {
-        id: SchemaId::System(PG_CATALOG_SCHEMA_ID),
-        oid: SCHEMA_PG_CATALOG_OID,
-        database_id: None,
-        name: "pg_catalog".to_string(),
-        owner_id: MZ_SYSTEM_ROLE_ID,
-        privileges: schema_privileges.clone(),
-    };
-    let mz_internal_schema = Schema {
-        id: SchemaId::System(MZ_INTERNAL_SCHEMA_ID),
-        oid: SCHEMA_MZ_INTERNAL_OID,
-        database_id: None,
-        name: "mz_internal".to_string(),
-        owner_id: MZ_SYSTEM_ROLE_ID,
-        privileges: schema_privileges.clone(),
-    };
-    let information_schema = Schema {
-        id: SchemaId::System(INFORMATION_SCHEMA_ID),
-        oid: SCHEMA_INFORMATION_SCHEMA_OID,
-        database_id: None,
-        name: "information_schema".to_string(),
-        owner_id: MZ_SYSTEM_ROLE_ID,
-        privileges: schema_privileges.clone(),
-    };
-    let mz_unsafe_schema = Schema {
-        id: SchemaId::System(MZ_UNSAFE_SCHEMA_ID),
-        oid: SCHEMA_MZ_UNSAFE_OID,
-        database_id: None,
-        name: "mz_unsafe".to_string(),
-        owner_id: MZ_SYSTEM_ROLE_ID,
-        privileges: schema_privileges.clone(),
-    };
-    let mz_catalog_unstable_schema = Schema {
-        id: SchemaId::System(MZ_CATALOG_UNSTABLE_SCHEMA_ID),
-        oid: SCHEMA_MZ_CATALOG_UNSTABLE_OID,
-        database_id: None,
-        name: "mz_catalog_unstable".to_string(),
-        owner_id: MZ_SYSTEM_ROLE_ID,
-        privileges: schema_privileges.clone(),
-    };
-    let mz_introspection_schema = Schema {
-        id: SchemaId::System(MZ_INTROSPECTION_SCHEMA_ID),
-        oid: SCHEMA_MZ_INTROSPECTION_OID,
-        database_id: None,
-        name: "mz_introspection".to_string(),
-        owner_id: MZ_SYSTEM_ROLE_ID,
-        privileges: schema_privileges.clone(),
-    };
     let public_schema_oid = tx.allocate_oid(&HashSet::new())?;
     let public_schema = Schema {
         id: SchemaId::User(PUBLIC_SCHEMA_ID),
@@ -452,22 +472,13 @@ pub(crate) async fn initialize(
         .collect(),
     };
 
-    for schema in [
-        mz_catalog_schema,
-        pg_catalog_schema,
-        public_schema,
-        mz_internal_schema,
-        information_schema,
-        mz_unsafe_schema,
-        mz_catalog_unstable_schema,
-        mz_introspection_schema,
-    ] {
+    for schema in SYSTEM_SCHEMAS.values().chain(iter::once(&&public_schema)) {
         tx.insert_schema(
             schema.id,
             schema.database_id,
-            schema.name,
+            schema.name.clone(),
             schema.owner_id,
-            schema.privileges,
+            schema.privileges.clone(),
             schema.oid,
         )?;
     }
@@ -650,6 +661,12 @@ pub(crate) async fn initialize(
     }
 
     Ok(())
+}
+
+pub(crate) fn resolve_system_schema(name: &str) -> &Schema {
+    SYSTEM_SCHEMAS
+        .get(name)
+        .unwrap_or_else(|| panic!("unable to resolve system schema: {name}"))
 }
 
 /// Defines the default config for a Cluster.
