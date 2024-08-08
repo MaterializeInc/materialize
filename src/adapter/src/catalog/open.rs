@@ -1092,7 +1092,7 @@ fn add_new_builtin_clusters_migration(
                     variant: mz_catalog::durable::ClusterVariant::Managed(ClusterVariantManaged {
                         size: cluster_size.clone(),
                         availability_zones: vec![],
-                        replication_factor: 1,
+                        replication_factor: builtin_cluster.replication_factor,
                         disk: is_cluster_size_v2(&cluster_size),
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
