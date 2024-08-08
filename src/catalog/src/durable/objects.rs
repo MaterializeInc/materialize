@@ -45,6 +45,7 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::plan::ClusterSchedule;
 use proptest_derive::Arbitrary;
 
+use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::objects::serialization::proto;
 
 // Structs used to pass information to outside modules.
@@ -509,6 +510,12 @@ pub struct SystemObjectDescription {
 pub struct SystemObjectUniqueIdentifier {
     pub id: GlobalId,
     pub fingerprint: String,
+}
+
+impl SystemObjectUniqueIdentifier {
+    pub fn runtime_alterable(&self) -> bool {
+        self.fingerprint == RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL
+    }
 }
 
 /// Functions can share the same name as any other catalog item type

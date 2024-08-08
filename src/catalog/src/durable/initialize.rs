@@ -663,7 +663,7 @@ pub(crate) async fn initialize(
     Ok(())
 }
 
-pub(crate) fn resolve_system_schema(name: &str) -> &Schema {
+pub fn resolve_system_schema(name: &str) -> &Schema {
     SYSTEM_SCHEMAS
         .get(name)
         .unwrap_or_else(|| panic!("unable to resolve system schema: {name}"))

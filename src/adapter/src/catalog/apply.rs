@@ -518,6 +518,13 @@ impl CatalogState {
     ) {
         let id = system_object_mapping.unique_identifier.id;
 
+        if system_object_mapping.unique_identifier.runtime_alterable() {
+            // Runtime-alterable system objects have real entries in the items
+            // collection and so get handled through the normal `insert_item`
+            // and `drop_item` code paths.
+            return;
+        }
+
         if let StateDiff::Retraction = diff {
             let entry = self.drop_item(id);
             retractions.system_object_mappings.insert(id, entry);
@@ -1040,7 +1047,14 @@ impl CatalogState {
                 diff,
             ),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
+                // Runtime-alterable system objects have real entries in the
+                // items collection and so get handled through the normal
+                // `StateUpdateKind::Item`.`
+                if !system_object_mapping.unique_identifier.runtime_alterable() {
+                    self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
+                } else {
+                    vec![]
+                }
             }
             StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
