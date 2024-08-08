@@ -48,6 +48,9 @@ const GROUP_PATH_WITH_SLASH: &str = "/frontegg/identity/resources/groups/v1/:id/
 const MEMBERS_PATH: &str = "/frontegg/team/resources/members/v1";
 const USERS_ME_PATH: &str = "/identity/resources/users/v2/me";
 const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
+const USER_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1/:id";
+const TENANT_API_TOKENS_PATH: &str = "/identity/resources/tenants/api-tokens/v1";
+const TENANT_API_TOKEN_PATH: &str = "/identity/resources/tenants/api-tokens/v1/:id";
 const USER_PATH: &str = "/identity/resources/users/v1/:id";
 const USER_CREATE_PATH: &str = "/identity/resources/users/v2";
 const USERS_V3_PATH: &str = "/identity/resources/users/v3";
@@ -162,7 +165,19 @@ impl FronteggMockServer {
             .route(AUTH_USER_PATH, post(handle_post_auth_user))
             .route(AUTH_API_TOKEN_REFRESH_PATH, post(handle_post_token_refresh))
             .route(USERS_ME_PATH, get(handle_get_user_profile))
-            .route(USERS_API_TOKENS_PATH, post(handle_post_user_api_token))
+            .route(
+                USERS_API_TOKENS_PATH,
+                get(handle_list_user_api_tokens).post(handle_post_user_api_token),
+            )
+            .route(USER_API_TOKENS_PATH, delete(handle_delete_user_api_token))
+            .route(
+                TENANT_API_TOKENS_PATH,
+                get(handle_list_tenant_api_tokens).post(handle_create_tenant_api_token),
+            )
+            .route(
+                TENANT_API_TOKEN_PATH,
+                delete(handle_delete_tenant_api_token),
+            )
             .route(USER_PATH, get(handle_get_user).delete(handle_delete_user))
             .route(USER_CREATE_PATH, post(handle_create_user))
             .route(USERS_V3_PATH, get(handle_get_users_v3))
@@ -527,7 +542,7 @@ async fn handle_get_user_profile<'a>(
 async fn handle_post_user_api_token<'a>(
     State(context): State<Arc<Context>>,
     TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
-) -> Result<Json<ApiToken>, StatusCode> {
+) -> Result<(StatusCode, Json<ApiToken>), StatusCode> {
     let claims: Claims = match decode_access_token(&context, authorization.token()) {
         Ok(TokenData { claims, .. }) => claims,
         Err(_) => return Err(StatusCode::UNAUTHORIZED),
@@ -538,7 +553,156 @@ async fn handle_post_user_api_token<'a>(
         secret: Uuid::new_v4(),
     };
     tokens.insert(new_token.clone(), claims.email.unwrap());
-    Ok(Json(new_token))
+    Ok((StatusCode::CREATED, Json(new_token)))
+}
+
+// https://docs.frontegg.com/reference/userapitokensv1controller_getapitokens
+async fn handle_list_user_api_tokens(
+    State(context): State<Arc<Context>>,
+    TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
+) -> Result<Json<Vec<ApiToken>>, StatusCode> {
+    let claims = match decode_access_token(&context, authorization.token()) {
+        Ok(TokenData { claims, .. }) => claims,
+        Err(_) => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    let user_api_tokens = context.user_api_tokens.lock().unwrap();
+    let tokens: Vec<ApiToken> = user_api_tokens
+        .iter()
+        .filter(|(_, email)| *email == claims.email.as_ref().unwrap())
+        .map(|(token, _)| token.clone())
+        .collect();
+
+    Ok(Json(tokens))
+}
+
+// https://docs.frontegg.com/reference/userapitokensv1controller_deleteapitoken
+async fn handle_delete_user_api_token(
+    State(context): State<Arc<Context>>,
+    TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
+    Path(token_id): Path<Uuid>,
+) -> StatusCode {
+    let claims = match decode_access_token(&context, authorization.token()) {
+        Ok(TokenData { claims, .. }) => claims,
+        Err(_) => return StatusCode::UNAUTHORIZED,
+    };
+
+    let mut user_api_tokens = context.user_api_tokens.lock().unwrap();
+
+    let removed = user_api_tokens
+        .iter()
+        .find(|(token, email)| {
+            token.client_id == token_id && *email == claims.email.as_ref().unwrap()
+        })
+        .map(|(token, _)| token.clone());
+
+    if let Some(token_to_remove) = removed {
+        user_api_tokens.remove(&token_to_remove);
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+// https://docs.frontegg.com/reference/tenantapitokensv1controller_gettenantsapitokens
+async fn handle_list_tenant_api_tokens(
+    State(context): State<Arc<Context>>,
+    TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
+) -> Result<Json<Vec<TenantApiTokenResponse>>, StatusCode> {
+    let _claims = match decode_access_token(&context, authorization.token()) {
+        Ok(TokenData { claims, .. }) => claims,
+        Err(_) => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    let tenant_api_tokens = context.tenant_api_tokens.lock().unwrap();
+    let tokens: Vec<TenantApiTokenResponse> = tenant_api_tokens
+        .iter()
+        .map(|(api_token, config)| TenantApiTokenResponse {
+            client_id: api_token.client_id,
+            description: "".to_string(),
+            secret: api_token.secret,
+            created_by_user_id: Uuid::nil(),
+            metadata: config
+                .metadata
+                .as_ref()
+                .and_then(|m| m.user.clone().map(serde_json::Value::String)),
+            created_at: Utc::now(),
+            role_ids: config.roles.clone(),
+        })
+        .collect();
+
+    Ok(Json(tokens))
+}
+
+// https://docs.frontegg.com/reference/tenantapitokensv1controller_createtenantapitoken
+async fn handle_create_tenant_api_token(
+    State(context): State<Arc<Context>>,
+    TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
+    Json(request): Json<CreateTenantApiTokenRequest>,
+) -> Result<(StatusCode, Json<TenantApiTokenResponse>), StatusCode> {
+    let claims = match decode_access_token(&context, authorization.token()) {
+        Ok(TokenData { claims, .. }) => claims,
+        Err(_) => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    let new_token = ApiToken {
+        client_id: Uuid::new_v4(),
+        secret: Uuid::new_v4(),
+    };
+
+    let config = TenantApiTokenConfig {
+        tenant_id: claims.tenant_id,
+        metadata: request.metadata.as_ref().and_then(|m| {
+            if let serde_json::Value::String(s) = m {
+                Some(ClaimMetadata {
+                    user: Some(s.clone()),
+                })
+            } else {
+                None
+            }
+        }),
+        roles: request.role_ids.clone(),
+    };
+
+    let mut tenant_api_tokens = context.tenant_api_tokens.lock().unwrap();
+    tenant_api_tokens.insert(new_token.clone(), config);
+
+    let response = TenantApiTokenResponse {
+        client_id: new_token.client_id,
+        description: request.description,
+        secret: new_token.secret,
+        created_by_user_id: claims.sub,
+        metadata: request.metadata,
+        created_at: Utc::now(),
+        role_ids: request.role_ids,
+    };
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+// https://docs.frontegg.com/reference/tenantapitokensv1controller_deletetenantapitoken
+async fn handle_delete_tenant_api_token(
+    State(context): State<Arc<Context>>,
+    TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
+    Path(token_id): Path<Uuid>,
+) -> StatusCode {
+    let _claims = match decode_access_token(&context, authorization.token()) {
+        Ok(TokenData { claims, .. }) => claims,
+        Err(_) => return StatusCode::UNAUTHORIZED,
+    };
+
+    let mut tenant_api_tokens = context.tenant_api_tokens.lock().unwrap();
+    if tenant_api_tokens
+        .remove(&ApiToken {
+            client_id: token_id,
+            secret: Uuid::nil(),
+        })
+        .is_some()
+    {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
 }
 
 // https://docs.frontegg.com/reference/userscontrollerv2_getuserbyid
@@ -1431,6 +1595,29 @@ pub struct TenantApiTokenConfig {
     pub tenant_id: Uuid,
     pub metadata: Option<ClaimMetadata>,
     pub roles: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CreateTenantApiTokenRequest {
+    description: String,
+    metadata: Option<serde_json::Value>,
+    #[serde(rename = "roleIds")]
+    role_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct TenantApiTokenResponse {
+    #[serde(rename = "clientId")]
+    client_id: Uuid,
+    description: String,
+    secret: Uuid,
+    #[serde(rename = "createdByUserId")]
+    created_by_user_id: Uuid,
+    metadata: Option<serde_json::Value>,
+    #[serde(rename = "createdAt")]
+    created_at: DateTime<Utc>,
+    #[serde(rename = "roleIds")]
+    role_ids: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Serialize)]
