@@ -107,7 +107,7 @@ use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tracing::{info, trace, warn};
+use tracing::{info, warn};
 
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
@@ -821,6 +821,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// reflect those commands. If the worker can not be made to reflect the
     /// commands, return an error.
     fn reconcile(&mut self, command_rx: &CommandReceiver) -> Result<(), RecvError> {
+        let worker_id = self.timely_worker.index();
+
         // To initialize the connection, we want to drain all commands until we
         // receive a `StorageCommand::InitializationComplete` command to form a
         // target command state.
@@ -847,6 +849,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     panic!("CreateTimely must be captured before")
                 }
                 StorageCommand::AllowCompaction(sinces) => {
+                    info!(%worker_id, ?sinces, "reconcile: received AllowCompaction command");
+
                     // collect all "drop commands". These are `AllowCompaction`
                     // commands that compact to the empty since. Then, later, we make sure
                     // we retain only those `Create*` commands that are not dropped. We
@@ -857,6 +861,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     drop_commands.extend(drops.map(|(id, _since)| id));
                 }
                 StorageCommand::RunIngestions(ingestions) => {
+                    info!(%worker_id, ?ingestions, "reconcile: received RunIngestions command");
+
                     // Ensure that ingestions are forward-rolling alter compatible.
                     for ingestion in ingestions {
                         let prev = running_ingestion_descriptions
@@ -873,6 +879,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
                 StorageCommand::RunSinks(exports) => {
+                    info!(%worker_id, ?exports, "reconcile: received RunSinks command");
+
                     // Ensure that exports are forward-rolling alter compatible.
                     for export in exports {
                         let prev = running_exports_descriptions
@@ -912,6 +920,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             .filter(|export_id| **export_id != ingestion.id)
                         {
                             if drop_commands.remove(export_id) {
+                                info!(%worker_id, %export_id, "reconcile: dropping subsource");
                                 self.storage_state.dropped_ids.insert(*export_id);
                             }
                         }
@@ -919,6 +928,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         if drop_commands.remove(&ingestion.id)
                             || self.storage_state.dropped_ids.contains(&ingestion.id)
                         {
+                            info!(%worker_id, %ingestion.id, "reconcile: dropping ingestion");
+
                             // If an ingestion is dropped, so too must all of
                             // its subsources (i.e. ingestion exports, as well
                             // as its progress subsource).
@@ -967,6 +978,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             // retained.
                             || self.storage_state.dropped_ids.contains(&export.id)
                         {
+                            info!(%worker_id, %export.id, "reconcile: dropping sink");
+
                             // Make sure that we report back that the ID was
                             // dropped.
                             self.storage_state.dropped_ids.insert(export.id);
@@ -1015,10 +1028,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .filter(|id| !expected_objects.contains(id))
             .collect::<Vec<_>>();
 
-        trace!(
-            "reconciliation expected objects\n{:?}\ndropping stale objects\n{:?}",
-            expected_objects,
-            stale_objects,
+        info!(
+            %worker_id, ?expected_objects, ?stale_objects,
+            "reconcile: modifing storage state to match expected objects",
         );
 
         for id in stale_objects {
