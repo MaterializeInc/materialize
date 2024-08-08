@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use differential_dataflow::lattice::Lattice;
+use futures::FutureExt;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
@@ -47,25 +48,59 @@ pub(crate) async fn read_only_mode_table_worker<
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 >(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
+    txns_handle: WriteHandle<SourceData, (), T, Diff>,
 ) {
     let mut write_handles = BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
 
-    while let Some(cmd) = rx.recv().await {
-        // Peel off all available commands.
-        // We do this in case we can consolidate commands.
-        // It would be surprising to receive multiple concurrent `Append` commands,
-        // but we might receive multiple *empty* `Append` commands.
-        let mut commands = VecDeque::new();
-        commands.push_back(cmd);
-        while let Ok(cmd) = rx.try_recv() {
-            commands.push_back(cmd);
-        }
+    let gen_upper_future = |mut handle: WriteHandle<SourceData, (), T, i64>| {
+        let fut = async move {
+            let current_upper = handle.shared_upper();
+            handle.wait_for_upper_past(&current_upper).await;
+            let new_upper = handle.shared_upper();
+            (handle, new_upper)
+        };
 
-        let shutdown = handle_commands(&mut write_handles, commands).await;
+        fut
+    };
 
-        if shutdown {
-            tracing::trace!("shutting down persist write append task");
-            break;
+    let mut txns_upper_future = {
+        let txns_upper_future = gen_upper_future(txns_handle);
+        txns_upper_future.boxed()
+    };
+
+    loop {
+        tokio::select! {
+            (handle, upper) = &mut txns_upper_future => {
+                tracing::debug!("new upper from txns shard: {:?}, advancing upper of migrated builtin tables", upper);
+                advance_uppers(&mut write_handles, upper).await;
+
+                let fut = gen_upper_future(handle);
+                txns_upper_future = fut.boxed();
+            }
+            cmd = rx.recv() => {
+                let Some(cmd) = cmd else {
+                    tracing::trace!("shutting down read-only table worker because command rx closed");
+                    break;
+                };
+
+                // Peel off all available commands.
+                // We do this in case we can consolidate commands.
+                // It would be surprising to receive multiple concurrent `Append` commands,
+                // but we might receive multiple *empty* `Append` commands.
+                let mut commands = VecDeque::new();
+                commands.push_back(cmd);
+                while let Ok(cmd) = rx.try_recv() {
+                    commands.push_back(cmd);
+                }
+
+                let shutdown = handle_commands(&mut write_handles, commands).await;
+
+                if shutdown {
+                    tracing::trace!("shutting down read-only table worker because we received a shutdown command");
+                    break;
+                }
+
+            }
         }
     }
 
@@ -192,4 +227,30 @@ where
     }
 
     shutdown
+}
+
+/// Advances the upper of all registered tables (which are only the migrated
+/// builtin tables) to the given `upper`.
+async fn advance_uppers<T>(
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, Diff>>,
+    upper: Antichain<T>,
+) where
+    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
+{
+    let mut all_updates = BTreeMap::default();
+
+    for (id, write_handle) in write_handles.iter_mut() {
+        // This business of continually advancing the upper is expensive, but
+        // we're a) only doing it when in read-only mode, and b) only doing it
+        // for each migrated builtin table, of which there usually aren't many.
+        let expected_upper = write_handle.fetch_recent_upper().await.to_owned();
+
+        all_updates.insert(
+            *id,
+            (Span::none(), Vec::new(), expected_upper, upper.clone()),
+        );
+    }
+
+    let result = append_work(write_handles, all_updates).await;
+    tracing::debug!(?result, "advanced upper of migrated builtin tables");
 }

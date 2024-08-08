@@ -142,12 +142,20 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
 }
 
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
-    pub(crate) fn new_read_only_mode() -> Self {
+    /// Create a new read-only table worker that continually bumps the upper of
+    /// it's tables. It is expected that we only register migrated builtin
+    /// tables, that cannot yet be registered in the txns system in read-only
+    /// mode.
+    ///
+    /// This takes a [WriteHandle] for the txns shard so that it can follow the
+    /// upper and continually bump the upper of registered tables to follow the
+    /// upper of the txns shard.
+    pub(crate) fn new_read_only_mode(txns_handle: WriteHandle<SourceData, (), T, Diff>) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(
             || "PersistTableWriteWorker",
-            read_only_table_worker::read_only_mode_table_worker(rx),
+            read_only_table_worker::read_only_mode_table_worker(rx, txns_handle),
         );
         Self {
             inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),

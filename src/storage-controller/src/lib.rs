@@ -2436,7 +2436,19 @@ where
             .expect("location should be valid");
 
         let persist_table_worker = if read_only {
-            persist_handles::PersistTableWriteWorker::new_read_only_mode()
+            let txns_write = txns_client
+                .open_writer(
+                    txns_id,
+                    Arc::new(RelationDesc::empty()),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: "txns".to_owned(),
+                        handle_purpose: "follow txns upper".to_owned(),
+                    },
+                )
+                .await
+                .expect("txns schema shouldn't change");
+            persist_handles::PersistTableWriteWorker::new_read_only_mode(txns_write)
         } else {
             let txns = TxnsHandle::open(
                 T::minimum(),
