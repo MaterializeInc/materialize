@@ -36,7 +36,8 @@ which has been tried and tested in production environments.
    file (`config.yml`) to hold the Exporter configuration.
 
    {{< tip >}}
-   You can use [this sample `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
+   You can use [this sample
+   `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
    as guidance to bootstrap your monitoring with some key Materialize metrics
    and indicators.
    {{</ tip >}}
