@@ -21,4 +21,4 @@ fetch_pr_target_branch
 merge_pr_target_branch
 
 ci_collapsed_heading "Conduct checks"
-bin/ci-builder run stable cargo check
+bin/ci-builder run stable cargo check --all-targets
