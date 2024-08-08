@@ -198,6 +198,23 @@ FROM{space_separator}{db_object_name}
 
         return sql
 
+    def collect_involved_vertical_table_indices(self) -> set[int] | None:
+        if self.storage_layout == ValueStorageLayout.HORIZONTAL:
+            return None
+
+        assert self.storage_layout == ValueStorageLayout.VERTICAL
+        table_indices = set()
+
+        all_expressions = []
+        all_expressions.extend(self.select_expressions)
+        all_expressions.append(self.where_expression)
+        all_expressions.extend(self.custom_order_expressions or [])
+
+        for expression in all_expressions:
+            table_indices.update(expression.collect_vertical_table_indices())
+
+        return table_indices
+
     def column_count(self) -> int:
         return len(self.select_expressions)
 

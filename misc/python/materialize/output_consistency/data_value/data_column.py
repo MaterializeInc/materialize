@@ -55,6 +55,9 @@ class DataColumn(LeafExpression):
 
         return involved_characteristics
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        return set()
+
     def get_filtered_values(self, row_selection: DataRowSelection) -> list[DataValue]:
         if row_selection.includes_all():
             return self.values

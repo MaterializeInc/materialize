@@ -83,6 +83,9 @@ class EnumConstant(Expression):
     def collect_leaves(self) -> list[LeafExpression]:
         return []
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        return set()
+
     def is_tagged(self, tag: str) -> bool:
         if self.tags is None:
             return False

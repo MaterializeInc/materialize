@@ -143,6 +143,14 @@ class ExpressionWithArgs(Expression):
 
         return leaves
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        vertical_table_indices = set()
+
+        for arg in self.args:
+            vertical_table_indices.update(arg.collect_vertical_table_indices())
+
+        return vertical_table_indices
+
     def is_leaf(self) -> bool:
         return False
 

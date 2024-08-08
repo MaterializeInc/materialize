@@ -65,5 +65,8 @@ class DataValue(LeafExpression):
     ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        return self.vertical_table_indices
+
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', value={self.value}, type={self.data_type})"

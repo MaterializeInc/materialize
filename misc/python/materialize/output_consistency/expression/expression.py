@@ -86,6 +86,9 @@ class Expression:
     def collect_leaves(self) -> list[LeafExpression]:
         raise NotImplementedError
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        raise NotImplementedError
+
     def __str__(self) -> str:
         raise NotImplementedError
 
