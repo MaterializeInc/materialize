@@ -277,9 +277,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO: #25108 flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_full_testdrive.py]
@@ -309,7 +307,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: limits
               run: main
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
 
       - id: limits-instance-size
         label: "Instance size limits"
@@ -841,9 +839,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO: #25108 flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
@@ -864,9 +860,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: #25108 flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -890,9 +884,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: #25108 flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -916,9 +908,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: #25108 flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -942,9 +932,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: #25108 flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -1221,8 +1209,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
-          # Runs into timeout on small agents
-          queue: hetzner-aarch64-8cpu-16gb
+          # Runs into timeout/OoM on small agents
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg

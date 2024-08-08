@@ -19,7 +19,6 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 REDPANDA_VERSIONS = ["v22.3.25", "v23.1.21", "v23.2.29", "v23.3.18", "v24.1.9"]
 
 CONFLUENT_PLATFORM_VERSIONS = [
-    "6.2.15",
     "7.0.14",
     "7.1.12",
     "7.2.10",
@@ -61,12 +60,10 @@ def workflow_default(c: Composition) -> None:
 
     for confluent_version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"--- Testing Confluent Platform {confluent_version}")
-        # No arm64 images available for Confluent Platform versions 6.*
-        platform = "linux/amd64" if confluent_version.startswith("6.") else None
         with c.override(
-            Zookeeper(tag=confluent_version, platform=platform),
-            Kafka(tag=confluent_version, platform=platform),
-            SchemaRegistry(tag=confluent_version, platform=platform),
+            Zookeeper(tag=confluent_version),
+            Kafka(tag=confluent_version),
+            SchemaRegistry(tag=confluent_version),
         ):
             c.down(destroy_volumes=True)
             c.up("zookeeper", "kafka", "schema-registry", "materialized")
