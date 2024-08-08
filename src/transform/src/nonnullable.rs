@@ -15,7 +15,7 @@
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
 use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
-use mz_repr::{Datum, RelationType, ScalarType};
+use mz_repr::RelationType;
 
 use crate::{TransformCtx, TransformError};
 
@@ -124,7 +124,7 @@ fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
         {
             if let MirScalarExpr::Column(c) = &**expr {
                 if !metadata.column_types[*c].nullable {
-                    *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+                    *e = MirScalarExpr::literal_false();
                 }
             }
         }
@@ -137,7 +137,7 @@ fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
     // count(true).
     if let (AggregateFunc::Count, MirScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
         if !metadata.column_types[*c].nullable && !expr.distinct {
-            expr.expr = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
+            expr.expr = MirScalarExpr::literal_true();
         }
     }
 }

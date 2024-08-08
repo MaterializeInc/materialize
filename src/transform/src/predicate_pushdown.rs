@@ -53,7 +53,7 @@
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(1);
 //! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+//! let predicate012 = MirScalarExpr::literal_false();
 //!
 //! let mut expr = join.filter(
 //!    vec![
@@ -92,7 +92,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{ColumnType, Datum, ScalarType};
+use mz_repr::ColumnType;
 
 use crate::{TransformCtx, TransformError};
 
@@ -323,10 +323,7 @@ impl PredicatePushdown {
                                             && aggregates[0].func == AggregateFunc::Any
                                         {
                                             push_down.push(aggregates[0].expr.clone());
-                                            aggregates[0].expr = MirScalarExpr::literal_ok(
-                                                Datum::True,
-                                                ScalarType::Bool,
-                                            );
+                                            aggregates[0].expr = MirScalarExpr::literal_true();
                                         } else {
                                             retain.push(predicate);
                                         }
