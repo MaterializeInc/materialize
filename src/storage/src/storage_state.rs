@@ -201,7 +201,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             Arc::clone(&persist_clients),
             Arc::clone(storage_configuration.config_set()),
         );
-        let async_worker = Rc::new(RefCell::new(async_worker));
         let cluster_memory_limit = instance_context.cluster_memory_limit;
 
         let storage_state = StorageState {
@@ -311,7 +310,7 @@ pub struct StorageState {
 
     /// Async worker companion, used for running code that requires async, which
     /// the timely main loop cannot do.
-    pub async_worker: Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>,
+    pub async_worker: AsyncStorageWorker<mz_repr::Timestamp>,
 
     /// Configuration for source and sink connections.
     pub storage_configuration: StorageConfiguration,
@@ -388,21 +387,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// workers responsibilities, how it communicates with the other workers and
     /// how commands flow from the controller and through the workers.
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
-        // There can only ever be one timely main loop/thread that sends
-        // commands to the async worker, so we borrow it for the whole lifetime
-        // of the loop below.
-        let async_worker = Rc::clone(&self.storage_state.async_worker);
-        let mut async_worker = async_worker.borrow_mut();
-
-        // We need this to get around having to borrow the sequencer but also
-        // passing around references to `self.storage_state`.
-        let command_sequencer = Rc::clone(&self.storage_state.internal_cmd_tx);
-
         // At this point, all workers are still reading from the command flow.
-        {
-            let mut command_sequencer = command_sequencer.borrow_mut();
-            self.reconcile(&mut *command_sequencer, &mut async_worker, &command_rx);
-        }
+        self.reconcile(&command_rx);
 
         let mut disconnected = false;
 
@@ -421,7 +407,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // pending commands or responses. The command may have already been
             // consumed by the call to `client_rx.recv`. See:
             // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
-            if command_rx.is_empty() && async_worker.is_empty() {
+            if command_rx.is_empty() && self.storage_state.async_worker.is_empty() {
                 self.timely_worker.step_or_park(None);
             } else {
                 self.timely_worker.step();
@@ -451,67 +437,35 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .parameters
                         .statistics_collection_interval
             {
-                let mut internal_cmd_tx = command_sequencer.borrow_mut();
-                self.report_storage_statistics(&response_tx, &mut *internal_cmd_tx);
+                self.report_storage_statistics(&response_tx);
                 last_stats_time = Some(Instant::now());
             }
 
             // Handle any received commands.
-            let mut cmds = vec![];
-            let mut empty = false;
-            while !empty {
+            loop {
                 match command_rx.try_recv() {
-                    Ok(cmd) => cmds.push(cmd),
-                    Err(TryRecvError::Empty) => empty = true,
+                    Ok(cmd) => self.storage_state.handle_storage_command(cmd),
+                    Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        empty = true;
                         disconnected = true;
+                        break;
                     }
-                }
-            }
-            {
-                let mut internal_cmd_tx = command_sequencer.borrow_mut();
-                for cmd in cmds {
-                    self.storage_state.handle_storage_command(
-                        self.timely_worker.index(),
-                        &mut *internal_cmd_tx,
-                        &mut async_worker,
-                        cmd,
-                    )
                 }
             }
 
             // Handle responses from the async worker.
-            let mut empty = false;
-            while !empty {
-                match async_worker.try_recv() {
-                    Ok(response) => {
-                        let mut command_sequencer = command_sequencer.borrow_mut();
-                        self.handle_async_worker_response(&mut *command_sequencer, response);
-                    }
-                    Err(TryRecvError::Empty) => empty = true,
-                    Err(TryRecvError::Disconnected) => {
-                        empty = true;
-                    }
-                }
+            while let Ok(response) = self.storage_state.async_worker.try_recv() {
+                self.handle_async_worker_response(response);
             }
 
             // Handle any received commands.
-            {
-                loop {
-                    let mut command_sequencer_borrow = command_sequencer.borrow_mut();
-                    let Some(internal_cmd) = command_sequencer_borrow.next() else {
-                        break;
-                    };
-                    // We must ensure the sequencer is not borrowed during rendering since
-                    // operators will be scheduled synchronously as part of the following call and
-                    // some of them might want to use it.
-                    drop(command_sequencer_borrow);
-                    self.handle_internal_storage_command(
-                        &command_sequencer,
-                        &mut async_worker,
-                        internal_cmd,
-                    );
+            loop {
+                let mut borrow = self.storage_state.internal_cmd_tx.borrow_mut();
+                if let Some(internal_cmd) = borrow.next() {
+                    drop(borrow);
+                    self.handle_internal_storage_command(internal_cmd)
+                } else {
+                    break;
                 }
             }
         }
@@ -520,7 +474,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying a response from the async storage worker.
     pub fn handle_async_worker_response(
         &mut self,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
         async_response: AsyncStorageWorkerResponse<mz_repr::Timestamp>,
     ) {
         match async_response {
@@ -539,26 +492,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     0,
                     "only worker #0 is doing async processing"
                 );
-                internal_cmd_tx.broadcast(InternalStorageCommand::CreateIngestionDataflow {
-                    id,
-                    ingestion_description,
-                    as_of,
-                    resume_uppers,
-                    source_resume_uppers,
-                });
+                self.storage_state.internal_cmd_tx.borrow_mut().broadcast(
+                    InternalStorageCommand::CreateIngestionDataflow {
+                        id,
+                        ingestion_description,
+                        as_of,
+                        resume_uppers,
+                        source_resume_uppers,
+                    },
+                );
             }
         }
     }
 
-    // False positive for async_worker
-    #[allow(clippy::needless_pass_by_ref_mut)]
     /// Entry point for applying an internal storage command.
-    pub fn handle_internal_storage_command(
-        &mut self,
-        internal_cmd_tx: &RefCell<dyn InternalCommandSender>,
-        async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
-        internal_cmd: InternalStorageCommand,
-    ) {
+    pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
         match internal_cmd {
             InternalStorageCommand::SuspendAndRestart { id, reason } => {
                 info!(
@@ -596,7 +544,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 .aggregated_statistics
                                 .advance_global_epoch(*id);
                         }
-                        async_worker.update_frontiers(id, ingestion_description);
+                        self.storage_state
+                            .async_worker
+                            .update_frontiers(id, ingestion_description);
                     }
 
                     // Continue with other commands.
@@ -622,7 +572,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state
                             .aggregated_statistics
                             .advance_global_epoch(id);
-                        internal_cmd_tx.borrow_mut().broadcast(
+                        self.storage_state.internal_cmd_tx.borrow_mut().broadcast(
                             InternalStorageCommand::RunSinkDataflow(id, sink_description),
                         );
                     }
@@ -840,14 +790,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     /// Report source statistics back to the controller.
-    pub fn report_storage_statistics(
-        &mut self,
-        response_tx: &ResponseSender,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
-    ) {
+    pub fn report_storage_statistics(&mut self, response_tx: &ResponseSender) {
         let (sources, sinks) = self.storage_state.aggregated_statistics.emit_local();
         if !sources.is_empty() || !sinks.is_empty() {
-            internal_cmd_tx.broadcast(InternalStorageCommand::StatisticsUpdate { sources, sinks })
+            self.storage_state
+                .internal_cmd_tx
+                .borrow_mut()
+                .broadcast(InternalStorageCommand::StatisticsUpdate { sources, sinks })
         }
 
         let (sources, sinks) = self.storage_state.aggregated_statistics.snapshot();
@@ -891,12 +840,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// subscribe response buffer. We will need to be vigilant with future
     /// modifications to `StorageState` to line up changes there with clean
     /// resets here.
-    fn reconcile(
-        &mut self,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
-        async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
-        command_rx: &CommandReceiver,
-    ) {
+    fn reconcile(&mut self, command_rx: &CommandReceiver) {
         // To initialize the connection, we want to drain all commands until we
         // receive a `StorageCommand::InitializationComplete` command to form a
         // target command state.
@@ -1121,32 +1065,19 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         // Execute the modified commands.
         for command in commands {
-            self.storage_state.handle_storage_command(
-                self.timely_worker.index(),
-                internal_cmd_tx,
-                async_worker,
-                command,
-            );
+            self.storage_state.handle_storage_command(command);
         }
     }
 }
 
 impl StorageState {
-    // False positive for async_worker
-    #[allow(clippy::needless_pass_by_ref_mut)]
     /// Entry point for applying a storage command.
     ///
     /// NOTE: This does not have access to the timely worker and therefore
     /// cannot render dataflows. For dataflow rendering, this needs to either
-    /// send asynchronous command to the given `async_worker` or internal
-    /// commands to the given `internal_cmd_tx`.
-    pub fn handle_storage_command(
-        &mut self,
-        worker_index: usize,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
-        async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
-        cmd: StorageCommand,
-    ) {
+    /// send asynchronous command to the `async_worker` or internal
+    /// commands to the `internal_cmd_tx`.
+    pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
@@ -1172,10 +1103,12 @@ impl StorageState {
                 // This needs to be broadcast by one worker and go through
                 // the internal command fabric, to ensure consistent
                 // ordering of dataflow rendering across all workers.
-                if worker_index == 0 {
-                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
-                        storage_parameters: params,
-                    })
+                if self.timely_worker_index == 0 {
+                    self.internal_cmd_tx.borrow_mut().broadcast(
+                        InternalStorageCommand::UpdateConfiguration {
+                            storage_parameters: params,
+                        },
+                    )
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {
@@ -1201,8 +1134,8 @@ impl StorageState {
                     // n.b. the ingestion on each worker uses the description from worker 0––not the
                     // ingestion in the local storage state. This is something we might have
                     // interest in fixing in the future, e.g. #19907
-                    if worker_index == 0 {
-                        async_worker.update_frontiers(id, description);
+                    if self.timely_worker_index == 0 {
+                        self.async_worker.update_frontiers(id, description);
                     }
                 }
             }
@@ -1223,11 +1156,10 @@ impl StorageState {
                     // This needs to be broadcast by one worker and go through the internal command
                     // fabric, to ensure consistent ordering of dataflow rendering across all
                     // workers.
-                    if worker_index == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
-                            export.id,
-                            export.description,
-                        ));
+                    if self.timely_worker_index == 0 {
+                        self.internal_cmd_tx.borrow_mut().broadcast(
+                            InternalStorageCommand::RunSinkDataflow(export.id, export.description),
+                        );
                     }
                 }
             }
@@ -1287,8 +1219,10 @@ impl StorageState {
 
                 // Broadcast from one worker to make sure its sequences
                 // with the other internal commands.
-                if worker_index == 0 && !drop_ids.is_empty() {
-                    internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(drop_ids));
+                if self.timely_worker_index == 0 && !drop_ids.is_empty() {
+                    self.internal_cmd_tx
+                        .borrow_mut()
+                        .broadcast(InternalStorageCommand::DropDataflow(drop_ids));
                 }
             }
         }
