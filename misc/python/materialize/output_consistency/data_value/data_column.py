@@ -67,33 +67,55 @@ class DataColumn(LeafExpression):
 
         return selected_rows
 
-    def get_values_at_rows(self, row_selection: DataRowSelection) -> list[DataValue]:
+    def get_values_at_rows(
+        self, row_selection: DataRowSelection, table_index: int | None
+    ) -> list[DataValue]:
         if row_selection.keys is None:
             return self.values
 
         values = []
         for row_index in row_selection.keys:
-            values.append(self.get_value_at_row(row_index))
+            values.append(self.get_value_at_row(row_index, table_index))
 
         return values
 
-    def get_value_at_row(self, row_index: int) -> DataValue:
+    def get_value_at_row(
+        self,
+        row_index: int,
+        table_index: int | None = None,
+    ) -> DataValue:
         """All types need to have the same number of rows, but not all have the same number of distinct values. After
         having iterated through of all values of the given type, begin repeating values but skip the NULL value, which
         is known to be the first value of all types.
         :param row_index: an arbitrary, positive number, may be out of the value range
         """
 
+        values_of_table = self._get_values_of_table(table_index)
+        assert len(values_of_table) > 0, f"No values for table index {table_index}"
+
+        # if there is a NULL value, it will always be at position 0; we can only exclude it if we have other values
+        has_null_value_to_exclude = (
+            values_of_table[0].is_null_value and len(values_of_table) > 1
+        )
         value_index = row_index
 
-        if value_index >= len(self.values):
-            null_value_offset = 1
-            available_value_count_without_null = len(self.values) - 1
+        if value_index >= len(values_of_table):
+            null_value_offset = 1 if has_null_value_to_exclude else 0
+            available_value_count = len(values_of_table) - (
+                1 if has_null_value_to_exclude else 0
+            )
             value_index = null_value_offset + (
-                (value_index - null_value_offset) % available_value_count_without_null
+                (value_index - null_value_offset) % available_value_count
             )
 
-        return self.values[value_index]
+        return values_of_table[value_index]
+
+    def _get_values_of_table(self, table_index: int | None) -> list[DataValue]:
+        return [
+            value
+            for value in self.values
+            if table_index is None or table_index in value.vertical_table_indices
+        ]
 
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', type={self.data_type})"
