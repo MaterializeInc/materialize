@@ -152,13 +152,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l1 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l1 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l1 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l1 =
       Reduce aggregates=[min(#0)] // { arity: 1 }

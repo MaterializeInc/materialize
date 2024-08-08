@@ -27,12 +27,16 @@ union all
 (select a, b, 2 from t)
 ----
 Explained Query:
-  Map (2) // { arity: 3 }
-    Union // { arity: 2 }
-      ReadStorage materialize.public.t // { arity: 2 }
-      ReadStorage materialize.public.t // { arity: 2 }
-      Constant // { arity: 2 }
-        - (null, 1)
+  Return // { arity: 3 }
+    Union // { arity: 3 }
+      Get l0 // { arity: 3 }
+      Get l0 // { arity: 3 }
+      Constant // { arity: 3 }
+        - (null, 1, 2)
+  With
+    cte l0 =
+      Map (2) // { arity: 3 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
 
@@ -49,12 +53,16 @@ union all
 (select a, b, 2, 3 from t)
 ----
 Explained Query:
-  Map (2, 3) // { arity: 4 }
-    Union // { arity: 2 }
-      ReadStorage materialize.public.t // { arity: 2 }
-      ReadStorage materialize.public.t // { arity: 2 }
-      Constant // { arity: 2 }
-        - (null, 1)
+  Return // { arity: 4 }
+    Union // { arity: 4 }
+      Get l0 // { arity: 4 }
+      Get l0 // { arity: 4 }
+      Constant // { arity: 4 }
+        - (null, 1, 2, 3)
+  With
+    cte l0 =
+      Map (2, 3) // { arity: 4 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
 
@@ -744,12 +752,11 @@ Explained Query:
     Union // { arity: 1 }
       Map (error("division by zero")) // { arity: 1 }
         Get l0 // { arity: 0 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Get l0 // { arity: 0 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Get l0 // { arity: 0 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Distinct project=[] // { arity: 0 }
@@ -770,12 +777,11 @@ Explained Query:
     Union // { arity: 1 }
       Map (error("division by zero")) // { arity: 1 }
         Get l0 // { arity: 0 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Get l0 // { arity: 0 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Get l0 // { arity: 0 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Distinct project=[] // { arity: 0 }
@@ -795,13 +801,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
@@ -838,13 +843,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
