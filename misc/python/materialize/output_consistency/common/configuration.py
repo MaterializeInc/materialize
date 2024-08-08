@@ -33,6 +33,7 @@ class ConsistencyTestConfiguration:
         avoid_expressions_expecting_db_error: bool,
         disable_predefined_queries: bool,
         query_output_mode: QueryOutputMode,
+        vertical_join_tables: int,
     ):
         self.scenario = scenario
         self.queries_per_tx = queries_per_tx
@@ -50,6 +51,7 @@ class ConsistencyTestConfiguration:
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.disable_predefined_queries = disable_predefined_queries
         self.query_output_mode = query_output_mode
+        self.vertical_join_tables = vertical_join_tables
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:
