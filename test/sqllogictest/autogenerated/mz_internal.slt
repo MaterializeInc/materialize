@@ -152,6 +152,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  id           text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_unstable_cluster_replicas' ORDER BY position
+----
+1  id           text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
 ----
 1  id  text
@@ -649,6 +654,7 @@ mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
+mz_unstable_cluster_replicas
 mz_webhook_sources
 pg_attrdef_all_databases
 pg_attribute_all_databases

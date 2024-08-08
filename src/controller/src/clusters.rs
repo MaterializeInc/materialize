@@ -214,6 +214,17 @@ impl ReplicaLocation {
         };
         workers_per_process * self.num_processes()
     }
+
+    /// A pending replica is created as part of an alter cluster of an managed
+    /// cluster. the configuration of a pending replica will not match that of
+    /// the clusters until the alter has been finalized promoting the pending
+    /// replicas and setting this value to false.
+    pub fn pending(&self) -> bool {
+        match self {
+            ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
+            _ => false,
+        }
+    }
 }
 
 /// The "role" of a cluster, which is currently used to determine the

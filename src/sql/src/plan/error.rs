@@ -262,6 +262,7 @@ pub enum PlanError {
         limit: Duration,
     },
     RetainHistoryRequired,
+    TimeoutRequired,
     SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
     // TODO(benesch): eventually all errors should be structured.
@@ -371,7 +372,7 @@ impl PlanError {
                         if cause.kind() == io::ErrorKind::TimedOut {
                             return Some(
                                 "Do you have a firewall or security group that is \
-                                preventing Materialize from conecting to your PostgreSQL server?"
+                                preventing Materialize from connecting to your PostgreSQL server?"
                                     .into(),
                             );
                         }
@@ -739,6 +740,9 @@ impl fmt::Display for PlanError {
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
             Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
+            Self::TimeoutRequired => {
+                write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH ( WAIT UNTIL CAUGHT UP ( ... ) )")
+            },
         }
     }
 }

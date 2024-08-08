@@ -1088,3 +1088,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16979  mz_cluster_workload_classes
 16981  mz_recent_storage_usage
 16982  mz_recent_storage_usage_ind
+16983  mz_unstable_cluster_replicas

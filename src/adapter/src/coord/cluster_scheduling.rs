@@ -17,7 +17,7 @@ use mz_ore::soft_panic_or_log;
 use mz_repr::adt::interval::Interval;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogCluster;
-use mz_sql::plan::ClusterSchedule;
+use mz_sql::plan::{AlterClusterPlanStrategy, ClusterSchedule};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
@@ -297,6 +297,7 @@ impl Coordinator {
                             crate::catalog::ReplicaCreateDropReason::ClusterScheduling(
                                 decisions.values().cloned().collect(),
                             ),
+                            AlterClusterPlanStrategy::None,
                         )
                         .await
                     {

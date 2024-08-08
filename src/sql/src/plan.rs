@@ -87,6 +87,7 @@ pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
 use crate::plan;
+use crate::plan::statement::ddl::ClusterAlterUntilCaughtUpOptionExtracted;
 use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
@@ -1646,28 +1647,44 @@ impl Default for PlanClusterOption {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct AlterClusterPlanStrategy {
-    pub condition: AlterClusterStrategyCondition,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AlterClusterPlanStrategy {
+    None,
+    For(Duration),
+    UntilCaughtUp {
+        on_timeout: ContinueOrAbort,
+        timeout: Duration,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AlterClusterStrategyCondition {
-    None,
-    For(Duration),
+pub enum ContinueOrAbort {
+    Continue,
+    Abort,
 }
 
-impl AlterClusterStrategyCondition {
-    pub fn is_none(&self) -> bool {
-        matches!(self, Self::None)
+impl Default for ContinueOrAbort {
+    fn default() -> Self {
+        Self::Abort
     }
 }
 
-impl Default for AlterClusterPlanStrategy {
-    fn default() -> Self {
-        Self {
-            condition: AlterClusterStrategyCondition::None,
+impl TryFrom<&str> for ContinueOrAbort {
+    type Error = PlanError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "continue" => Ok(Self::Continue),
+            "abort" => Ok(Self::Abort),
+            _ => Err(PlanError::Unstructured(
+                "Valid options are CONTINUE, ABORT".into(),
+            )),
         }
+    }
+}
+
+impl AlterClusterPlanStrategy {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
     }
 }
 
@@ -1675,13 +1692,27 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
     type Error = PlanError;
 
     fn try_from(value: ClusterAlterOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(Self {
-            condition: match value.wait {
-                Some(ClusterAlterOptionValue::For(v)) => {
-                    AlterClusterStrategyCondition::For(Duration::try_from_value(v)?)
+        Ok(match value.wait {
+            Some(ClusterAlterOptionValue::For(d)) => Self::For(Duration::try_from_value(d)?),
+            Some(ClusterAlterOptionValue::UntilCaughtUp(options)) => {
+                let extracted = ClusterAlterUntilCaughtUpOptionExtracted::try_from(options)?;
+                Self::UntilCaughtUp {
+                    timeout: match extracted.timeout {
+                        Some(d) => d,
+                        None => Err(PlanError::TimeoutRequired)?,
+                    },
+                    on_timeout: match extracted.on_timeout {
+                        Some(v) => ContinueOrAbort::try_from(v.as_str()).map_err(|e| {
+                            PlanError::InvalidOptionValue {
+                                option_name: "ON TIMEOUT".into(),
+                                err: Box::new(e),
+                            }
+                        })?,
+                        None => ContinueOrAbort::default(),
+                    },
                 }
-                None => AlterClusterStrategyCondition::None,
-            },
+            }
+            None => Self::None,
         })
     }
 }
