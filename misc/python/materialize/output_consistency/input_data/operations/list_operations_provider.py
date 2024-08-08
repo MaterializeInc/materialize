@@ -15,8 +15,8 @@ from materialize.output_consistency.input_data.params.collection_operation_param
     ElementOfOtherCollectionOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
+    COLLECTION_INDEX_OPTIONAL_PARAM,
     COLLECTION_INDEX_PARAM,
-    COLLECTION_INDEX_PARAM_OPT,
 )
 from materialize.output_consistency.input_data.params.list_operation_param import (
     ListLikeOtherListOperationParam,
@@ -125,7 +125,11 @@ LIST_OPERATION_TYPES.append(
 LIST_OPERATION_TYPES.append(
     DbOperation(
         "$[$:$]",
-        [ListOperationParam(), COLLECTION_INDEX_PARAM_OPT, COLLECTION_INDEX_PARAM_OPT],
+        [
+            ListOperationParam(),
+            COLLECTION_INDEX_OPTIONAL_PARAM,
+            COLLECTION_INDEX_OPTIONAL_PARAM,
+        ],
         ListReturnTypeSpec(),
         comment="slice list",
     )

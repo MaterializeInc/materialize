@@ -19,7 +19,7 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     LIKE_PARAM,
-    REGEX_FLAG_PARAM,
+    REGEX_FLAG_OPTIONAL_PARAM,
     REGEX_PARAM,
     REPETITIONS_PARAM,
     STRING_TRIM_SPEC_PARAM,
@@ -289,7 +289,7 @@ STRING_OPERATION_TYPES.append(
 STRING_OPERATION_TYPES.append(
     DbFunction(
         "regexp_match",
-        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_OPTIONAL_PARAM],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.STRING),
         tags={TAG_REGEX},
     )
@@ -297,7 +297,12 @@ STRING_OPERATION_TYPES.append(
 
 REGEXP_REPLACE = DbFunction(
     "regexp_replace",
-    [StringOperationParam(), REGEX_PARAM, StringOperationParam(), REGEX_FLAG_PARAM],
+    [
+        StringOperationParam(),
+        REGEX_PARAM,
+        StringOperationParam(),
+        REGEX_FLAG_OPTIONAL_PARAM,
+    ],
     StringReturnTypeSpec(),
     tags={TAG_REGEX},
 )
@@ -306,7 +311,7 @@ STRING_OPERATION_TYPES.append(REGEXP_REPLACE)
 STRING_OPERATION_TYPES.append(
     DbFunction(
         "regexp_split_to_array",
-        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_OPTIONAL_PARAM],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.ARRAY),
         tags={TAG_REGEX},
     )

@@ -18,8 +18,8 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_operation_tagged,
     matches_fun_by_any_name,
     matches_fun_by_name,
+    matches_op_by_any_pattern,
     matches_op_by_pattern,
-    matches_x_or_y,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
     YesIgnore,
@@ -125,15 +125,11 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             self.lower_version < MZ_VERSION_0_93_0 <= self.higher_version
             and expression.matches(
                 partial(
-                    matches_x_or_y,
-                    x=partial(
-                        matches_op_by_pattern,
-                        pattern="$ ILIKE $",
-                    ),
-                    y=partial(
-                        matches_op_by_pattern,
-                        pattern="$ NOT ILIKE $",
-                    ),
+                    matches_op_by_any_pattern,
+                    patterns={
+                        "$ ILIKE $",
+                        "$ NOT ILIKE $",
+                    },
                 ),
                 True,
             )

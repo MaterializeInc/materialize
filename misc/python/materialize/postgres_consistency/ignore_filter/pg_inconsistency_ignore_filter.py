@@ -23,11 +23,13 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    argument_has_any_characteristic,
     involves_data_type_categories,
     involves_data_type_category,
     is_any_date_time_expression,
     is_known_to_involve_exact_data_types,
     is_operation_tagged,
+    is_table_function,
     matches_any_expression_arg,
     matches_fun_by_any_name,
     matches_fun_by_name,
@@ -329,6 +331,40 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
+        if (
+            db_function.function_name_in_lower_case == "regexp_split_to_table"
+            and expression.matches(
+                partial(
+                    matches_x_and_y,
+                    x=partial(
+                        matches_op_by_any_pattern,
+                        patterns={
+                            "$ ILIKE $",
+                            "$ NOT ILIKE $",
+                        },
+                    ),
+                    y=partial(
+                        argument_has_any_characteristic,
+                        arg_index=1,
+                        characteristics={ExpressionCharacteristics.NULL},
+                    ),
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("#28806: regexp_split_to_table with ILIKE on NULL")
+
+        if expression.matches(
+            partial(
+                matches_fun_by_name,
+                function_name_in_lower_case="regexp_split_to_table",
+            ),
+            True,
+        ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL}):
+            return YesIgnore(
+                "#28806: function with NULL applied to regexp_split_to_table"
+            )
+
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(
@@ -590,6 +626,40 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Different evaluation order")
 
+        if query_template.matches_any_expression(
+            partial(
+                matches_x_and_y,
+                x=partial(
+                    matches_fun_by_name,
+                    function_name_in_lower_case="regexp_split_to_table",
+                ),
+                y=partial(
+                    matches_x_or_y,
+                    x=partial(
+                        argument_has_any_characteristic,
+                        arg_index=1,
+                        characteristics={ExpressionCharacteristics.NULL},
+                    ),
+                    y=partial(
+                        argument_has_any_characteristic,
+                        arg_index=2,
+                        characteristics={ExpressionCharacteristics.NULL},
+                    ),
+                ),
+            ),
+            True,
+        ):
+            return YesIgnore("Evaluation shortcut on NULL pattern")
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_fun_by_name,
+                function_name_in_lower_case="regexp_split_to_table",
+            ),
+            True,
+        ):
+            return YesIgnore("Evaluation shortcut on NULL pattern")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
@@ -718,6 +788,24 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if "invalid regular expression flag: n" in mz_error_msg:
             return YesIgnore("#28805: regex n flag")
+
+        if "aggregate functions are not allowed in table function" in mz_error_msg:
+            return YesIgnore(
+                "#28390: aggregate functions are not allowed in table function arguments"
+            )
+
+        if "table functions are not allowed in other table functions" in mz_error_msg:
+            return YesIgnore(
+                "#28393: table functions are not allowed in other table functions"
+            )
+
+        if (
+            "table functions are not allowed in aggregate function calls"
+            in mz_error_msg
+        ):
+            return YesIgnore(
+                "#28871: table functions are not allowed in aggregate function calls"
+            )
 
         return NoIgnore()
 
@@ -945,6 +1033,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             in all_involved_characteristics
         ):
             return YesIgnore("#28300: ALL and ANY with NULL or empty array")
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            is_table_function,
+            True,
+        ) and (query_template.offset is not None or query_template.limit is not None):
+            # When table functions are used, a row-order insensitive comparison will be conducted in the result
+            # comparator. However, this is not sufficient when a LIMIT or OFFSET clause is present.
+            return YesIgnore("Different sort order")
 
         return NoIgnore()
 

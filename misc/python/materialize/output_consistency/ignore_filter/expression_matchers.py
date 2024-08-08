@@ -16,6 +16,9 @@ from materialize.output_consistency.expression.expression import (
     Expression,
     LeafExpression,
 )
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
@@ -178,6 +181,25 @@ def is_operation_tagged(expression: Expression, tag: str) -> bool:
     return False
 
 
+def argument_has_any_characteristic(
+    expression: Expression,
+    arg_index: int,
+    characteristics: set[ExpressionCharacteristics],
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        assert arg_index < len(
+            expression.operation.params
+        ), f"Invalid argument index for {expression.operation_to_pattern()}"
+        param = expression.operation.params[arg_index]
+        if param.optional and len(expression.args) <= arg_index:
+            return False
+
+        argument = expression.args[arg_index]
+        return argument.has_any_characteristic(characteristics)
+
+    return False
+
+
 def is_any_date_time_expression(expression: Expression) -> bool:
     all_date_time_function_names = {
         function.function_name_in_lower_case
@@ -221,4 +243,10 @@ def is_known_to_return_non_integer_number(expression: Expression):
     if isinstance(return_type_spec, NumericReturnTypeSpec):
         return return_type_spec.always_floating_type
 
+    return False
+
+
+def is_table_function(expression: Expression) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        return expression.operation.is_table_function
     return False

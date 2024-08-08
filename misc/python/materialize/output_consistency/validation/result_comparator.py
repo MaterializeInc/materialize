@@ -338,10 +338,21 @@ class ResultComparator:
         # both results are known to be not empty and have the same number of rows
         row_length = len(result1.result_rows)
 
+        column_values1 = []
+        column_values2 = []
+        expression = query_execution.query_template.select_expressions[col_index]
+
         for row_index in range(0, row_length):
-            result_value1 = result1.result_rows[row_index][col_index]
-            result_value2 = result2.result_rows[row_index][col_index]
-            expression = query_execution.query_template.select_expressions[col_index]
+            column_values1.append(result1.result_rows[row_index][col_index])
+            column_values2.append(result2.result_rows[row_index][col_index])
+
+        if self.ignore_row_order(expression):
+            column_values1 = self._sort_column_values(column_values1)
+            column_values2 = self._sort_column_values(column_values2)
+
+        for row_index in range(0, row_length):
+            result_value1 = column_values1[row_index]
+            result_value2 = column_values2[row_index]
 
             if not self.is_value_equal(result_value1, result_value2, expression):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
@@ -497,6 +508,9 @@ class ResultComparator:
 
         return True
 
+    def ignore_row_order(self, expression: Expression) -> bool:
+        return False
+
     def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
         return False
 
@@ -507,3 +521,10 @@ class ResultComparator:
             return query_execution.query_template.select_expressions[0]
 
         return None
+
+    def _sort_column_values(self, column_values: list[Any]) -> list[Any]:
+        # needed because, for example, None values have no order
+        def sort_key(value: Any) -> Any:
+            return str(value)
+
+        return sorted(column_values, key=sort_key)
