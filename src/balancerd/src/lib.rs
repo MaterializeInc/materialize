@@ -572,7 +572,8 @@ impl PgwireBalancer {
         }
 
         let conn_uuid = Uuid::new_v4();
-        if LOG_PGWIRE_CONNECTION_STATUS.get(&configs) {
+        let log_connection_status = LOG_PGWIRE_CONNECTION_STATUS.get(&configs);
+        if log_connection_status {
             debug!(%conn_uuid, "starting new pgwire connection in balancer");
         }
         let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
@@ -599,11 +600,7 @@ impl PgwireBalancer {
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
-        // Ignore error returns because they are not actionable, and not even useful to record
-        // metrics of. For example, running psql in a shell then exiting with ctrl+D produces an
-        // error, even though it was an intended exit by the user. Those connections should not get
-        // recorded as errors, as that's probably a misleading metric.
-        let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+        let conn_res = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
         if let Some(tenant) = &resolved.tenant {
             metrics
                 .tenant_connections_tx(tenant)
@@ -611,6 +608,14 @@ impl PgwireBalancer {
             metrics
                 .tenant_connections_rx(tenant)
                 .inc_by(u64::cast_from(client_counter.read));
+        }
+        if log_connection_status {
+            match conn_res {
+                Ok(_) => debug!(%conn_uuid, "closing pgwire connection in balancer successfully"),
+                Err(e) => {
+                    debug!(%conn_uuid, "closing pgwire connection in balancer with error: {e}")
+                }
+            }
         }
 
         Ok(())

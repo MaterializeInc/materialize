@@ -29,7 +29,6 @@ use mz_adapter::{
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
-use mz_ore::option::OptionExt;
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
@@ -37,7 +36,7 @@ use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSION
 use mz_repr::{
     Datum, GlobalId, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
 };
-use mz_server_core::{TlsMode, CONN_UUID_KEY};
+use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{CopyDirection, CopyStatement, FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
@@ -132,7 +131,6 @@ where
     }
 
     let user = params.remove("user").unwrap_or_else(String::new);
-    let conn_uuid = params.remove(CONN_UUID_KEY);
 
     if internal {
         // The internal server can only be used to connect to the internal users.
@@ -286,8 +284,6 @@ where
         adapter_client,
         txn_needs_commit: false,
     };
-
-    debug!(conn_uuid = %conn_uuid.display_or("<none>"), "starting new pgwire connection in adapter");
 
     select! {
         r = machine.run() => {
