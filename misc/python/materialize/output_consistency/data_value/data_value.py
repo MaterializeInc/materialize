@@ -32,6 +32,7 @@ class DataValue(LeafExpression):
         data_type: DataType,
         value_identifier: str,
         characteristics: set[ExpressionCharacteristics],
+        is_null_value: bool,
         is_pg_compatible: bool = True,
     ):
         column_name = (
@@ -46,6 +47,7 @@ class DataValue(LeafExpression):
             False,
         )
         self.value = value
+        self.is_null_value = is_null_value
         self.is_pg_compatible = is_pg_compatible
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:

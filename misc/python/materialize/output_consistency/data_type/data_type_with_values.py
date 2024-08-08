@@ -22,7 +22,7 @@ class DataTypeWithValues:
         """Creates a new instance and prefills the values with a NULL value"""
         self.data_type = data_type
         self.null_value = self._create_raw_value(
-            "NULL", "NULL", {ExpressionCharacteristics.NULL}
+            "NULL", "NULL", {ExpressionCharacteristics.NULL}, is_null_value=True
         )
         # values (and implicitly a column for each value for horizontal storage)
         self.raw_values: list[DataValue] = [self.null_value]
@@ -32,8 +32,15 @@ class DataTypeWithValues:
         value: str,
         column_name: str,
         characteristics: set[ExpressionCharacteristics],
+        is_null_value: bool = False,
     ) -> DataValue:
-        return DataValue(value, self.data_type, column_name, characteristics)
+        return DataValue(
+            value,
+            self.data_type,
+            column_name,
+            characteristics,
+            is_null_value=is_null_value,
+        )
 
     def add_raw_value(
         self,
