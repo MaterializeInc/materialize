@@ -4345,6 +4345,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
