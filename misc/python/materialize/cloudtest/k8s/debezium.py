@@ -36,7 +36,9 @@ class DebeziumDeployment(K8sDeployment):
         ports = [V1ContainerPort(container_port=8083, name="debezium")]
 
         env = [
-            V1EnvVar(name="BOOTSTRAP_SERVERS", value="redpanda:9092"),
+            V1EnvVar(
+                name="BOOTSTRAP_SERVERS", value=f"redpanda.{redpanda_namespace}:9092"
+            ),
             V1EnvVar(name="CONFIG_STORAGE_TOPIC", value="connect_configs"),
             V1EnvVar(name="OFFSET_STORAGE_TOPIC", value="connect_offsets"),
             V1EnvVar(name="STATUS_STORAGE_TOPIC", value="connect_statuses"),

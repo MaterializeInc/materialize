@@ -149,6 +149,7 @@ IGNORE_RE = re.compile(
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ at\ a\ time
     # For 0dt upgrades
     | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
+    | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey
     )
