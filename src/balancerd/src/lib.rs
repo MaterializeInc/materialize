@@ -46,7 +46,7 @@ use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::task::{spawn, JoinSetExt};
-use mz_ore::{assert_none, metric, netio};
+use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
@@ -576,7 +576,14 @@ impl PgwireBalancer {
             debug!(%conn_uuid, "starting new pgwire connection in balancer");
         }
         let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
-        assert_none!(prev);
+        if prev.is_some() {
+            return conn
+                .send(ErrorResponse::fatal(
+                    SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                    format!("invalid parameter '{CONN_UUID_KEY}'"),
+                ))
+                .await;
+        }
 
         let _active_guard = resolved
             .tenant
