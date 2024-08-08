@@ -72,6 +72,9 @@ class ConsistencyTestRunner:
         self.output_printer = output_printer
 
     def setup(self) -> None:
+        self.input_data.assign_columns_to_tables(
+            self.config.vertical_join_tables, self.randomized_picker
+        )
         self.execution_manager.setup_database_objects(
             self.input_data, self.evaluation_strategies
         )

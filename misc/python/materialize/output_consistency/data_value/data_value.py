@@ -47,6 +47,7 @@ class DataValue(LeafExpression):
             False,
         )
         self.value = value
+        self.vertical_table_indices: set[int] = set()
         self.is_null_value = is_null_value
         self.is_pg_compatible = is_pg_compatible
 
