@@ -1967,6 +1967,106 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
             assert "ERROR" not in line, f"found ERROR in service {service}: {line}"
 
 
+def workflow_test_drop_during_reconciliation(c: Composition) -> None:
+    """
+    Test that dropping storage and compute objects during reconciliation works.
+
+    Regression test for #28784.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_unorchestrated_cluster_replicas": "true",
+            },
+        ),
+        Testdrive(
+            no_reset=True,
+            default_timeout="30s",
+        ),
+    ):
+        c.up("materialized", "clusterd1", "toxiproxy")
+        c.up("testdrive", persistent=True)
+
+        # Set up toxi-proxies for all clusterd endpoints.
+        toxi_url = "http://toxiproxy:8474/proxies"
+        for port in range(2100, 2104):
+            c.testdrive(
+                dedent(
+                    f"""
+                    $ http-request method=POST url={toxi_url} content-type=application/json
+                    {{
+                      "name": "clusterd_{port}",
+                      "listen": "0.0.0.0:{port}",
+                      "upstream": "clusterd1:{port}"
+                    }}
+                    """
+                )
+            )
+
+        # Set up a cluster with storage and compute objects that can be dropped
+        # during reconciliation.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['toxiproxy:2100'],
+                STORAGE ADDRESSES ['toxiproxy:2103'],
+                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                COMPUTE ADDRESSES ['toxiproxy:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+
+            CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
+            CREATE DEFAULT INDEX on s;
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM s;
+            """
+        )
+
+        # Wait for objects to be installed on the cluster.
+        c.sql("SELECT * FROM mv")
+
+        # Sever the connection between envd and clusterd.
+        for port in range(2100, 2104):
+            c.testdrive(
+                dedent(
+                    f"""
+                    $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
+                    {{"enabled": false}}
+                    """
+                )
+            )
+
+        # Drop all objects installed on the cluster.
+        c.sql("DROP SOURCE s CASCADE")
+
+        # Restore the connection between envd and clusterd, causing a
+        # reconciliation.
+        for port in range(2100, 2104):
+            c.testdrive(
+                dedent(
+                    f"""
+                    $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
+                    {{"enabled": true}}
+                    """
+                )
+            )
+
+        # Confirm the cluster is still healthy and the compute objects have
+        # been dropped. We can't verify the dropping of storage objects due to
+        # the lack of introspection for storage dataflows.
+        c.testdrive(
+            dedent(
+                """
+                > SET cluster = cluster1;
+                > SELECT * FROM mz_introspection.mz_compute_exports WHERE export_id LIKE 'u%';
+                """
+            )
+        )
+
+
 def workflow_test_mz_subscriptions(c: Composition) -> None:
     """
     Test that in-progress subscriptions are reflected in
