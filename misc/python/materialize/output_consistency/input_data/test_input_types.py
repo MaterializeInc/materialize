@@ -26,14 +26,14 @@ class ConsistencyTestTypesInput:
         self.all_data_types_with_values: list[DataTypeWithValues] = (
             ALL_DATA_TYPES_WITH_VALUES
         )
-        self.max_value_count = self._get_max_value_count_of_all_types()
+        self.max_value_count = self.get_max_value_count_of_all_types(table_index=None)
 
     def remove_types(self, shall_remove: Callable[[DataType], bool]) -> None:
         self.all_data_types_with_values = [
             x for x in self.all_data_types_with_values if not shall_remove(x.data_type)
         ]
 
-        self.max_value_count = self._get_max_value_count_of_all_types()
+        self.max_value_count = self.get_max_value_count_of_all_types(table_index=None)
 
     def remove_values(self, shall_remove: Callable[[DataValue], bool]) -> None:
         for data_type_with_values in self.all_data_types_with_values:
@@ -43,9 +43,16 @@ class ConsistencyTestTypesInput:
                 if not shall_remove(value)
             ]
 
-    def _get_max_value_count_of_all_types(self) -> int:
+    def get_max_value_count_of_all_types(self, table_index: int | None) -> int:
         return max(
-            len(type_with_values.raw_values)
+            len(
+                [
+                    value
+                    for value in type_with_values.raw_values
+                    if table_index is None
+                    or table_index in value.vertical_table_indices
+                ]
+            )
             for type_with_values in self.all_data_types_with_values
         )
 
