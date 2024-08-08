@@ -4407,6 +4407,7 @@ dependencies = [
  "prometheus",
  "reqwest",
  "semver",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-openssl",

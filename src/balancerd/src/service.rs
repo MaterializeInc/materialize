@@ -20,6 +20,7 @@ use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
     DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
+use mz_ore::cli::KeyValueArg;
 use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::TlsCliArgs;
 use tracing::warn;
@@ -107,6 +108,10 @@ pub struct Args {
         parse(try_from_str = humantime::parse_duration),
     )]
     config_sync_loop_interval: Option<Duration>,
+    /// A list of NAME=VALUE pairs used to override static defaults
+    /// for configuration parameters.
+    #[clap(long, env = "CONFIG_DEFAULT", multiple = true, value_delimiter = ';')]
+    config_default: Vec<KeyValueArg<String, String>>,
 
     /// The cloud provider where the balancer is running.
     #[clap(long, env = "CLOUD_PROVIDER")]
@@ -181,6 +186,10 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.launchdarkly_sdk_key,
         args.config_sync_timeout,
         args.config_sync_loop_interval,
+        args.config_default
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
         args.cloud_provider,
         args.cloud_provider_region,
     );

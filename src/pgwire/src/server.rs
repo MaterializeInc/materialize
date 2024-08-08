@@ -13,18 +13,19 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use mz_adapter_types::dyncfgs::LOG_PGWIRE_CONNECTION_STATUS;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
     decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION,
 };
-use mz_server_core::{ConnectionHandler, ReloadingTlsConfig};
+use mz_server_core::{ConnectionHandler, ReloadingTlsConfig, CONN_UUID_KEY};
 use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::Ssl;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::codec::FramedConn;
 use crate::metrics::{Metrics, MetricsConfig};
@@ -127,9 +128,19 @@ impl Server {
                             // `SslRequest`. This is considered a graceful termination.
                             None => return Ok(()),
 
-                            Some(FrontendStartupMessage::Startup { version, params }) => {
+                            Some(FrontendStartupMessage::Startup { version, mut params }) => {
                                 let mut conn = FramedConn::new(conn_id.clone(), conn);
-                                protocol::run(protocol::RunParams {
+
+                                let conn_uuid = params.remove(CONN_UUID_KEY);
+                                let log_connection_status =
+                                    LOG_PGWIRE_CONNECTION_STATUS.get(adapter_client.configs());
+                                if let Some(conn_uuid) = &conn_uuid {
+                                    if log_connection_status {
+                                        info!(%conn_uuid, "starting new pgwire connection in adapter");
+                                    }
+                                }
+
+                                let conn_res = protocol::run(protocol::RunParams {
                                     tls_mode: tls.as_ref().map(|tls| tls.mode),
                                     adapter_client,
                                     conn: &mut conn,
@@ -139,8 +150,23 @@ impl Server {
                                     internal,
                                     active_connection_count,
                                 })
-                                .await?;
-                                conn.flush().await?;
+                                .await;
+
+                                if let Some(conn_uuid) = &conn_uuid {
+                                    if log_connection_status {
+                                        match &conn_res {
+                                            Ok(_) => info!(%conn_uuid, "closing pgwire connection in adapter successfully"),
+                                            Err(e) => {
+                                                info!(%conn_uuid, "closing pgwire connection in adapter with error: {e}")
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Try to flush the connection before returning an error.
+                                let flush_res = conn.flush().await;
+                                conn_res?;
+                                flush_res?;
                                 return Ok(());
                             }
 

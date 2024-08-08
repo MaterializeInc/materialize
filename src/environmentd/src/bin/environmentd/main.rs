@@ -508,7 +508,7 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_support_cluster_replica_size: String,
-    /// An list of NAME=VALUE pairs used to override static defaults
+    /// A list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
         long,

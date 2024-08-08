@@ -39,7 +39,7 @@ use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::{build_info, BuildInfo};
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
@@ -94,6 +94,7 @@ pub struct BalancerConfig {
     launchdarkly_sdk_key: Option<String>,
     config_sync_timeout: Duration,
     config_sync_loop_interval: Option<Duration>,
+    config_default: BTreeMap<String, String>,
     cloud_provider: Option<String>,
     cloud_provider_region: Option<String>,
 }
@@ -113,6 +114,7 @@ impl BalancerConfig {
         launchdarkly_sdk_key: Option<String>,
         config_sync_timeout: Duration,
         config_sync_loop_interval: Option<Duration>,
+        config_default: BTreeMap<String, String>,
         cloud_provider: Option<String>,
         cloud_provider_region: Option<String>,
     ) -> Self {
@@ -130,6 +132,7 @@ impl BalancerConfig {
             launchdarkly_sdk_key,
             config_sync_timeout,
             config_sync_loop_interval,
+            config_default,
             cloud_provider,
             cloud_provider_region,
         }
@@ -178,6 +181,75 @@ impl BalancerService {
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);
+        // Populate default config parameters.
+        {
+            let mut updates = ConfigUpdates::default();
+            for (key, value) in &cfg.config_default {
+                let Some(entry) = configs.entry(&key) else {
+                    warn!("Unknown config parameter '{key}'");
+                    continue;
+                };
+                let config_val_template = entry.default();
+                let config_val = match config_val_template {
+                    ConfigVal::Bool(_) => {
+                        let Ok(value) = value.parse() else {
+                            warn!("invalid value '{value}' for key '{key}'");
+                            continue;
+                        };
+                        ConfigVal::Bool(value)
+                    }
+                    ConfigVal::U32(_) => {
+                        let Ok(value) = value.parse() else {
+                            warn!("invalid value '{value}' for key '{key}'");
+                            continue;
+                        };
+                        ConfigVal::U32(value)
+                    }
+                    ConfigVal::Usize(_) => {
+                        let Ok(value) = value.parse() else {
+                            warn!("invalid value '{value}' for key '{key}'");
+                            continue;
+                        };
+                        ConfigVal::Usize(value)
+                    }
+                    ConfigVal::OptUsize(_) => {
+                        if value.is_empty() {
+                            ConfigVal::OptUsize(None)
+                        } else {
+                            let Ok(value) = value.parse() else {
+                                warn!("invalid value '{value}' for key '{key}'");
+                                continue;
+                            };
+                            ConfigVal::OptUsize(Some(value))
+                        }
+                    }
+                    ConfigVal::F64(_) => {
+                        let Ok(value) = value.parse() else {
+                            warn!("invalid value '{value}' for key '{key}'");
+                            continue;
+                        };
+                        ConfigVal::F64(value)
+                    }
+                    ConfigVal::String(_) => ConfigVal::String(value.to_string()),
+                    ConfigVal::Duration(_) => {
+                        let Ok(value) = humantime::parse_duration(&value) else {
+                            warn!("invalid value '{value}' for key '{key}'");
+                            continue;
+                        };
+                        ConfigVal::Duration(value)
+                    }
+                    ConfigVal::Json(_) => {
+                        let Ok(value) = serde_json::from_str(value) else {
+                            warn!("invalid value '{value}' for key '{key}'");
+                            continue;
+                        };
+                        ConfigVal::Json(value)
+                    }
+                };
+                updates.add_dynamic(&key, config_val);
+                updates.apply(&configs);
+            }
+        }
         if let Err(err) = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
             configs.clone(),
             &BUILD_INFO,
@@ -571,7 +643,8 @@ impl PgwireBalancer {
             metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
         }
 
-        if LOG_PGWIRE_CONNECTION_STATUS.get(&configs) {
+        let log_connection_status = LOG_PGWIRE_CONNECTION_STATUS.get(&configs);
+        if log_connection_status {
             info!(%conn.uuid, "starting new pgwire connection in balancer");
         }
         let prev = params.insert(CONN_UUID_KEY.to_string(), conn.uuid.to_string());
@@ -591,11 +664,7 @@ impl PgwireBalancer {
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
-        // Ignore error returns because they are not actionable, and not even useful to record
-        // metrics of. For example, running psql in a shell then exiting with ctrl+D produces an
-        // error, even though it was an intended exit by the user. Those connections should not get
-        // recorded as errors, as that's probably a misleading metric.
-        let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+        let conn_res = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
         if let Some(tenant) = &resolved.tenant {
             metrics
                 .tenant_connections_tx(tenant)
@@ -603,6 +672,14 @@ impl PgwireBalancer {
             metrics
                 .tenant_connections_rx(tenant)
                 .inc_by(u64::cast_from(client_counter.read));
+        }
+        if log_connection_status {
+            match conn_res {
+                Ok(_) => info!(%conn.uuid, "closing pgwire connection in balancer successfully"),
+                Err(e) => {
+                    info!(%conn.uuid, "closing pgwire connection in balancer with error: {e}")
+                }
+            }
         }
 
         Ok(())

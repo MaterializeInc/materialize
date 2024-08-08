@@ -221,6 +221,11 @@ impl ConfigSet {
     pub fn entries(&self) -> impl Iterator<Item = &ConfigEntry> {
         self.configs.values()
     }
+
+    /// Returns the config with `name` registered to this set, if one exists.
+    pub fn entry(&self, name: &str) -> Option<&ConfigEntry> {
+        self.configs.get(name)
+    }
 }
 
 /// An entry for a config in a [ConfigSet].
