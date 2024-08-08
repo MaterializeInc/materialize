@@ -3412,7 +3412,9 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: Lazy<BuiltinView> = Lazy::new(|| Bui
     name: "mz_object_fully_qualified_names",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_FULLY_QUALIFIED_NAMES_OID,
-    column_defs: Some("id, name, object_type, schema_id, schema_name, database_id, database_name"),
+    column_defs: Some(
+        "id, name, object_type, schema_id, schema_name, database_id, database_name, cluster_id",
+    ),
     sql: "
     SELECT o.id,
         o.name,
@@ -3420,7 +3422,8 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: Lazy<BuiltinView> = Lazy::new(|| Bui
         sc.id as schema_id,
         sc.name as schema_name,
         db.id as database_id,
-        db.name as database_name
+        db.name as database_name,
+        o.cluster_id
     FROM mz_catalog.mz_objects o
     INNER JOIN mz_catalog.mz_schemas sc ON sc.id = o.schema_id
     -- LEFT JOIN accounts for objects in the ambient database.

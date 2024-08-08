@@ -250,6 +250,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  schema_name  text
 6  database_id  text
 7  database_name  text
+8  cluster_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_lifetimes' ORDER BY position
