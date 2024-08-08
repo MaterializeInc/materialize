@@ -70,7 +70,9 @@ class QueryTemplate:
         query_output_mode: QueryOutputMode,
         override_db_object_name: str | None = None,
     ) -> str:
-        db_object_name = self.get_db_object_name(strategy, override_db_object_name)
+        db_object_name = self.get_db_object_name(
+            strategy, override_db_object_name=override_db_object_name
+        )
         space_separator = self._get_space_separator(output_format)
 
         column_sql = self._create_column_sql(
@@ -95,12 +97,16 @@ FROM{space_separator}{db_object_name}
         return self._post_format_sql(sql, output_format)
 
     def get_db_object_name(
-        self, strategy: EvaluationStrategy, override_db_object_name: str | None = None
+        self,
+        strategy: EvaluationStrategy,
+        table_index: int | None = None,
+        override_db_object_name: str | None = None,
     ) -> str:
+        table_index_suffix = f"_{table_index}" if table_index is not None else ""
         return (
             override_db_object_name
-            or self.custom_db_object_name
-            or strategy.get_db_object_name(self.storage_layout)
+            or f"{self.custom_db_object_name}{table_index_suffix}"
+            or strategy.get_db_object_name(self.storage_layout, table_index=table_index)
         )
 
     def _get_space_separator(self, output_format: QueryOutputFormat) -> str:

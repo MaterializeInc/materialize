@@ -106,6 +106,7 @@ class EvaluationStrategy:
     def get_db_object_name(
         self,
         storage_layout: ValueStorageLayout,
+        table_index: int | None = None,
         override_db_object_name: str | None = None,
     ) -> str:
         if storage_layout == ValueStorageLayout.ANY:
@@ -117,7 +118,8 @@ class EvaluationStrategy:
         storage_suffix = (
             "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
         )
-        return f"{self.object_name_base}_{storage_suffix}"
+        table_index_suffix = f"_{table_index}" if table_index is not None else ""
+        return f"{self.object_name_base}_{storage_suffix}{table_index_suffix}"
 
     def __str__(self) -> str:
         return self.name
@@ -259,7 +261,8 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         override_db_object_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
-            storage_layout, override_db_object_name
+            storage_layout,
+            override_db_object_name=override_db_object_name,
         )
 
         statements = []
@@ -298,7 +301,8 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         override_db_object_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
-            storage_layout, override_db_object_name
+            storage_layout,
+            override_db_object_name=override_db_object_name,
         )
 
         column_specs = self._create_column_specs(
