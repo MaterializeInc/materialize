@@ -244,9 +244,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=15.6" ]
         agents:
-          # TODO(def-): Expected 0 replication slot(s) but found 2 slot(s)
-          # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-14_11
         label: "Postgres CDC w/ 14.11"
         depends_on: build-aarch64
@@ -257,9 +255,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=14.11" ]
         agents:
-          # TODO(def-): Expected 0 replication slot(s) but found 2 slot(s)
-          # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-13_14
         label: "Postgres CDC w/ 13.14"
         depends_on: build-aarch64
@@ -270,9 +266,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=13.14" ]
         agents:
-          # TODO(def-): Expected 0 replication slot(s) but found 2 slot(s)
-          # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-12_18
         label: "Postgres CDC w/ 12.18"
         depends_on: build-aarch64
@@ -283,9 +277,7 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=12.18" ]
         agents:
-          # TODO(def-): Expected 0 replication slot(s) but found 2 slot(s)
-          # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-11_22
         label: "Postgres CDC w/ 11.22"
         depends_on: build-aarch64
@@ -296,6 +288,4 @@ steps:
               composition: pg-cdc
               args: [ "--pg-version=11.22" ]
         agents:
-          # TODO(def-): Expected 0 replication slot(s) but found 2 slot(s)
-          # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb

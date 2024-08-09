@@ -419,8 +419,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          # TODO(def-): Expected 0 replication slot(s) but found 2 slot(s)
-          # queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-4cpu-8gb
           queue: linux-aarch64-small
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
