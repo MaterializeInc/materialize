@@ -362,7 +362,34 @@ impl EquivalenceClasses {
         let mut to_add = Vec::new();
         let mut to_add_true = Vec::new();
         let mut to_add_false = Vec::new();
+        // Record columns that must be non-null, to introduce as explicit constraints.
+        let mut non_null_cols = std::collections::BTreeSet::new();
         for class in self.classes.iter_mut() {
+            use mz_repr::Datum;
+            // If a class leads with a literal, it might mean that some columns must be non-null.
+            match class[0].as_literal() {
+                Some(Ok(Datum::Null)) => {}
+                Some(Ok(Datum::False)) => {
+                    for expr in class.iter() {
+                        if let MirScalarExpr::CallUnary {
+                            func: mz_expr::UnaryFunc::IsNull(_),
+                            expr,
+                        } = expr
+                        {
+                            expr.non_null_requirements(&mut non_null_cols);
+                        } else {
+                            expr.non_null_requirements(&mut non_null_cols);
+                        }
+                    }
+                }
+                Some(Ok(_)) => {
+                    for expr in class.iter() {
+                        expr.non_null_requirements(&mut non_null_cols);
+                    }
+                }
+                _ => {}
+            }
+
             if class.iter().any(|c| c.is_literal_true()) {
                 for expression in class.iter_mut() {
                     // Take ownership of the expression, to use when we match various patterns.
@@ -437,6 +464,11 @@ impl EquivalenceClasses {
                 }
             }
         }
+        to_add_false.extend(
+            non_null_cols
+                .iter()
+                .map(|c| MirScalarExpr::Column(*c).call_is_null()),
+        );
 
         self.classes.extend(to_add);
         if !to_add_true.is_empty() {
