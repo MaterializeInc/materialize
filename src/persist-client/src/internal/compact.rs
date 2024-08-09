@@ -694,7 +694,7 @@ where
             true,
         );
 
-        let mut consolidator = Consolidator::new(
+        let mut consolidator = Consolidator::<T, D>::new(
             format!(
                 "{}[lower={:?},upper={:?}]",
                 shard_id,
@@ -727,16 +727,30 @@ where
         let mut val_vec = vec![];
         loop {
             let fetch_start = Instant::now();
-            let Some(updates) = consolidator.next().await? else {
+            let Some(updates) = consolidator
+                .next_chunk(cfg.compaction_yield_after_n_updates)
+                .await?
+            else {
                 break;
             };
             timings.part_fetching += fetch_start.elapsed();
-            for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
+            // We now have a full set of consolidated columnar data here, but no way to push it
+            // into the batch builder yet. Instead, iterate over the codec records and push those
+            // in directly.
+            for ((k, v), t, d) in updates.records().iter() {
                 key_vec.clear();
                 key_vec.extend_from_slice(k);
                 val_vec.clear();
                 val_vec.extend_from_slice(v);
-                batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+                batch
+                    .add(
+                        &real_schemas,
+                        &key_vec,
+                        &val_vec,
+                        &T::decode(t),
+                        &D::decode(d),
+                    )
+                    .await?;
             }
             tokio::task::yield_now().await;
         }
