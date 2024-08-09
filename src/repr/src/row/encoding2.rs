@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{
-    Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
+    Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
     BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, Float32Array, Float32Builder,
     Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder, Int64Array,
     Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StructArray,
@@ -770,7 +770,7 @@ impl DatumColumnEncoder {
                     entries.data_type().clone(),
                     entries.is_nullable(),
                 );
-                let array = MapArray::new(Arc::new(field), offsets, entries, nulls, true);
+                let array = ListArray::new(Arc::new(field), offsets, Arc::new(entries), nulls);
                 (Arc::new(array), ColumnStatKinds::None)
             }
             DatumColumnEncoder::Record {
@@ -1505,6 +1505,19 @@ fn array_to_decoder(
             let array = downcast_array::<MapArray>(array)?;
             let keys = downcast_array::<StringArray>(array.keys())?;
             let vals = array_to_decoder(array.values(), value_type)?;
+            DatumColumnDecoder::Map {
+                offsets: array.offsets().clone(),
+                keys: keys.clone(),
+                vals: Box::new(vals),
+                nulls: array.nulls().cloned(),
+            }
+        }
+        (DataType::List(_), ScalarType::Map { value_type, .. }) => {
+            let array: &ListArray = downcast_array(array)?;
+            let entries: &StructArray = downcast_array(array.values())?;
+            let [keys, values]: &[ArrayRef; 2] = entries.columns().try_into()?;
+            let keys: &StringArray = downcast_array(keys)?;
+            let vals: DatumColumnDecoder = array_to_decoder(values, value_type)?;
             DatumColumnDecoder::Map {
                 offsets: array.offsets().clone(),
                 keys: keys.clone(),
