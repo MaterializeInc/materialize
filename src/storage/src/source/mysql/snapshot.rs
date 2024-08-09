@@ -11,7 +11,7 @@
 //!
 //! # Snapshot reading
 //!
-//! Depending on the `subsource_resume_uppers` parameter this dataflow decides which tables to
+//! Depending on the `source_outputs resume_upper` parameters this dataflow decides which tables to
 //! snapshot and performs a simple `SELECT * FROM table` on them in order to get a snapshot.
 //! There are a few subtle points about this operation, described below.
 //!
@@ -84,7 +84,7 @@
 //! updates to be potentially negated by the replication operator, which will emit negated
 //! updates at the minimum timestamp (by convention) when it encounters rows from a table that
 //! occur before the GTID frontier in the Rewind Request for that table.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -92,22 +92,23 @@ use differential_dataflow::AsCollection;
 use futures::TryStreamExt;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
+use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, ER_NO_SUCH_TABLE};
+use mz_ore::cast::CastFrom;
+use mz_ore::future::InTask;
+use mz_ore::iter::IteratorExt;
+use mz_ore::metrics::MetricsFutureExt;
+use mz_repr::Row;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
+use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use tracing::{error, trace};
-
-use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, ER_NO_SUCH_TABLE};
-use mz_ore::future::InTask;
-use mz_ore::metrics::MetricsFutureExt;
-use mz_repr::Row;
-use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
-use mz_storage_types::sources::MySqlSourceConnection;
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::types::{
@@ -118,7 +119,7 @@ use crate::source::RawSourceCreationConfig;
 use super::schemas::verify_schemas;
 use super::{
     return_definite_error, validate_mysql_repl_settings, DefiniteError, MySqlTableName,
-    ReplicationError, RewindRequest, SubsourceInfo, TransientError,
+    ReplicationError, RewindRequest, SourceOutputInfo, TransientError,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -126,7 +127,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     scope: G,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    subsources: Vec<SubsourceInfo>,
+    source_outputs: Vec<SourceOutputInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
@@ -140,7 +141,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let (mut raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
     let (mut rewinds_handle, rewinds) = builder.new_output();
-    // Captures DefiniteErrors that affect the entire source, including all subsources
+    // Captures DefiniteErrors that affect the entire source, including all outputs
     let (mut definite_error_handle, definite_errors) = builder.new_output();
 
     let (mut stats_output, stats_stream) = builder.new_output();
@@ -150,19 +151,22 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     // A map containing only the table infos that this worker should snapshot.
     let mut reader_snapshot_table_info = BTreeMap::new();
 
-    for subsource in subsources.into_iter() {
+    for output in source_outputs.into_iter() {
         mz_ore::soft_assert_or_log!(
-            subsource.output_index != 0,
-            "primary collection should not be represented in subsources info"
+            output.output_index != 0,
+            "primary collection should not be represented in output info"
         );
-        // Determine which collections need to be snapshot and which already have been.
-        if *subsource.resume_upper != [GtidPartition::minimum()] {
+        // Determine which outputs need to be snapshot and which already have been.
+        if *output.resume_upper != [GtidPartition::minimum()] {
             // Already has been snapshotted.
             continue;
         }
-        all_outputs.push(subsource.output_index);
-        if config.responsible_for(&subsource.name) {
-            reader_snapshot_table_info.insert(subsource.name.clone(), subsource);
+        all_outputs.push(output.output_index);
+        if config.responsible_for(&output.table_name) {
+            reader_snapshot_table_info
+                .entry(output.table_name.clone())
+                .or_insert_with(Vec::new)
+                .push(output);
         }
     }
 
@@ -352,38 +356,35 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 trace!(%id, "timely-{worker_id} started transaction");
 
                 // Verify the schemas of the tables we are snapshotting
-                let errored_tables = verify_schemas(
-                    &mut tx,
-                    &reader_snapshot_table_info.iter().collect::<Vec<_>>(),
-                )
-                .await?;
-                let mut removed_tables = vec![];
-                for (table, err) in errored_tables {
-                    let info = reader_snapshot_table_info.get(table).unwrap();
+                let errored_outputs =
+                    verify_schemas(&mut tx, reader_snapshot_table_info.iter().collect()).await?;
+                let mut removed_outputs = BTreeSet::new();
+                for (output, err) in errored_outputs {
                     // Publish the error for this table and stop ingesting it
                     raw_handle
                         .give_fueled(
                             &data_cap_set[0],
                             (
-                                (info.output_index, Err(err.clone().into())),
+                                (output.output_index, Err(err.clone().into())),
                                 GtidPartition::minimum(),
                                 1,
                             ),
                         )
                         .await;
-                    trace!(%id, "timely-{worker_id} stopping snapshot of table {table} \
-                                    due to schema mismatch");
-                    removed_tables.push(table.clone());
+                    trace!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
+                                due to schema mismatch");
+                    removed_outputs.insert(output.output_index);
                 }
-                for table in removed_tables {
-                    reader_snapshot_table_info.remove(&table);
+                for (_, outputs) in reader_snapshot_table_info.iter_mut() {
+                    outputs.retain(|output| !removed_outputs.contains(&output.output_index));
                 }
+                reader_snapshot_table_info.retain(|_, outputs| !outputs.is_empty());
 
                 let snapshot_total = fetch_snapshot_size(
                     &mut tx,
                     reader_snapshot_table_info
-                        .values()
-                        .map(|info| info.name.clone())
+                        .iter()
+                        .map(|(name, outputs)| ((*name).clone(), outputs.len()))
                         .collect(),
                     metrics,
                 )
@@ -406,45 +407,48 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 let mut final_row = Row::default();
 
                 let mut snapshot_staged = 0;
-                for (table, info) in &reader_snapshot_table_info {
+                for (table, outputs) in &reader_snapshot_table_info {
                     let query = format!("SELECT * FROM {}", table);
                     trace!(%id, "timely-{worker_id} reading snapshot from \
-                                 table '{table}':\n{:?}", info.desc);
+                                 table '{table}'");
                     let mut results = tx.exec_stream(query, ()).await?;
                     let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
-                        let event = match pack_mysql_row(&mut final_row, row, &info.desc) {
-                            Ok(row) => Ok(SourceMessage {
-                                key: Row::default(),
-                                value: row,
-                                metadata: Row::default(),
-                            }),
-                            // Produce a DefiniteError in the stream for any rows that fail to decode
-                            Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                                Err(DataflowError::from(DefiniteError::ValueDecodeError(
-                                    err.to_string(),
-                                )))
+                        for (output, row_val) in outputs.iter().repeat_clone(row) {
+                            let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
+                            {
+                                Ok(row) => Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value: row,
+                                    metadata: Row::default(),
+                                }),
+                                // Produce a DefiniteError in the stream for any rows that fail to decode
+                                Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                                    Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                                        err.to_string(),
+                                    )))
+                                }
+                                Err(err) => Err(err)?,
+                            };
+                            raw_handle
+                                .give_fueled(
+                                    &data_cap_set[0],
+                                    ((output.output_index, event), GtidPartition::minimum(), 1),
+                                )
+                                .await;
+                            count += 1;
+                            snapshot_staged += 1;
+                            // TODO(guswynn): does this 1000 need to be configurable?
+                            if snapshot_staged % 1000 == 0 {
+                                stats_output.give(
+                                    &stats_cap[0],
+                                    ProgressStatisticsUpdate::Snapshot {
+                                        records_known: snapshot_total,
+                                        records_staged: snapshot_staged,
+                                    },
+                                );
                             }
-                            Err(err) => Err(err)?,
-                        };
-                        raw_handle
-                            .give_fueled(
-                                &data_cap_set[0],
-                                ((info.output_index, event), GtidPartition::minimum(), 1),
-                            )
-                            .await;
-                        count += 1;
-                        snapshot_staged += 1;
-                        // TODO(guswynn): does this 1000 need to be configurable?
-                        if snapshot_staged % 1000 == 0 {
-                            stats_output.give(
-                                &stats_cap[0],
-                                ProgressStatisticsUpdate::Snapshot {
-                                    records_known: snapshot_total,
-                                    records_staged: snapshot_staged,
-                                },
-                            );
                         }
                     }
                     trace!(%id, "timely-{worker_id} snapshotted {count} records from \
@@ -457,13 +461,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // seem like a good idea to read the replication stream concurrently with the
                 // snapshot but it actually leads to a lot of data being staged for the future,
                 // which needlesly consumed memory in the cluster.
-                for table in reader_snapshot_table_info.keys() {
-                    trace!(%id, "timely-{worker_id} producing rewind request for {table}");
-                    let req = RewindRequest {
-                        table: table.clone(),
-                        snapshot_upper: snapshot_gtid_frontier.clone(),
-                    };
-                    rewinds_handle.give(&rewind_cap_set[0], req);
+                for (table, outputs) in reader_snapshot_table_info {
+                    for output in outputs {
+                        trace!(%id, "timely-{worker_id} producing rewind request for {table}\
+                                     output {}", output.output_index);
+                        let req = RewindRequest {
+                            output_index: output.output_index,
+                            snapshot_upper: snapshot_gtid_frontier.clone(),
+                        };
+                        rewinds_handle.give(&rewind_cap_set[0], req);
+                    }
                 }
                 *rewind_cap_set = CapabilitySet::new();
 
@@ -499,17 +506,17 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 /// Fetch the size of the snapshot on this worker.
 async fn fetch_snapshot_size<'a, Q>(
     conn: &mut Q,
-    tables: Vec<MySqlTableName>,
+    tables: Vec<(MySqlTableName, usize)>,
     metrics: MySqlSnapshotMetrics,
 ) -> Result<u64, anyhow::Error>
 where
     Q: Queryable,
 {
     let mut total = 0;
-    for table in tables {
+    for (table, num_outputs) in tables {
         let stats = collect_table_statistics(conn, &table).await?;
         metrics.record_table_count_latency(table.1, table.0, stats.count_latency);
-        total += stats.count;
+        total += stats.count * u64::cast_from(num_outputs);
     }
     Ok(total)
 }

@@ -343,31 +343,38 @@ pub(super) async fn purify_source_exports(
     // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
     // and we can't tell if a table exists without a privilege, so in some cases we may
     // return an EmptyDatabase error in the case of privilege issues.
-    let tables = mz_mysql_util::schema_info(
-        conn.deref_mut(),
-        &table_schema_request,
-        &text_cols_map,
-        &ignore_cols_map,
-    )
-    .await
-    .map_err(|err| match err {
-        mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
-            PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
-                cols: columns
-                    .into_iter()
-                    .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
-                    .collect(),
-            })
-        }
-        mz_mysql_util::MySqlError::DuplicatedColumnNames {
-            qualified_table_name,
-            columns,
-        } => PlanError::from(MySqlSourcePurificationError::DuplicatedColumnNames(
-            qualified_table_name,
-            columns,
-        )),
-        _ => err.into(),
-    })?;
+    let raw_tables = mz_mysql_util::schema_info(conn.deref_mut(), &table_schema_request).await?;
+
+    // Convert the raw tables into a format that we can use to generate source exports
+    // using any applicable text_columns and ignore_columns.
+    let mut tables = Vec::with_capacity(raw_tables.len());
+    for table in raw_tables.into_iter() {
+        let table_ref = table.table_ref();
+        // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
+        let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
+        let ignore_cols = ignore_cols_map.get(&table_ref).map(|s| s.clone());
+        let parsed_table = table
+            .to_desc(text_cols.as_ref(), ignore_cols.as_ref())
+            .map_err(|err| match err {
+                mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
+                    PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
+                        cols: columns
+                            .into_iter()
+                            .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
+                            .collect(),
+                    })
+                }
+                mz_mysql_util::MySqlError::DuplicatedColumnNames {
+                    qualified_table_name,
+                    columns,
+                } => PlanError::from(MySqlSourcePurificationError::DuplicatedColumnNames(
+                    qualified_table_name,
+                    columns,
+                )),
+                _ => err.into(),
+            })?;
+        tables.push(parsed_table);
+    }
 
     if tables.is_empty() {
         Err(MySqlSourcePurificationError::EmptyDatabase)?;

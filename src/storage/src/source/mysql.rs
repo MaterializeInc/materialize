@@ -55,7 +55,6 @@ use std::fmt;
 use std::io;
 use std::rc::Rc;
 
-use mz_ore::collections::HashSet;
 use mz_repr::Diff;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
@@ -108,9 +107,8 @@ impl SourceRender for MySqlSourceConnection {
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
-        // Collect the subsources that we will be exporting.
-        let mut subsources = Vec::new();
-        let mut upstream_tables = HashSet::new();
+        // Collect the source outputs that we will be exporting.
+        let mut source_outputs = Vec::new();
         for (
             id,
             SourceExport {
@@ -141,8 +139,8 @@ impl SourceRender for MySqlSourceConnection {
                     .map(GtidPartition::decode_row),
             );
             let name = MySqlTableName::new(&desc.schema_name, &desc.name);
-            subsources.push(SubsourceInfo {
-                name: name.clone(),
+            source_outputs.push(SourceOutputInfo {
+                table_name: name.clone(),
                 output_index: *ingestion_output,
                 desc,
                 text_columns: details.text_columns.clone(),
@@ -150,12 +148,6 @@ impl SourceRender for MySqlSourceConnection {
                 initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
             });
-            // TODO(roshan): Remove this when we allow multiple source_exports to ingest the same
-            // table in https://github.com/MaterializeInc/materialize/issues/28435
-            assert!(
-                upstream_tables.insert(name),
-                "duplicate table reference in source exports"
-            );
         }
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
@@ -165,7 +157,7 @@ impl SourceRender for MySqlSourceConnection {
                 scope.clone(),
                 config.clone(),
                 self.clone(),
-                subsources.clone(),
+                source_outputs.clone(),
                 metrics.snapshot_metrics.clone(),
             );
 
@@ -173,7 +165,7 @@ impl SourceRender for MySqlSourceConnection {
             scope.clone(),
             config.clone(),
             self.clone(),
-            subsources,
+            source_outputs,
             &rewinds,
             metrics,
         );
@@ -228,9 +220,9 @@ impl SourceRender for MySqlSourceConnection {
 }
 
 #[derive(Clone, Debug)]
-struct SubsourceInfo {
+struct SourceOutputInfo {
     output_index: usize,
-    name: MySqlTableName,
+    table_name: MySqlTableName,
     desc: MySqlTableDesc,
     text_columns: Vec<String>,
     ignore_columns: Vec<String>,
@@ -342,8 +334,8 @@ impl From<&MySqlTableDesc> for MySqlTableName {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct RewindRequest {
-    /// The table that should be rewound.
-    pub(crate) table: MySqlTableName,
+    /// The output index that should be rewound.
+    pub(crate) output_index: usize,
     /// The frontier of GTIDs that this snapshot represents; all GTIDs that are not beyond this
     /// frontier have been committed by the snapshot operator at timestamp 0.
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
