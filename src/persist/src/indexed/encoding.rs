@@ -203,6 +203,14 @@ impl BlobTraceUpdates {
             BlobTraceUpdates::Both(c, _structured) => c,
         }
     }
+
+    /// Return the [`ColumnarRecordsStructuredExt`] of the blob.
+    pub fn structured(&self) -> Option<&ColumnarRecordsStructuredExt> {
+        match self {
+            BlobTraceUpdates::Row(_) => None,
+            BlobTraceUpdates::Both(_, structured) => Some(structured),
+        }
+    }
 }
 
 impl TraceBatchMeta {

@@ -920,7 +920,7 @@ where
             .next()
             .await
             .expect("fetching a leased part")?;
-        let iter = iter.map(|(k, v, t, d)| {
+        let iter = iter.map(|((k, v), t, d)| {
             let key = K::decode(k, &self.schemas.key);
             let val = V::decode(v, &self.schemas.val);
             ((key, val), t, d)
