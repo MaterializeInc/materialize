@@ -720,8 +720,8 @@ impl MirScalarExpr {
     /// use mz_repr::{ColumnType, Datum, ScalarType};
     ///
     /// let expr_0 = MirScalarExpr::Column(0);
-    /// let expr_t = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
-    /// let expr_f = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+    /// let expr_t = MirScalarExpr::literal_true();
+    /// let expr_f = MirScalarExpr::literal_false();
     ///
     /// let mut test =
     /// expr_t

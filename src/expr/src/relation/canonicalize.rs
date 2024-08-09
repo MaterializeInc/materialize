@@ -14,7 +14,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::soft_assert_or_log;
-use mz_repr::{ColumnType, Datum, ScalarType};
+use mz_repr::{ColumnType, ScalarType};
 
 use crate::visit::Visit;
 use crate::{func, MirScalarExpr, UnaryFunc, VariadicFunc};
@@ -312,15 +312,9 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
             expr,
         } = &predicate_to_apply
         {
-            replace_subexpr_other_predicates(
-                expr,
-                &MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool),
-            )
+            replace_subexpr_other_predicates(expr, &MirScalarExpr::literal_false())
         } else {
-            replace_subexpr_other_predicates(
-                &predicate_to_apply,
-                &MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
-            );
+            replace_subexpr_other_predicates(&predicate_to_apply, &MirScalarExpr::literal_true());
         }
         completed.push(predicate_to_apply);
     }
@@ -350,7 +344,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
                 .chain(completed.iter_mut())
                 .any(|p| is_null_rejecting_predicate(p, expr))
             {
-                completed.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
+                completed.push(MirScalarExpr::literal_false());
                 break;
             }
         }
@@ -364,7 +358,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
         p.typ(column_types).scalar_type == ScalarType::Bool
     }) {
         // all rows get filtered away if any predicate is null or false.
-        *predicates = vec![MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool)]
+        *predicates = vec![MirScalarExpr::literal_false()]
     } else {
         // Remove any predicates that have been reduced to "true"
         completed.retain(|p| !p.is_literal_true());

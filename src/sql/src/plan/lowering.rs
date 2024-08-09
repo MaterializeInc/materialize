@@ -1884,7 +1884,7 @@ fn apply_scalar_subquery(
                     (0..inner_arity).collect::<Vec<_>>(),
                     vec![mz_expr::AggregateExpr {
                         func: mz_expr::AggregateFunc::Count,
-                        expr: MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
+                        expr: MirScalarExpr::literal_true(),
                         distinct: false,
                     }],
                     None,

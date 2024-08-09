@@ -3588,7 +3588,7 @@ Explained Query:
             implementation
               %1[#0]UKA » %0:l0[#1]K
             ArrangeBy keys=[[#1{id}]] // { arity: 3 }
-              Filter (#1{id}) IS NOT NULL // { arity: 3 }
+              Filter (#0{id}) IS NOT NULL // { arity: 3 }
                 Get l0 // { arity: 3 }
             ArrangeBy keys=[[#0{id}]] // { arity: 1 }
               Distinct project=[#0{id}] // { arity: 1 }
@@ -3609,7 +3609,7 @@ Explained Query:
                   implementation
                     %1:pathq19[#0]KA » %0:l0[#1]K
                   ArrangeBy keys=[[#1{id}]] // { arity: 3 }
-                    Filter (#1{id}) IS NOT NULL // { arity: 3 }
+                    Filter (#0{id}) IS NOT NULL // { arity: 3 }
                       Get l0 // { arity: 3 }
                   ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                     ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
@@ -3713,10 +3713,10 @@ Explained Query:
             implementation
               %0:l0[#1]K » %1:l1[#1]K
             ArrangeBy keys=[[#1{id}]] // { arity: 3 }
-              Filter (#1{id}) IS NOT NULL // { arity: 3 }
+              Filter (#0{id}) IS NOT NULL // { arity: 3 }
                 Get l0 // { arity: 3 }
             ArrangeBy keys=[[#1{id}]] // { arity: 3 }
-              Filter (#1{id}) IS NOT NULL // { arity: 3 }
+              Filter (#0{id}) IS NOT NULL // { arity: 3 }
                 Get l1 // { arity: 3 }
     cte l1 =
       TopK group_by=[#0{id}, #1{id}] order_by=[#2 asc nulls_last] limit=1 // { arity: 3 }
@@ -3733,7 +3733,7 @@ Explained Query:
                     %1 » %0:l1[×] » %2:pathq19[#0]KA
                     %2:pathq19 » %0:l1[#1]K » %1[×]
                   ArrangeBy keys=[[], [#1{id}]] // { arity: 3 }
-                    Filter (#1{id}) IS NOT NULL // { arity: 3 }
+                    Filter (#0{id}) IS NOT NULL // { arity: 3 }
                       Get l1 // { arity: 3 }
                   ArrangeBy keys=[[]] // { arity: 1 }
                     Union // { arity: 1 }
@@ -3764,7 +3764,7 @@ Explained Query:
                     %1 » %0:l0[×] » %2:pathq19[#0]KA
                     %2:pathq19 » %0:l0[#1]K » %1[×]
                   ArrangeBy keys=[[], [#1{id}]] // { arity: 3 }
-                    Filter (#1{id}) IS NOT NULL // { arity: 3 }
+                    Filter (#0{id}) IS NOT NULL // { arity: 3 }
                       Get l0 // { arity: 3 }
                   ArrangeBy keys=[[]] // { arity: 1 }
                     Union // { arity: 1 }
