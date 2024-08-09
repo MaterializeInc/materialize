@@ -1531,98 +1531,84 @@ where
         });
     }
 
-    /// Applies `updates`, propagates consequences through other read capabilities, and sends
-    /// appropriate compaction commands.
-    ///
-    /// NOTE: The only caller of this method should be `apply_read_hold_changes`. Nobody else
-    /// should modify read capabilities directly. Instead, collection users should manage read
-    /// holds through [`ReadHold`] objects acquired through [`Instance::acquire_read_hold`].
-    ///
-    /// TODO(teskje): Restructure the code to enforce the above in the type system.
-    #[mz_ore::instrument(level = "debug")]
-    fn update_read_capabilities(&mut self, updates: BTreeMap<GlobalId, ChangeBatch<T>>) {
-        for (id, mut update) in updates {
-            let Some(collection) = self.collections.get_mut(&id) else {
-                tracing::error!(
-                    %id, ?update,
-                    "received read capability update for an unknown collection",
-                );
-                continue;
-            };
-
-            // Sanity check to prevent corrupted `read_capabilities`, which can cause hard-to-debug
-            // issues (usually stuck read frontiers).
-            let read_frontier = collection.read_capabilities.frontier();
-            for (time, diff) in update.iter() {
-                let count = collection.read_capabilities.count_for(time) + diff;
-                if count < 0 {
-                    panic!(
-                        "invalid read capabilities update for collection {id}: negative capability \
-                         (read_capabilities={:?}, update={update:?}",
-                        collection.read_capabilities
-                    );
-                } else if count > 0 && !read_frontier.less_equal(time) {
-                    panic!(
-                        "invalid read capabilities update for collection {id}: frontier regression \
-                         (read_capabilities={:?}, update={update:?}",
-                        collection.read_capabilities
-                    );
-                }
-            }
-
-            // Apply read capability updates and learn about resulting changes to the read
-            // frontier.
-            let changes = collection.read_capabilities.update_iter(update.drain());
-            if changes.count() == 0 {
-                continue; // read frontier did not change
-            }
-
-            let new_since = collection.read_frontier().to_owned();
-
-            // Propagate read frontier update to dependencies.
-            for read_hold in collection.compute_dependencies.values_mut() {
-                read_hold
-                    .try_downgrade(new_since.clone())
-                    .expect("frontiers don't regress");
-            }
-            for read_hold in collection.storage_dependencies.values_mut() {
-                read_hold
-                    .try_downgrade(new_since.clone())
-                    .expect("frontiers don't regress");
-            }
-
-            // Produce `AllowCompaction` command.
-            self.send(ComputeCommand::AllowCompaction {
-                id,
-                frontier: new_since,
-            });
-        }
-    }
-
     /// Apply collection read hold changes pending in `read_holds_rx`.
     fn apply_read_hold_changes(&mut self) {
-        use std::collections::btree_map::Entry;
+        let mut allowed_compaction = BTreeMap::new();
 
-        let mut updates = BTreeMap::new();
-        while let Ok((id, mut changes)) = self.read_holds_rx.try_recv() {
-            if !self.collections.contains_key(&id) {
-                soft_panic_or_log!(
-                    "read hold change for absent collection (id={id}, changes={changes:?})"
-                );
-                continue;
+        // It's more efficient to apply updates for greater IDs before updates for smaller IDs,
+        // since ID order usually matches dependency order and downgrading read holds on a
+        // collection can cause downgrades on its dependencies. So instead of processing changes as
+        // they come in, we batch them up as much as we can and process them in reverse ID order.
+        let mut recv_batch = || {
+            let mut batch = BTreeMap::<_, ChangeBatch<_>>::new();
+            while let Ok((id, mut update)) = self.read_holds_rx.try_recv() {
+                batch
+                    .entry(id)
+                    .and_modify(|e| e.extend(update.drain()))
+                    .or_insert(update);
             }
 
-            match updates.entry(id) {
-                Entry::Vacant(e) => {
-                    e.insert(changes);
+            let has_updates = !batch.is_empty();
+            has_updates.then_some(batch)
+        };
+
+        while let Some(batch) = recv_batch() {
+            for (id, mut update) in batch.into_iter().rev() {
+                let Some(collection) = self.collections.get_mut(&id) else {
+                    soft_panic_or_log!(
+                        "read hold change for absent collection (id={id}, changes={update:?})"
+                    );
+                    continue;
+                };
+
+                // Sanity check to prevent corrupted `read_capabilities`, which can cause hard-to-debug
+                // issues (usually stuck read frontiers).
+                let read_frontier = collection.read_capabilities.frontier();
+                for (time, diff) in update.iter() {
+                    let count = collection.read_capabilities.count_for(time) + diff;
+                    assert!(
+                        count >= 0,
+                        "invalid read capabilities update: negative capability \
+                     (id={id:?}, read_capabilities={:?}, update={update:?})",
+                        collection.read_capabilities,
+                    );
+                    assert!(
+                        count == 0 || read_frontier.less_equal(time),
+                        "invalid read capabilities update: frontier regression \
+                     (id={id:?}, read_capabilities={:?}, update={update:?})",
+                        collection.read_capabilities,
+                    );
                 }
-                Entry::Occupied(mut e) => {
-                    e.get_mut().extend(changes.drain());
+
+                // Apply read capability updates and learn about resulting changes to the read
+                // frontier.
+                let changes = collection.read_capabilities.update_iter(update.drain());
+                if changes.count() == 0 {
+                    continue; // read frontier did not change
                 }
+
+                let new_since = collection.read_frontier().to_owned();
+
+                // Propagate read frontier update to dependencies.
+                for read_hold in collection.compute_dependencies.values_mut() {
+                    read_hold
+                        .try_downgrade(new_since.clone())
+                        .expect("frontiers don't regress");
+                }
+                for read_hold in collection.storage_dependencies.values_mut() {
+                    read_hold
+                        .try_downgrade(new_since.clone())
+                        .expect("frontiers don't regress");
+                }
+
+                allowed_compaction.insert(id, new_since);
             }
         }
 
-        self.update_read_capabilities(updates);
+        // Produce `AllowCompaction` commands.
+        for (id, frontier) in allowed_compaction {
+            self.send(ComputeCommand::AllowCompaction { id, frontier });
+        }
     }
 
     /// Removes a registered peek and clean up associated state.

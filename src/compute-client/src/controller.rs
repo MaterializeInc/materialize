@@ -955,6 +955,12 @@ pub struct CollectionState<T: Timestamp> {
     ///
     /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
     /// collection, including `implied_read_hold` and `warmup_read_hold`.
+    ///
+    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`]. Nobody else
+    /// should modify read capabilities directly. Instead, collection users should manage read
+    /// holds through [`ReadHold`] objects acquired through [`Instance::acquire_read_hold`].
+    ///
+    /// TODO(teskje): Restructure the code to enforce the above in the type system.
     read_capabilities: MutableAntichain<T>,
     /// A read hold maintaining the implicit capability of the collection.
     ///
