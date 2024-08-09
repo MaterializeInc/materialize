@@ -302,7 +302,6 @@ pub struct PostgresSourcePublicationDetails {
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
     fn into_proto(&self) -> ProtoPostgresSourcePublicationDetails {
         ProtoPostgresSourcePublicationDetails {
-            deprecated_tables: vec![],
             slot: self.slot.clone(),
             timeline_id: self.timeline_id.clone(),
             database: self.database.clone(),
