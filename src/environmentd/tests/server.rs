@@ -43,7 +43,7 @@ use mz_ore::retry::Retry;
 use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_ore::{assert_err, assert_none, assert_ok, task};
 use mz_pgrepr::UInt8;
-use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql::session::user::{ANALYTICS_USER, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
@@ -4490,4 +4490,109 @@ async fn test_cert_reloading() {
     let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
     assert_eq!(resp_x509, next_x509);
     check_pgwire(&conn_str, &ca.ca_cert_path(), next_x509.clone()).await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+
+    {
+        let server = harness.clone().start().await;
+        let client = server
+            .connect()
+            .internal()
+            .user(&ANALYTICS_USER.name)
+            .await
+            .unwrap();
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .await
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = '')"
+        );
+    }
+
+    {
+        let server = harness.clone().start().await;
+        let client = server
+            .connect()
+            .internal()
+            .user(&ANALYTICS_USER.name)
+            .await
+            .unwrap();
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .await
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = '')"
+        );
+
+        client
+            .execute(
+                "ALTER CONNECTION mz_internal.mz_analytics SET (ASSUME ROLE ARN = 'foo')",
+                &[],
+            )
+            .await
+            .expect("success");
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .await
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = 'foo')"
+        );
+    }
+
+    {
+        let server = harness.clone().start().await;
+        let client = server
+            .connect()
+            .internal()
+            .user(&ANALYTICS_USER.name)
+            .await
+            .unwrap();
+
+        let row = client
+            .query_one(
+                "SELECT create_sql
+            FROM mz_catalog.mz_connections
+            WHERE name = 'mz_analytics'",
+                &[],
+            )
+            .await
+            .expect("success");
+        let sql: String = row.get("create_sql");
+        assert_eq!(
+            sql,
+            "CREATE CONNECTION \"mz_internal\".\"mz_analytics\" TO AWS (ASSUME ROLE ARN = 'foo')"
+        );
+    }
 }
