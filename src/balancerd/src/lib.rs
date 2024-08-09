@@ -57,7 +57,7 @@ use mz_server_core::{
     listen, Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode,
 };
-use openssl::ssl::{NameType, Ssl};
+use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use proxy_header::{ProxiedAddress, ProxyHeader};
 use semver::Version;
@@ -649,12 +649,34 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-    ) -> Result<TcpStream, anyhow::Error>
+    ) -> Result<Conn<TcpStream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
         let mut mz_stream = TcpStream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
+
+        FrontendStartupMessage::SslRequest.encode(&mut buf)?;
+        mz_stream.write_all(&buf).await?;
+        buf.clear();
+        let mut maybe_ssl_request_response = [0u8; 1];
+        let nread =
+            netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
+        let mut mz_stream = if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
+            // do a TLS handshake
+            let mut builder =
+                SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+            // environmentd doesn't yet have a cert we trust, so for now disable verification.
+            builder.set_verify(SslVerifyMode::NONE);
+            let mut ssl = builder
+                .build()
+                .configure()?
+                .into_ssl(&envd_addr.to_string())?;
+            ssl.set_connect_state();
+            Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+        } else {
+            Conn::Unencrypted(mz_stream)
+        };
 
         // Send initial startup and password messages.
         let startup = FrontendStartupMessage::Startup {
@@ -1105,8 +1127,6 @@ impl mz_server_core::Server for HttpsBalancer {
 
                 let mut mz_stream = TcpStream::connect(resolved.addr).await?;
 
-                let mut client_counter = CountingConn::new(client_stream);
-
                 if inject_proxy_headers {
                     // Write the tcp proxy header
                     let addrs = ProxiedAddress::stream(peer_addr, resolved.addr);
@@ -1115,6 +1135,19 @@ impl mz_server_core::Server for HttpsBalancer {
                     let len = header.encode_to_slice_v2(&mut buf)?;
                     mz_stream.write_all(&buf[..len]).await?;
                 }
+
+                // do a TLS handshake
+                let mut builder =
+                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+                // environmentd doesn't yet have a cert we trust, so for now disable verification.
+                builder.set_verify(SslVerifyMode::NONE);
+                let mut ssl = builder
+                    .build()
+                    .configure()?
+                    .into_ssl(&resolved.addr.to_string())?;
+                ssl.set_connect_state();
+                let mut mz_stream = SslStream::new(ssl, mz_stream)?;
+                let mut client_counter = CountingConn::new(client_stream);
 
                 // Now blindly shuffle bytes back and forth until closed.
                 // TODO: Limit total memory use.
