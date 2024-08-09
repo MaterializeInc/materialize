@@ -48,7 +48,7 @@ contains:PROGRESS TOPIC REPLICATION FACTOR must be greater than 0
 
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
-> SELECT name, type from mz_connections
+> SELECT name, type from mz_connections WHERE id LIKE 'u%'
 name       type
 ------------------------------
 testconn   kafka

@@ -508,6 +508,13 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_support_cluster_replica_size: String,
+    /// The size of the builtin analytics cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE",
+        default_value = "1"
+    )]
+    bootstrap_builtin_analytics_cluster_replica_size: String,
     /// An list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
@@ -987,6 +994,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .bootstrap_builtin_probe_cluster_replica_size,
                 bootstrap_builtin_support_cluster_replica_size: args
                     .bootstrap_builtin_support_cluster_replica_size,
+                bootstrap_builtin_analytics_cluster_replica_size: args
+                    .bootstrap_builtin_analytics_cluster_replica_size,
                 system_parameter_defaults: args
                     .system_parameter_default
                     .into_iter()

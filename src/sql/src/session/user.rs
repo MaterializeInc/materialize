@@ -26,8 +26,14 @@ pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
     external_metadata: None,
 });
 
+pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
+pub static ANALYTICS_USER: Lazy<User> = Lazy::new(|| User {
+    name: ANALYTICS_USER_NAME.into(),
+    external_metadata: None,
+});
+
 pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    [&SYSTEM_USER, &SUPPORT_USER]
+    [&SYSTEM_USER, &SUPPORT_USER, &ANALYTICS_USER]
         .into_iter()
         .map(|user| user.name.clone())
         .collect()
@@ -38,6 +44,7 @@ pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>>
         [
             (&SYSTEM_USER, "mz_system"),
             (&SUPPORT_USER, "mz_catalog_server"),
+            (&ANALYTICS_USER, "mz_analytics"),
         ]
         .into_iter()
         .map(|(user, cluster)| (user.name.clone(), cluster.to_string()))
@@ -112,6 +119,7 @@ pub enum UserKind {
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
 pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
+pub const MZ_ANALYTICS_ROLE_ID: RoleId = RoleId::System(3);
 pub const MZ_MONITOR_ROLE_ID: RoleId = RoleId::Predefined(1);
 pub const MZ_MONITOR_REDACTED_ROLE_ID: RoleId = RoleId::Predefined(2);
 

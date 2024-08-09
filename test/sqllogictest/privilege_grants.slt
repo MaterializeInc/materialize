@@ -82,6 +82,8 @@ public              mz_support=U/mz_system
 query TT rowsort
 SELECT * FROM cluster_privileges ORDER BY name, privilege
 ----
+mz_analytics  mz_analytics=UC/mz_analytics
+mz_analytics  mz_system=UC/mz_analytics
 mz_catalog_server  =U/mz_system
 mz_catalog_server  mz_support=UC/mz_system
 mz_catalog_server  mz_system=UC/mz_system

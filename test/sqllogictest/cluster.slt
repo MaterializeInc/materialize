@@ -91,6 +91,7 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u4  foo
 u7  bar
@@ -419,7 +420,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-224
+253
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -427,7 +428,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-195
+224
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize
@@ -918,6 +919,7 @@ s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
+s5  NULL
 u1  NULL
 
 statement error WORKLOAD CLASS not supported for non-system users
@@ -936,6 +938,7 @@ s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
+s5  NULL
 u1  NULL
 u2  production
 
@@ -952,6 +955,7 @@ s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
+s5  NULL
 u1  NULL
 
 statement ok
@@ -965,6 +969,7 @@ s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
+s5  NULL
 u1  NULL
 u3  NULL
 
@@ -990,6 +995,7 @@ s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
+s5  NULL
 u1  NULL
 u3  NULL
 
@@ -1006,6 +1012,7 @@ s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
+s5  NULL
 u1  NULL
 u3  qa
 
@@ -1022,6 +1029,7 @@ s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
+s5  NULL
 u1  NULL
 u3  NULL
 

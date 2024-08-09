@@ -17,6 +17,7 @@ SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%'
 ----
 s1  mz_system  true
 s2  mz_support  true
+s3  mz_analytics  true
 g1  mz_monitor  true
 g2  mz_monitor_redacted  true
 
@@ -75,6 +76,7 @@ query TB rowsort
 SELECT name, inherit FROM mz_roles
 ----
 materialize  true
+mz_analytics  true
 mz_monitor  true
 mz_monitor_redacted  true
 mz_support  true
@@ -90,6 +92,7 @@ query T rowsort
 SELECT name FROM mz_roles
 ----
 materialize
+mz_analytics
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -104,6 +107,7 @@ query T rowsort
 SELECT name FROM mz_roles
 ----
 materialize
+mz_analytics
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -117,6 +121,7 @@ query T rowsort
 SELECT name FROM mz_roles
 ----
 materialize
+mz_analytics
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -133,6 +138,7 @@ mz_system
 mz_monitor
 mz_support
 materialize
+mz_analytics
 mz_monitor_redacted
 
 statement ok

@@ -32,6 +32,8 @@ bar
 r1 (1), r2 (1)
 foo
 NULL
+mz_analytics
+NULL
 mz_catalog_server
 r1 (2)
 mz_probe

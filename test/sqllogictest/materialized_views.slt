@@ -1553,6 +1553,7 @@ c_schedule_3  on-refresh  00:00:00
 c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
 c_schedule_hydration_time_estimate  on-refresh  00:16:35
+mz_analytics  manual  NULL
 mz_catalog_server  manual  NULL
 mz_probe  manual  NULL
 mz_support  manual  NULL

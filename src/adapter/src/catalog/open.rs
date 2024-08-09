@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
-    BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
-    BUILTIN_PREFIXES, BUILTIN_ROLES,
+    Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
+    BUILTIN_PREFIXES, BUILTIN_ROLES, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -53,6 +53,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::SchemaId;
+use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -300,6 +301,7 @@ impl Catalog {
                 catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
                 probe_cluster: config.builtin_probe_cluster_replica_size,
                 support_cluster: config.builtin_support_cluster_replica_size,
+                analytics_cluster: config.builtin_analytics_cluster_replica_size,
             };
             // TODO(jkosh44) These functions should clean up old clusters, replicas, and
             // roles like they do for builtin items and introspection sources, but they
@@ -963,13 +965,26 @@ fn add_new_remove_old_builtin_items_migration(
 
     // Look for new and migrated builtins.
     for (desc, builtin) in builtins {
+        let fingerprint = match builtin.runtime_alterable() {
+            false => builtin.fingerprint(),
+            true => RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL.into(),
+        };
         match system_object_mappings.remove(&desc) {
             Some(system_object_mapping) => {
-                if system_object_mapping.unique_identifier.fingerprint != builtin.fingerprint() {
+                if system_object_mapping.unique_identifier.fingerprint != fingerprint {
                     assert_ne!(
                         builtin.catalog_item_type(),
                         CatalogItemType::Type,
                         "types cannot be migrated"
+                    );
+                    assert_ne!(
+                        system_object_mapping.unique_identifier.fingerprint,
+                        RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+                        "clearing the runtime alterable flag on an existing object is not permitted",
+                    );
+                    assert!(
+                        !builtin.runtime_alterable(),
+                        "setting the runtime alterable flag on an existing object is not permitted"
                     );
                     migrated_builtins.push(system_object_mapping.unique_identifier.id);
                 }
@@ -982,11 +997,39 @@ fn add_new_remove_old_builtin_items_migration(
                         object_type: builtin.catalog_item_type(),
                         object_name: builtin.name().to_string(),
                     },
-                    unique_identifier: SystemObjectUniqueIdentifier {
-                        id,
-                        fingerprint: builtin.fingerprint(),
-                    },
+                    unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
                 });
+
+                // Runtime-alterable system objects are durably recorded to the
+                // usual items collection, so that they can be later altered at
+                // runtime by their owner (i.e., outside of the usual builtin
+                // migration framework that requires changes to the binary
+                // itself).
+                let handled_runtime_alterable = match builtin {
+                    Builtin::Connection(c) if c.runtime_alterable => {
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::Connection,
+                            c.owner_id.clone(),
+                        )];
+                        acl_items.extend_from_slice(c.access);
+                        txn.insert_item(
+                            id,
+                            c.oid,
+                            mz_catalog::durable::initialize::resolve_system_schema(c.schema).id,
+                            c.name,
+                            c.sql.into(),
+                            *c.owner_id,
+                            acl_items,
+                        )?;
+                        true
+                    }
+                    _ => false,
+                };
+                assert_eq!(
+                    builtin.runtime_alterable(),
+                    handled_runtime_alterable,
+                    "runtime alterable object was not handled by migration",
+                );
             }
         }
     }
@@ -996,10 +1039,14 @@ fn add_new_remove_old_builtin_items_migration(
 
     // Anything left in `system_object_mappings` must have been deleted and should be removed from
     // the catalog.
-    let deleted_system_objects: BTreeSet<_> = system_object_mappings
-        .into_iter()
-        .map(|(_, system_object_mapping)| system_object_mapping.description)
-        .collect();
+    let mut deleted_system_objects = BTreeSet::new();
+    let mut deleted_runtime_alterable_system_ids = BTreeSet::new();
+    for (_, mapping) in system_object_mappings {
+        deleted_system_objects.insert(mapping.description);
+        if mapping.unique_identifier.fingerprint == RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL {
+            deleted_runtime_alterable_system_ids.insert(mapping.unique_identifier.id);
+        }
+    }
     // If you are 100% positive that it is safe to delete a system object outside any of the
     // unstable schemas, then add it to this set. Make sure that no prod environments are
     // using this object and that the upgrade checker does not show any issues.
@@ -1019,6 +1066,7 @@ fn add_new_remove_old_builtin_items_migration(
         "only objects in unstable schemas can be deleted, deleted objects: {:?}",
         deleted_system_objects
     );
+    txn.remove_items(&deleted_runtime_alterable_system_ids)?;
     txn.remove_system_object_mappings(deleted_system_objects)?;
 
     Ok(migrated_builtins)
@@ -1044,7 +1092,7 @@ fn add_new_builtin_clusters_migration(
                     variant: mz_catalog::durable::ClusterVariant::Managed(ClusterVariantManaged {
                         size: cluster_size.clone(),
                         availability_zones: vec![],
-                        replication_factor: 1,
+                        replication_factor: builtin_cluster.replication_factor,
                         disk: is_cluster_size_v2(&cluster_size),
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
@@ -1260,6 +1308,8 @@ pub struct BuiltinBootstrapClusterSizes {
     pub probe_cluster: String,
     /// Size to default support_cluster on bootstrap
     pub support_cluster: String,
+    /// Size to default analytics_cluster on bootstrap
+    pub analytics_cluster: String,
 }
 
 impl BuiltinBootstrapClusterSizes {
@@ -1273,6 +1323,8 @@ impl BuiltinBootstrapClusterSizes {
             Ok(self.probe_cluster.clone())
         } else if cluster_name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name {
             Ok(self.support_cluster.clone())
+        } else if cluster_name == mz_catalog::builtin::MZ_ANALYTICS_CLUSTER.name {
+            Ok(self.analytics_cluster.clone())
         } else {
             Err(mz_catalog::durable::CatalogError::Catalog(
                 SqlCatalogError::UnexpectedBuiltinCluster(cluster_name.to_owned()),
