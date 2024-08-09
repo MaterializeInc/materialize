@@ -57,7 +57,13 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
         (**self).send(cmd).await
     }
 
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
     async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
+        // `GenericClient::recv` is required to be cancel safe.
         (**self).recv().await
     }
 }
