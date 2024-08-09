@@ -81,6 +81,7 @@ export MZ_BOOTSTRAP_ROLE=${MZ_BOOTSTRAP_ROLE:-materialize}
 
 if [ -z "${MZ_NO_TELEMETRY:-}" ]; then
     export MZ_SEGMENT_API_KEY=${MZ_SEGMENT_API_KEY:-hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A}
+    export MZ_SEGMENT_CLIENT_SIDE=${MZ_SEGMENT_API_KEY:-true}
 fi
 
 exec environmentd "$@"
