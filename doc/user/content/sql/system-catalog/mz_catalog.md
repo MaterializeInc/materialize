@@ -356,6 +356,25 @@ Field       | Type                 | Meaning
 `cluster_id`| [`text`]             | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types.
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the relation.
 
+### `mz_recent_storage_usage`
+
+{{< warn-if-unreleased "v0.113" >}}
+
+The `mz_recent_storage_usage` table describes the storage utilization of each
+table, source, and materialized view in the system in the most recent storage
+utilization assessment. Storage utilization assessments occur approximately
+every hour.
+
+See [`mz_storage_usage`](../mz_catalog#mz_storage_usage) for historical storage
+usage information.
+
+<!-- RELATION_SPEC mz_catalog.mz_recent_storage_usage -->
+Field                  | Type                         | Meaning
+---------------------- | ---------------------------- | -----------------------------------------------------------
+`object_id`            | [`text`]                     | The ID of the table, source, or materialized view.
+`size_bytes`           | [`uint8`]                    | The number of storage bytes used by the object in the most recent assessment.
+
+
 ### `mz_roles`
 
 The `mz_roles` table contains a row for each role in the system.

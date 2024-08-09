@@ -185,6 +185,10 @@ mz_pseudo_types
 BASE TABLE
 materialize
 mz_catalog
+mz_recent_storage_usage
+VIEW
+materialize
+mz_catalog
 mz_relations
 VIEW
 materialize
@@ -430,10 +434,6 @@ VIEW
 materialize
 mz_internal
 mz_recent_sql_text_redacted
-VIEW
-materialize
-mz_internal
-mz_recent_storage_usage
 VIEW
 materialize
 mz_internal

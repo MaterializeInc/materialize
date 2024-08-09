@@ -545,6 +545,7 @@ name
 -----------------------------------
 mz_objects
 mz_relations
+mz_recent_storage_usage
 mz_storage_usage
 mz_timezone_abbreviations
 mz_timezone_names
@@ -629,7 +630,6 @@ mz_recent_activity_log_thinned
 mz_recent_activity_log_redacted
 mz_recent_sql_text
 mz_recent_sql_text_redacted
-mz_recent_storage_usage
 mz_show_all_my_privileges
 mz_show_all_privileges
 mz_show_cluster_privileges
