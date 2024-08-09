@@ -98,7 +98,7 @@ pub fn tracing_config(configs: &ConfigSet) -> Result<TracingParameters, String> 
         let directives = config.get(configs);
         let directives: Vec<_> = directives
             .split(',')
-            .map(|directive| Directive::from_str(directive))
+            .map(Directive::from_str)
             .collect::<Result<_, _>>()
             .map_err(|e| e.to_string())?;
         Ok(directives.into_iter().map(|d| d.into()).collect())
