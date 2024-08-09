@@ -409,14 +409,10 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 
     /// Returns the write frontier for each collection installed on each replica.
     pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
-        let mut result = BTreeMap::new();
-        let collections = self.instances.values().flat_map(|i| i.collections_iter());
-        for (&collection_id, collection) in collections {
-            for (&replica_id, frontier) in &collection.replica_write_frontiers {
-                result.insert((collection_id, replica_id), frontier.clone());
-            }
-        }
-        result
+        self.instances
+            .values()
+            .flat_map(|i| i.replica_write_frontiers())
+            .collect()
     }
 
     /// Returns the state of the [`ComputeController`] formatted as JSON.
@@ -991,10 +987,6 @@ pub struct CollectionState<T: Timestamp> {
 
     /// The write frontier of this collection.
     write_frontier: Antichain<T>,
-    /// The write frontiers reported by individual replicas.
-    replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
-    /// The input frontiers reported by individual replicas.
-    replica_input_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 
     /// Introspection state associated with this collection.
     collection_introspection: CollectionIntrospection<T>,
@@ -1077,8 +1069,6 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             storage_dependencies,
             compute_dependencies,
             write_frontier: upper.clone(),
-            replica_write_frontiers: BTreeMap::new(),
-            replica_input_frontiers: BTreeMap::new(),
             collection_introspection: CollectionIntrospection::new(
                 collection_id,
                 introspection_tx,
