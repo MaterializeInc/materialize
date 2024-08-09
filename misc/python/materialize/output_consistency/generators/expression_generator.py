@@ -157,17 +157,39 @@ class ExpressionGenerator:
         storage_layout: ValueStorageLayout | None,
         nesting_level: int = NESTING_LEVEL_ROOT,
     ) -> ExpressionWithArgs | None:
-        def accept_op(operation: DbOperationOrFunction) -> bool:
+        return self.generate_expression_for_data_type_category(
+            use_aggregation, storage_layout, DataTypeCategory.BOOLEAN, nesting_level
+        )
+
+    def generate_expression_for_data_type_category(
+        self,
+        use_aggregation: bool,
+        storage_layout: ValueStorageLayout | None,
+        data_type_category: DataTypeCategory,
+        nesting_level: int = NESTING_LEVEL_ROOT,
+    ) -> ExpressionWithArgs | None:
+        def operation_filter(operation: DbOperationOrFunction) -> bool:
             if operation.is_aggregation != use_aggregation:
                 return False
 
-            # Simplification: This will only include operations defined to return a boolean value but not generic
-            # operations that might return a boolean value depending on the input.
-            return operation.return_type_spec.type_category == DataTypeCategory.BOOLEAN
+                # Simplification: This will only include operations defined to return a boolean value but not generic
+                # operations that might return a boolean value depending on the input.
+            return operation.return_type_spec.type_category == data_type_category
 
-        boolean_operation = self.pick_random_operation(use_aggregation, accept_op)
+        return self.generate_expression_with_filter(
+            use_aggregation, storage_layout, operation_filter, nesting_level
+        )
+
+    def generate_expression_with_filter(
+        self,
+        use_aggregation: bool,
+        storage_layout: ValueStorageLayout | None,
+        operation_filter: Callable[[DbOperationOrFunction], bool],
+        nesting_level: int = NESTING_LEVEL_ROOT,
+    ) -> ExpressionWithArgs | None:
+        operation = self.pick_random_operation(use_aggregation, operation_filter)
         expression, _ = self.generate_expression_for_operation(
-            boolean_operation, storage_layout, nesting_level
+            operation, storage_layout, nesting_level
         )
         return expression
 
