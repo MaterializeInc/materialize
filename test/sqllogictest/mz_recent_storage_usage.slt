@@ -11,14 +11,14 @@ mode cockroach
 
 # Ensure that querying `mz_recent_storage_usage` by ID is a point lookup.
 query T multiline
-EXPLAIN SELECT * FROM mz_internal.mz_recent_storage_usage WHERE object_id = 'just checking explain plan; this value does not matter'
+EXPLAIN SELECT * FROM mz_recent_storage_usage WHERE object_id = 'just checking explain plan; this value does not matter'
 ----
 Explained Query (fast path):
   Project (#0, #1)
-    ReadIndex on=mz_internal.mz_recent_storage_usage mz_recent_storage_usage_ind=[lookup value=("just checking explain plan; this value does not matter")]
+    ReadIndex on=mz_catalog.mz_recent_storage_usage mz_recent_storage_usage_ind=[lookup value=("just checking explain plan; this value does not matter")]
 
 Used Indexes:
-  - mz_internal.mz_recent_storage_usage_ind (lookup)
+  - mz_catalog.mz_recent_storage_usage_ind (lookup)
 
 Target cluster: mz_catalog_server
 

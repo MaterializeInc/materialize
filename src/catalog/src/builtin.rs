@@ -3363,7 +3363,7 @@ GROUP BY object_id, collection_timestamp",
 pub static MZ_RECENT_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
     name: "mz_recent_storage_usage",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::VIEW_MZ_RECENT_STORAGE_USAGE_OID,
     column_defs: Some("object_id, size_bytes"),
     sql: "
@@ -3399,9 +3399,9 @@ GROUP BY object_id",
 
 pub static MZ_RECENT_STORAGE_USAGE_IND: Lazy<BuiltinIndex> = Lazy::new(|| BuiltinIndex {
     name: "mz_recent_storage_usage_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_RECENT_STORAGE_USAGE_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_recent_storage_usage (object_id)",
+    sql: "IN CLUSTER mz_catalog_server ON mz_catalog.mz_recent_storage_usage (object_id)",
     is_retained_metrics_object: false,
 });
 

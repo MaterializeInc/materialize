@@ -572,9 +572,8 @@ referenced from
 | `authenticated_user` | [`text`]                     | The name of the user for which the session was established.                                                                       |
 -->
 
+{{< if-unreleased "v0.113" >}}
 ### `mz_recent_storage_usage`
-
-{{< warn-if-unreleased "v0.111" >}}
 
 The `mz_recent_storage_usage` table describes the storage utilization of each
 table, source, and materialized view in the system in the most recent storage
@@ -584,11 +583,11 @@ every hour.
 See [`mz_storage_usage`](../mz_catalog#mz_storage_usage) for historical storage
 usage information.
 
-<!-- RELATION_SPEC mz_internal.mz_recent_storage_usage -->
 Field                  | Type                         | Meaning
 ---------------------- | ---------------------------- | -----------------------------------------------------------
 `object_id`            | [`text`]                     | The ID of the table, source, or materialized view.
 `size_bytes`           | [`uint8`]                    | The number of storage bytes used by the object in the most recent assessment.
+{{< /if-unreleased >}}
 
 ## `mz_sessions`
 
