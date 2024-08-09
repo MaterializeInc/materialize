@@ -45,17 +45,17 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 !CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (regtype_table);
-contains:publication mz_source contains column regtype_table.f1 of type regtype which Materialize cannot currently ingest
+contains:table regtype_table contains column f1 of type regtype which Materialize cannot currently ingest
 
 !CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (regclass_table);
-contains:publication mz_source contains column regclass_table.f1 of type regclass which Materialize cannot currently ingest
+contains:table regclass_table contains column f1 of type regclass which Materialize cannot currently ingest
 
 !CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (regproc_table);
-contains:publication mz_source contains column regproc_table.f1 of type regproc which Materialize cannot currently ingest
+contains:table regproc_table contains column f1 of type regproc which Materialize cannot currently ingest
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (

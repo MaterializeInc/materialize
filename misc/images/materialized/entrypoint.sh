@@ -12,6 +12,17 @@
 set -euo pipefail
 
 cat <<EOF >/dev/stderr
+Thank you for trying Materialize! We are interested in any and all feedback you
+have, which may be able to improve both our software and your queries!
+
+Please reach out at:
+
+  Web: https://materialize.com
+  GitHub issues: https://github.com/MaterializeInc/materialize/issues
+  Slack: https://www.materialize.com/s/chat
+  Email: support@materialize.com
+  Twitter: @MaterializeInc
+
 ********************************* WARNING ********************************
 
 You *should not* run production deployments using this Docker image.
@@ -67,5 +78,9 @@ export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
 export MZ_BOOTSTRAP_ROLE=${MZ_BOOTSTRAP_ROLE:-materialize}
+
+if [ -z "${MZ_NO_TELEMETRY:-}" ]; then
+    export MZ_SEGMENT_API_KEY=${MZ_SEGMENT_API_KEY:-hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A}
+fi
 
 exec environmentd "$@"

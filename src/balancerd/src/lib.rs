@@ -46,6 +46,7 @@ use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::task::{spawn, JoinSetExt};
+use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
@@ -69,7 +70,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
-use crate::dyncfgs::SIGTERM_WAIT;
+use crate::dyncfgs::{has_tracing_config_update, tracing_config, SIGTERM_WAIT};
 
 /// Balancer build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -96,6 +97,7 @@ pub struct BalancerConfig {
     config_sync_loop_interval: Option<Duration>,
     cloud_provider: Option<String>,
     cloud_provider_region: Option<String>,
+    tracing_handle: TracingHandle,
 }
 
 impl BalancerConfig {
@@ -115,6 +117,7 @@ impl BalancerConfig {
         config_sync_loop_interval: Option<Duration>,
         cloud_provider: Option<String>,
         cloud_provider_region: Option<String>,
+        tracing_handle: TracingHandle,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
@@ -132,6 +135,7 @@ impl BalancerConfig {
             config_sync_loop_interval,
             cloud_provider,
             cloud_provider_region,
+            tracing_handle,
         }
     }
 }
@@ -178,6 +182,7 @@ impl BalancerService {
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);
+        let tracing_handle = cfg.tracing_handle.clone();
         if let Err(err) = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
             configs.clone(),
             &BUILD_INFO,
@@ -209,6 +214,14 @@ impl BalancerService {
             cfg.launchdarkly_sdk_key.as_deref(),
             cfg.config_sync_timeout,
             cfg.config_sync_loop_interval,
+            move |updates, configs| {
+                if has_tracing_config_update(updates) {
+                    match tracing_config(configs) {
+                        Ok(parameters) => parameters.apply(&tracing_handle),
+                        Err(err) => warn!("unable to update tracing: {err}"),
+                    }
+                }
+            },
         )
         .await
         {

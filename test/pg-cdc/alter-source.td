@@ -69,7 +69,7 @@ INSERT INTO table_a VALUES (9, 'nine');
 
 # We are not aware that the new table_a is different
 !ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:another subsource already refers to postgres.public.table_a
+contains:catalog item 'table_a' already exists
 
 > DROP SOURCE mz_source CASCADE;
 
@@ -225,7 +225,7 @@ mz_source_progress    progress
 > ALTER SOURCE mz_source ADD SUBSOURCE table_g;
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_g;
-contains:another subsource already refers to postgres.public.table_g
+contains:catalog item 'table_g' already exists
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a, table_b AS tb;
 
@@ -234,7 +234,7 @@ contains:another subsource already refers to postgres.public.table_g
 2 two
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:another subsource already refers to postgres.public.table_a
+contains:catalog item 'table_a' already exists
 
 > SELECT * FROM tb;
 1 one

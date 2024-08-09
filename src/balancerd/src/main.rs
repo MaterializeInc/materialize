@@ -48,7 +48,7 @@ fn main() {
         .expect("Failed building the Runtime");
 
     let metrics_registry = MetricsRegistry::new();
-    let (_, _tracing_guard) = runtime
+    let (tracing_handle, _tracing_guard) = runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "balancerd",
@@ -62,7 +62,9 @@ fn main() {
 
     let root_span = info_span!("balancer");
     let res = match args.command {
-        Command::Service(args) => runtime.block_on(crate::service::run(args).instrument(root_span)),
+        Command::Service(args) => {
+            runtime.block_on(crate::service::run(args, tracing_handle).instrument(root_span))
+        }
     };
 
     if let Err(err) = res {

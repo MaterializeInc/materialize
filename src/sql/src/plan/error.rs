@@ -253,8 +253,8 @@ pub enum PlanError {
         expected_type: ObjectType,
     },
     /// MZ failed to generate cast for the data type.
-    PublicationContainsUningestableTypes {
-        publication: String,
+    TableContainsUningestableTypes {
+        name: String,
         type_: String,
         column: String,
     },
@@ -435,8 +435,8 @@ impl PlanError {
             | Self::InvalidRefreshEveryAlignedTo => {
                 Some("Calling `mz_now()` is allowed.".into())
             },
-            Self::PublicationContainsUningestableTypes { column,.. } => {
-                Some(format!("Remove the table from the publication or use TEXT COLUMNS ({column}, ..) to ingest this column as text"))
+            Self::TableContainsUningestableTypes { column,.. } => {
+                Some(format!("Remove the table or use TEXT COLUMNS ({column}, ..) to ingest this column as text"))
             }
             Self::RetainHistoryLow { .. } | Self::RetainHistoryRequired => {
                 Some("Use ALTER ... RESET (RETAIN HISTORY) to set the retain history to its default and lowest value.".into())
@@ -728,8 +728,8 @@ impl fmt::Display for PlanError {
                     expected_type.to_string().to_lowercase()
                 )
             }
-            Self::PublicationContainsUningestableTypes { publication, type_, column } => {
-                write!(f, "publication {publication} contains column {column} of type {type_} which Materialize cannot currently ingest")
+            Self::TableContainsUningestableTypes { name, type_, column } => {
+                write!(f, "table {name} contains column {column} of type {type_} which Materialize cannot currently ingest")
             },
             Self::RetainHistoryLow { limit } => {
                 write!(f, "RETAIN HISTORY cannot be set lower than {}ms", limit.as_millis())

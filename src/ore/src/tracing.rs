@@ -271,28 +271,38 @@ impl std::fmt::Debug for TracingGuard {
 ///
 /// Note: folks should feel free to add more crates here if we find more
 /// with long lived Spans.
+pub const LOGGING_DEFAULTS_STR: [&str; 1] = ["kube_client::client::builder=off"];
+/// Same as [`LOGGING_DEFAULTS_STR`], but structured as [`Directive`]s.
 pub static LOGGING_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+    LOGGING_DEFAULTS_STR
+        .into_iter()
+        .map(|directive| Directive::from_str(directive).expect("valid directive"))
+        .collect()
 });
 /// By default we turn off tracing from the following crates, because they
 /// have long-lived Spans, which OpenTelemetry does not handle well.
 ///
 /// Note: folks should feel free to add more crates here if we find more
 /// with long lived Spans.
+pub const OPENTELEMETRY_DEFAULTS_STR: [&str; 2] = ["h2=off", "hyper=off"];
+/// Same as [`OPENTELEMETRY_DEFAULTS_STR`], but structured as [`Directive`]s.
 pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![
-        Directive::from_str("h2=off").expect("valid directive"),
-        Directive::from_str("hyper=off").expect("valid directive"),
-    ]
+    OPENTELEMETRY_DEFAULTS_STR
+        .into_iter()
+        .map(|directive| Directive::from_str(directive).expect("valid directive"))
+        .collect()
 });
 
 /// By default we turn off tracing from the following crates, because they
 /// have error spans which are noisy.
+pub const SENTRY_DEFAULTS_STR: [&str; 2] =
+    ["kube_client::client::builder=off", "mysql_async::conn=off"];
+/// Same as [`SENTRY_DEFAULTS_STR`], but structured as [`Directive`]s.
 pub static SENTRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![
-        Directive::from_str("kube_client::client::builder=off").expect("valid directive"),
-        Directive::from_str("mysql_async::conn=off").expect("valid directive"),
-    ]
+    SENTRY_DEFAULTS_STR
+        .into_iter()
+        .map(|directive| Directive::from_str(directive).expect("valid directive"))
+        .collect()
 });
 
 /// The [`GLOBAL_SUBSCRIBER`] type.

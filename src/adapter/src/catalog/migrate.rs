@@ -571,6 +571,7 @@ pub(crate) fn durable_migrate(
     catalog_add_new_unstable_schemas_v_0_106_0(tx)?;
     catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx);
     catalog_remove_txn_wal_toggle_v_0_109_0(tx)?;
+
     Ok(())
 }
 

@@ -648,11 +648,6 @@ steps:
           composition: replica-isolation
     agents:
       queue: linux-aarch64-small
-    # TODO: #28046 (!! AllowCompaction not found for materialized view with id ['User(11)'])
-    retry:
-      automatic:
-        - exit_status: 1
-          limit: 2
 
   - id: persistence
     label: Persistence tests

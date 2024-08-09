@@ -38,6 +38,7 @@ rust_library(
 		"//src/ore:mz_ore",
 		"//src/pgwire-common:mz_pgwire_common",
 		"//src/server-core:mz_server_core",
+		"//src/tracing:mz_tracing",
 	] + all_crate_deps(normal = True),
 	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
 	compile_data = [],
@@ -69,6 +70,7 @@ rust_test(
 		"//src/ore:mz_ore",
 		"//src/pgwire-common:mz_pgwire_common",
 		"//src/server-core:mz_server_core",
+		"//src/tracing:mz_tracing",
 	] + all_crate_deps(
 		normal = True,
 		normal_dev = True,
@@ -102,6 +104,7 @@ rust_doc_test(
 		"//src/ore:mz_ore",
 		"//src/pgwire-common:mz_pgwire_common",
 		"//src/server-core:mz_server_core",
+		"//src/tracing:mz_tracing",
 	] + all_crate_deps(
 		normal = True,
 		normal_dev = True,
@@ -132,6 +135,7 @@ rust_test(
 		"//src/ore:mz_ore",
 		"//src/pgwire-common:mz_pgwire_common",
 		"//src/server-core:mz_server_core",
+		"//src/tracing:mz_tracing",
 	] + all_crate_deps(
 		normal = True,
 		normal_dev = True,
@@ -170,6 +174,7 @@ rust_binary(
 		"//src/ore:mz_ore",
 		"//src/pgwire-common:mz_pgwire_common",
 		"//src/server-core:mz_server_core",
+		"//src/tracing:mz_tracing",
 	] + all_crate_deps(normal = True),
 	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
 	compile_data = [],

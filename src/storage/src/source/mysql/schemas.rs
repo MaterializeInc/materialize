@@ -11,9 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
 use mz_mysql_util::{schema_info, MySqlError, MySqlTableDesc, QualifiedTableRef, SchemaRequest};
-use mz_storage_types::sources::mysql::MySqlColumnRef;
 
-use super::{DefiniteError, MySqlTableName};
+use super::{DefiniteError, MySqlTableName, SubsourceInfo};
 
 /// Given a list of tables and their expected schemas, retrieve the current schema for each table
 /// and verify they are compatible with the expected schema.
@@ -21,15 +20,12 @@ use super::{DefiniteError, MySqlTableName};
 /// Returns a vec of tables that have incompatible schema changes.
 pub(super) async fn verify_schemas<'a, Q>(
     conn: &mut Q,
-    expected: &[(&'a MySqlTableName, &MySqlTableDesc)],
-    text_columns: &Vec<MySqlColumnRef>,
-    ignore_columns: &Vec<MySqlColumnRef>,
+    expected: &[(&'a MySqlTableName, &SubsourceInfo)],
 ) -> Result<Vec<(&'a MySqlTableName, DefiniteError)>, MySqlError>
 where
     Q: Queryable,
 {
-    let text_column_map = map_columns(text_columns);
-    let ignore_column_map = map_columns(ignore_columns);
+    let (text_column_map, ignore_column_map) = map_columns(expected);
 
     // Get the current schema for each requested table from mysql
     let cur_schemas: BTreeMap<_, _> = schema_info(
@@ -55,8 +51,8 @@ where
 
     Ok(expected
         .into_iter()
-        .filter_map(|(table, desc)| {
-            if let Err(err) = verify_schema(table, desc, &cur_schemas) {
+        .filter_map(|(table, info)| {
+            if let Err(err) = verify_schema(table, &info.desc, &cur_schemas) {
                 Some((*table, err))
             } else {
                 None
@@ -83,17 +79,32 @@ fn verify_schema(
 }
 
 fn map_columns<'a>(
-    columns: &'a [MySqlColumnRef],
-) -> BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>> {
-    let mut column_map = BTreeMap::new();
-    for column in columns {
-        column_map
-            .entry(QualifiedTableRef {
-                schema_name: column.schema_name.as_str(),
-                table_name: column.table_name.as_str(),
-            })
-            .or_insert_with(BTreeSet::new)
-            .insert(column.column_name.as_str());
+    tables: &'a [(&'a MySqlTableName, &SubsourceInfo)],
+) -> (
+    BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
+    BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
+) {
+    let mut text_column_map = BTreeMap::new();
+    let mut ignore_column_map = BTreeMap::new();
+    for (table, info) in tables {
+        if !info.text_columns.is_empty() {
+            text_column_map.insert(
+                QualifiedTableRef {
+                    schema_name: &table.0,
+                    table_name: &table.1,
+                },
+                info.text_columns.iter().map(|s| s.as_str()).collect(),
+            );
+        }
+        if !info.ignore_columns.is_empty() {
+            ignore_column_map.insert(
+                QualifiedTableRef {
+                    schema_name: &table.0,
+                    table_name: &table.1,
+                },
+                info.ignore_columns.iter().map(|s| s.as_str()).collect(),
+            );
+        }
     }
-    column_map
+    (text_column_map, ignore_column_map)
 }

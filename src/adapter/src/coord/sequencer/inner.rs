@@ -30,16 +30,13 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, spawn, JoinHandle};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_proto::RustType;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, RowIterator, Timestamp};
-use mz_sql::ast::{
-    CreateSubsourceStatement, Ident, MySqlConfigOptionName, UnresolvedItemName, Value,
-};
+use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -52,11 +49,6 @@ use mz_sql::names::{
 use mz_sql::plan::StatementContext;
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::mysql::{MySqlSourceDetails, ProtoMySqlSourceDetails};
-use mz_storage_types::sources::postgres::{
-    PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
-};
-use prost::Message as _;
 use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
@@ -560,10 +552,12 @@ impl Coordinator {
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
                             external_reference,
+                            details,
                         } => (
                             DataSource::IngestionExport {
                                 ingestion_id,
                                 external_reference,
+                                details,
                             },
                             source_status_collection_id,
                         ),
@@ -3554,7 +3548,6 @@ impl Coordinator {
                 let mz_sql::plan::AlterSourceAddSubsourceOptionExtracted {
                     text_columns: mut new_text_columns,
                     ignore_columns: mut new_ignore_columns,
-                    details: new_details,
                     ..
                 } = options.try_into()?;
 
@@ -3571,8 +3564,8 @@ impl Coordinator {
                     .filter_map(|subsource| {
                         catalog
                             .get_entry(subsource)
-                            .subsource_details()
-                            .map(|(_id, reference)| reference)
+                            .source_export_details()
+                            .map(|(_id, reference, _details)| reference)
                     })
                     .collect();
 
@@ -3581,116 +3574,21 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
+                // TODO(roshan): Remove all the text-column/ignore-column option merging here once
+                // we remove support for implicitly created subsources from a `CREATE SOURCE`
+                // statement.
                 match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres {
                         options: curr_options,
                         ..
                     } => {
                         let mz_sql::plan::PgConfigOptionExtracted {
-                            details,
-                            mut text_columns,
-                            ..
+                            mut text_columns, ..
                         } = curr_options.clone().try_into()?;
 
-                        // Drop both details and text columns; we will add them back in
+                        // Drop text columns; we will add them back in
                         // as appropriate below.
-                        curr_options.retain(|o| {
-                            !matches!(
-                                o.name,
-                                PgConfigOptionName::Details | PgConfigOptionName::TextColumns
-                            )
-                        });
-
-                        let gen_details = |details: Option<String>| -> Result<
-                            PostgresSourcePublicationDetails,
-                            AdapterError,
-                        > {
-                            let details = details.as_ref().ok_or_else(|| {
-                                AdapterError::internal(
-                                    ALTER_SOURCE,
-                                    "Postgres source missing details",
-                                )
-                            })?;
-
-                            let details = hex::decode(details)
-                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-                            let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
-                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                            PostgresSourcePublicationDetails::from_proto(details)
-                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
-                        };
-
-                        let mut curr_details = gen_details(details)?;
-                        let mut new_details = gen_details(new_details)?;
-
-                        // n.b. this does not check publication table names, so we must
-                        // do that separately.
-                        curr_details
-                            .alter_compatible(cur_entry.id(), &new_details)
-                            .map_err(StorageError::InvalidAlter)?;
-
-                        // Trim any unreferred-to tables.
-                        curr_details.tables.retain(|table| {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(curr_details.database.clone()),
-                                Ident::new_unchecked(table.namespace.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-
-                            // Retain the definition of only those that are still referenced. This
-                            // lets us retain only the minimal set of publication details, which can
-                            // help avoid issues when generating PostgreSQL table casts.
-                            //
-                            // For example, if a table in the publication contains a column whose
-                            // cast requires using `TEXT COLUMNS` but the table is not an ingested
-                            // subsource. This poses an issue because `TEXT COLUMNS` requires that
-                            // the columns refer only to referenced subsources. The best solution to
-                            // this is to ensure that we simply don't try to generate the table cast
-                            // in the first place.
-                            curr_references.contains(&name)
-                        });
-
-                        mz_ore::soft_assert_eq_or_log!(
-                            curr_details.tables.len(),
-                            curr_references.len(),
-                            "PostgresSourcePublicationDetails must have entry for every reference"
-                        );
-
-                        let referenced_oids: BTreeSet<_> =
-                            curr_details.tables.iter().map(|t| t.oid).collect();
-
-                        // Ensure that new tables are distinct from the current tables. We check the names only because
-                        for table in new_details.tables.iter() {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(curr_details.database.clone()),
-                                Ident::new_unchecked(table.namespace.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-
-                            // Check both the OIDs and the names of the references to protect against
-                            // hard-to-reason-about renames.
-                            if referenced_oids.contains(&table.oid)
-                                || curr_references.contains(&name)
-                            {
-                                Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
-                            }
-                        }
-
-                        // Merge the current table definitions into new tables. Note
-                        // this changes the output indexes of the subsources.
-                        new_details.tables.extend(curr_details.tables);
-
-                        curr_options.push(PgConfigOption {
-                            name: PgConfigOptionName::Details,
-                            value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                                new_details.into_proto().encode_to_vec(),
-                            )))),
-                        });
+                        curr_options.retain(|o| !matches!(o.name, PgConfigOptionName::TextColumns));
 
                         // Drop all text columns that are not currently referred to.
                         text_columns.retain(|column_qualified_reference| {
@@ -3726,115 +3624,19 @@ impl Coordinator {
                         ..
                     } => {
                         let mz_sql::plan::MySqlConfigOptionExtracted {
-                            details,
                             mut text_columns,
                             mut ignore_columns,
                             ..
                         } = curr_options.clone().try_into()?;
 
-                        // Drop both details and text columns; we will add them back in
+                        // Drop both ignore and text columns; we will add them back in
                         // as appropriate below.
                         curr_options.retain(|o| {
                             !matches!(
                                 o.name,
-                                MySqlConfigOptionName::Details
-                                    | MySqlConfigOptionName::TextColumns
+                                MySqlConfigOptionName::TextColumns
                                     | MySqlConfigOptionName::IgnoreColumns
                             )
-                        });
-
-                        let gen_details =
-                            |details: Option<String>| -> Result<MySqlSourceDetails, AdapterError> {
-                                let details = details.as_ref().ok_or_else(|| {
-                                    AdapterError::internal(
-                                        ALTER_SOURCE,
-                                        "MySQL source missing details",
-                                    )
-                                })?;
-
-                                let details = hex::decode(details)
-                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-                                let details = ProtoMySqlSourceDetails::decode(&*details)
-                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                                let mut details = MySqlSourceDetails::from_proto(details)
-                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                                // Expand the initial_gtid_set vec to be one entry per table if
-                                // it's currently in the form of one entry for the whole source.
-                                if details.initial_gtid_set.len() == 1 {
-                                    details.initial_gtid_set = vec![
-                                        details.initial_gtid_set[0]
-                                            .clone();
-                                        details.tables.len()
-                                    ];
-                                }
-                                Ok(details)
-                            };
-
-                        let mut curr_details = gen_details(details)?;
-                        let mut new_details = gen_details(new_details)?;
-
-                        // this doesn't check table names, so we must do that separately.
-                        curr_details
-                            .alter_compatible(cur_entry.id(), &new_details)
-                            .map_err(StorageError::InvalidAlter)?;
-
-                        // Trim any unreferred-to tables and their corresponding initial_gtid_sets.
-                        let mut to_remove = vec![];
-                        for (i, table) in curr_details.tables.iter().enumerate() {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(table.schema_name.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-                            if !curr_references.contains(&name) {
-                                to_remove.push(i);
-                            }
-                        }
-                        for i in to_remove.into_iter().rev() {
-                            curr_details.tables.remove(i);
-                            curr_details.initial_gtid_set.remove(i);
-                        }
-
-                        mz_ore::soft_assert_eq_or_log!(
-                            curr_details.tables.len(),
-                            curr_references.len(),
-                            "MySqlSourceDetails must have entry for every reference"
-                        );
-
-                        // Ensure that new tables are distinct from the current tables.
-                        for table in new_details.tables.iter() {
-                            let name = UnresolvedItemName(vec![
-                                // Unchecked is fine beause we have previously verified
-                                // that these are valid idents.
-                                Ident::new_unchecked(table.schema_name.clone()),
-                                Ident::new_unchecked(table.name.clone()),
-                            ]);
-                            if curr_references.contains(&name) {
-                                Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
-                            }
-                        }
-
-                        // Merge the current table definitions into new tables. Note
-                        // this changes the output indexes of the subsources.
-                        new_details.tables.extend(curr_details.tables);
-                        new_details
-                            .initial_gtid_set
-                            .extend(curr_details.initial_gtid_set);
-
-                        assert_eq!(
-                            new_details.tables.len(),
-                            new_details.initial_gtid_set.len(),
-                            "initial_gtid_set must have entry for every table after merging"
-                        );
-
-                        curr_options.push(MySqlConfigOption {
-                            name: MySqlConfigOptionName::Details,
-                            value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                                new_details.into_proto().encode_to_vec(),
-                            )))),
                         });
 
                         // Drop all text / ignore columns that are not currently referred to.
@@ -3973,10 +3775,12 @@ impl Coordinator {
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
                             external_reference,
+                            details,
                         } => (
                             DataSource::IngestionExport {
                                 ingestion_id,
                                 external_reference,
+                                details,
                             },
                             source_status_collection_id,
                         ),

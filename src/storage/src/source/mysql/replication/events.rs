@@ -82,7 +82,7 @@ pub(super) async fn handle_query_event(
             if ctx.table_info.contains_key(&table) {
                 trace!(%id, "timely-{worker_id} DDL change detected \
                        for {table:?}");
-                let (output_index, table_desc) = &ctx.table_info[&table];
+                let info = &ctx.table_info[&table];
                 let mut conn = ctx
                     .connection_config
                     .connect(
@@ -90,15 +90,10 @@ pub(super) async fn handle_query_event(
                         &ctx.config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                if let Some((err_table, err)) = verify_schemas(
-                    &mut *conn,
-                    &[(&table, table_desc)],
-                    ctx.text_columns,
-                    ctx.ignore_columns,
-                )
-                .await?
-                .into_iter()
-                .next()
+                if let Some((err_table, err)) = verify_schemas(&mut *conn, &[(&table, info)])
+                    .await?
+                    .into_iter()
+                    .next()
                 {
                     assert_eq!(err_table, &table, "Unexpected table verification error");
                     trace!(%id, "timely-{worker_id} DDL change \
@@ -107,7 +102,7 @@ pub(super) async fn handle_query_event(
                     ctx.data_output
                         .give_fueled(
                             &gtid_cap,
-                            ((*output_index, Err(err.into())), new_gtid.clone(), 1),
+                            ((info.output_index, Err(err.into())), new_gtid.clone(), 1),
                         )
                         .await;
                     ctx.errored_tables.insert(table.clone());
@@ -128,10 +123,8 @@ pub(super) async fn handle_query_event(
                 .table_info
                 .iter()
                 .filter(|(t, _)| !ctx.errored_tables.contains(t))
-                .map(|(t, d)| (t, &d.1))
                 .collect::<Vec<_>>();
-            let schema_errors =
-                verify_schemas(&mut *conn, &expected, ctx.text_columns, ctx.ignore_columns).await?;
+            let schema_errors = verify_schemas(&mut *conn, &expected).await?;
             is_complete_event = true;
             for (dropped_table, err) in schema_errors {
                 if ctx.table_info.contains_key(dropped_table)
@@ -139,12 +132,12 @@ pub(super) async fn handle_query_event(
                 {
                     trace!(%id, "timely-{worker_id} DDL change \
                            dropped table: {dropped_table:?}: {err:?}");
-                    if let Some((output_index, _)) = ctx.table_info.get(dropped_table) {
+                    if let Some(info) = ctx.table_info.get(dropped_table) {
                         let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                         ctx.data_output
                             .give_fueled(
                                 &gtid_cap,
-                                ((*output_index, Err(err.into())), new_gtid.clone(), 1),
+                                ((info.output_index, Err(err.into())), new_gtid.clone(), 1),
                             )
                             .await;
                         ctx.errored_tables.insert(dropped_table.clone());
@@ -170,14 +163,14 @@ pub(super) async fn handle_query_event(
             if ctx.table_info.contains_key(&table) {
                 trace!(%id, "timely-{worker_id} TRUNCATE detected \
                        for {table:?}");
-                if let Some((output_index, _)) = ctx.table_info.get(&table) {
+                if let Some(info) = ctx.table_info.get(&table) {
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     ctx.data_output
                         .give_fueled(
                             &gtid_cap,
                             (
                                 (
-                                    *output_index,
+                                    info.output_index,
                                     Err(DataflowError::from(DefiniteError::TableTruncated(
                                         table.to_string(),
                                     ))),
@@ -236,7 +229,7 @@ pub(super) async fn handle_rows_event(
     }
 
     let (output_index, table_desc) = match &ctx.table_info.get(&table) {
-        Some((output_index, table_desc)) => (output_index, table_desc),
+        Some(info) => (info.output_index, &info.desc),
         None => {
             // We don't know about this table, so skip this event
             return Ok(());
@@ -287,7 +280,7 @@ pub(super) async fn handle_rows_event(
                 Err(err) => Err(err)?,
             };
 
-            let data = (*output_index, event);
+            let data = (output_index, event);
 
             // Rewind this update if it was already present in the snapshot
             if let Some((_rewind_data_cap, rewind_req)) = ctx.rewinds.get(&table) {

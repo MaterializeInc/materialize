@@ -16,11 +16,13 @@ use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use tracing::trace;
 
-use mz_mysql_util::{Config, MySqlTableDesc};
-use mz_storage_types::sources::mysql::{GtidPartition, GtidState, MySqlColumnRef};
+use mz_mysql_util::Config;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::mysql::{MySqlTableName, RewindRequest, StackedAsyncOutputHandle};
+use crate::source::mysql::{
+    MySqlTableName, RewindRequest, StackedAsyncOutputHandle, SubsourceInfo,
+};
 use crate::source::types::SourceMessage;
 use crate::source::RawSourceCreationConfig;
 
@@ -30,10 +32,8 @@ pub(super) struct ReplContext<'a> {
     pub(super) config: &'a RawSourceCreationConfig,
     pub(super) connection_config: &'a Config,
     pub(super) stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-    pub(super) table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+    pub(super) table_info: &'a BTreeMap<MySqlTableName, SubsourceInfo>,
     pub(super) metrics: &'a MySqlSourceMetrics,
-    pub(super) text_columns: &'a Vec<MySqlColumnRef>,
-    pub(super) ignore_columns: &'a Vec<MySqlColumnRef>,
     pub(super) data_output: &'a mut StackedAsyncOutputHandle<
         GtidPartition,
         (usize, Result<SourceMessage, DataflowError>),
@@ -50,10 +50,8 @@ impl<'a> ReplContext<'a> {
         config: &'a RawSourceCreationConfig,
         connection_config: &'a Config,
         stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-        table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+        table_info: &'a BTreeMap<MySqlTableName, SubsourceInfo>,
         metrics: &'a MySqlSourceMetrics,
-        text_columns: &'a Vec<MySqlColumnRef>,
-        ignore_columns: &'a Vec<MySqlColumnRef>,
         data_output: &'a mut StackedAsyncOutputHandle<
             GtidPartition,
             (usize, Result<SourceMessage, DataflowError>),
@@ -68,8 +66,6 @@ impl<'a> ReplContext<'a> {
             stream,
             table_info,
             metrics,
-            text_columns,
-            ignore_columns,
             data_output,
             data_cap_set,
             upper_cap_set,

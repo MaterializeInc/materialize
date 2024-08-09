@@ -151,6 +151,13 @@ impl<D: ConfigDefault> Config<D> {
             .unwrap_or_else(|| panic!("config {} should be registered to set", self.name))
             .val
     }
+
+    /// Parse a string value for this config.
+    pub fn parse_val(&self, val: &str) -> Result<ConfigVal, String> {
+        let val = D::ConfigType::parse(val)?;
+        let val = Into::<ConfigVal>::into(val);
+        Ok(val)
+    }
 }
 
 /// A type usable as a [Config].
@@ -159,6 +166,9 @@ pub trait ConfigType: Into<ConfigVal> + Clone + Sized {
     ///
     /// Panics if the enum's variant does not match this type.
     fn from_val(val: ConfigVal) -> Self;
+
+    /// Parses this string slice into a [`ConfigType`].
+    fn parse(s: &str) -> Result<Self, String>;
 }
 
 /// A trait for a type that can be used as a default for a [`Config`].
@@ -221,6 +231,11 @@ impl ConfigSet {
     pub fn entries(&self) -> impl Iterator<Item = &ConfigEntry> {
         self.configs.values()
     }
+
+    /// Returns the config with `name` registered to this set, if one exists.
+    pub fn entry(&self, name: &str) -> Option<&ConfigEntry> {
+        self.configs.get(name)
+    }
 }
 
 /// An entry for a config in a [ConfigSet].
@@ -277,7 +292,7 @@ impl<T: ConfigType> ConfigValHandle<T> {
 
 /// A type-erased configuration value for when set of different types are stored
 /// in a collection.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConfigVal {
     /// A `bool` value.
     Bool(bool),
@@ -442,6 +457,8 @@ impl ConfigUpdates {
 }
 
 mod impls {
+    use std::num::{ParseFloatError, ParseIntError};
+    use std::str::ParseBoolError;
     use std::time::Duration;
 
     use mz_ore::cast::CastFrom;
@@ -458,6 +475,10 @@ mod impls {
                 x => panic!("expected bool value got {:?}", x),
             }
         }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            s.parse().map_err(|e: ParseBoolError| e.to_string())
+        }
     }
 
     impl From<bool> for ConfigVal {
@@ -472,6 +493,10 @@ mod impls {
                 ConfigVal::U32(x) => x,
                 x => panic!("expected u32 value got {:?}", x),
             }
+        }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            s.parse().map_err(|e: ParseIntError| e.to_string())
         }
     }
 
@@ -488,6 +513,10 @@ mod impls {
                 x => panic!("expected usize value got {:?}", x),
             }
         }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            s.parse().map_err(|e: ParseIntError| e.to_string())
+        }
     }
 
     impl From<usize> for ConfigVal {
@@ -501,6 +530,15 @@ mod impls {
             match val {
                 ConfigVal::OptUsize(x) => x,
                 x => panic!("expected usize value got {:?}", x),
+            }
+        }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            if s.is_empty() {
+                Ok(None)
+            } else {
+                let val = s.parse().map_err(|e: ParseIntError| e.to_string())?;
+                Ok(Some(val))
             }
         }
     }
@@ -518,6 +556,10 @@ mod impls {
                 x => panic!("expected f64 value got {:?}", x),
             }
         }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            s.parse().map_err(|e: ParseFloatError| e.to_string())
+        }
     }
 
     impl From<f64> for ConfigVal {
@@ -532,6 +574,10 @@ mod impls {
                 ConfigVal::String(x) => x,
                 x => panic!("expected String value got {:?}", x),
             }
+        }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            Ok(s.to_string())
         }
     }
 
@@ -556,6 +602,10 @@ mod impls {
                 x => panic!("expected Duration value got {:?}", x),
             }
         }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            humantime::parse_duration(s).map_err(|e| e.to_string())
+        }
     }
 
     impl From<Duration> for ConfigVal {
@@ -570,6 +620,10 @@ mod impls {
                 ConfigVal::Json(x) => x,
                 x => panic!("expected JSON value got {:?}", x),
             }
+        }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            serde_json::from_str(s).map_err(|e| e.to_string())
         }
     }
 
@@ -632,6 +686,8 @@ mod impls {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use mz_ore::assert_err;
 
     const BOOL: Config<bool> = Config::new("bool", true, "");
     const U32: Config<u32> = Config::new("u32", 4, "");
@@ -762,5 +818,109 @@ mod tests {
         let c = ConfigSet::default().add(&USIZE);
         u1.apply(&c);
         assert_eq!(USIZE.get(&c), 2);
+    }
+
+    #[mz_ore::test]
+    fn config_parse() {
+        assert_eq!(BOOL.parse_val("true"), Ok(ConfigVal::Bool(true)));
+        assert_eq!(BOOL.parse_val("false"), Ok(ConfigVal::Bool(false)));
+        assert_err!(BOOL.parse_val("42"));
+        assert_err!(BOOL.parse_val("66.6"));
+        assert_err!(BOOL.parse_val("farragut"));
+        assert_err!(BOOL.parse_val(""));
+        assert_err!(BOOL.parse_val("5 s"));
+
+        assert_err!(U32.parse_val("true"));
+        assert_err!(U32.parse_val("false"));
+        assert_eq!(U32.parse_val("42"), Ok(ConfigVal::U32(42)));
+        assert_err!(U32.parse_val("66.6"));
+        assert_err!(U32.parse_val("farragut"));
+        assert_err!(U32.parse_val(""));
+        assert_err!(U32.parse_val("5 s"));
+
+        assert_err!(USIZE.parse_val("true"));
+        assert_err!(USIZE.parse_val("false"));
+        assert_eq!(USIZE.parse_val("42"), Ok(ConfigVal::Usize(42)));
+        assert_err!(USIZE.parse_val("66.6"));
+        assert_err!(USIZE.parse_val("farragut"));
+        assert_err!(USIZE.parse_val(""));
+        assert_err!(USIZE.parse_val("5 s"));
+
+        assert_err!(OPT_USIZE.parse_val("true"));
+        assert_err!(OPT_USIZE.parse_val("false"));
+        assert_eq!(OPT_USIZE.parse_val("42"), Ok(ConfigVal::OptUsize(Some(42))));
+        assert_err!(OPT_USIZE.parse_val("66.6"));
+        assert_err!(OPT_USIZE.parse_val("farragut"));
+        assert_eq!(OPT_USIZE.parse_val(""), Ok(ConfigVal::OptUsize(None)));
+        assert_err!(OPT_USIZE.parse_val("5 s"));
+
+        assert_err!(F64.parse_val("true"));
+        assert_err!(F64.parse_val("false"));
+        assert_eq!(F64.parse_val("42"), Ok(ConfigVal::F64(42.0)));
+        assert_eq!(F64.parse_val("66.6"), Ok(ConfigVal::F64(66.6)));
+        assert_err!(F64.parse_val("farragut"));
+        assert_err!(F64.parse_val(""));
+        assert_err!(F64.parse_val("5 s"));
+
+        assert_eq!(
+            STRING.parse_val("true"),
+            Ok(ConfigVal::String("true".to_string()))
+        );
+        assert_eq!(
+            STRING.parse_val("false"),
+            Ok(ConfigVal::String("false".to_string()))
+        );
+        assert_eq!(
+            STRING.parse_val("66.6"),
+            Ok(ConfigVal::String("66.6".to_string()))
+        );
+        assert_eq!(
+            STRING.parse_val("42"),
+            Ok(ConfigVal::String("42".to_string()))
+        );
+        assert_eq!(
+            STRING.parse_val("farragut"),
+            Ok(ConfigVal::String("farragut".to_string()))
+        );
+        assert_eq!(STRING.parse_val(""), Ok(ConfigVal::String("".to_string())));
+        assert_eq!(
+            STRING.parse_val("5 s"),
+            Ok(ConfigVal::String("5 s".to_string()))
+        );
+
+        assert_err!(DURATION.parse_val("true"));
+        assert_err!(DURATION.parse_val("false"));
+        assert_err!(DURATION.parse_val("42"));
+        assert_err!(DURATION.parse_val("66.6"));
+        assert_err!(DURATION.parse_val("farragut"));
+        assert_err!(DURATION.parse_val(""));
+        assert_eq!(
+            DURATION.parse_val("5 s"),
+            Ok(ConfigVal::Duration(Duration::from_secs(5)))
+        );
+
+        assert_eq!(
+            JSON.parse_val("true"),
+            Ok(ConfigVal::Json(serde_json::json!(true)))
+        );
+        assert_eq!(
+            JSON.parse_val("false"),
+            Ok(ConfigVal::Json(serde_json::json!(false)))
+        );
+        assert_eq!(
+            JSON.parse_val("42"),
+            Ok(ConfigVal::Json(serde_json::json!(42)))
+        );
+        assert_eq!(
+            JSON.parse_val("66.6"),
+            Ok(ConfigVal::Json(serde_json::json!(66.6)))
+        );
+        assert_err!(JSON.parse_val("farragut"));
+        assert_err!(JSON.parse_val(""));
+        assert_err!(JSON.parse_val("5 s"));
+        assert_eq!(
+            JSON.parse_val("{\"joe\": \"developer\"}"),
+            Ok(ConfigVal::Json(serde_json::json!({"joe": "developer"})))
+        );
     }
 }

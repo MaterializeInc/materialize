@@ -166,7 +166,14 @@ where
         Ok(())
     }
 
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
+        // `TryStreamExt::try_next` is cancel safe. The returned future only holds onto a
+        // reference to the underlying stream, so dropping it will never lose a value.
         match self.rx.try_next().await? {
             None => Ok(None),
             Some(response) => Ok(Some(response.into_rust()?)),

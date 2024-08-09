@@ -53,3 +53,44 @@ message ProtoKeyValueLoadGenerator {
     uint64 seed = 8;
     optional string include_offset = 9;
 }
+
+message ProtoLoadGeneratorSourceExportDetails {
+    ProtoLoadGeneratorOutput output = 1;
+}
+
+message ProtoLoadGeneratorOutput {
+    oneof kind {
+        google.protobuf.Empty default = 1;
+        ProtoLoadGeneratorAuctionOutput auction = 2;
+        ProtoLoadGeneratorMarketingOutput marketing = 3;
+        ProtoLoadGeneratorTpchOutput tpch = 4;
+    }
+}
+
+enum ProtoLoadGeneratorAuctionOutput {
+    Organizations = 0;
+    Users = 1;
+    Accounts = 2;
+    Auctions = 3;
+    Bids = 4;
+}
+
+enum ProtoLoadGeneratorMarketingOutput {
+    Customers = 0;
+    Impressions = 1;
+    Clicks = 2;
+    Leads = 3;
+    Coupons = 4;
+    ConversionPredictions = 5;
+}
+
+enum ProtoLoadGeneratorTpchOutput {
+    Supplier = 0;
+    Part = 1;
+    Partsupp = 2;
+    Customer = 3;
+    Orders = 4;
+    Lineitem = 5;
+    Nation = 6;
+    Region = 7;
+}

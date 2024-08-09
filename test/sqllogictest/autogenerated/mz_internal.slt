@@ -152,6 +152,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  id           text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_pending_cluster_replicas' ORDER BY position
+----
+1  id           text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
 ----
 1  id  text
@@ -599,6 +604,7 @@ mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies
 mz_optimizer_notices
+mz_pending_cluster_replicas
 mz_postgres_source_tables
 mz_postgres_sources
 mz_prepared_statement_history

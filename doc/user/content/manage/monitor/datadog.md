@@ -35,9 +35,13 @@ which has been tried and tested in production environments.
 1. In the host that will run the Prometheus SQL Exporter, create a configuration
    file (`config.yml`) to hold the Exporter configuration.
 
-   **Tip:** use [this sample `config.yml`](https://github.com/MaterializeInc/demos/blob/main/integrations/datadog/config.yaml)
+   {{< tip >}}
+   You can use [this sample
+   `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
    as guidance to bootstrap your monitoring with some key Materialize metrics
    and indicators.
+   {{</ tip >}}
+
 
 1. In the configuration file, define the connection to your Materialize region
    under `connections` using the credentials provided in the [Materialize console](https://console.materialize.com/).

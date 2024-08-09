@@ -2605,6 +2605,15 @@ pub static MZ_INTERNAL_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| Built
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_PENDING_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_pending_cluster_replicas",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_PENDING_CLUSTER_REPLICAS_OID,
+    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7469,6 +7478,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),
+        Builtin::Table(&MZ_PENDING_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),

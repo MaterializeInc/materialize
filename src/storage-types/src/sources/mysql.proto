@@ -15,24 +15,16 @@ import "mysql-util/src/desc.proto";
 
 package mz_storage_types.sources.mysql;
 
-message ProtoMySqlColumnRef {
-    string schema_name = 1;
-    string table_name = 2;
-    string column_name = 3;
-}
-
 message ProtoMySqlSourceConnection {
+    reserved 4, 5;
     mz_repr.global_id.ProtoGlobalId connection_id = 1;
     mz_storage_types.connections.ProtoMySqlConnection connection = 2;
     ProtoMySqlSourceDetails details = 3;
-
-    repeated ProtoMySqlColumnRef text_columns = 4;
-    repeated ProtoMySqlColumnRef ignore_columns = 5;
 }
 
 message ProtoMySqlSourceDetails {
-    // NOTE(roshan): These fields are planned for deprecation, since relevant table descriptions
-    // and initial_gtid_sets are now stored on source export statements directly.
+    // These fields marked 'deprecated_' are kept around to migrate old sources since
+    // this message is serialized as proto in the catalog.
     repeated mz_mysql_util.ProtoMySqlTableDesc deprecated_tables = 1;
     // This was changed from a string to a repeated string in order to support
     // separate GTID sets for each table. If this field contains a single element,
@@ -42,6 +34,12 @@ message ProtoMySqlSourceDetails {
     repeated string deprecated_initial_gtid_set = 3;
 }
 
+message ProtoMySqlSourceExportDetails {
+    mz_mysql_util.ProtoMySqlTableDesc table = 1;
+    string initial_gtid_set = 2;
+    repeated string text_columns = 3;
+    repeated string ignore_columns = 4;
+}
 
 // NOTE: this message is encoded and stored as part of a source export
 // statement option (currently only `CREATE SUBSOURCE` statements)
