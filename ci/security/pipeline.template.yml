@@ -13,4 +13,4 @@ steps:
   - command: bin/ci-builder run stable cargo deny check advisories
     timeout_in_minutes: 20
     agents:
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
