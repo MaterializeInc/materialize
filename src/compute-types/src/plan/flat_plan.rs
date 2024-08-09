@@ -662,6 +662,20 @@ impl<T> FlatPlan<T> {
             }
         }
     }
+
+    /// Enumerate all identifiers referenced in `Get` operators.
+    pub fn depends(&self) -> BTreeSet<Id> {
+        self.nodes
+            .values()
+            .filter_map(|node| {
+                if let FlatPlanNode::Get { id, .. } = node {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 impl<T: Clone> FlatPlan<T> {
