@@ -23,16 +23,7 @@ pub const SIGTERM_WAIT: Config<Duration> = Config::new(
     "Duration to wait after SIGTERM for outstanding connections to complete.",
 );
 
-/// Whether to log the status of pgwire connections.
-pub const LOG_PGWIRE_CONNECTION_STATUS: Config<bool> = Config::new(
-    "balancerd_log_pgwire_connection_status",
-    false,
-    "Whether to log the status of pgwire connections.",
-);
-
 /// Adds the full set of all balancer `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
-    configs
-        .add(&SIGTERM_WAIT)
-        .add(&LOG_PGWIRE_CONNECTION_STATUS)
+    configs.add(&SIGTERM_WAIT)
 }

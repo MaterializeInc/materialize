@@ -69,7 +69,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
-use crate::dyncfgs::{LOG_PGWIRE_CONNECTION_STATUS, SIGTERM_WAIT};
+use crate::dyncfgs::SIGTERM_WAIT;
 
 /// Balancer build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -265,7 +265,6 @@ impl BalancerService {
                 cancellation_resolver,
                 tls: pgwire_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
-                configs: self.configs.clone(),
             };
             let (handle, stream) = self.pgwire;
             server_handles.push(handle);
@@ -512,7 +511,6 @@ struct PgwireBalancer {
     cancellation_resolver: Option<Arc<PathBuf>>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
-    configs: ConfigSet,
 }
 
 impl PgwireBalancer {
@@ -524,7 +522,6 @@ impl PgwireBalancer {
         resolver: &Resolver,
         tls_mode: Option<TlsMode>,
         metrics: &ServerMetrics,
-        configs: ConfigSet,
     ) -> Result<(), io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -572,10 +569,7 @@ impl PgwireBalancer {
         }
 
         let conn_uuid = Uuid::new_v4();
-        let log_connection_status = LOG_PGWIRE_CONNECTION_STATUS.get(&configs);
-        if log_connection_status {
-            debug!(%conn_uuid, "starting new pgwire connection in balancer");
-        }
+        debug!(%conn_uuid, "starting new pgwire connection in balancer");
         let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
         if prev.is_some() {
             return conn
@@ -609,12 +603,11 @@ impl PgwireBalancer {
                 .tenant_connections_rx(tenant)
                 .inc_by(u64::cast_from(client_counter.read));
         }
-        if log_connection_status {
-            match conn_res {
-                Ok(_) => debug!(%conn_uuid, "closing pgwire connection in balancer successfully"),
-                Err(e) => {
-                    debug!(%conn_uuid, "closing pgwire connection in balancer with error: {e}")
-                }
+
+        match conn_res {
+            Ok(_) => debug!(%conn_uuid, "closing pgwire connection in balancer successfully"),
+            Err(e) => {
+                debug!(%conn_uuid, "closing pgwire connection in balancer with error: {e}")
             }
         }
 
@@ -683,7 +676,6 @@ impl mz_server_core::Server for PgwireBalancer {
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
         let cancellation_resolver = self.cancellation_resolver.clone();
-        let configs = self.configs.clone();
 
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
@@ -709,7 +701,6 @@ impl mz_server_core::Server for PgwireBalancer {
                                 &resolver,
                                 tls.map(|tls| tls.mode),
                                 &inner_metrics,
-                                configs,
                             )
                             .await?;
                             conn.flush().await?;
