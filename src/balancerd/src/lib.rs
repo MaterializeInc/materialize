@@ -54,7 +54,7 @@ use mz_pgwire_common::{
 };
 use mz_server_core::{
     listen, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
-    ReloadingTlsConfig, TlsCertConfig, TlsMode,
+    ReloadingTlsConfig, TlsCertConfig, TlsMode, CONN_UUID_KEY,
 };
 use openssl::ssl::{NameType, Ssl};
 use prometheus::{IntCounterVec, IntGaugeVec};
@@ -531,7 +531,7 @@ impl PgwireBalancer {
     async fn run<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
-        params: BTreeMap<String, String>,
+        mut params: BTreeMap<String, String>,
         resolver: &Resolver,
         tls_mode: Option<TlsMode>,
         metrics: &ServerMetrics,
@@ -581,6 +581,18 @@ impl PgwireBalancer {
             metrics.tenant_pgwire_sni_count(tenant, has_sni).inc();
         }
 
+        let conn_uuid = Uuid::new_v4();
+        debug!(%conn_uuid, "starting new pgwire connection in balancer");
+        let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
+        if prev.is_some() {
+            return conn
+                .send(ErrorResponse::fatal(
+                    SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                    format!("invalid parameter '{CONN_UUID_KEY}'"),
+                ))
+                .await;
+        }
+
         let _active_guard = resolved
             .tenant
             .as_ref()
@@ -595,11 +607,7 @@ impl PgwireBalancer {
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
-        // Ignore error returns because they are not actionable, and not even useful to record
-        // metrics of. For example, running psql in a shell then exiting with ctrl+D produces an
-        // error, even though it was an intended exit by the user. Those connections should not get
-        // recorded as errors, as that's probably a misleading metric.
-        let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+        let conn_res = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
         if let Some(tenant) = &resolved.tenant {
             metrics
                 .tenant_connections_tx(tenant)
@@ -607,6 +615,13 @@ impl PgwireBalancer {
             metrics
                 .tenant_connections_rx(tenant)
                 .inc_by(u64::cast_from(client_counter.read));
+        }
+
+        match conn_res {
+            Ok(_) => debug!(%conn_uuid, "closing pgwire connection in balancer successfully"),
+            Err(e) => {
+                debug!(%conn_uuid, "closing pgwire connection in balancer with error: {e}")
+            }
         }
 
         Ok(())
@@ -674,6 +689,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
         let cancellation_resolver = self.cancellation_resolver.clone();
+
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
@@ -690,6 +706,7 @@ impl mz_server_core::Server for PgwireBalancer {
 
                         Some(FrontendStartupMessage::Startup { version, params }) => {
                             let mut conn = FramedConn::new(conn);
+
                             Self::run(
                                 &mut conn,
                                 version,

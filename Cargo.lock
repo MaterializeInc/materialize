@@ -5872,6 +5872,7 @@ dependencies = [
  "mz-sql",
  "openssl",
  "postgres",
+ "scopeguard",
  "tokio",
  "tokio-openssl",
  "tokio-stream",
@@ -6212,6 +6213,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
