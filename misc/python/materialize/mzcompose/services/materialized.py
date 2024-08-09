@@ -69,6 +69,7 @@ class Materialized(Service):
         }
 
         environment = [
+            "MZ_NO_TELEMETRY=1",
             f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",
             # The following settings can not be baked in the default image, as they
             # are enabled for testing purposes only
