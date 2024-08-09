@@ -192,7 +192,7 @@ enum DatumColumnEncoder {
     },
     Record {
         /// Columns in the record.
-        fields: Vec<Box<DatumColumnEncoder>>,
+        fields: Vec<DatumEncoder>,
         /// Null entries, if any.
         nulls: Option<BooleanBufferBuilder>,
         /// Number of values we've pushed into this builder thus far.
@@ -781,13 +781,10 @@ impl DatumColumnEncoder {
                     .enumerate()
                     .map(|(tag, encoder)| {
                         // TODO(parkmycar): Record these stats.
+                        let nullable = encoder.nullable;
                         let (array, _field_stats) = encoder.finish();
-                        let field = Field::new(
-                            tag.to_string(),
-                            array.data_type().clone(),
-                            array.is_nullable(),
-                        );
-
+                        let field =
+                            Field::new(tag.to_string(), array.data_type().clone(), nullable);
                         (field, array)
                     })
                     .unzip();
@@ -1629,7 +1626,13 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Record { fields, .. } => {
             let encoders = fields
                 .iter()
-                .map(|(_name, ty)| scalar_type_to_encoder(&ty.scalar_type).map(Box::new))
+                .map(|(_name, ty)| {
+                    scalar_type_to_encoder(&ty.scalar_type).map(|e| DatumEncoder {
+                        nullable: ty.nullable,
+                        encoder: e,
+                        none_stats: 0,
+                    })
+                })
                 .collect::<Result<_, _>>()?;
 
             DatumColumnEncoder::Record {
