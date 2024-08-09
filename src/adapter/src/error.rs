@@ -24,7 +24,6 @@ use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::{NotNullViolation, Timestamp};
-use mz_sql::ast::UnresolvedItemName;
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
@@ -215,10 +214,6 @@ pub enum AdapterError {
     /// A CREATE MATERIALIZED VIEW statement tried to acquire a read hold at a REFRESH AT time,
     /// but was unable to get a precise read hold.
     InputNotReadableAtRefreshAtTime(Timestamp, Antichain<Timestamp>),
-    /// An ALTER SOURCE referred to an upstream table that's already referred to.
-    SubsourceAlreadyReferredTo {
-        name: UnresolvedItemName,
-    },
     /// A humanized version of [`StorageError::RtrTimeout`].
     RtrTimeout(String),
     /// A humanized version of [`StorageError::RtrDropFailure`].
@@ -410,9 +405,6 @@ impl AdapterError {
                  either at the explicitly specified timestamp, or now if the given timestamp would \
                  be in the past.".to_string()
             ),
-            Self::SubsourceAlreadyReferredTo { .. } => {
-                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
-            },
             _ => None,
         }
     }
@@ -536,9 +528,6 @@ impl AdapterError {
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
-            // Calling this `FEATURE_NOT_SUPPORTED` because we will eventually allow multiple
-            // references to the same subsource (albeit with different schemas).
-            AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::RtrTimeout(_) => SqlState::QUERY_CANCELED,
             AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
@@ -757,9 +746,6 @@ impl fmt::Display for AdapterError {
                     f,
                     "REFRESH AT requested for a time where not all the inputs are readable"
                 )
-            }
-            Self::SubsourceAlreadyReferredTo { name } => {
-                write!(f, "another subsource already refers to {}", name)
             }
             AdapterError::RtrTimeout(_) => {
                 write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")

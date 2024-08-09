@@ -1025,6 +1025,11 @@ pub enum PgConfigOptionName {
     /// The name of the publication to sync
     Publication,
     /// Columns whose types you want to unconditionally format as text
+    /// NOTE(roshan): This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
     TextColumns,
 }
 
@@ -1069,8 +1074,18 @@ pub enum MySqlConfigOptionName {
     /// `mz_storage_types::sources::mysql::MySqlSourceDetails`
     Details,
     /// Columns whose types you want to unconditionally format as text
+    /// NOTE(roshan): This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
     TextColumns,
     /// Columns you want to ignore
+    /// NOTE(roshan): This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
     IgnoreColumns,
 }
 

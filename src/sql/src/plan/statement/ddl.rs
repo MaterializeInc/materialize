@@ -27,13 +27,12 @@ use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
+use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::VecExt;
-use mz_ore::{assert_none, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::adt::system::Oid;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
@@ -92,18 +91,19 @@ use mz_storage_types::sources::envelope::{
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
+    LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
 };
 use mz_storage_types::sources::postgres::{
-    CastType, PostgresSourceConnection, PostgresSourcePublicationDetails,
+    PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
 use mz_storage_types::sources::{
-    GenericSourceConnection, ProtoSourceExportStatementDetails, SourceConnection, SourceDesc,
-    SourceExportStatementDetails, SourceReferenceResolver, Timeline,
+    GenericSourceConnection, MySqlSourceExportDetails, PostgresSourceExportDetails,
+    ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDetails,
+    SourceExportStatementDetails, Timeline,
 };
 use prost::Message;
 
@@ -120,12 +120,11 @@ use crate::names::{
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
-use crate::plan::expr::ColumnRef;
 use crate::plan::query::{plan_expr, scalar_type_from_catalog, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
-use crate::plan::typeconv::{plan_cast, CastContext};
+use crate::plan::typeconv::CastContext;
 use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterPlanStrategy,
@@ -139,7 +138,7 @@ use crate::plan::{
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
+    DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
     VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
     WebhookValidation,
@@ -802,17 +801,14 @@ pub fn plan_create_source(
             options,
         } => {
             let connection_item = scx.get_item_by_resolved_name(connection)?;
-            let connection = match connection_item.connection()? {
-                Connection::Postgres(connection) => connection.clone(),
-                _ => sql_bail!(
-                    "{} is not a postgres connection",
-                    scx.catalog.resolve_full_name(connection_item.name())
-                ),
-            };
+
             let PgConfigOptionExtracted {
                 details,
                 publication,
-                text_columns,
+                // text columns are already part of the source-exports and are only included
+                // in these options for round-tripping of a `CREATE SOURCE` statement. This should
+                // be removed once we drop support for implicitly created subsources.
+                text_columns: _,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -826,199 +822,10 @@ pub fn plan_create_source(
             let publication_details = PostgresSourcePublicationDetails::from_proto(details)
                 .map_err(|e| sql_err!("{}", e))?;
 
-            let reference_resolver =
-                SourceReferenceResolver::new(&connection.database, &publication_details.tables)
-                    .expect("references validated during purification");
-
-            let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
-
-            // Look up the referenced text_columns in the publication_catalog.
-            for name in text_columns {
-                let (col, qual) = name.0.split_last().expect("must have at least one element");
-
-                let idx = reference_resolver
-                    .resolve_idx(qual)
-                    .expect("known to exist from purification");
-
-                let table_desc = &publication_details.tables[idx];
-
-                assert!(
-                    table_desc
-                        .columns
-                        .iter()
-                        .find(|column| column.name == col.as_str())
-                        .is_some(),
-                    "validated column exists in table during purification"
-                );
-
-                text_cols
-                    .entry(Oid(table_desc.oid))
-                    .or_default()
-                    .insert(col.clone().into_string());
-            }
-
-            // Here we will generate the cast expressions required to convert the text encoded
-            // columns into the appropriate target types, creating a Vec<MirScalarExpr> per table.
-            // The postgres source reader will then eval each of those on the incoming rows based
-            // on the target table
-            let mut table_casts = BTreeMap::new();
-
-            for (i, table) in publication_details.tables.iter().enumerate() {
-                // First, construct an expression context where the expression is evaluated on an
-                // imaginary row which has the same number of columns as the upstream table but all
-                // of the types are text
-                let mut cast_scx = scx.clone();
-                cast_scx.param_types = Default::default();
-                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
-                let mut column_types = vec![];
-                for column in table.columns.iter() {
-                    column_types.push(ColumnType {
-                        nullable: column.nullable,
-                        scalar_type: ScalarType::String,
-                    });
-                }
-
-                let cast_ecx = ExprContext {
-                    qcx: &cast_qcx,
-                    name: "plan_postgres_source_cast",
-                    scope: &Scope::empty(),
-                    relation_type: &RelationType {
-                        column_types,
-                        keys: vec![],
-                    },
-                    allow_aggregates: false,
-                    allow_subqueries: false,
-                    allow_parameters: false,
-                    allow_windows: false,
-                };
-
-                // Then, for each column we will generate a MirRelationExpr that extracts the nth
-                // column and casts it to the appropriate target type
-                let mut column_casts = vec![];
-                for (i, column) in table.columns.iter().enumerate() {
-                    let (cast_type, ty) = match text_cols.get(&Oid(table.oid)) {
-                        // Treat the column as text if it was referenced in
-                        // `TEXT COLUMNS`. This is the only place we need to
-                        // perform this logic; even if the type is unsupported,
-                        // we'll be able to ingest its values as text in
-                        // storage.
-                        Some(names) if names.contains(&column.name) => {
-                            (CastType::Text, mz_pgrepr::Type::Text)
-                        }
-                        _ => {
-                            match mz_pgrepr::Type::from_oid_and_typmod(
-                                column.type_oid,
-                                column.type_mod,
-                            ) {
-                                Ok(t) => (CastType::Natural, t),
-                                // If this reference survived purification, we
-                                // do not expect it to be from a table that the
-                                // user will consume., i.e. expect this table to
-                                // be filtered out of table casts.
-                                Err(_) => {
-                                    column_casts.push((
-                                        CastType::Natural,
-                                        HirScalarExpr::CallVariadic {
-                                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                                            exprs: vec![
-                                                HirScalarExpr::literal_null(ScalarType::String),
-                                                HirScalarExpr::literal(
-                                                    mz_repr::Datum::from(
-                                                        format!(
-                                                            "Unsupported type with OID {}",
-                                                            column.type_oid
-                                                        )
-                                                        .as_str(),
-                                                    ),
-                                                    ScalarType::String,
-                                                ),
-                                            ],
-                                        }
-                                        .lower_uncorrelated()
-                                        .expect("no correlation"),
-                                    ));
-                                    continue;
-                                }
-                            }
-                        }
-                    };
-
-                    let data_type = scx.resolve_type(ty)?;
-                    let scalar_type = query::scalar_type_from_sql(scx, &data_type)?;
-
-                    let col_expr = HirScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: i,
-                    });
-
-                    let cast_expr =
-                        plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
-
-                    let cast = if column.nullable {
-                        cast_expr
-                    } else {
-                        // We must enforce nullability constraint on cast
-                        // because PG replication stream does not propagate
-                        // constraint changes and we want to error subsource if
-                        // e.g. the constraint is dropped and we don't notice
-                        // it.
-                        HirScalarExpr::CallVariadic {
-                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                            exprs: vec![
-                                cast_expr,
-                                HirScalarExpr::literal(
-                                    mz_repr::Datum::from(
-                                        format!(
-                                            "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
-                                            table.namespace.clone(),
-                                            table.name.clone(),
-                                            column.name.clone())
-                                            .as_str(),
-                                    ),
-                                    ScalarType::String,
-                                ),
-                            ],
-                        }
-                    };
-
-                    // We expect only reg* types to encounter this issue. Users
-                    // can ingest the data as text if they need to ingest it.
-                    // This is acceptable because we don't expect the OIDs from
-                    // an external PG source to be unilaterally usable in
-                    // resolving item names in MZ.
-                    let mir_cast = cast.lower_uncorrelated().map_err(|_e| {
-                        tracing::info!(
-                            "cannot ingest {:?} data from PG source because cast is correlated",
-                            scalar_type
-                        );
-
-                        let publication = match publication.clone() {
-                            Some(publication) => publication,
-                            None => return sql_err!("[internal error]: missing publication"),
-                        };
-
-                        PlanError::PublicationContainsUningestableTypes {
-                            publication,
-                            type_: scx.humanize_scalar_type(&scalar_type),
-                            column: UnresolvedItemName::qualified(&[
-                                Ident::new_unchecked(table.name.to_string()),
-                                Ident::new_unchecked(column.name.to_string()),
-                            ])
-                            .to_ast_string(),
-                        }
-                    })?;
-
-                    column_casts.push((cast_type, mir_cast));
-                }
-                let r = table_casts.insert(i + 1, column_casts);
-                assert_none!(r, "cannot have table defined multiple times");
-            }
-
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(PostgresSourceConnection {
                     connection: connection_item.id(),
                     connection_id: connection_item.id(),
-                    table_casts,
                     publication: publication.expect("validated exists during purification"),
                     publication_details,
                 });
@@ -1039,8 +846,11 @@ pub fn plan_create_source(
             };
             let MySqlConfigOptionExtracted {
                 details,
-                text_columns,
-                ignore_columns,
+                // text/ignore columns are already part of the source-exports and are only included
+                // in these options for round-tripping of a `CREATE SOURCE` statement. This should
+                // be removed once we drop support for implicitly created subsources.
+                text_columns: _,
+                ignore_columns: _,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -1052,22 +862,11 @@ pub fn plan_create_source(
                 ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
             let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
 
-            let text_columns = text_columns
-                .into_iter()
-                .map(|name| name.try_into().map_err(|e| sql_err!("{}", e)))
-                .collect::<Result<Vec<_>, _>>()?;
-            let ignore_columns = ignore_columns
-                .into_iter()
-                .map(|name| name.try_into().map_err(|e| sql_err!("{}", e)))
-                .collect::<Result<Vec<_>, _>>()?;
-
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
                     connection: connection_item.id(),
                     connection_id: connection_item.id(),
                     details,
-                    text_columns,
-                    ignore_columns,
                 });
 
             connection
@@ -1578,15 +1377,41 @@ pub fn plan_create_subsource(
             ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
         let details =
             SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
-        // TODO(roshan): Use these options in the IngestionExport struct below. For now we just
-        // decode here to ensure that the details are present and valid.
-        let _ = details;
-        let _ = text_columns;
-        let _ = ignore_columns;
-
+        let details = match details {
+            SourceExportStatementDetails::Postgres { table } => {
+                SourceExportDetails::Postgres(PostgresSourceExportDetails {
+                    column_casts: crate::pure::postgres::generate_column_casts(
+                        scx,
+                        &table,
+                        &text_columns,
+                    )?,
+                    table,
+                })
+            }
+            SourceExportStatementDetails::MySql {
+                table,
+                initial_gtid_set,
+            } => SourceExportDetails::MySql(MySqlSourceExportDetails {
+                table,
+                initial_gtid_set,
+                text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
+                ignore_columns: ignore_columns
+                    .into_iter()
+                    .map(|c| c.into_string())
+                    .collect(),
+            }),
+            SourceExportStatementDetails::LoadGenerator => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                    output: mz_storage_types::sources::load_generator::external_reference_to_output(
+                        &external_reference,
+                    ),
+                })
+            }
+        };
         DataSourceDesc::IngestionExport {
             ingestion_id,
             external_reference,
+            details,
         }
     } else if progress {
         DataSourceDesc::Progress
@@ -1682,13 +1507,7 @@ pub(crate) fn load_generator_ast_to_generator(
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
     include_metadata: &[SourceIncludeMetadata],
-) -> Result<
-    (
-        LoadGenerator,
-        Option<BTreeMap<FullItemName, (usize, RelationDesc)>>,
-    ),
-    PlanError,
-> {
+) -> Result<(LoadGenerator, Option<BTreeMap<FullItemName, RelationDesc>>), PlanError> {
     let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
     extracted.ensure_only_valid_options(loadgen)?;
 
@@ -1820,7 +1639,7 @@ pub(crate) fn load_generator_ast_to_generator(
     };
 
     let mut available_subsources = BTreeMap::new();
-    for (i, (name, desc)) in load_generator.views().iter().enumerate() {
+    for (name, desc) in load_generator.views() {
         let name = FullItemName {
             database: RawDatabaseSpecifier::Name(
                 mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
@@ -1828,10 +1647,7 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: load_generator.schema_name().into(),
             item: name.to_string(),
         };
-        // The zero-th output is the main output
-        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-        // to handle the main source and the subsources uniformly
-        available_subsources.insert(name, (i + 1, desc.clone()));
+        available_subsources.insert(name, desc);
     }
     let available_subsources = if available_subsources.is_empty() {
         None

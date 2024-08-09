@@ -70,6 +70,15 @@ message ProtoCompression {
     }
 }
 
+message ProtoSourceExportDetails {
+    oneof kind {
+        google.protobuf.Empty kafka = 1;
+        mz_storage_types.sources.postgres.ProtoPostgresSourceExportDetails postgres = 2;
+        mz_storage_types.sources.mysql.ProtoMySqlSourceExportDetails mysql = 3;
+        mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportDetails loadgen = 4;
+    }
+}
+
 // NOTE: this message is encoded and stored as part of a source export
 // statement option (currently only `CREATE SUBSOURCE` statements)
 // Be extra careful about changes, ensuring that all changes are backwards compatible
@@ -94,6 +103,7 @@ message ProtoIngestionDescription {
         // uint64 output_index = 2;
         mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 3;
         repeated string ingestion_output = 4;
+        ProtoSourceExportDetails details = 5;
     }
 
     reserved 1;

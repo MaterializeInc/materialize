@@ -789,7 +789,6 @@ async fn purify_create_source(
 
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
-                referenced_tables,
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
@@ -821,7 +820,6 @@ async fn purify_create_source(
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourcePublicationDetails {
-                tables: referenced_tables,
                 slot: format!(
                     "materialize_{}",
                     Uuid::new_v4().to_string().replace('-', "")
@@ -915,7 +913,6 @@ async fn purify_create_source(
 
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
-                tables,
                 normalized_text_columns,
                 normalized_ignore_columns,
             } = mysql::purify_source_exports(
@@ -929,15 +926,9 @@ async fn purify_create_source(
             .await?;
             requested_subsource_map.extend(subsources);
 
-            // Create/Update the details for the source to include the new tables
-            let details = MySqlSourceDetails {
-                tables,
-                // Since we're creating a new source, we can just use a single
-                // value in this vector which is assumed to be for all tables.
-                // If we ever alter this source, this will be expanded to have a
-                // distinct value for each table.
-                initial_gtid_set: vec![initial_gtid_set],
-            };
+            // We don't have any fields in this details struct but keep this around for
+            // conformity with postgres and in-case we end up needing it again in the future.
+            let details = MySqlSourceDetails {};
             // Update options with the purified details
             options
                 .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
@@ -970,20 +961,18 @@ async fn purify_create_source(
 
             match external_references {
                 Some(ExternalReferences::All) => {
-                    let available_subsources = match &available_subsources {
+                    let available_subsources = match available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => Err(LoadGeneratorSourcePurificationError::ForAllTables)?,
                     };
-                    for (name, (_, desc)) in available_subsources {
-                        let external_reference = UnresolvedItemName::from(name.clone());
+                    for (name, desc) in available_subsources {
                         let subsource_name = source_export_name_gen(source_name, &name.item)?;
+                        let external_reference = UnresolvedItemName::from(name);
                         requested_subsource_map.insert(
                             subsource_name,
                             PurifiedSourceExport {
                                 external_reference,
-                                details: PurifiedExportDetails::LoadGenerator {
-                                    table: desc.clone(),
-                                },
+                                details: PurifiedExportDetails::LoadGenerator { table: desc },
                             },
                         );
                     }
@@ -1201,7 +1190,6 @@ async fn purify_alter_source(
 
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
-                referenced_tables,
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
@@ -1222,47 +1210,6 @@ async fn purify_alter_source(
             }
 
             requested_subsource_map.extend(subsources);
-
-            let timeline_id = match pg_source_connection.publication_details.timeline_id {
-                None => {
-                    // If we had not yet been able to fill in the source's timeline ID, fill it in now.
-                    let replication_client = config
-                        .connect_replication(
-                            &storage_configuration.connection_context.ssh_tunnel_manager,
-                        )
-                        .await?;
-                    let timeline_id =
-                        mz_postgres_util::get_timeline_id(&replication_client).await?;
-                    Some(timeline_id)
-                }
-                timeline_id => timeline_id,
-            };
-
-            // These new details need to be merged with the existing details and cannot
-            // simply overwrite the existing details. This suggests they should be their
-            // own options, but it's nice to be able to take the values to and from a
-            // hex-encoded string.
-            let new_details = PostgresSourcePublicationDetails {
-                // In this context, we only track the referenced tables; we will merge these with the tables
-                // referenced in the catalog.
-                //
-                // We MUST check for duplicate references when we rejoin the main coordinator thread! We do
-                // that later because the sources that are present might have changed while this
-                // purification occurs.
-                tables: referenced_tables,
-                timeline_id,
-                // This value is not allowed to be altered in the source.
-                slot: pg_source_connection.publication_details.slot,
-                // This value is not allowed to be altered in the source.
-                database: pg_source_connection.publication_details.database,
-            };
-
-            options.push(AlterSourceAddSubsourceOption {
-                name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
-                value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                    new_details.into_proto().encode_to_vec(),
-                )))),
-            });
         }
         GenericSourceConnection::MySql(mysql_source_connection) => {
             let mysql_connection = &mysql_source_connection.connection;
@@ -1290,7 +1237,6 @@ async fn purify_alter_source(
 
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
-                tables,
                 normalized_text_columns,
                 normalized_ignore_columns,
             } = mysql::purify_source_exports(
@@ -1303,30 +1249,6 @@ async fn purify_alter_source(
             )
             .await?;
             requested_subsource_map.extend(subsources);
-
-            // These new details need to be merged with the existing details and cannot
-            // simply overwrite the existing details. This suggests they should be their
-            // own options, but it's nice to be able to take the values to and from a
-            // hex-encoded string.
-            let new_details = MySqlSourceDetails {
-                // In this context, we only track the referenced tables; we will merge these with the tables
-                // referenced in the catalog.
-                //
-                // We MUST check for duplicate references when we rejoin the main coordinator thread! We do
-                // that later because the sources that are present might have changed while this
-                // purification occurs.
-                tables,
-                // This value will be expanded and merged with the existing value during sequencing to
-                // match the final set of tables.
-                initial_gtid_set: vec![initial_gtid_set],
-            };
-
-            options.push(AlterSourceAddSubsourceOption {
-                name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
-                value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                    new_details.into_proto().encode_to_vec(),
-                )))),
-            });
 
             // Update options with the purified details
             if let Some(text_cols_option) = options
@@ -1457,13 +1379,13 @@ pub fn generate_subsource_statements(
         PurifiedExportDetails::LoadGenerator { .. } => {
             let mut subsource_stmts = Vec::with_capacity(subsources.len());
             for (subsource_name, purified_export) in subsources {
-                let desc = match &purified_export.details {
+                let desc = match purified_export.details {
                     PurifiedExportDetails::LoadGenerator { table } => table,
                     _ => unreachable!("purified export details must be load generator"),
                 };
 
-                let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
-                let details = SourceExportStatementDetails::LoadGenerator {};
+                let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+                let details = SourceExportStatementDetails::LoadGenerator;
                 // Create the subsource statement
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,

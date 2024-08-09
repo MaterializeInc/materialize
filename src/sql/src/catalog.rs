@@ -32,7 +32,7 @@ use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
-use mz_storage_types::sources::SourceDesc;
+use mz_storage_types::sources::{SourceDesc, SourceExportDetails};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::Regex;
@@ -613,9 +613,11 @@ pub trait CatalogItem {
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
 
-    /// Reports whether this catalog entry is a subsource and, if it is, the
-    /// ingestion it is a subsource of, as well as the item it exports.
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)>;
+    /// Reports whether this catalog entry is a source export and, if it is, the
+    /// ingestion it is an export of, as well as the item it exports.
+    fn source_export_details(
+        &self,
+    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)>;
 
     /// Reports whether this catalog item is a progress source.
     fn is_progress_source(&self) -> bool;

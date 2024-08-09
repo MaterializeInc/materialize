@@ -211,7 +211,7 @@ mod tests {
     use mz_storage_types::sources::load_generator::LoadGenerator;
     use mz_storage_types::sources::{
         GenericSourceConnection, IngestionDescription, LoadGeneratorSourceConnection, SourceDesc,
-        SourceEnvelope, SourceExport,
+        SourceEnvelope, SourceExport, SourceExportDetails,
     };
     use timely::progress::Antichain;
 
@@ -255,6 +255,7 @@ mod tests {
                         ),
                         txns_shard: Default::default(),
                     },
+                    details: SourceExportDetails::None,
                 };
                 (GlobalId::User(id), export)
             })

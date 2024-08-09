@@ -162,8 +162,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         }
         all_outputs.push(subsource.output_index);
         if config.responsible_for(&subsource.name) {
-            reader_snapshot_table_info
-                .insert(subsource.name, (subsource.output_index, subsource.desc));
+            reader_snapshot_table_info.insert(subsource.name.clone(), subsource);
         }
     }
 
@@ -355,23 +354,18 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // Verify the schemas of the tables we are snapshotting
                 let errored_tables = verify_schemas(
                     &mut tx,
-                    &reader_snapshot_table_info
-                        .iter()
-                        .map(|(table, (_, desc))| (table, desc))
-                        .collect::<Vec<_>>(),
-                    &connection.text_columns,
-                    &connection.ignore_columns,
+                    &reader_snapshot_table_info.iter().collect::<Vec<_>>(),
                 )
                 .await?;
                 let mut removed_tables = vec![];
                 for (table, err) in errored_tables {
-                    let (output_index, _) = reader_snapshot_table_info.get(table).unwrap();
+                    let info = reader_snapshot_table_info.get(table).unwrap();
                     // Publish the error for this table and stop ingesting it
                     raw_handle
                         .give_fueled(
                             &data_cap_set[0],
                             (
-                                (*output_index, Err(err.clone().into())),
+                                (info.output_index, Err(err.clone().into())),
                                 GtidPartition::minimum(),
                                 1,
                             ),
@@ -389,7 +383,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     &mut tx,
                     reader_snapshot_table_info
                         .values()
-                        .map(|(_, table_desc)| Into::<MySqlTableName>::into(table_desc))
+                        .map(|info| info.name.clone())
                         .collect(),
                     metrics,
                 )
@@ -412,15 +406,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 let mut final_row = Row::default();
 
                 let mut snapshot_staged = 0;
-                for (table, (output_index, table_desc)) in &reader_snapshot_table_info {
+                for (table, info) in &reader_snapshot_table_info {
                     let query = format!("SELECT * FROM {}", table);
                     trace!(%id, "timely-{worker_id} reading snapshot from \
-                                 table '{table}':\n{table_desc:?}");
+                                 table '{table}':\n{:?}", info.desc);
                     let mut results = tx.exec_stream(query, ()).await?;
                     let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
-                        let event = match pack_mysql_row(&mut final_row, row, table_desc) {
+                        let event = match pack_mysql_row(&mut final_row, row, &info.desc) {
                             Ok(row) => Ok(SourceMessage {
                                 key: Row::default(),
                                 value: row,
@@ -437,7 +431,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         raw_handle
                             .give_fueled(
                                 &data_cap_set[0],
-                                ((*output_index, event), GtidPartition::minimum(), 1),
+                                ((info.output_index, event), GtidPartition::minimum(), 1),
                             )
                             .await;
                         count += 1;

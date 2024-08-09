@@ -287,7 +287,12 @@ pub(super) async fn validate_requested_references_privileges(
 pub(super) struct PurifiedSourceExports {
     /// map of source export names to the details of the export
     pub(super) source_exports: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
-    pub(super) tables: Vec<MySqlTableDesc>,
+    // NOTE(roshan): The text columns and ignore columns are already part of their
+    // appropriate `source_exports` above, but these are returned to allow
+    // round-tripping a `CREATE SOURCE` statement while we still allow creating
+    // implicit subsources from `CREATE SOURCE`. Remove once
+    // fully deprecating that feature and forcing users to use explicit
+    // `CREATE TABLE .. FROM SOURCE` statements.
     pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
     pub(super) normalized_ignore_columns: Vec<WithOptionValue<Aug>>,
 }
@@ -481,6 +486,5 @@ pub(super) async fn purify_source_exports(
             &reference_resolver,
             &tables,
         )?,
-        tables,
     })
 }

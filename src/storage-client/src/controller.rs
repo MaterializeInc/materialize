@@ -45,7 +45,7 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExportDetails,
 };
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -108,6 +108,7 @@ pub enum DataSource {
         // be sufficiently genericized to support all multi-output sources we
         // support.
         external_reference: UnresolvedItemName,
+        details: SourceExportDetails,
     },
     /// Data comes from introspection sources, which the controller itself is
     /// responsible for generating.

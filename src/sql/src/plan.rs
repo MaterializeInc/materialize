@@ -53,7 +53,7 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{
     S3SinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
 };
-use mz_storage_types::sources::{SourceDesc, Timeline};
+use mz_storage_types::sources::{SourceDesc, SourceExportDetails, Timeline};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -1334,6 +1334,7 @@ pub enum DataSourceDesc {
     IngestionExport {
         ingestion_id: GlobalId,
         external_reference: UnresolvedItemName,
+        details: SourceExportDetails,
     },
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
