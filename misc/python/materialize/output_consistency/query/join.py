@@ -18,6 +18,9 @@ class JoinTarget(Enum):
     BOOLEAN_EXPRESSION = 5
 
 
+JOIN_TARGET_WEIGHTS = [0.4, 0.2, 0.1, 0.2, 0.1]
+
+
 class JoinOperator(Enum):
     INNER = "INNER JOIN"
     LEFT_OUTER = "LEFT OUTER JOIN"

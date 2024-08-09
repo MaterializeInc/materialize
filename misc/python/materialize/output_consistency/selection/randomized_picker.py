@@ -20,6 +20,14 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
     OperationRelevance,
 )
+from materialize.output_consistency.query.data_source import (
+    DataSource,
+)
+from materialize.output_consistency.query.join import (
+    JOIN_TARGET_WEIGHTS,
+    JoinOperator,
+    JoinTarget,
+)
 
 
 class RandomizedPicker:
@@ -59,6 +67,9 @@ class RandomizedPicker:
     def random_value(self, values: list[DataValue]) -> DataValue:
         return random.choice(values)
 
+    def random_data_source(self, sources: list[DataSource]) -> DataSource:
+        return random.choice(sources)
+
     def convert_operation_relevance_to_number(
         self, relevance: OperationRelevance
     ) -> float:
@@ -75,3 +86,9 @@ class RandomizedPicker:
 
     def _random_bool(self, probability: float) -> bool:
         return random.random() < probability
+
+    def random_join_operator(self) -> JoinOperator:
+        return random.choice(list(JoinOperator))
+
+    def random_join_target(self) -> JoinTarget:
+        return random.choices(list(JoinTarget), k=1, weights=JOIN_TARGET_WEIGHTS)[0]
