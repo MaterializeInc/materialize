@@ -15,7 +15,6 @@ use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
@@ -29,8 +28,8 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::IntrospectionType;
@@ -288,6 +287,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         as_of: Antichain<T>,
         storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
+        replica_input_read_holds: Vec<ReadHold<T>>,
         write_only: bool,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
@@ -314,7 +314,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         // Add per-replica collection state.
         for replica in self.replicas.values_mut() {
-            replica.add_collection(id, as_of.clone());
+            replica.add_collection(id, as_of.clone(), replica_input_read_holds.clone());
         }
 
         // Update introspection.
@@ -367,7 +367,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             }
 
             let as_of = collection.read_frontier().to_owned();
-            replica.add_collection(*collection_id, as_of);
+            let input_read_holds = collection.storage_dependencies.values().cloned().collect();
+            replica.add_collection(*collection_id, as_of, input_read_holds);
         }
 
         self.replicas.insert(id, replica);
@@ -1094,34 +1095,38 @@ where
         // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
 
-        // When we initialize per-replica input frontiers (and thereby the per-replica read
-        // capabilities), we cannot use the `as_of` because of reconciliation: Existing
-        // slow replicas might be reading from the inputs at times before the `as_of` and we
-        // would rather not crash them by allowing their inputs to compact too far. So instead
-        // we initialize the per-replica write frontiers with the smallest possible value that
-        // is a valid read capability for all inputs, which is the join of all input `since`s.
-        let mut replica_input_frontier = Antichain::from_elem(T::minimum());
+        // When we install per-replica input read holds, we cannot use the `as_of` because of
+        // reconciliation: Existing slow replicas might be reading from the inputs at times before
+        // the `as_of` and we would rather not crash them by allowing their inputs to compact too
+        // far. So instead we take read holds at the least time available.
+        let mut replica_input_read_holds = Vec::new();
 
         // Collect all dependencies of the dataflow, and read holds on them.
         let mut storage_dependencies = BTreeMap::new();
         let mut compute_dependencies = BTreeMap::new();
 
-        for source_id in dataflow.source_imports.keys() {
-            let read_hold = self.acquire_storage_read_hold_at(*source_id, as_of.clone())?;
-            replica_input_frontier.join_assign(read_hold.since());
-            storage_dependencies.insert(*source_id, read_hold);
+        for &id in dataflow.source_imports.keys() {
+            let mut read_hold = self
+                .storage_collections
+                .acquire_read_holds(vec![id])?
+                .into_element();
+            replica_input_read_holds.push(read_hold.clone());
+
+            read_hold
+                .try_downgrade(as_of.clone())
+                .map_err(|_| DataflowCreationError::SinceViolation(id))?;
+            storage_dependencies.insert(id, read_hold);
         }
 
-        for index_id in dataflow.index_imports.keys() {
-            let read_hold = self.acquire_read_hold_at(*index_id, as_of.clone())?;
-            replica_input_frontier.join_assign(read_hold.since());
-            compute_dependencies.insert(*index_id, read_hold);
+        for &id in dataflow.index_imports.keys() {
+            let as_of_read_hold = self.acquire_read_hold_at(id, as_of.clone())?;
+            compute_dependencies.insert(id, as_of_read_hold);
         }
 
         // If the `as_of` is empty, we are not going to create a dataflow, so replicas won't read
         // from the inputs.
         if as_of.is_empty() {
-            replica_input_frontier = Antichain::new();
+            replica_input_read_holds = Default::default();
         }
 
         // Install collection state for each of the exports.
@@ -1132,6 +1137,7 @@ where
                 as_of.clone(),
                 storage_dependencies.clone(),
                 compute_dependencies.clone(),
+                replica_input_read_holds.clone(),
                 write_only,
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
@@ -1982,7 +1988,7 @@ impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
 
 /// State maintained about individual replicas.
 #[derive(Debug)]
-pub struct ReplicaState<T> {
+pub struct ReplicaState<T: Timestamp> {
     /// The ID of the replica.
     id: ReplicaId,
     /// Client for the running replica task.
@@ -2023,10 +2029,16 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
     /// # Panics
     ///
     /// Panics if a collection with the same ID exists already.
-    fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
+    fn add_collection(
+        &mut self,
+        id: GlobalId,
+        as_of: Antichain<T>,
+        input_read_holds: Vec<ReadHold<T>>,
+    ) {
         let metrics = self.metrics.for_collection(id);
         let hydration_state = HydrationState::new(self.id, id, self.introspection_tx.clone());
-        let mut state = ReplicaCollectionState::new(metrics, as_of, hydration_state);
+        let mut state =
+            ReplicaCollectionState::new(metrics, as_of, hydration_state, input_read_holds);
 
         // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
         // is not useful for indexes, because they wouldn't be readable. For write-only
@@ -2106,7 +2118,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
 }
 
 #[derive(Debug)]
-struct ReplicaCollectionState<T> {
+struct ReplicaCollectionState<T: Timestamp> {
     /// The replica write frontier of this collection.
     ///
     /// See [`FrontiersResponse::write_frontier`].
@@ -2130,6 +2142,12 @@ struct ReplicaCollectionState<T> {
     as_of: Antichain<T>,
     /// Tracks hydration state for this collection.
     hydration_state: HydrationState,
+    /// Read holds on storage inputs to this collection.
+    ///
+    /// These read holds are kept to ensure that the replica is able to read from storage inputs at
+    /// all times it hasn't read yet. We only need to install read holds for storage inputs since
+    /// compaction of compute inputs is implicitly held back by Timely/DD.
+    input_read_holds: Vec<ReadHold<T>>,
 }
 
 impl<T: Timestamp> ReplicaCollectionState<T> {
@@ -2137,6 +2155,7 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
         metrics: Option<ReplicaCollectionMetrics>,
         as_of: Antichain<T>,
         hydration_state: HydrationState,
+        input_read_holds: Vec<ReadHold<T>>,
     ) -> Self {
         Self {
             write_frontier: as_of.clone(),
@@ -2146,6 +2165,7 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
             created_at: Instant::now(),
             as_of,
             hydration_state,
+            input_read_holds,
         }
     }
 
@@ -2192,6 +2212,16 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
         }
 
         self.input_frontier = new_frontier;
+
+        // Relax our read holds on collection inputs.
+        for read_hold in &mut self.input_read_holds {
+            let result = read_hold.try_downgrade(self.input_frontier.clone());
+            soft_assert_or_log!(
+                result.is_ok(),
+                "read hold downgrade failed (read_hold={read_hold:?}, new_since={:?})",
+                self.input_frontier,
+            );
+        }
     }
 
     /// Updates the replica output frontier of this collection.
