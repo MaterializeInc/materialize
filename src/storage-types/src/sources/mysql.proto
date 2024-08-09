@@ -23,15 +23,7 @@ message ProtoMySqlSourceConnection {
 }
 
 message ProtoMySqlSourceDetails {
-    // These fields marked 'deprecated_' are kept around to migrate old sources since
-    // this message is serialized as proto in the catalog.
-    repeated mz_mysql_util.ProtoMySqlTableDesc deprecated_tables = 1;
-    // This was changed from a string to a repeated string in order to support
-    // separate GTID sets for each table. If this field contains a single element,
-    // or the `legacy_initial_gtid_set` field is populated, it
-    // is the initial GTID set for all tables.
-    string deprecated_legacy_initial_gtid_set = 2;
-    repeated string deprecated_initial_gtid_set = 3;
+    reserved 1, 2, 3;
 }
 
 message ProtoMySqlSourceExportDetails {

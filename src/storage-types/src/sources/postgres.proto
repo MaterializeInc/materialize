@@ -38,9 +38,7 @@ message ProtoPostgresSourceConnection {
 }
 
 message ProtoPostgresSourcePublicationDetails {
-    // This field is deprecated, but kept around to migrate old sources since this
-    // field is serialized as proto in the catalog.
-    repeated mz_postgres_util.desc.ProtoPostgresTableDesc deprecated_tables = 1;
+    reserved 1;
 
     string slot = 2;
     optional uint64 timeline_id = 3;
