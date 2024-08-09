@@ -128,22 +128,22 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
-    literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterClusterStrategyCondition, AlterClusterSwapPlan,
+    literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterPlanStrategy,
+    AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
     AlterConnectionPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
     AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
     VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation,
 };
-use crate::plan::{AlterClusterPlanStrategy, AlterSinkPlan, WebhookValidation};
 use crate::session::vars;
 use crate::session::vars::{
     ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
@@ -5030,7 +5030,7 @@ pub fn plan_alter_cluster(
     };
 
     let mut options: PlanClusterOption = Default::default();
-    let mut alter_strategy: AlterClusterPlanStrategy = Default::default();
+    let mut alter_strategy: AlterClusterPlanStrategy = AlterClusterPlanStrategy::None;
 
     match action {
         AlterClusterAction::SetOptions {
@@ -5063,13 +5063,12 @@ pub fn plan_alter_cluster(
                         ClusterAlterOptionExtracted::try_from(with_options)?;
                     alter_strategy = AlterClusterPlanStrategy::try_from(alter_strategy_extracted)?;
 
-                    match alter_strategy.condition {
-                        AlterClusterStrategyCondition::None => {}
-                        AlterClusterStrategyCondition::For(_) => {
+                    match alter_strategy {
+                        AlterClusterPlanStrategy::None => {}
+                        AlterClusterPlanStrategy::For(_) => {
                             scx.require_feature_flag(
                                 &crate::session::vars::ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION,
                             )?;
-                            sql_bail!("ALTER CLUSTER... WITH is not yet supported")
                         }
                     }
 
@@ -5112,7 +5111,7 @@ pub fn plan_alter_cluster(
                     }
                 }
                 false => {
-                    if !alter_strategy.condition.is_none() {
+                    if !alter_strategy.is_none() {
                         sql_bail!("ALTER... WITH not supported for unmanaged clusters");
                     }
                     if availability_zones.is_some() {

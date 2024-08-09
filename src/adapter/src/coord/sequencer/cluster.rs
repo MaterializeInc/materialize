@@ -10,6 +10,7 @@
 //! Coordinator functionality to sequence cluster-related plans
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
@@ -23,10 +24,10 @@ use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, ObjectType};
 use mz_sql::plan::{
-    AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
-    AlterOptionParameter, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    PlanClusterOption,
+    AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
+    AlterClusterSwapPlan, AlterOptionParameter, ComputeReplicaIntrospectionConfig,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
@@ -35,6 +36,8 @@ use crate::catalog::{Op, ReplicaCreateDropReason};
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
+
+pub(crate) const PENDING_REPLICA_SUFFIX: &str = "-pending";
 
 impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
@@ -156,6 +159,7 @@ impl Coordinator {
                     Some(availability_zones.as_ref())
                 },
                 disk,
+                false,
                 *session.current_role_id(),
                 ReplicaCreateDropReason::Manual,
             )?;
@@ -178,6 +182,7 @@ impl Coordinator {
         ops: &mut Vec<Op>,
         azs: Option<&[String]>,
         disk: bool,
+        pending: bool,
         owner_id: RoleId,
         reason: ReplicaCreateDropReason,
     ) -> Result<(), AdapterError> {
@@ -187,7 +192,7 @@ impl Coordinator {
             disk,
             internal: false,
             size: size.clone(),
-            pending: false,
+            pending,
         };
 
         let logging = if let Some(config) = compute.introspection {
@@ -560,11 +565,15 @@ impl Coordinator {
         cluster_id: ClusterId,
         new_config: ClusterConfig,
         reason: ReplicaCreateDropReason,
-    ) -> Result<(), AdapterError> {
+        strategy: AlterClusterPlanStrategy,
+    ) -> Result<FinalizationNeeded, AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
         let owner_id = cluster.owner_id();
+
         let mut ops = vec![];
+        let mut create_cluster_replicas = vec![];
+        let mut finalization_needed = FinalizationNeeded::False;
 
         let ClusterVariant::Managed(ClusterVariantManaged {
             size,
@@ -597,7 +606,10 @@ impl Coordinator {
             new_size,
         )?;
 
-        let mut create_cluster_replicas = vec![];
+        // check for active updates
+        if cluster.replicas().any(|r| r.config.location.pending()) {
+            coord_bail!("Cannot Alter clusters with pending updates.")
+        }
 
         let compute = mz_sql::plan::ComputeReplicaConfig {
             introspection: new_logging
@@ -628,39 +640,65 @@ impl Coordinator {
             || new_disk != disk
         {
             self.ensure_valid_azs(new_availability_zones.iter())?;
-
+            // If we're not doing a graceful reconfig
             // tear down all replicas, create new ones
-            let replica_ids_and_reasons = (0..*replication_factor)
-                .map(managed_cluster_replica_name)
-                .filter_map(|name| cluster.replica_id(&name))
-                .map(|replica_id| {
-                    catalog::DropObjectInfo::ClusterReplica((
-                        cluster.id(),
-                        replica_id,
-                        reason.clone(),
-                    ))
-                })
-                .collect();
-            ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
-
-            for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
-                self.create_managed_cluster_replica_op(
-                    cluster_id,
-                    id,
-                    name,
-                    &compute,
-                    new_size,
-                    &mut ops,
-                    Some(new_availability_zones.as_ref()),
-                    *new_disk,
-                    owner_id,
-                    reason.clone(),
-                )?;
-                create_cluster_replicas.push((cluster_id, id))
+            // else create the pending replicas and return
+            // early asking for finalization
+            match strategy {
+                AlterClusterPlanStrategy::None => {
+                    let replica_ids_and_reasons = (0..*replication_factor)
+                        .map(managed_cluster_replica_name)
+                        .filter_map(|name| cluster.replica_id(&name))
+                        .map(|replica_id| {
+                            catalog::DropObjectInfo::ClusterReplica((
+                                cluster.id(),
+                                replica_id,
+                                reason.clone(),
+                            ))
+                        })
+                        .collect();
+                    ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
+                    for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
+                        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                        self.create_managed_cluster_replica_op(
+                            cluster_id,
+                            id,
+                            name,
+                            &compute,
+                            new_size,
+                            &mut ops,
+                            Some(new_availability_zones.as_ref()),
+                            *new_disk,
+                            false,
+                            owner_id,
+                            reason.clone(),
+                        )?;
+                        create_cluster_replicas.push((cluster_id, id));
+                    }
+                }
+                AlterClusterPlanStrategy::For(duration) => {
+                    for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
+                        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                        self.create_managed_cluster_replica_op(
+                            cluster_id,
+                            id,
+                            format!("{name}{PENDING_REPLICA_SUFFIX}"),
+                            &compute,
+                            new_size,
+                            &mut ops,
+                            Some(new_availability_zones.as_ref()),
+                            *new_disk,
+                            true,
+                            owner_id,
+                            reason.clone(),
+                        )?;
+                        create_cluster_replicas.push((cluster_id, id));
+                    }
+                    finalization_needed = FinalizationNeeded::In(duration);
+                }
             }
         } else if new_replication_factor < replication_factor {
-            // Adjust size down
+            // Adjust replica count down
             let replica_ids = (*new_replication_factor..*replication_factor)
                 .map(managed_cluster_replica_name)
                 .filter_map(|name| cluster.replica_id(&name))
@@ -674,7 +712,7 @@ impl Coordinator {
                 .collect();
             ops.push(catalog::Op::DropObjects(replica_ids));
         } else if new_replication_factor > replication_factor {
-            // Adjust size up
+            // Adjust replica count up
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
@@ -690,6 +728,7 @@ impl Coordinator {
                     // rescheduled.
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
+                    false,
                     owner_id,
                     reason.clone(),
                 )?;
@@ -697,17 +736,23 @@ impl Coordinator {
             }
         }
 
-        ops.push(catalog::Op::UpdateClusterConfig {
-            id: cluster_id,
-            name,
-            config: new_config,
-        });
-
-        self.catalog_transact(session, ops).await?;
+        // If finalization is needed, finalization should update the cluster
+        // config.
+        match finalization_needed {
+            FinalizationNeeded::False => {
+                ops.push(catalog::Op::UpdateClusterConfig {
+                    id: cluster_id,
+                    name,
+                    config: new_config,
+                });
+            }
+            _ => {}
+        }
+        self.catalog_transact(session, ops.clone()).await?;
         for (cluster_id, replica_id) in create_cluster_replicas {
             self.create_cluster_replica(cluster_id, replica_id).await;
         }
-        Ok(())
+        Ok(finalization_needed)
     }
 
     /// # Panics
@@ -982,4 +1027,13 @@ impl Coordinator {
 
 fn managed_cluster_replica_name(index: u32) -> String {
     format!("r{}", index + 1)
+}
+
+/// The type of finalization needed after an
+/// operation such as alter_cluster_managed_to_managed.
+pub enum FinalizationNeeded {
+    /// Wait for the provided duration before finalizing
+    In(Duration),
+    /// Finalization has already occurred
+    False,
 }
