@@ -45,7 +45,7 @@ steps:
   - wait
   - label: mkpipeline
     command: bin/ci-builder run stable bin/pyactivate -m ci.mkpipeline $pipeline $@
-    priority: 2
+    priority: 100
     agents:
       queue: linux-aarch64-small
 EOF

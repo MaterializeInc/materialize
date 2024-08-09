@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Default priority, just set to be explicit
+priority: 0
+
 steps:
   - group: Builds
     key: builds
@@ -18,7 +21,7 @@ steps:
           - "*"
         depends_on: []
         timeout_in_minutes: 60
-        priority: 1
+        priority: 50
         agents:
           queue: builder-linux-x86_64
 
@@ -277,7 +280,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64-medium
         plugins:
@@ -841,7 +844,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64-medium
         plugins:
@@ -864,7 +867,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
@@ -890,7 +893,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
@@ -916,7 +919,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
@@ -942,7 +945,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
