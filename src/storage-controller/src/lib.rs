@@ -1741,14 +1741,6 @@ where
         self.storage_collections.acquire_read_holds(desired_holds)
     }
 
-    #[instrument(level = "debug", fields(updates))]
-    fn update_read_capabilities(
-        &mut self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    ) {
-        self.storage_collections.update_read_capabilities(updates);
-    }
-
     async fn ready(&mut self) {
         if self.pending_compaction_commands.len() > 0 {
             return;
