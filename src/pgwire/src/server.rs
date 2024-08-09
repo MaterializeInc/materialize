@@ -132,7 +132,11 @@ impl Server {
                                 let mut conn = FramedConn::new(conn_id.clone(), conn);
 
                                 let conn_uuid = params.remove(CONN_UUID_KEY);
-                                debug!(conn_uuid = %conn_uuid.clone().display_or("<none>"), "starting new pgwire connection in adapter");
+                                let conn_uuid = conn_uuid.clone().display_or("<none>");
+                                debug!(%conn_uuid, "starting new pgwire connection in adapter");
+                           let guard = scopeguard::guard((), |_| {
+                               debug!(%conn_uuid, "dropping pgwire connection in adapter without explicit termination");
+                           });
 
                                 let conn_res = protocol::run(protocol::RunParams {
                                     tls_mode: tls.as_ref().map(|tls| tls.mode),
