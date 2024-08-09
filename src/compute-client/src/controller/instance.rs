@@ -334,18 +334,38 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.collections.remove(&id);
     }
 
+    /// Returns the write frontier for each collection installed on each replica.
+    pub fn replica_write_frontiers(
+        &self,
+    ) -> impl Iterator<Item = ((GlobalId, ReplicaId), Antichain<T>)> + '_ {
+        self.replicas.iter().flat_map(|(replica_id, replica)| {
+            let collections = replica.collections.iter();
+            collections.map(|(collection_id, collection)| {
+                let frontier = collection.write_frontier.clone();
+                ((*collection_id, *replica_id), frontier)
+            })
+        })
+    }
+
     fn add_replica_state(
         &mut self,
         id: ReplicaId,
         client: ReplicaClient<T>,
         config: ReplicaConfig,
     ) {
+        let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
+
         let metrics = self.metrics.for_replica(id);
         let mut replica =
             ReplicaState::new(id, client, config, metrics, self.introspection_tx.clone());
 
         // Add per-replica collection state.
         for (collection_id, collection) in &self.collections {
+            // Skip log collections not maintained by this replica.
+            if collection.log_collection && !log_ids.contains(collection_id) {
+                continue;
+            }
+
             let as_of = collection.read_frontier().to_owned();
             replica.add_collection(*collection_id, as_of);
         }
@@ -388,11 +408,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// Returns whether the identified replica exists.
     pub fn replica_exists(&self, id: ReplicaId) -> bool {
         self.replicas.contains_key(&id)
-    }
-
-    /// Returns the ids of all replicas of this instance.
-    pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
-        self.replicas.keys().copied()
     }
 
     /// Return the IDs of pending peeks targeting the specified replica.
@@ -453,15 +468,13 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
     /// Refresh the `wallclock_lag_seconds` metric with the current lag values.
     fn refresh_wallclock_lag_metric(&self) {
-        for (replica_id, replica) in &self.replicas {
-            for (collection_id, replica_collection) in &replica.collections {
-                let Some(metrics) = &replica_collection.metrics else {
+        for replica in self.replicas.values() {
+            for collection in replica.collections.values() {
+                let Some(metrics) = &collection.metrics else {
                     continue;
                 };
 
-                let collection = &self.collections[collection_id];
-                let replica_frontier = &collection.replica_write_frontiers[replica_id];
-                let lag = match replica_frontier.as_option() {
+                let lag = match collection.write_frontier.as_option() {
                     Some(ts) => (self.wallclock_lag)(ts),
                     None => Duration::ZERO,
                 };
@@ -490,42 +503,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .collect();
 
         self.deliver_introspection_updates(IntrospectionType::ComputeDependencies, updates);
-    }
-
-    /// Update the tracked hydration status for the given collection and replica according to an
-    /// observed frontier update.
-    fn update_hydration_status(
-        &mut self,
-        id: GlobalId,
-        replica_id: ReplicaId,
-        frontier: &Antichain<T>,
-    ) {
-        let Some(replica) = self.replicas.get_mut(&replica_id) else {
-            tracing::error!(
-                %id, %replica_id, frontier = ?frontier.elements(),
-                "frontier update for an unknown replica"
-            );
-            return;
-        };
-        let Some(collection) = replica.collections.get_mut(&id) else {
-            tracing::error!(
-                %id, %replica_id, frontier = ?frontier.elements(),
-                "frontier update for an unknown collection"
-            );
-            return;
-        };
-
-        // We may have already reported successful hydration before, in which case we have nothing
-        // left to do.
-        if collection.hydrated() {
-            return;
-        }
-
-        // If the observed frontier is greater than the collection's as-of, the collection has
-        // produced some output and is therefore hydrated now.
-        if PartialOrder::less_than(&collection.as_of, frontier) {
-            collection.set_hydrated();
-        }
     }
 
     /// Update the tracked hydration status for an operator according to a received status update.
@@ -677,17 +654,13 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     fn cleanup_collections(&mut self) {
         let to_remove: Vec<_> = self
             .collections_iter()
-            .filter(|(_id, collection)| {
+            .filter(|(id, collection)| {
                 collection.dropped
-                    && collection.read_frontier().is_empty()
-                    && collection
-                        .replica_write_frontiers
+                    && collection.read_capabilities.is_empty()
+                    && self
+                        .replicas
                         .values()
-                        .all(|frontier| frontier.is_empty())
-                    && collection
-                        .replica_input_frontiers
-                        .values()
-                        .all(|frontier| frontier.is_empty())
+                        .all(|r| r.collection_frontiers_empty(**id))
             })
             .map(|(id, _collection)| *id)
             .collect();
@@ -985,21 +958,6 @@ where
         }
 
         config.logging.index_logs = self.log_sources.clone();
-        let log_ids: BTreeSet<_> = config.logging.index_logs.values().collect();
-
-        // Initialize frontier tracking for the new replica.
-        let mut updates = BTreeMap::new();
-        for (compute_id, collection) in &mut self.collections {
-            // Skip log collections not maintained by this replica.
-            if collection.log_collection && !log_ids.contains(compute_id) {
-                continue;
-            }
-
-            let read_frontier = collection.read_frontier();
-            updates.insert(*compute_id, read_frontier.to_owned());
-        }
-        self.update_replica_write_frontiers(id, &updates);
-        self.update_replica_input_frontiers(id, &updates);
 
         let replica_epoch = self.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
@@ -1035,9 +993,6 @@ where
     /// Remove an existing instance replica, by ID.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
         self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
-
-        // Remove frontier tracking for this replica.
-        self.remove_replica_frontiers(id);
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an
@@ -1168,21 +1123,6 @@ where
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
             );
-        }
-
-        // Initialize tracking of replica frontiers.
-        let replica_write_frontier_updates = dataflow
-            .export_ids()
-            .map(|id| (id, as_of.clone()))
-            .collect();
-        let replica_input_frontier_updates = dataflow
-            .export_ids()
-            .map(|id| (id, replica_input_frontier.clone()))
-            .collect();
-        let replica_ids: Vec<_> = self.replica_ids().collect();
-        for replica_id in replica_ids {
-            self.update_replica_write_frontiers(replica_id, &replica_write_frontier_updates);
-            self.update_replica_input_frontiers(replica_id, &replica_input_frontier_updates);
         }
 
         // Initialize tracking of subscribes.
@@ -1528,173 +1468,48 @@ where
         Ok(hold)
     }
 
-    /// Accept write frontier updates from the compute layer.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the `updates` references an absent collection.
-    /// Panics if any of the `updates` regresses an existing write frontier.
-    #[mz_ore::instrument(level = "debug")]
-    fn update_write_frontiers(
-        &mut self,
-        replica_id: ReplicaId,
-        updates: &BTreeMap<GlobalId, Antichain<T>>,
-    ) {
-        // Apply advancements of replica frontiers.
-        self.update_replica_write_frontiers(replica_id, updates);
-
-        // Apply advancements of global collection frontiers.
-        self.maybe_update_global_write_frontiers(updates);
-    }
-
-    /// Apply replica write frontier updates.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the `updates` references an absent collection.
-    /// Panics if any of the `updates` regresses an existing replica write frontier.
-    #[mz_ore::instrument(level = "debug")]
-    fn update_replica_write_frontiers(
-        &mut self,
-        replica_id: ReplicaId,
-        updates: &BTreeMap<GlobalId, Antichain<T>>,
-    ) {
-        for (id, new_upper) in updates {
-            let collection = self.expect_collection_mut(*id);
-
-            let old_upper = collection
-                .replica_write_frontiers
-                .insert(replica_id, new_upper.clone());
-
-            // Safety check against frontier regressions.
-            if let Some(old) = &old_upper {
-                assert!(
-                    PartialOrder::less_equal(old, new_upper),
-                    "replica frontier regression: {old:?} -> {new_upper:?}, \
-                     collection={id}, replica={replica_id}",
-                );
-            }
-        }
-    }
-
-    /// Apply replica input frontier updates.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the `updates` references an absent collection.
-    /// Panics if any of the `updates` regresses an existing replica input frontier.
-    #[mz_ore::instrument(level = "debug")]
-    fn update_replica_input_frontiers(
-        &mut self,
-        replica_id: ReplicaId,
-        updates: &BTreeMap<GlobalId, Antichain<T>>,
-    ) {
-        // Compute and apply read hold downgrades on storage dependencies that result from
-        // input frontier advancements.
-        let mut storage_read_capability_changes = BTreeMap::default();
-        for (id, new_cap) in updates {
-            let collection = self.expect_collection_mut(*id);
-
-            let old_cap = collection
-                .replica_input_frontiers
-                .insert(replica_id, new_cap.clone());
-
-            // Safety check against frontier regressions.
-            if let Some(old) = &old_cap {
-                assert!(
-                    PartialOrder::less_equal(old, new_cap),
-                    "replica input frontier regression: {old:?} -> {new_cap:?}, \
-                     collection={id}, replica={replica_id}",
-                );
-            }
-
-            // Update per-replica read holds on storage dependencies.
-            for storage_id in collection.storage_dependency_ids() {
-                let update = storage_read_capability_changes
-                    .entry(storage_id)
-                    .or_insert_with(|| ChangeBatch::new());
-                if let Some(old) = &old_cap {
-                    update.extend(old.iter().map(|time| (time.clone(), -1)));
-                }
-                update.extend(new_cap.iter().map(|time| (time.clone(), 1)));
-            }
-        }
-
-        // Prune empty changes. We might end up with empty changes for dependencies that have been
-        // dropped already, which is fine but might be confusing if we reported them.
-        storage_read_capability_changes.retain(|_key, update| !update.is_empty());
-
-        if !storage_read_capability_changes.is_empty() {
-            self.storage_collections
-                .update_read_capabilities(&mut storage_read_capability_changes);
-        }
-    }
-
-    /// Remove frontier tracking state for the given replica.
-    #[mz_ore::instrument(level = "debug")]
-    fn remove_replica_frontiers(&mut self, replica_id: ReplicaId) {
-        let mut storage_read_capability_changes = BTreeMap::default();
-        for collection in self.collections.values_mut() {
-            // Remove the tracked write frontier.
-            collection.replica_write_frontiers.remove(&replica_id);
-
-            // Remove the tracked input frontier and release any corresponding read holds on
-            // storage dependencies.
-            let last_cap = collection.replica_input_frontiers.remove(&replica_id);
-            if let Some(frontier) = last_cap {
-                if !frontier.is_empty() {
-                    for storage_id in collection.storage_dependency_ids() {
-                        let update = storage_read_capability_changes
-                            .entry(storage_id)
-                            .or_insert_with(ChangeBatch::new);
-                        update.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                    }
-                }
-            }
-        }
-
-        if !storage_read_capability_changes.is_empty() {
-            self.storage_collections
-                .update_read_capabilities(&mut storage_read_capability_changes);
-        }
-    }
-
-    /// Apply global write frontier updates.
+    /// Advance the global write frontier of the given collection.
     ///
     /// Frontier regressions are gracefully ignored.
     ///
     /// # Panics
     ///
-    /// Panics if any of the `updates` references an absent collection.
+    /// Panics if the identified collection does not exist.
     #[mz_ore::instrument(level = "debug")]
-    fn maybe_update_global_write_frontiers(&mut self, updates: &BTreeMap<GlobalId, Antichain<T>>) {
-        // Compute and apply read capability downgrades that result from collection frontier
-        // advancements.
-        for (id, new_upper) in updates {
-            let collection = self.expect_collection_mut(*id);
+    fn maybe_update_global_write_frontier(&mut self, id: GlobalId, new_frontier: Antichain<T>) {
+        let collection = self.expect_collection_mut(id);
 
-            if !PartialOrder::less_than(&collection.write_frontier, new_upper) {
-                continue; // frontier has not advanced
-            }
-
-            collection.write_frontier.clone_from(new_upper);
-
-            let new_since = match &collection.read_policy {
-                Some(read_policy) => {
-                    // For readable collections the read frontier is determined by applying the
-                    // client-provided read policy to the write frontier.
-                    read_policy.frontier(new_upper.borrow())
-                }
-                None => {
-                    // Write-only collections cannot be read within the context of the compute
-                    // controller, so we can immediately advance their read frontier to the new write
-                    // frontier.
-                    new_upper.clone()
-                }
-            };
-
-            let _ = collection.implied_read_hold.try_downgrade(new_since);
+        if !PartialOrder::less_than(&collection.write_frontier, &new_frontier) {
+            return; // frontier has not advanced
         }
+
+        collection.write_frontier.clone_from(&new_frontier);
+
+        // Relax the implied read hold according to the read policy.
+        let new_since = match &collection.read_policy {
+            Some(read_policy) => {
+                // For readable collections the read frontier is determined by applying the
+                // client-provided read policy to the write frontier.
+                read_policy.frontier(new_frontier.borrow())
+            }
+            None => {
+                // Write-only collections cannot be read within the context of the compute
+                // controller, so we can immediately advance their read frontier to the new write
+                // frontier.
+                new_frontier.clone()
+            }
+        };
+        let _ = collection.implied_read_hold.try_downgrade(new_since);
+
+        // Report the frontier advancement internally and externally.
+        collection
+            .collection_introspection
+            .frontier_update(&new_frontier);
+
+        self.deliver_response(ComputeControllerResponse::FrontierUpper {
+            id,
+            upper: new_frontier,
+        });
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends
@@ -1838,55 +1653,37 @@ where
         frontiers: FrontiersResponse<T>,
         replica_id: ReplicaId,
     ) {
-        // According to the compute protocol, replicas are not allowed to send `Frontiers`
-        // responses that regress frontiers they have reported previously. We still perform a check
-        // here, rather than risking the controller becoming confused trying to handle regressions.
-        let Ok(coll) = self.collection(id) else {
-            tracing::error!(
-               %id, %replica_id, ?frontiers,
-               "frontiers update for unknown collection",
+        if !self.collections.contains_key(&id) {
+            soft_panic_or_log!(
+                "frontiers update for an unknown collection \
+                 (id={id}, replica_id={replica_id}, frontiers={frontiers:?})"
+            );
+            return;
+        }
+        let Some(replica) = self.replicas.get_mut(&replica_id) else {
+            soft_panic_or_log!(
+                "frontiers update for an unknown replica \
+                 (replica_id={replica_id}, frontiers={frontiers:?})"
+            );
+            return;
+        };
+        let Some(replica_collection) = replica.collections.get_mut(&id) else {
+            soft_panic_or_log!(
+                "frontiers update for an unknown replica collection \
+                 (id={id}, replica_id={replica_id}, frontiers={frontiers:?})"
             );
             return;
         };
 
-        // Apply a write frontier advancement.
-        if let Some(new_frontier) = frontiers.write_frontier {
-            if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
-                if !PartialOrder::less_equal(old_frontier, &new_frontier) {
-                    tracing::error!(
-                       %id, %replica_id, ?old_frontier, ?new_frontier,
-                       "collection write frontier regression",
-                    );
-                    return;
-                }
-            }
-
-            let old_global_frontier = coll.write_frontier.clone();
-
-            self.collection_mut(id)
-                .expect("we know about the collection")
-                .collection_introspection
-                .frontier_update(&new_frontier);
-            self.update_write_frontiers(replica_id, &[(id, new_frontier)].into());
-
-            if let Ok(coll) = self.collection(id) {
-                if coll.write_frontier != old_global_frontier {
-                    self.deliver_response(ComputeControllerResponse::FrontierUpper {
-                        id,
-                        upper: coll.write_frontier.clone(),
-                    });
-                }
-            }
-        }
-
-        // Apply an input frontier advancement.
         if let Some(new_frontier) = frontiers.input_frontier {
-            self.update_replica_input_frontiers(replica_id, &[(id, new_frontier)].into());
+            replica_collection.update_input_frontier(new_frontier.clone());
         }
-
-        // Apply an output frontier advancement.
         if let Some(new_frontier) = frontiers.output_frontier {
-            self.update_hydration_status(id, replica_id, &new_frontier);
+            replica_collection.update_output_frontier(new_frontier.clone());
+        }
+        if let Some(new_frontier) = frontiers.write_frontier {
+            replica_collection.update_write_frontier(new_frontier.clone());
+            self.maybe_update_global_write_frontier(id, new_frontier);
         }
     }
 
@@ -1959,12 +1756,25 @@ where
         replica_id: ReplicaId,
     ) {
         if !self.collections.contains_key(&subscribe_id) {
-            tracing::error!(
-                %subscribe_id, %replica_id,
-                "received response for an unknown subscribe",
+            soft_panic_or_log!(
+                "received response for an unknown subscribe \
+                 (subscribe_id={subscribe_id}, replica_id={replica_id})",
             );
             return;
         }
+        let Some(replica) = self.replicas.get_mut(&replica_id) else {
+            soft_panic_or_log!(
+                "subscribe response for an unknown replica (replica_id={replica_id})"
+            );
+            return;
+        };
+        let Some(replica_collection) = replica.collections.get_mut(&subscribe_id) else {
+            soft_panic_or_log!(
+                "subscribe response for an unknown replica collection \
+                 (subscribe_id={subscribe_id}, replica_id={replica_id})"
+            );
+            return;
+        };
 
         // Always apply replica write frontier updates. Even if the subscribe is not tracked
         // anymore, there might still be replicas reading from its inputs, so we need to track the
@@ -1974,16 +1784,12 @@ where
             SubscribeResponse::DroppedAt(_) => Antichain::new(),
         };
 
-        self.update_hydration_status(subscribe_id, replica_id, &write_frontier);
-
-        let write_frontier_updates = [(subscribe_id, write_frontier)].into();
-        self.update_replica_write_frontiers(replica_id, &write_frontier_updates);
-
-        // For subscribes we downgrade replica input frontiers based on write frontiers. This
-        // should be fine because subscribes can't jump their write frontiers ahead of the times
-        // they have read from their inputs currently.
-        // TODO(#16274): report subscribe input frontiers through `Frontiers` responses
-        self.update_replica_input_frontiers(replica_id, &write_frontier_updates);
+        // For subscribes we downgrade all replica frontiers based on write frontiers. This should
+        // be fine because the input and output frontier of a subscribe track its write frontier.
+        // TODO(#16274): report subscribe frontiers through `Frontiers` responses
+        replica_collection.update_write_frontier(write_frontier.clone());
+        replica_collection.update_input_frontier(write_frontier.clone());
+        replica_collection.update_output_frontier(write_frontier.clone());
 
         // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
         let Some(mut subscribe) = self.subscribes.get(&subscribe_id).cloned() else {
@@ -1999,7 +1805,7 @@ where
         // frontier only based on responses from the targeted replica. Otherwise, another replica
         // could advance to the empty frontier, making us drop the subscribe on the targeted
         // replica prematurely.
-        self.maybe_update_global_write_frontiers(&write_frontier_updates);
+        self.maybe_update_global_write_frontier(subscribe_id, write_frontier);
 
         match response {
             SubscribeResponse::Batch(batch) => {
@@ -2180,7 +1986,7 @@ pub struct ReplicaState<T> {
     failed: bool,
 }
 
-impl<T: Debug> ReplicaState<T> {
+impl<T: ComputeControllerTimestamp> ReplicaState<T> {
     fn new(
         id: ReplicaId,
         client: ReplicaClient<T>,
@@ -2207,12 +2013,7 @@ impl<T: Debug> ReplicaState<T> {
     fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
         let metrics = self.metrics.for_collection(id);
         let hydration_state = HydrationState::new(self.id, id, self.introspection_tx.clone());
-        let mut state = ReplicaCollectionState {
-            metrics,
-            created_at: Instant::now(),
-            as_of,
-            hydration_state,
-        };
+        let mut state = ReplicaCollectionState::new(metrics, as_of, hydration_state);
 
         // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
         // is not useful for indexes, because they wouldn't be readable. For write-only
@@ -2238,6 +2039,15 @@ impl<T: Debug> ReplicaState<T> {
     /// Remove state for a collection.
     fn remove_collection(&mut self, id: GlobalId) -> Option<ReplicaCollectionState<T>> {
         self.collections.remove(&id)
+    }
+
+    /// Returns whether all replica frontiers of the given collection are empty.
+    fn collection_frontiers_empty(&self, id: GlobalId) -> bool {
+        self.collections.get(&id).map_or(true, |c| {
+            c.write_frontier.is_empty()
+                && c.input_frontier.is_empty()
+                && c.output_frontier.is_empty()
+        })
     }
 
     /// Returns the state of the [`ReplicaState`] formatted as JSON.
@@ -2284,6 +2094,19 @@ impl<T: Debug> ReplicaState<T> {
 
 #[derive(Debug)]
 struct ReplicaCollectionState<T> {
+    /// The replica write frontier of this collection.
+    ///
+    /// See [`FrontiersResponse::write_frontier`].
+    write_frontier: Antichain<T>,
+    /// The replica input frontier of this collection.
+    ///
+    /// See [`FrontiersResponse::input_frontier`].
+    input_frontier: Antichain<T>,
+    /// The replica output frontier of this collection.
+    ///
+    /// See [`FrontiersResponse::output_frontier`].
+    output_frontier: Antichain<T>,
+
     /// Metrics tracked for this collection.
     ///
     /// If this is `None`, no metrics are collected.
@@ -2296,7 +2119,23 @@ struct ReplicaCollectionState<T> {
     hydration_state: HydrationState,
 }
 
-impl<T> ReplicaCollectionState<T> {
+impl<T: Timestamp> ReplicaCollectionState<T> {
+    fn new(
+        metrics: Option<ReplicaCollectionMetrics>,
+        as_of: Antichain<T>,
+        hydration_state: HydrationState,
+    ) -> Self {
+        Self {
+            write_frontier: as_of.clone(),
+            input_frontier: as_of.clone(),
+            output_frontier: as_of.clone(),
+            metrics,
+            created_at: Instant::now(),
+            as_of,
+            hydration_state,
+        }
+    }
+
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
         self.hydration_state.hydrated
@@ -2310,6 +2149,51 @@ impl<T> ReplicaCollectionState<T> {
         }
 
         self.hydration_state.hydrated = true;
+    }
+
+    /// Updates the replica write frontier of this collection.
+    fn update_write_frontier(&mut self, new_frontier: Antichain<T>) {
+        if PartialOrder::less_than(&new_frontier, &self.write_frontier) {
+            soft_panic_or_log!(
+                "replica collection write frontier regression (old={:?}, new={new_frontier:?})",
+                self.write_frontier,
+            );
+            return;
+        }
+
+        self.write_frontier = new_frontier;
+    }
+
+    /// Updates the replica input frontier of this collection.
+    fn update_input_frontier(&mut self, new_frontier: Antichain<T>) {
+        if PartialOrder::less_than(&new_frontier, &self.input_frontier) {
+            soft_panic_or_log!(
+                "replica collection input frontier regression (old={:?}, new={new_frontier:?})",
+                self.input_frontier,
+            );
+            return;
+        }
+
+        self.input_frontier = new_frontier;
+    }
+
+    /// Updates the replica output frontier of this collection.
+    fn update_output_frontier(&mut self, new_frontier: Antichain<T>) {
+        if PartialOrder::less_than(&new_frontier, &self.output_frontier) {
+            soft_panic_or_log!(
+                "replica collection output frontier regression (old={:?}, new={new_frontier:?})",
+                self.output_frontier,
+            );
+            return;
+        }
+
+        self.output_frontier = new_frontier;
+
+        // If the observed frontier is greater than the collection's as-of, the collection has
+        // produced some output and is therefore hydrated now.
+        if !self.hydrated() && PartialOrder::less_than(&self.as_of, &self.output_frontier) {
+            self.set_hydrated();
+        }
     }
 }
 
