@@ -464,8 +464,8 @@ query T multiline
 EXPLAIN WITH(types, no fast path) SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
 ----
 Explained Query:
-  Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
-    Map ((#1 = 1), true, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
+  Project (#2, #2..=#4, #4, #4) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
+    Map ((#1 = 1), true, null) // { types: "(integer?, integer, boolean, boolean, boolean?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -478,8 +478,8 @@ query T multiline
 EXPLAIN WITH(types, no fast path) SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
 ----
 Explained Query:
-  Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
-    Map ((#1 != 1), false, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
+  Project (#2, #2..=#4, #4, #4) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
+    Map ((#1 != 1), false, null) // { types: "(integer?, integer, boolean, boolean, boolean?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -497,8 +497,8 @@ EXPLAIN WITH(types, no fast path) SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (
 ----
 Explained Query:
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-    Project (#5, #4, #7, #8, #6, #6) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-      Map ((#0 = 1), (#0 = #1), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?)" }
+    Project (#5, #4, #7, #7, #6, #6) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+      Map ((#0 = 1), (#0 = #1), null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?)" }
         Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
@@ -530,8 +530,8 @@ EXPLAIN WITH(types, no fast path) SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VA
 ----
 Explained Query:
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-    Project (#7, #4, #8, #9, #5, #6) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-      Map ((#0 > #1), (#1 > #0), (1 > #0), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?, boolean?)" }
+    Project (#7, #4, #8, #8, #5, #6) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+      Map ((#0 > #1), (#1 > #0), (1 > #0), null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?)" }
         Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
@@ -562,8 +562,8 @@ EXPLAIN WITH(types, no fast path) SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VA
 ----
 Explained Query:
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-    Project (#7..=#10, #5, #6) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-      Map ((#0 < #1), (#1 < #0), (1 < #0), NOT(#4), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean, boolean?, boolean?)" }
+    Project (#7..=#9, #9, #5, #6) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
+      Map ((#0 < #1), (#1 < #0), (1 < #0), NOT(#4), null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean, boolean?)" }
         Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
