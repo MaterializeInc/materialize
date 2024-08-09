@@ -344,11 +344,13 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(1 = (#0 / #2)) type=differential // { arity: 4 }
       implementation
-        %0:foo[×] » %1:bar[×]
+        %0:foo[×]enf » %1:bar[×]enf
       ArrangeBy keys=[[]] // { arity: 2 }
-        ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
+        Filter (false = (#0) IS NULL) // { arity: 2 }
+          ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
-        ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
+        Filter (false = (#0) IS NULL) // { arity: 2 }
+          ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
@@ -377,11 +379,13 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(-1 = (#3 - #1) = (#0 / #2)) type=differential // { arity: 4 }
       implementation
-        %0:foo[×] » %1:bar[×]
+        %0:foo[×]enf » %1:bar[×]enf
       ArrangeBy keys=[[]] // { arity: 2 }
-        ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
+        Filter (false = (#0) IS NULL) AND (false = (#1) IS NULL) // { arity: 2 }
+          ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
-        ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
+        Filter (false = (#0) IS NULL) AND (false = (#1) IS NULL) // { arity: 2 }
+          ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
