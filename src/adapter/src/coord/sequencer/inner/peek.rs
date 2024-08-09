@@ -15,7 +15,7 @@ use http::Uri;
 use itertools::Either;
 use maplit::btreemap;
 use mz_controller_types::ClusterId;
-use mz_expr::{CollectionPlan, ResultSpec};
+use mz_expr::{CollectionPlan, ResultSpec, StatisticsOracle};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -28,7 +28,6 @@ use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_transform::EmptyStatisticsOracle;
 use tokio::sync::oneshot;
 use tracing::warn;
 use tracing::{Instrument, Span};
@@ -486,7 +485,7 @@ impl Coordinator {
             session,
             &plan.when,
             cluster_id,
-            timeline_context,
+            timeline_context.clone(),
             oracle_read_ts,
             &id_bundle,
             &source_ids,
@@ -504,13 +503,15 @@ impl Coordinator {
             determination,
             optimizer,
             explain_ctx,
+            cluster_id,
+            timeline_context,
         });
         Ok(StageResult::Immediate(Box::new(stage)))
     }
 
     #[instrument]
     async fn peek_optimize(
-        &self,
+        &mut self,
         session: &Session,
         PeekStageOptimize {
             validity,
@@ -520,17 +521,58 @@ impl Coordinator {
             id_bundle,
             target_replica,
             determination,
-            mut optimizer,
             explain_ctx,
+            cluster_id,
+            timeline_context,
+            mut optimizer,
         }: PeekStageOptimize,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
-        let stats = self
-            .statistics_oracle(session, &source_ids, &timestamp_context.antichain(), true)
+
+        // Generate a stats timestamp. This needs to be as fresh as possible that can return
+        // immediately. So use serializable isolation without oracles. Ignore read_holds here since,
+        // on the main coord thread, the timestamps will not be GC'd after determination.
+        let stats_when = match plan.when {
+            // Freshest wants a linearized timestamp, so convert to immediately.
+            QueryWhen::FreshestTableWrite => &QueryWhen::Immediately,
+            QueryWhen::Immediately | QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => {
+                &plan.when
+            }
+        };
+        let stats_ts = self.determine_timestamp_for(
+            session,
+            &id_bundle,
+            stats_when,
+            cluster_id,
+            &timeline_context,
+            None,
+            None,
+            &mz_sql::session::vars::IsolationLevel::Serializable,
+        );
+
+        let stats_ts_ctx = match stats_ts {
+            Ok((ts, _read_holds)) => {
+                eprintln!(
+                    "MGREE stats_ts.respond_immediately = {}",
+                    ts.respond_immediately()
+                );
+                ts.timestamp_context
+            }
+            Err(e) => {
+                eprintln!("MGREE stats_ts = Err({e:?})");
+                timestamp_context.clone()
+            }
+        };
+
+        let cardinality_stats = self
+            .statistics_oracle(session, &source_ids, &stats_ts_ctx.antichain(), true)
             .await
-            .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
+            .unwrap_or_else(|e| {
+                eprintln!("MGREE statistics_oracle = Err({e:?})");
+                StatisticsOracle::default()
+            });
         let session = session.meta();
         let now = self.catalog().config().now.clone();
         let catalog = self.owned_catalog();
@@ -545,6 +587,7 @@ impl Coordinator {
         }
 
         let span = Span::current();
+        let optimizer_stats = cardinality_stats.clone();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize peek",
             move || {
@@ -560,7 +603,7 @@ impl Coordinator {
                                 // HIR ⇒ MIR lowering and MIR optimization (local)
                                 let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                                 // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
+                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, optimizer_stats);
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                                 let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -571,7 +614,7 @@ impl Coordinator {
                                 // HIR ⇒ MIR lowering and MIR optimization (local and global)
                                 let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                                 // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
+                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, optimizer_stats);
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                                 let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -621,6 +664,7 @@ impl Coordinator {
                                         validity,
                                         optimizer,
                                         df_meta,
+                                        cardinality_stats,
                                         explain_ctx,
                                         insights_ctx,
                                     })
@@ -634,6 +678,7 @@ impl Coordinator {
                                         target_replica,
                                         source_ids,
                                         determination,
+                                        cardinality_stats,
                                         optimizer,
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         global_lir_plan,
@@ -649,6 +694,7 @@ impl Coordinator {
                                     target_replica,
                                     source_ids,
                                     determination,
+                                    cardinality_stats,
                                     optimizer,
                                     plan_insights_optimizer_trace: None,
                                     global_lir_plan,
@@ -709,6 +755,7 @@ impl Coordinator {
                                     validity,
                                     optimizer,
                                     df_meta: Default::default(),
+                                    cardinality_stats,
                                     explain_ctx,
                                     insights_ctx: None,
                             })
@@ -798,6 +845,7 @@ impl Coordinator {
             target_replica,
             source_ids,
             determination,
+            cardinality_stats,
             optimizer,
             plan_insights_optimizer_trace,
             global_lir_plan,
@@ -831,6 +879,7 @@ impl Coordinator {
                 .into_plan_insights(
                     &features,
                     &self.catalog().for_session(session),
+                    &cardinality_stats,
                     Some(plan.finishing),
                     Some(target_cluster),
                     df_meta,
@@ -997,6 +1046,7 @@ impl Coordinator {
             optimizer,
             insights_ctx,
             df_meta,
+            cardinality_stats,
             explain_ctx:
                 ExplainPlanContext {
                     config,
@@ -1037,6 +1087,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 finishing,
                 Some(target_cluster),
                 df_meta,

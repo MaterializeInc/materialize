@@ -21,7 +21,7 @@ mod tests {
 
     use anyhow::{anyhow, Error};
     use mz_expr::explain::ExplainContext;
-    use mz_expr::{Id, MirRelationExpr};
+    use mz_expr::{Id, MirRelationExpr, StatisticsOracle};
     use mz_expr_test_util::{
         build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog,
     };
@@ -50,8 +50,9 @@ mod tests {
         static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
+            let stats = StatisticsOracle::default();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &stats, &mut df_meta);
 
             #[allow(deprecated)]
             Optimizer::logical_optimizer(&mut transform_ctx)
@@ -153,7 +154,7 @@ mod tests {
                     config: &config,
                     features: &features,
                     humanizer: cat,
-                    cardinality_stats: Default::default(), // empty stats
+                    cardinality_stats: &StatisticsOracle::default(), // empty stats
                     used_indexes: Default::default(),
                     finishing: Default::default(),
                     duration: Default::default(),
@@ -178,7 +179,9 @@ mod tests {
         let features = OptimizerFeatures::default();
         let typecheck_ctx = typecheck::empty_context();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+        let stats = StatisticsOracle::default();
+        let mut transform_ctx =
+            TransformCtx::local(&features, &typecheck_ctx, &stats, &mut df_meta);
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(&mut rel, &mut transform_ctx)?;
@@ -354,8 +357,10 @@ mod tests {
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
+            let stats = StatisticsOracle::default();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx =
+                TransformCtx::local(&features, &typecheck_ctx, &stats, &mut df_meta);
 
             #[allow(deprecated)]
             let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
@@ -388,8 +393,10 @@ mod tests {
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
+            let stats = StatisticsOracle::default();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx =
+                TransformCtx::local(&features, &typecheck_ctx, &stats, &mut df_meta);
 
             let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
             let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);

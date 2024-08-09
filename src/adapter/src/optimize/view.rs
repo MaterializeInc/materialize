@@ -11,7 +11,7 @@
 
 use std::time::Instant;
 
-use mz_expr::OptimizedMirRelationExpr;
+use mz_expr::{OptimizedMirRelationExpr, StatisticsOracle};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -55,9 +55,14 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config, self.metrics.as_ref())?;
 
         // MIR ⇒ MIR optimization (local)
+        let stats = StatisticsOracle::default();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &stats,
+            &mut df_meta,
+        );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
         if let Some(metrics) = &self.metrics {

@@ -61,7 +61,7 @@ fn handle_explain(
         config: &config,
         features: &features,
         humanizer: catalog,
-        cardinality_stats: Default::default(), // empty stats
+        cardinality_stats: &mz_expr::StatisticsOracle::default(), // empty stats
         used_indexes: Default::default(),
         finishing: Default::default(),
         duration: Default::default(),
@@ -259,9 +259,10 @@ fn apply_transform<T: mz_transform::Transform>(
 
     let features = mz_repr::optimize::OptimizerFeatures::default();
     let typecheck_ctx = mz_transform::typecheck::empty_context();
+    let stats = mz_expr::StatisticsOracle::default();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx =
-        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &stats, &mut df_meta);
 
     // Apply the transformation, returning early on TransformError.
     transform

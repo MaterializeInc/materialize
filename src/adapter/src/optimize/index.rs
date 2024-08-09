@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
+use mz_expr::StatisticsOracle;
 use mz_repr::explain::trace_plan;
 use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
@@ -179,10 +180,11 @@ impl Optimize<Index> for Optimizer {
         )?;
 
         // Construct TransformCtx for global optimization.
+        let stats = StatisticsOracle::default();
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
-            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
+            &stats, // !!!(mgree): wire proper stats
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,

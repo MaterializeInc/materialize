@@ -26,7 +26,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::{fmt, iter};
 
-use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{MirRelationExpr, MirScalarExpr, StatisticsOracle};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::optimize::OptimizerFeatures;
@@ -92,7 +92,7 @@ pub struct TransformCtx<'a> {
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
     /// Statistical estimates.
-    pub stats: &'a dyn StatisticsOracle,
+    pub stats: &'a StatisticsOracle,
     /// Features passed to the enclosing `Optimizer`.
     pub features: &'a OptimizerFeatures,
     /// Typechecking context.
@@ -113,11 +113,12 @@ impl<'a> TransformCtx<'a> {
     pub fn local(
         features: &'a OptimizerFeatures,
         typecheck_ctx: &'a typecheck::SharedContext,
+        stats: &'a StatisticsOracle,
         df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
-            stats: &EmptyStatisticsOracle,
+            stats,
             global_id: None,
             features,
             typecheck_ctx,
@@ -131,7 +132,7 @@ impl<'a> TransformCtx<'a> {
     /// Used to call [`dataflow::optimize_dataflow`].
     pub fn global(
         indexes: &'a dyn IndexOracle,
-        stats: &'a dyn StatisticsOracle,
+        stats: &'a StatisticsOracle,
         features: &'a OptimizerFeatures,
         typecheck_ctx: &'a SharedContext,
         df_meta: &'a mut DataflowMetainfo,
@@ -243,31 +244,6 @@ impl IndexOracle for EmptyIndexOracle {
         _id: GlobalId,
     ) -> Box<dyn Iterator<Item = (GlobalId, &[MirScalarExpr])> + '_> {
         Box::new(iter::empty())
-    }
-}
-
-/// A trait for a type that can estimate statistics about a given `GlobalId`
-pub trait StatisticsOracle: fmt::Debug + Send {
-    /// Returns a cardinality estimate for the given identifier
-    ///
-    /// Returning `None` means "no estimate"; returning `Some(0)` means estimating that the shard backing `id` is empty
-    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize>;
-
-    /// Returns a map from identifiers to sizes
-    fn as_map(&self) -> BTreeMap<GlobalId, usize>;
-}
-
-/// A [`StatisticsOracle`] that knows nothing and can give no estimates.
-#[derive(Debug)]
-pub struct EmptyStatisticsOracle;
-
-impl StatisticsOracle for EmptyStatisticsOracle {
-    fn cardinality_estimate(&self, _: GlobalId) -> Option<usize> {
-        None
-    }
-
-    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
-        BTreeMap::new()
     }
 }
 
