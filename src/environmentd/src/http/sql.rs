@@ -1030,11 +1030,15 @@ async fn execute_request<S: ResultSender>(
         SqlRequest::Simple { query } => match parse(client, &query) {
             Ok(stmts) => {
                 let mut stmt_group = Vec::with_capacity(stmts.len());
+                let mut stmt_err = None;
                 for StatementParseResult { ast: stmt, sql } in stmts {
-                    check_prohibited_stmts(sender, &stmt)?;
+                    if let Err(err) = check_prohibited_stmts(sender, &stmt) {
+                        stmt_err = Some(err);
+                        break;
+                    }
                     stmt_group.push((stmt, sql.to_string(), vec![]));
                 }
-                stmt_groups.push(Ok(stmt_group));
+                stmt_groups.push(stmt_err.map(Err).unwrap_or_else(|| Ok(stmt_group)));
             }
             Err(e) => stmt_groups.push(Err(e)),
         },
@@ -1051,9 +1055,10 @@ async fn execute_request<S: ResultSender>(
                         }
 
                         let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
-                        check_prohibited_stmts(sender, &stmt)?;
-
-                        stmt_groups.push(Ok(vec![(stmt, sql.to_string(), params)]));
+                        stmt_groups.push(
+                            check_prohibited_stmts(sender, &stmt)
+                                .map(|_| vec![(stmt, sql.to_string(), params)]),
+                        );
                     }
                     Err(e) => stmt_groups.push(Err(e)),
                 };

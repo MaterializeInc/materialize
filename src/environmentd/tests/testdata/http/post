@@ -238,14 +238,14 @@ http
 http
 {"query":"subscribe (select * from t)"}
 ----
-400 Bad Request
-unsupported via this API: SUBSCRIBE (SELECT * FROM t)
+200 OK
+{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"copy (select 1) to stdout"}
 ----
-400 Bad Request
-unsupported via this API: COPY (SELECT 1) TO STDOUT
+200 OK
+{"results":[{"error":{"message":"unsupported via this API: COPY (SELECT 1) TO STDOUT","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"EXPLAIN SELECT 1"}
@@ -459,8 +459,8 @@ http
 http
 {"queries":[{"query":"subscribe (select * from t)","params":[]}]}
 ----
-400 Bad Request
-unsupported via this API: SUBSCRIBE (SELECT * FROM t)
+200 OK
+{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
 
 # Test detail and hint error fields.
 http
