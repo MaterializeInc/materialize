@@ -706,8 +706,8 @@ impl Coordinator {
                 "status": event.status.as_kebab_case_str(),
             });
             match event.status {
-                ClusterStatus::Ready => (),
-                ClusterStatus::NotReady(reason) => {
+                ClusterStatus::Online => (),
+                ClusterStatus::Offline(reason) => {
                     let properties = match &mut properties {
                         serde_json::Value::Object(map) => map,
                         _ => unreachable!(),

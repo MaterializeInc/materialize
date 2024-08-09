@@ -116,27 +116,27 @@
 -- Time: 791.930 ms
 -- CREATE INDEX
 -- Time: 349.982 ms
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "not-ready" at 2023-07-20 18:17:02.072258+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "offline" at 2023-07-20 18:17:02.072258+00
 -- HINT:  The cluster replica may be restarting or going offline.
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "ready" at 2023-07-20 18:17:07.113753+00
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "not-ready" at 2023-07-20 22:19:42.544537+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "online" at 2023-07-20 18:17:07.113753+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "offline" at 2023-07-20 22:19:42.544537+00
 -- HINT:  The cluster replica may be restarting or going offline.
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "ready" at 2023-07-20 22:19:47.566627+00
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "not-ready" at 2023-07-21 01:54:04.832211+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "online" at 2023-07-20 22:19:47.566627+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "offline" at 2023-07-21 01:54:04.832211+00
 -- HINT:  The cluster replica may be restarting or going offline.
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "ready" at 2023-07-21 01:54:09.850194+00
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "not-ready" at 2023-07-21 05:49:35.058072+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "online" at 2023-07-21 01:54:09.850194+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "offline" at 2023-07-21 05:49:35.058072+00
 -- HINT:  The cluster replica may be restarting or going offline.
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "ready" at 2023-07-21 05:49:40.109144+00
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "not-ready" at 2023-07-21 08:42:54.897804+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "online" at 2023-07-21 05:49:40.109144+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "offline" at 2023-07-21 08:42:54.897804+00
 -- HINT:  The cluster replica may be restarting or going offline.
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "ready" at 2023-07-21 08:42:59.928996+00
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "not-ready" at 2023-07-21 12:02:54.517557+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "online" at 2023-07-21 08:42:59.928996+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "offline" at 2023-07-21 12:02:54.517557+00
 -- HINT:  The cluster replica may be restarting or going offline.
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "ready" at 2023-07-21 12:02:59.559505+00
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "not-ready" at 2023-07-21 13:30:02.559734+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "online" at 2023-07-21 12:02:59.559505+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "offline" at 2023-07-21 13:30:02.559734+00
 -- HINT:  The cluster replica may be restarting or going offline.
--- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "ready" at 2023-07-21 13:30:07.566586+00
+-- psql:q04.sql:63: NOTICE:  cluster replica default.r1 changed status to "online" at 2023-07-21 13:30:07.566586+00
 -- ^CCancel request sent
 -- psql:q04.sql:63: ERROR:  canceling statement due to user request
 -- Time: 93951684.641 ms (1 d 02:05:51.685)

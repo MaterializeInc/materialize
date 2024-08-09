@@ -436,10 +436,10 @@ impl CatalogState {
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let status = event.status.as_kebab_case_str();
 
-        let not_ready_reason = match event.status {
-            ClusterStatus::Ready => None,
-            ClusterStatus::NotReady(None) => None,
-            ClusterStatus::NotReady(Some(reason)) => Some(reason.to_string()),
+        let offline_reason = match event.status {
+            ClusterStatus::Online => None,
+            ClusterStatus::Offline(None) => None,
+            ClusterStatus::Offline(Some(reason)) => Some(reason.to_string()),
         };
 
         BuiltinTableUpdate {
@@ -448,7 +448,7 @@ impl CatalogState {
                 Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
-                Datum::from(not_ready_reason.as_deref()),
+                Datum::from(offline_reason.as_deref()),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,

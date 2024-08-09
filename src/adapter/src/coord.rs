@@ -1398,7 +1398,7 @@ impl ClusterReplicaStatuses {
         let process_statuses = (0..num_processes)
             .map(|process_id| {
                 let status = ClusterReplicaProcessStatus {
-                    status: ClusterStatus::NotReady(None),
+                    status: ClusterStatus::Offline(None),
                     time: time.clone(),
                 };
                 (u64::cast_from(process_id), status)
@@ -1475,19 +1475,19 @@ impl ClusterReplicaStatuses {
     ) -> ClusterStatus {
         process_status
             .values()
-            .fold(ClusterStatus::Ready, |s, p| match (s, p.status) {
-                (ClusterStatus::Ready, ClusterStatus::Ready) => ClusterStatus::Ready,
+            .fold(ClusterStatus::Online, |s, p| match (s, p.status) {
+                (ClusterStatus::Online, ClusterStatus::Online) => ClusterStatus::Online,
                 (x, y) => {
                     let reason_x = match x {
-                        ClusterStatus::NotReady(reason) => reason,
-                        ClusterStatus::Ready => None,
+                        ClusterStatus::Offline(reason) => reason,
+                        ClusterStatus::Online => None,
                     };
                     let reason_y = match y {
-                        ClusterStatus::NotReady(reason) => reason,
-                        ClusterStatus::Ready => None,
+                        ClusterStatus::Offline(reason) => reason,
+                        ClusterStatus::Online => None,
                     };
                     // Arbitrarily pick the first known not-ready reason.
-                    ClusterStatus::NotReady(reason_x.or(reason_y))
+                    ClusterStatus::Offline(reason_x.or(reason_y))
                 }
             })
     }

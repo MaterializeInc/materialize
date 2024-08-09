@@ -6198,7 +6198,7 @@ pub static MZ_SHOW_CLUSTER_REPLICAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinVie
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
     mz_catalog.mz_cluster_replicas.size AS size,
-    statuses.ready AS ready
+    statuses.online AS online
 FROM
     mz_catalog.mz_cluster_replicas
         JOIN mz_catalog.mz_clusters
@@ -6207,7 +6207,7 @@ FROM
             (
                 SELECT
                     replica_id,
-                    mz_unsafe.mz_all(status = 'ready') AS ready
+                    mz_unsafe.mz_all(status = 'online') AS online
                 FROM mz_internal.mz_cluster_replica_statuses
                 GROUP BY replica_id
             ) AS statuses
