@@ -18,6 +18,7 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 
 $ postgres-execute connection=mz_system
 > SELECT name FROM (SHOW CLUSTERS)
+mz_analytics
 mz_system
 mz_catalog_server
 quickstart
@@ -26,6 +27,7 @@ mz_support
 
 $ postgres-execute connection=mz_system
 > select managed from mz_catalog.mz_clusters where id like 's%';
+true
 true
 true
 true

@@ -37,6 +37,7 @@ GRANT ALL PRIVILEGES ON SYSTEM TO materialize;
 COMPLETE 0
 
 # All objects on a fresh installation should be owned by mz_system (s1)
+# except for the mz_analytics connection which is owned by mz_analytics (s3)
 
 # No builtin sinks
 query T
@@ -48,10 +49,10 @@ SELECT owner_id FROM mz_indexes GROUP BY owner_id
 ----
 s1
 
-# No builtin connections
 query T
 SELECT owner_id FROM mz_connections GROUP BY owner_id
 ----
+s3
 
 query T
 SELECT owner_id FROM mz_types GROUP BY owner_id
@@ -103,6 +104,7 @@ SELECT owner_id FROM mz_clusters GROUP BY owner_id
 ----
 s1
 s2
+s3
 
 query T
 SELECT owner_id FROM mz_cluster_replicas GROUP BY owner_id
@@ -2771,7 +2773,7 @@ DROP OWNED BY materialize
 simple conn=mz_system,user=mz_system
 DROP OWNED BY mz_system CASCADE;
 ----
-db error: ERROR: cannot drop objects owned by role "mz_system" because they are required by the database system
+db error: ERROR: cannot drop objects owned by role "mz_system", "mz_analytics" because they are required by the database system
 
 ## Test dropping PUBLIC objects
 

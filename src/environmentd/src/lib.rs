@@ -151,6 +151,8 @@ pub struct Config {
     pub bootstrap_builtin_probe_cluster_replica_size: String,
     /// The size of the builtin support cluster replicas if bootstrapping.
     pub bootstrap_builtin_support_cluster_replica_size: String,
+    /// The size of the builtin analytics cluster replicas if bootstrapping.
+    pub bootstrap_builtin_analytics_cluster_replica_size: String,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
@@ -579,6 +581,8 @@ impl Listeners {
             builtin_probe_cluster_replica_size: config.bootstrap_builtin_probe_cluster_replica_size,
             builtin_support_cluster_replica_size: config
                 .bootstrap_builtin_support_cluster_replica_size,
+            builtin_analytics_cluster_replica_size: config
+                .bootstrap_builtin_analytics_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             storage_usage_client,

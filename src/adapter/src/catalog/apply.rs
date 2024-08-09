@@ -518,6 +518,13 @@ impl CatalogState {
     ) {
         let id = system_object_mapping.unique_identifier.id;
 
+        if system_object_mapping.unique_identifier.runtime_alterable() {
+            // Runtime-alterable system objects have real entries in the items
+            // collection and so get handled through the normal `insert_item`
+            // and `drop_item` code paths.
+            return;
+        }
+
         if let StateDiff::Retraction = diff {
             let entry = self.drop_item(id);
             retractions.system_object_mappings.insert(id, entry);
@@ -721,6 +728,43 @@ impl CatalogState {
                         is_retained_metrics_object: coll.is_retained_metrics_object,
                     }),
                     MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
+            Builtin::Connection(connection) => {
+                let mut item = self
+                    .parse_item(
+                        connection.sql,
+                        None,
+                        false,
+                        None,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "internal error: failed to load bootstrap connection:\n\
+                                    {}\n\
+                                    error:\n\
+                                    {:?}\n\n\
+                                    make sure that the schema name is specified in the builtin connection's create sql statement.",
+                            connection.name, e
+                        )
+                    });
+                let CatalogItem::Connection(_) = &mut item else {
+                    panic!("internal error: builtin connection {}'s SQL does not begin with \"CREATE CONNECTION\".", connection.name);
+                };
+
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Connection,
+                    connection.owner_id.clone(),
+                )];
+                acl_items.extend_from_slice(connection.access);
+
+                self.insert_item(
+                    id,
+                    connection.oid,
+                    name.clone(),
+                    item,
+                    connection.owner_id.clone(),
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
@@ -1003,7 +1047,14 @@ impl CatalogState {
                 diff,
             ),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
+                // Runtime-alterable system objects have real entries in the
+                // items collection and so get handled through the normal
+                // `StateUpdateKind::Item`.`
+                if !system_object_mapping.unique_identifier.runtime_alterable() {
+                    self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
+                } else {
+                    vec![]
+                }
             }
             StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),

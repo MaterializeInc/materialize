@@ -1068,6 +1068,7 @@ impl<'a> RunnerInner<'a> {
             bootstrap_builtin_catalog_server_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_probe_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_support_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_analytics_cluster_replica_size: config.replicas.to_string(),
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(

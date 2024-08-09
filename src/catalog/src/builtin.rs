@@ -45,8 +45,8 @@ use mz_sql::catalog::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{
-    MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
-    SUPPORT_USER_NAME, SYSTEM_USER_NAME,
+    ANALYTICS_USER_NAME, MZ_ANALYTICS_ROLE_ID, MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID,
+    MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
@@ -64,6 +64,23 @@ use crate::durable::objects::SystemObjectDescription;
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
 
+/// A sentinel used in place of a fingerprint that indicates that a builtin
+/// object is runtime alterable. Runtime alterable objects don't have meaningful
+/// fingerprints because they may have been intentionally changed by the user
+/// after creation.
+// NOTE(benesch): ideally we'd use a fingerprint type that used a sum type
+// rather than a loosely typed string to represent the runtime alterable
+// state like so:
+//
+//     enum Fingerprint {
+//         SqlText(String),
+//         RuntimeAlterable,
+//     }
+//
+// However, that would entail a complicated migration for the existing system object
+// mapping collection stored on disk.
+pub const RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL: &str = "<RUNTIME-ALTERABLE>";
+
 #[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
@@ -73,6 +90,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     Func(BuiltinFunc),
     Source(&'static BuiltinSource),
     Index(&'static BuiltinIndex),
+    Connection(&'static BuiltinConnection),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -85,6 +103,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Func(func) => func.name,
             Builtin::Source(coll) => coll.name,
             Builtin::Index(index) => index.name,
+            Builtin::Connection(connection) => connection.name,
         }
     }
 
@@ -97,6 +116,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Func(func) => func.schema,
             Builtin::Source(coll) => coll.schema,
             Builtin::Index(index) => index.schema,
+            Builtin::Connection(connection) => connection.schema,
         }
     }
 
@@ -109,6 +129,15 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
             Builtin::Index(_) => CatalogItemType::Index,
+            Builtin::Connection(_) => CatalogItemType::Connection,
+        }
+    }
+
+    /// Whether the object can be altered at runtime by its owner.
+    pub fn runtime_alterable(&self) -> bool {
+        match self {
+            Builtin::Connection(c) => c.runtime_alterable,
+            _ => false,
         }
     }
 }
@@ -211,6 +240,21 @@ impl BuiltinIndex {
     }
 }
 
+#[derive(Hash, Debug)]
+pub struct BuiltinConnection {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub oid: u32,
+    pub sql: &'static str,
+    pub access: &'static [MzAclItem],
+    pub owner_id: &'static RoleId,
+    /// Whether the object can be altered at runtime by its owner.
+    ///
+    /// Note that when `runtime_alterable` is true, changing the `sql` in future
+    /// versions does not trigger a migration.
+    pub runtime_alterable: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct BuiltinRole {
     pub id: RoleId,
@@ -230,6 +274,7 @@ pub struct BuiltinCluster {
     pub name: &'static str,
     pub privileges: &'static [MzAclItem],
     pub owner_id: &'static RoleId,
+    pub replication_factor: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,6 +300,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Func(func) => func.fingerprint(),
             Builtin::Source(coll) => coll.fingerprint(),
             Builtin::Index(index) => index.fingerprint(),
+            Builtin::Connection(connection) => connection.fingerprint(),
         }
     }
 }
@@ -332,6 +378,12 @@ impl Fingerprint for &BuiltinSource {
 impl Fingerprint for &BuiltinIndex {
     fn fingerprint(&self) -> String {
         self.create_sql()
+    }
+}
+
+impl Fingerprint for &BuiltinConnection {
+    fn fingerprint(&self) -> String {
+        self.sql.to_string()
     }
 }
 
@@ -7189,6 +7241,20 @@ ON mz_internal.mz_webhook_sources (id)",
     is_retained_metrics_object: true,
 };
 
+pub static MZ_ANALYTICS: BuiltinConnection = BuiltinConnection {
+    name: "mz_analytics",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::CONNECTION_MZ_ANALYTICS_OID,
+    sql: "CREATE CONNECTION mz_internal.mz_analytics TO AWS (ASSUME ROLE ARN = '')",
+    access: &[MzAclItem {
+        grantee: MZ_SYSTEM_ROLE_ID,
+        grantor: MZ_ANALYTICS_ROLE_ID,
+        acl_mode: rbac::all_object_privileges(SystemObjectType::Object(ObjectType::Connection)),
+    }],
+    owner_id: &MZ_ANALYTICS_ROLE_ID,
+    runtime_alterable: true,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -7200,6 +7266,13 @@ pub const MZ_SUPPORT_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SUPPORT_ROLE_ID,
     name: SUPPORT_USER_NAME,
     oid: oid::ROLE_MZ_SUPPORT_OID,
+    attributes: RoleAttributes::new(),
+};
+
+pub const MZ_ANALYTICS_ROLE: BuiltinRole = BuiltinRole {
+    id: MZ_ANALYTICS_ROLE_ID,
+    name: ANALYTICS_USER_NAME,
+    oid: oid::ROLE_MZ_ANALYTICS_OID,
     attributes: RoleAttributes::new(),
 };
 
@@ -7232,6 +7305,7 @@ pub const MZ_SYSTEM_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
+    replication_factor: 1,
 };
 
 pub const MZ_SYSTEM_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
@@ -7255,6 +7329,7 @@ pub const MZ_CATALOG_SERVER_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
+    replication_factor: 1,
 };
 
 pub const MZ_CATALOG_SERVER_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
@@ -7278,6 +7353,7 @@ pub const MZ_PROBE_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
+    replication_factor: 1,
 };
 pub const MZ_PROBE_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
     name: BUILTIN_CLUSTER_REPLICA_NAME,
@@ -7295,6 +7371,21 @@ pub const MZ_SUPPORT_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SUPPORT_ROLE_ID),
     ],
+    replication_factor: 0,
+};
+
+pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
+    name: "mz_analytics",
+    owner_id: &MZ_ANALYTICS_ROLE_ID,
+    privileges: &[
+        MzAclItem {
+            grantee: MZ_SYSTEM_ROLE_ID,
+            grantor: MZ_ANALYTICS_ROLE_ID,
+            acl_mode: rbac::all_object_privileges(SystemObjectType::Object(ObjectType::Cluster)),
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_ANALYTICS_ROLE_ID),
+    ],
+    replication_factor: 0,
 };
 
 /// List of all builtin objects sorted topologically by dependency.
@@ -7712,6 +7803,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
+        Builtin::Connection(&MZ_ANALYTICS),
     ]);
 
     builtins.extend(notice::builtins());
@@ -7721,6 +7813,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 pub const BUILTIN_ROLES: &[&BuiltinRole] = &[
     &MZ_SYSTEM_ROLE,
     &MZ_SUPPORT_ROLE,
+    &MZ_ANALYTICS_ROLE,
     &MZ_MONITOR_ROLE,
     &MZ_MONITOR_REDACTED,
 ];
@@ -7729,6 +7822,7 @@ pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[
     &MZ_CATALOG_SERVER_CLUSTER,
     &MZ_PROBE_CLUSTER,
     &MZ_SUPPORT_CLUSTER,
+    &MZ_ANALYTICS_CLUSTER,
 ];
 pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
     &MZ_SYSTEM_CLUSTER_REPLICA,
