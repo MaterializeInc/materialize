@@ -4875,6 +4875,7 @@ dependencies = [
 name = "mz-dyncfg"
 version = "0.0.0"
 dependencies = [
+ "humantime",
  "mz-build-tools",
  "mz-ore",
  "mz-proto",
