@@ -49,7 +49,7 @@ use mz_storage_types::sources::{
 };
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
@@ -665,12 +665,6 @@ pub trait StorageController: Debug {
 
         Ok(hold)
     }
-
-    /// Applies `updates` and sends any appropriate compaction command.
-    fn update_read_capabilities(
-        &mut self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    );
 
     /// Waits until the controller is ready to process a response.
     ///
