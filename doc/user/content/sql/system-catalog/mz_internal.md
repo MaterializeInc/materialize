@@ -423,28 +423,29 @@ all database objects in the system.
 The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with namespace information.
 
 <!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
-| Field          | Type       | Meaning                                                                                                                                        |
-| ---------------|------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`           | [`text`]   | Materialize's unique ID for the object.                                                                                                        |
-| `name`         | [`text`]   | The name of the object.                                                                                                                        |
-| `object_type`  | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
-| `schema_id`    | [`text`]   | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                |
-| `schema_name`  | [`text`]   | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).            |
-| `database_id`  | [`text`]   | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_schemas).             |
-| `database_name`| [`text`]   | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).      |
+| Field           | Type         | Meaning                                                                                                                                                                                         |
+| --------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------                                                |
+| `id`            | [`text`]     | Materialize's unique ID for the object.                                                                                                                                                         |
+| `name`          | [`text`]     | The name of the object.                                                                                                                                                                         |
+| `object_type`   | [`text`]     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                  |
+| `schema_id`     | [`text`]     | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                                 |
+| `schema_name`   | [`text`]     | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                             |
+| `database_id`   | [`text`]     | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_schemas).                                                             |
+| `database_name` | [`text`]     | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).                                                       |
+| `cluster_id`    | [`text`]     | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types. |
 
 ## `mz_object_lifetimes`
 
 The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with information about the last lifetime event that occurred for each object in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
-| Field          | Type                         | Meaning                                          |
-| ---------------|------------------------------|------------------------------------------------- |
-| `id`           | [`text`]                     | Materialize's unique ID for the object.          |
-| `previous_id`  | [`text`]                     | The object's previous ID, if one exists.          |
-| `object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                                              |
-| `event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.   |
-| `occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred. |
+| Field           | Type                           | Meaning                                                                                                                                        |
+| --------------- | ------------------------------ | -------------------------------------------------                                                                                              |
+| `id`            | [`text`]                       | Materialize's unique ID for the object.                                                                                                        |
+| `previous_id`   | [`text`]                       | The object's previous ID, if one exists.                                                                                                       |
+| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `event_type`    | [`text`]                       | The lifetime event, either `create` or `drop`.                                                                                                 |
+| `occurred_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the event occurred.                                                                                               |
 
 ## `mz_object_transitive_dependencies`
 
