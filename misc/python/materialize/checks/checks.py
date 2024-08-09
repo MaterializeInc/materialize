@@ -106,7 +106,7 @@ class Check:
             self._validate.join(e)
 
     def is_running_as_cloudtest(self) -> bool:
-        return buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID, "") in {
+        return buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY, "") in {
             "cloudtest-upgrade",
             "testdrive-in-cloudtest",
         }
