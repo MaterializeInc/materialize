@@ -206,11 +206,7 @@ pub struct MySqlSourceDetails {}
 
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
     fn into_proto(&self) -> ProtoMySqlSourceDetails {
-        ProtoMySqlSourceDetails {
-            deprecated_tables: vec![],
-            deprecated_initial_gtid_set: vec![],
-            deprecated_legacy_initial_gtid_set: "".to_string(),
-        }
+        ProtoMySqlSourceDetails {}
     }
 
     fn from_proto(_proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
