@@ -291,7 +291,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64-medium
         plugins:
@@ -855,7 +855,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64-medium
         plugins:
@@ -878,7 +878,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
@@ -904,7 +904,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
@@ -930,7 +930,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
@@ -956,7 +956,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64
         inputs:
