@@ -39,6 +39,7 @@ pub async fn sync_launchdarkly_to_configset<F>(
     launchdarkly_sdk_key: Option<&str>,
     config_sync_timeout: Duration,
     config_sync_loop_interval: Option<Duration>,
+    on_update: impl Fn(&ConfigUpdates, &ConfigSet) + Send + 'static,
 ) -> Result<(), anyhow::Error>
 where
     F: FnOnce(&mut ld::MultiContextBuilder) -> Result<(), anyhow::Error>,
@@ -76,6 +77,7 @@ where
         set,
         ld_client,
         ld_ctx: ld_ctx(build_info, ctx_builder)?,
+        on_update,
     };
     synced.sync()?;
     task::spawn(
@@ -110,13 +112,17 @@ where
     builder.build().map_err(|e| anyhow::anyhow!(e))
 }
 
-struct SyncedConfigSet {
+struct SyncedConfigSet<F>
+where
+    F: Fn(&ConfigUpdates, &ConfigSet) + Send,
+{
     set: ConfigSet,
     ld_client: Option<ld::Client>,
     ld_ctx: ld::Context,
+    on_update: F,
 }
 
-impl SyncedConfigSet {
+impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
     /// Returns a future that periodically polls LaunchDarkly and updates the ConfigSet.
     async fn sync_loop(self, tick_interval: Option<Duration>) {
         let Some(tick_interval) = tick_interval else {
@@ -145,6 +151,7 @@ impl SyncedConfigSet {
     fn sync(&self) -> Result<ConfigUpdates, anyhow::Error> {
         let mut updates = ConfigUpdates::default();
         let Some(ld_client) = &self.ld_client else {
+            (self.on_update)(&updates, &self.set);
             return Ok(updates);
         };
         for entry in self.set.entries() {
@@ -182,6 +189,7 @@ impl SyncedConfigSet {
             updates.add_dynamic(entry.name(), update);
         }
         updates.apply(&self.set);
+        (self.on_update)(&updates, &self.set);
         Ok(updates)
     }
 }
