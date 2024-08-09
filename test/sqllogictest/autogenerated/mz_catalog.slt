@@ -249,6 +249,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 8  privileges  mz_aclitem[]
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_recent_storage_usage' ORDER BY position
+----
+1  object_id  text
+2  size_bytes  uint8
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_roles' ORDER BY position
 ----
 1  id  text
@@ -424,6 +430,7 @@ mz_materialized_views
 mz_objects
 mz_operators
 mz_pseudo_types
+mz_recent_storage_usage
 mz_relations
 mz_role_members
 mz_role_parameters
