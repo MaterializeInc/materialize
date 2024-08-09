@@ -217,22 +217,6 @@ impl TryFrom<StateUpdate<StateUpdateKindRaw>> for StateUpdate<StateUpdateKind> {
     }
 }
 
-impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
-    type Error = DurableCatalogError;
-
-    fn try_from(
-        StateUpdate { kind, ts, diff }: &StateUpdate<StateUpdateKind>,
-    ) -> Result<Self, Self::Error> {
-        let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
-        let update = kind.map(|kind| memory::objects::StateUpdate {
-            kind,
-            ts: ts.clone(),
-            diff: diff.clone().try_into().expect("invalid diff"),
-        });
-        Ok(update)
-    }
-}
-
 /// The contents of a single state update.
 ///
 /// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
