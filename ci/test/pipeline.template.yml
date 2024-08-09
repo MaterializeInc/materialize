@@ -21,6 +21,9 @@ env:
   # build jobs to "default" which will use all cores.
   CARGO_BUILD_JOBS: "default"
 
+# When resources are constrained, run early since this might be blocking a PR from merging
+priority: 20
+
 steps:
   - group: Builds
     key: builds
@@ -32,7 +35,7 @@ steps:
           - "*"
         depends_on: []
         timeout_in_minutes: 60
-        priority: 1
+        priority: 50
         agents:
           queue: builder-linux-x86_64
 
@@ -42,7 +45,7 @@ steps:
         inputs:
           - "*"
         depends_on: []
-        priority: 1
+        priority: 50
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-aarch64
