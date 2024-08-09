@@ -22,6 +22,7 @@ use mz_pgwire_common::{
 use mz_server_core::{ConnectionHandler, ReloadingTlsConfig, CONN_UUID_KEY};
 use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::Ssl;
+use scopeguard::ScopeGuard;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
@@ -134,7 +135,7 @@ impl Server {
                                 let conn_uuid = params.remove(CONN_UUID_KEY);
                                 let conn_uuid = conn_uuid.display_or("<none>");
                                 debug!(%conn_uuid, "starting new pgwire connection in adapter");
-                                let _guard = scopeguard::guard((), |_| {
+                                let guard = scopeguard::guard((), |_| {
                                     debug!(%conn_uuid, "dropping pgwire connection in adapter without explicit termination");
                                 });
 
@@ -157,7 +158,7 @@ impl Server {
 
                                 conn_res?;
                                 conn.flush().await?;
-                                let () = guard.into_inner();
+                                let () = ScopeGuard::into_inner(guard);
                                 return Ok(());
                             }
 
