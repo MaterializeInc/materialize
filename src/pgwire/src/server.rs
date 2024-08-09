@@ -157,6 +157,7 @@ impl Server {
 
                                 conn_res?;
                                 conn.flush().await?;
+                                let () = guard.into_inner();
                                 return Ok(());
                             }
 
