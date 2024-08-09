@@ -182,6 +182,9 @@ mz_audit_events  object_type
 mz_audit_events  occurred_at
 mz_audit_events  user
 mz_base_types  id
+mz_cluster_replica_frontiers  object_id
+mz_cluster_replica_frontiers  replica_id
+mz_cluster_replica_frontiers  write_frontier
 mz_cluster_replica_history  cluster_name
 mz_cluster_replica_history  created_at
 mz_cluster_replica_history  credits_per_hour
@@ -247,6 +250,13 @@ mz_compute_exports_per_worker  worker_id
 mz_compute_frontiers_per_worker  export_id
 mz_compute_frontiers_per_worker  time
 mz_compute_frontiers_per_worker  worker_id
+mz_compute_hydration_statuses  hydrated
+mz_compute_hydration_statuses  hydration_time
+mz_compute_hydration_statuses  object_id
+mz_compute_hydration_statuses  replica_id
+mz_compute_hydration_times  object_id
+mz_compute_hydration_times  replica_id
+mz_compute_hydration_times  time_ns
 mz_compute_hydration_times_per_worker  export_id
 mz_compute_hydration_times_per_worker  time_ns
 mz_compute_hydration_times_per_worker  worker_id
@@ -302,6 +312,9 @@ mz_functions  return_type_id
 mz_functions  returns_set
 mz_functions  schema_id
 mz_functions  variadic_argument_type_id
+mz_hydration_statuses  hydrated
+mz_hydration_statuses  object_id
+mz_hydration_statuses  replica_id
 mz_index_columns  index_id
 mz_index_columns  index_position
 mz_index_columns  nullable

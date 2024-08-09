@@ -6198,17 +6198,18 @@ pub static MZ_SHOW_CLUSTER_REPLICAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinVie
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
     mz_catalog.mz_cluster_replicas.size AS size,
-    statuses.ready AS ready
+    coalesce(statuses.ready, FALSE) AS ready
 FROM
     mz_catalog.mz_cluster_replicas
         JOIN mz_catalog.mz_clusters
             ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
-        JOIN
+        LEFT JOIN
             (
                 SELECT
                     replica_id,
-                    mz_unsafe.mz_all(status = 'ready') AS ready
-                FROM mz_internal.mz_cluster_replica_statuses
+                    bool_and(hydrated) AS ready
+                FROM mz_internal.mz_hydration_statuses
+                WHERE replica_id is not null
                 GROUP BY replica_id
             ) AS statuses
             ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
@@ -7541,7 +7542,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
-        Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&MZ_TIMEZONE_NAMES),
         Builtin::View(&MZ_TIMEZONE_ABBREVIATIONS),
@@ -7670,6 +7670,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::View(&MZ_HYDRATION_STATUSES),
+        Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),

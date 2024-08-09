@@ -726,14 +726,15 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5)]]-errors" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]-errors" 1
-"ArrangeBy[[Column(0), Column(2)]]"           2
+"ArrangeBy[[Column(0), Column(1)]]"           1
+"ArrangeBy[[Column(0), Column(2)]]"           3
 "ArrangeBy[[Column(1), Column(2)]]"           1
 "ArrangeBy[[Column(0)]]-errors"              26
-"ArrangeBy[[Column(0)]]"                     81
+"ArrangeBy[[Column(0)]]"                     90
 "ArrangeBy[[Column(1), Column(3)]]"           1
 "ArrangeBy[[Column(1)]]-errors"               6
 ArrangeBy[[Column(13)]]                       1
-"ArrangeBy[[Column(1)]]"                     17
+"ArrangeBy[[Column(1)]]"                     19
 "ArrangeBy[[Column(2)]]-errors"               9
 "ArrangeBy[[Column(2)]]"                     20
 "ArrangeBy[[Column(3)]]"                      3
@@ -747,18 +748,18 @@ ArrangeBy[[Column(13)]]                       1
 "ArrangeBy[[Column(20)]]-errors"              1
 "ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
 "ArrangeBy[[]]"                               10
-"Arranged DistinctBy"                         22
+"Arranged DistinctBy"                         24
 "Arranged MinsMaxesHierarchical input"        14
 "Arranged ReduceInaccumulable"                1
-"Arranged TopK input"                        16
+"Arranged TopK input"                        24
 "Distinct recursive err"                      1
-"DistinctBy"                                  22
-"DistinctByErrorCheck"                        22
+"DistinctBy"                                  24
+"DistinctByErrorCheck"                        24
 "ReduceAccumulable"                           9
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1
 "Reduced Fallibly MinsMaxesHierarchical"     14
-"Reduced TopK input"                         16
+"Reduced TopK input"                         24
 "ReduceInaccumulable Error Check"             1
 "ReduceInaccumulable"                         1
 "ReduceMinsMaxes"                             2
