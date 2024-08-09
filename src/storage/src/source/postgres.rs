@@ -88,7 +88,7 @@ use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{simple_query_opt, PostgresError};
+use mz_postgres_util::{simple_query_opt, Client, PostgresError};
 use mz_repr::{Datum, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
@@ -103,7 +103,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
@@ -406,6 +405,12 @@ async fn fetch_slot_metadata(
 
 /// Fetch the `pg_current_wal_lsn`, used to report metrics.
 async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
+    // NOTE(benesch): this doesn't work for YugabyteDB, where LSNs are specific
+    // to a replication slot. We need a YugabyteDB-specific function which
+    // returns the latest LSN for a specific replication slot.
+    //
+    // We also need to be careful to report YugabyteDB WAL as "message lag"
+    // rather than "WAL byte" lag.
     let query = "SELECT pg_current_wal_lsn()";
     let row = simple_query_opt(client, query).await?;
 
