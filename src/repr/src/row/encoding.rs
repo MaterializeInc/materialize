@@ -18,6 +18,7 @@ use bytes::{BufMut, Bytes};
 use chrono::Timelike;
 use dec::Decimal;
 use enum_dispatch::enum_dispatch;
+use itertools::{EitherOrBoth, Itertools};
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::{
     ColumnCfg, ColumnGet, ColumnPush, Data, DataType, OpaqueData, PartDecoder, PartEncoder, Schema,
@@ -100,6 +101,16 @@ impl Codec for Row {
         let ret = self.decode_from_proto(&proto, schema);
         storage.replace(proto);
         ret
+    }
+
+    fn validate(row: &Self, desc: &Self::Schema) -> Result<(), String> {
+        for x in Itertools::zip_longest(desc.iter_types(), row.iter()) {
+            match x {
+                EitherOrBoth::Both(typ, datum) if datum.is_instance_of(typ) => continue,
+                _ => return Err(format!("row {:?} did not match desc {:?}", row, desc)),
+            };
+        }
+        Ok(())
     }
 
     fn encode_schema(schema: &Self::Schema) -> Bytes {
