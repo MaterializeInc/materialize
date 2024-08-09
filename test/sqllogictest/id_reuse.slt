@@ -83,6 +83,7 @@ g1  mz_monitor
 g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
+s3  mz_analytics
 u1  materialize
 u2  foo
 
@@ -102,6 +103,7 @@ g1  mz_monitor
 g2  mz_monitor_redacted
 s1  mz_system
 s2  mz_support
+s3  mz_analytics
 u1  materialize
 u3  bar
 
@@ -115,6 +117,7 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u2  foo
 
@@ -131,5 +134,6 @@ s1  mz_system
 s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
+s5  mz_analytics
 u1  quickstart
 u3  bar

@@ -23,7 +23,7 @@ $ kafka-ingest format=bytes topic=connection_test
 
 > CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
-> SELECT name, type from mz_connections
+> SELECT name, type from mz_connections WHERE id LIKE 'u%'
 name       type
 ------------------------------
 conn   kafka

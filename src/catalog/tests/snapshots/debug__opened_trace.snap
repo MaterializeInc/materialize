@@ -1141,6 +1141,42 @@ Trace {
                         id: Some(
                             RoleId {
                                 value: Some(
+                                    System(
+                                        3,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    RoleValue {
+                        name: "mz_analytics",
+                        attributes: Some(
+                            RoleAttributes {
+                                inherit: true,
+                            },
+                        ),
+                        membership: Some(
+                            RoleMembership {
+                                map: [],
+                            },
+                        ),
+                        vars: Some(
+                            RoleVars {
+                                entries: [],
+                            },
+                        ),
+                        oid: 16984,
+                    },
+                ),
+                2,
+                1,
+            ),
+            (
+                (
+                    RoleKey {
+                        id: Some(
+                            RoleId {
+                                value: Some(
                                     Public(
                                         Empty,
                                     ),
