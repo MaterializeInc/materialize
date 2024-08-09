@@ -88,14 +88,13 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.print_separator_line()
 
         # evaluation strategy 1
-        if not query_template.custom_db_object_name:
-            self.__print_setup_code_for_error(
-                query_template,
-                error.details1.strategy,
-                table_column_selection,
-                apply_row_filter,
-            )
-            self.print_separator_line()
+        self.__print_setup_code_for_error(
+            query_template,
+            error.details1.strategy,
+            table_column_selection,
+            apply_row_filter,
+        )
+        self.print_separator_line()
 
         self.__print_query_of_error(
             query_template, error.details1.strategy, query_column_selection
@@ -103,14 +102,13 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.print_separator_line()
 
         # evaluation strategy 2
-        if not query_template.custom_db_object_name:
-            self.__print_setup_code_for_error(
-                query_template,
-                error.details2.strategy,
-                table_column_selection,
-                apply_row_filter,
-            )
-            self.print_separator_line()
+        self.__print_setup_code_for_error(
+            query_template,
+            error.details2.strategy,
+            table_column_selection,
+            apply_row_filter,
+        )
+        self.print_separator_line()
 
         self.__print_query_of_error(
             query_template, error.details2.strategy, query_column_selection
@@ -140,17 +138,26 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         row_selection = (
             query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
         )
-        setup_code_lines = evaluation_strategy.generate_source_for_storage_layout(
-            self.input_data.types_input,
-            query_template.storage_layout,
-            row_selection,
-            table_column_selection,
-            override_db_object_name=(
-                query_template.custom_db_object_name
-                if query_template.custom_db_object_name is not None
-                else evaluation_strategy.simple_db_object_name
-            ),
-        )
+        setup_code_lines = []
+        for data_source in query_template.get_all_data_sources():
+            if data_source.custom_db_object_name is not None:
+                # we assume that the custom object already exists
+                continue
+
+            setup_code_lines.extend(
+                evaluation_strategy.generate_source_for_storage_layout(
+                    self.input_data.types_input,
+                    query_template.storage_layout,
+                    row_selection,
+                    table_column_selection,
+                    table_index=data_source.table_index,
+                    override_db_object_name=(
+                        data_source.custom_db_object_name
+                        if data_source.custom_db_object_name is not None
+                        else evaluation_strategy.simple_db_object_name
+                    ),
+                )
+            )
 
         for line in setup_code_lines:
             self._print_executable(line)
@@ -170,8 +177,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
                 self.query_output_mode,
-                override_db_object_name=query_template.custom_db_object_name
-                or evaluation_strategy.simple_db_object_name,
+                override_db_object_name=evaluation_strategy.simple_db_object_name,
             )
         )
 
