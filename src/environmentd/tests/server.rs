@@ -1625,15 +1625,29 @@ fn test_max_statement_batch_size() {
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         let res = Client::new().post(http_url).json(&json).send().unwrap();
+        let body: serde_json::Value = res.json().unwrap();
+        let is_error = body
+            .get("results")
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .get("error")
+            .is_some();
+        assert!(is_error, "statement should result in an error: {body}");
         assert!(
-            res.status().is_client_error(),
-            "statement should result in an error: {res:?}"
-        );
-        let text = res.text().unwrap();
-        assert!(
-            text.contains("statement batch size cannot exceed"),
+            body.get("results")
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .get("error")
+                .unwrap()
+                .get("message")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("statement batch size cannot exceed"),
             "error should indicate that the statement was too large: {}",
-            text
+            body
         );
     }
 
@@ -1645,6 +1659,9 @@ fn test_max_statement_batch_size() {
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.send(Message::Text(json.to_string())).unwrap();
+
+        // Discard the CommandStarting message
+        let _ = ws.read().unwrap();
 
         let msg = ws.read().unwrap();
         let msg = msg.into_text().expect("response should be text");
@@ -3104,6 +3121,7 @@ async fn test_http_metrics() {
     ))
     .unwrap();
 
+    // Handled query (successful)
     let json = r#"{ "query": "SHOW application_name;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     let response = reqwest::Client::new()
@@ -3114,7 +3132,27 @@ async fn test_http_metrics() {
         .unwrap();
     assert!(response.status().is_success());
 
+    // Handled query (error)
     let json = r#"{ "query": "invalid sql 123;" }"#;
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    let response = reqwest::Client::new()
+        .post(http_url.clone())
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = response.json().await.unwrap();
+    let is_error = body
+        .get("results")
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .get("error")
+        .is_some();
+    assert!(is_error);
+
+    // Invalid request
+    let json = r#"{ "q": "invalid sql 123;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     let response = reqwest::Client::new()
         .post(http_url)
@@ -3152,14 +3190,14 @@ async fn test_http_metrics() {
 
     let request_metric = request_metrics.pop().unwrap();
     let success_metric = &request_metric.get_metric()[0];
-    assert_eq!(success_metric.get_counter().get_value(), 1.0);
+    assert_eq!(success_metric.get_counter().get_value(), 2.0);
     assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
     assert_eq!(success_metric.get_label()[2].get_value(), "200");
 
     let failure_metric = &request_metric.get_metric()[1];
     assert_eq!(failure_metric.get_counter().get_value(), 1.0);
     assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(failure_metric.get_label()[2].get_value(), "400");
+    assert_eq!(failure_metric.get_label()[2].get_value(), "422");
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
