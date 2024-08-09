@@ -34,6 +34,7 @@ mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", default-features = false }
 mz-server-core = { path = "../server-core" }
+mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
 num_cpus = "1.14.0"
 openssl = { version = "0.10.48", features = ["vendored"] }
@@ -45,6 +46,7 @@ tokio-postgres = { version = "0.7.8" }
 tokio-util = { version = "0.7.4", features = ["codec"] }
 tower = "0.4.13"
 tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 

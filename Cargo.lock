@@ -4401,6 +4401,7 @@ dependencies = [
  "mz-ore",
  "mz-pgwire-common",
  "mz-server-core",
+ "mz-tracing",
  "num_cpus",
  "openssl",
  "postgres",
@@ -4414,6 +4415,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "workspace-hack",
 ]

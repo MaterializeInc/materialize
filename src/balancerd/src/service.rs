@@ -21,6 +21,7 @@ use mz_frontegg_auth::{
     DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::TracingHandle;
 use mz_server_core::TlsCliArgs;
 use tracing::warn;
 
@@ -116,7 +117,7 @@ pub struct Args {
     cloud_provider_region: Option<String>,
 }
 
-pub async fn run(args: Args) -> Result<(), anyhow::Error> {
+pub async fn run(args: Args, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     let resolver = match (args.static_resolver_addr, args.frontegg_resolver_template) {
         (None, Some(addr_template)) => {
@@ -183,6 +184,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.config_sync_loop_interval,
         args.cloud_provider,
         args.cloud_provider_region,
+        tracing_handle,
     );
     let service = BalancerService::new(config).await?;
     service.serve().await?;
