@@ -9,6 +9,9 @@
 
 # Checks for security advisories in the Rust crate dependency graph.
 
+# Very fast
+priority: 80
+
 steps:
   - command: bin/ci-builder run stable cargo deny check advisories
     timeout_in_minutes: 20
