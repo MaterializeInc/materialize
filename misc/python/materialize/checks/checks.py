@@ -10,6 +10,8 @@
 from random import Random
 from typing import TYPE_CHECKING
 
+from materialize import buildkite
+from materialize.buildkite import BuildkiteEnvVar
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -102,6 +104,12 @@ class Check:
     def join_validate(self, e: Executor) -> None:
         if self._can_run(e) and self.enabled:
             self._validate.join(e)
+
+    def is_running_as_cloudtest(self) -> bool:
+        return buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID, "") in {
+            "cloudtest-upgrade",
+            "testdrive-in-cloudtest",
+        }
 
 
 def disabled(ignore_reason: str):
