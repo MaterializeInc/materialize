@@ -794,7 +794,10 @@ class AlterKafkaSinkFromAction(Action):
                 objs = [
                     o
                     for o in exe.db.db_objects_without_views()
-                    if len(o.columns) >= len(old_object.columns)
+                    # Webhook sources can include all headers, then we don't know the exact columns
+                    if not isinstance(old_object, WebhookSource)
+                    and not isinstance(o, WebhookSource)
+                    and len(o.columns) >= len(old_object.columns)
                     and [c.data_type for c in o.columns[: len(old_object.columns)]]
                     == [c.data_type for c in old_object.columns]
                 ]
