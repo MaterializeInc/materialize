@@ -55,7 +55,7 @@ use mz_server_core::{
     listen, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, TlsCertConfig, TlsMode,
 };
-use openssl::ssl::{NameType, Ssl};
+use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -605,12 +605,33 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-    ) -> Result<TcpStream, anyhow::Error>
+    ) -> Result<Conn<TcpStream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let mut mz_stream = TcpStream::connect(envd_addr).await?;
+        let mut mz_stream = Conn::Unencrypted(TcpStream::connect(envd_addr).await?);
         let mut buf = BytesMut::new();
+
+        FrontendStartupMessage::SslRequest.encode(&mut buf)?;
+        mz_stream.write_all(&buf).await?;
+        let mut maybe_ssl_request_response = [0u8; 1];
+        let nread =
+            netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
+        if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
+            // do a TLS handshake
+            let mut builder =
+                SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+            // environmentd doesn't yet have a cert we trust, so for now disable verification.
+            builder.set_verify(SslVerifyMode::NONE);
+            let ssl = builder
+                .build()
+                .configure()?
+                .into_ssl(&envd_addr.to_string())?;
+            mz_stream = match mz_stream {
+                Conn::Unencrypted(stream) => Conn::Ssl(SslStream::new(ssl, stream)?),
+                Conn::Ssl(_) => unreachable!(),
+            };
+        }
 
         // Send initial startup and password messages.
         let startup = FrontendStartupMessage::Startup {
@@ -1016,7 +1037,17 @@ impl mz_server_core::Server for HttpsBalancer {
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
 
-                let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+                let mz_stream = TcpStream::connect(resolved.addr).await?;
+                // do a TLS handshake
+                let mut builder =
+                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+                // environmentd doesn't yet have a cert we trust, so for now disable verification.
+                builder.set_verify(SslVerifyMode::NONE);
+                let ssl = builder
+                    .build()
+                    .configure()?
+                    .into_ssl(&resolved.addr.to_string())?;
+                let mut mz_stream = SslStream::new(ssl, mz_stream)?;
                 let mut client_counter = CountingConn::new(client_stream);
 
                 // Now blindly shuffle bytes back and forth until closed.
