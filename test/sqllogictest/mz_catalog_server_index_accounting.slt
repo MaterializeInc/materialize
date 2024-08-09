@@ -70,7 +70,7 @@ mz_object_transitive_dependencies_ind  CREATE␠INDEX␠"mz_object_transitive_de
 mz_peek_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_peek_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_peek_durations_histogram_raw"␠("worker_id",␠"type",␠"duration_ns")
 mz_recent_activity_log_thinned_ind  CREATE␠INDEX␠"mz_recent_activity_log_thinned_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_recent_activity_log_thinned"␠("sql_hash")
 mz_recent_sql_text_ind  CREATE␠INDEX␠"mz_recent_sql_text_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_recent_sql_text"␠("sql_hash")
-mz_recent_storage_usage_ind  CREATE␠INDEX␠"mz_recent_storage_usage_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_recent_storage_usage"␠("object_id")
+mz_recent_storage_usage_ind  CREATE␠INDEX␠"mz_recent_storage_usage_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_recent_storage_usage"␠("object_id")
 mz_roles_ind  CREATE␠INDEX␠"mz_roles_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_roles"␠("id")
 mz_scheduling_elapsed_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_elapsed_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_scheduling_elapsed_raw"␠("id",␠"worker_id")
 mz_scheduling_parks_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_parks_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_scheduling_parks_histogram_raw"␠("worker_id",␠"slept_for_ns",␠"requested_ns")

@@ -264,7 +264,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 <SIZE> true
 
                 > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size//3} AND {database_object.expected_size*3}
-                  FROM mz_internal.mz_recent_storage_usage
+                  FROM mz_recent_storage_usage
                   WHERE object_id = ( SELECT id FROM mz_objects WHERE name = 'obj' );
                 <SIZE> true
                 """
