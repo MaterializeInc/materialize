@@ -73,8 +73,7 @@ impl Staged for ClusterStage {
     }
 
     fn cancel_enabled(&self) -> bool {
-        // Cluster create and alter are not yet cancelable
-        false
+        true
     }
 }
 
@@ -245,6 +244,17 @@ impl Coordinator {
                     .await?;
                 return match alter_followup {
                     FinalizationNeeded::In(duration) => {
+                        // For non backgrounded graceful alters,
+                        // store the cluster_id in the ConnMeta
+                        // to allow for cancellation.
+                        // For non backgrounded graceful alters,
+                        // store the cluster_id in the ConnMeta
+                        // to allow for cancellation.
+                        self.active_conns
+                            .get_mut(session.conn_id())
+                            .expect("There must be an active connection")
+                            .pending_cluster_alters
+                            .insert(cluster_id.clone());
                         let span = Span::current();
                         let new_config_managed = new_config_managed.clone();
                         Ok(StageResult::Handle(mz_ore::task::spawn(
@@ -409,7 +419,14 @@ impl Coordinator {
                 workload_class: cluster.config.workload_class.clone(),
             },
         });
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact(Some(session), ops.clone()).await?;
+        // Remove the cluster being altered from the ConnMeta
+        // pending_cluster_alters BTreeSet
+        self.active_conns
+            .get_mut(session.conn_id())
+            .expect("There must be an active connection")
+            .pending_cluster_alters
+            .remove(&cluster_id);
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
         )))
