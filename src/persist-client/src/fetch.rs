@@ -73,7 +73,9 @@ pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
 pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     "persist_part_decode_format",
     PartDecodeFormat::default().as_str(),
-    "Format we'll use to decode a Persist Part, either 'row' or 'row_with_validate' (Materialize).",
+    "\
+    Format we'll use to decode a Persist Part, either 'row', \
+    'row_with_validate', or 'arrow' (Materialize).",
 );
 
 #[derive(Debug, Clone)]
@@ -696,6 +698,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
         Option<Arc<<K::Schema as Schema2<K>>::Decoder>>,
         Option<Arc<<V::Schema as Schema2<V>>::Decoder>>,
     ),
+    part_decode_format: PartDecodeFormat,
     schemas: Schemas<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
     part_cursor: Cursor,
@@ -712,6 +715,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
             ts_filter: self.ts_filter.clone(),
             part: self.part.clone(),
             structured_part: self.structured_part.clone(),
+            part_decode_format: self.part_decode_format,
             schemas: self.schemas.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             part_cursor: self.part_cursor.clone(),
@@ -729,7 +733,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         schemas: Schemas<K, V>,
         ts_filter: FetchBatchFilter<T>,
         filter_pushdown_audit: bool,
-        structured_part_audit: PartDecodeFormat,
+        part_decode_format: PartDecodeFormat,
         stats: Option<&LazyPartStats>,
     ) -> Self {
         let filter_pushdown_audit = if filter_pushdown_audit {
@@ -744,15 +748,17 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         // For structured columnar data we need to downcast from `dyn Array`s to concrete types.
         // Downcasting is relatively expensive so we want to do this once, which is why we do it
         // when creating a FetchedPart.
-        let structured_part = match (&part.part.updates, structured_part_audit) {
+        let should_downcast = match part_decode_format {
+            PartDecodeFormat::Row {
+                validate_structured,
+            } => validate_structured,
+            PartDecodeFormat::Arrow => true,
+        };
+        let structured_part = match (&part.part.updates, should_downcast) {
             // Only downcast and create decoders if we have structured data AND
-            // an audit of the data is requested.
-            (
-                BlobTraceUpdates::Both(_codec, structured),
-                PartDecodeFormat::Row {
-                    validate_structured: true,
-                },
-            ) => {
+            // (an audit of the data is requested OR we'd like to decode
+            // directly from the structured data).
+            (BlobTraceUpdates::Both(_codec, structured), true) => {
                 let key = match Schema2::decoder_any(schemas.key.as_ref(), &*structured.key) {
                     Ok(key) => Some(Arc::new(key)),
                     Err(err) => {
@@ -779,6 +785,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             ts_filter,
             part,
             structured_part,
+            part_decode_format,
             schemas,
             filter_pushdown_audit,
             part_cursor: Cursor::default(),
@@ -860,60 +867,113 @@ where
 
             if let Some((key, val)) = result_override {
                 return Some(((Ok(key), Ok(val)), t, d));
-            } else {
-                let k = self.metrics.codecs.key.decode(|| match key.take() {
-                    Some(mut key) => {
-                        match K::decode_from(&mut key, k, &mut self.key_storage, &self.schemas.key)
-                        {
-                            Ok(()) => Ok(key),
-                            Err(err) => Err(err),
-                        }
-                    }
-                    None => K::decode(k, &self.schemas.key),
-                });
-                let v = self.metrics.codecs.val.decode(|| match val.take() {
-                    Some(mut val) => {
-                        match V::decode_from(&mut val, v, &mut self.val_storage, &self.schemas.val)
-                        {
-                            Ok(()) => Ok(val),
-                            Err(err) => Err(err),
-                        }
-                    }
-                    None => V::decode(v, &self.schemas.val),
-                });
+            }
 
-                // Note: We only provide structured columns, if they were originally written, and a
-                // dyncfg was specified to run validation.
-                if let Some(key_structured) = self.structured_part.0.as_ref() {
-                    let key_metrics = self.metrics.columnar.arrow().key();
-
-                    let mut k_s = K::default();
-                    key_metrics.measure_decoding(|| key_structured.decode(idx, &mut k_s));
-
-                    // Purposefully do not trace to prevent blowing up Sentry.
-                    let is_valid = key_metrics.report_valid(|| Ok(&k_s) == k.as_ref());
-                    if !is_valid {
-                        soft_panic_no_log!("structured key did not match, {k_s:?} != {k:?}");
-                    }
-                }
-
-                if let Some(val_structured) = self.structured_part.1.as_ref() {
-                    let val_metrics = self.metrics.columnar.arrow().val();
-
-                    let mut v_s = V::default();
-                    val_metrics.measure_decoding(|| val_structured.decode(idx, &mut v_s));
-
-                    // Purposefully do not trace to prevent blowing up Sentry.
-                    let is_valid = val_metrics.report_valid(|| Ok(&v_s) == v.as_ref());
-                    if !is_valid {
-                        soft_panic_no_log!("structured val did not match, {v_s:?} != {v:?}");
-                    }
-                }
-
+            // TODO: Putting this here relies on the Codec data still being
+            // populated (i.e. for the consolidate optimization above).
+            // Eventually we'll have to rewrite this path to work entirely
+            // without Codec data, but in the meantime, putting in here allows
+            // us to see the performance impact of decoding from arrow instead
+            // of Codec.
+            //
+            // Plus, it'll likely be easier to port all the logic here to work
+            // solely on arrow data once we finish migrating things like the
+            // ConsolidatingIter.
+            if let ((Some(keys), Some(vals)), PartDecodeFormat::Arrow) =
+                (&self.structured_part, self.part_decode_format)
+            {
+                let (k, v) = self.decode_structured(idx, keys, vals, key, val);
                 return Some(((k, v), t, d));
             }
+
+            let (k, v) = Self::decode_codec(
+                &self.metrics,
+                &self.schemas,
+                k,
+                v,
+                key,
+                val,
+                &mut self.key_storage,
+                &mut self.val_storage,
+            );
+            // Note: We only provide structured columns, if they were originally written, and a
+            // dyncfg was specified to run validation.
+            if let (Some(keys), Some(vals)) = &self.structured_part {
+                let (k_s, v_s) = self.decode_structured(idx, keys, vals, &mut None, &mut None);
+
+                // Purposefully do not trace to prevent blowing up Sentry.
+                let is_valid = self
+                    .metrics
+                    .columnar
+                    .arrow()
+                    .key()
+                    .report_valid(|| k_s == k);
+                if !is_valid {
+                    soft_panic_no_log!("structured key did not match, {k_s:?} != {k:?}");
+                }
+                // Purposefully do not trace to prevent blowing up Sentry.
+                let is_valid = self
+                    .metrics
+                    .columnar
+                    .arrow()
+                    .val()
+                    .report_valid(|| v_s == v);
+                if !is_valid {
+                    soft_panic_no_log!("structured val did not match, {v_s:?} != {v:?}");
+                }
+            }
+
+            return Some(((k, v), t, d));
         }
         None
+    }
+
+    fn decode_codec(
+        metrics: &Metrics,
+        schemas: &Schemas<K, V>,
+        key_buf: &[u8],
+        val_buf: &[u8],
+        key: &mut Option<K>,
+        val: &mut Option<V>,
+        key_storage: &mut Option<K::Storage>,
+        val_storage: &mut Option<V::Storage>,
+    ) -> (Result<K, String>, Result<V, String>) {
+        let k = metrics.codecs.key.decode(|| match key.take() {
+            Some(mut key) => match K::decode_from(&mut key, key_buf, key_storage, &schemas.key) {
+                Ok(()) => Ok(key),
+                Err(err) => Err(err),
+            },
+            None => K::decode(key_buf, &schemas.key),
+        });
+        let v = metrics.codecs.val.decode(|| match val.take() {
+            Some(mut val) => match V::decode_from(&mut val, val_buf, val_storage, &schemas.val) {
+                Ok(()) => Ok(val),
+                Err(err) => Err(err),
+            },
+            None => V::decode(val_buf, &schemas.val),
+        });
+        (k, v)
+    }
+
+    fn decode_structured(
+        &self,
+        idx: usize,
+        keys: &<K::Schema as Schema2<K>>::Decoder,
+        vals: &<V::Schema as Schema2<V>>::Decoder,
+        key: &mut Option<K>,
+        val: &mut Option<V>,
+    ) -> (Result<K, String>, Result<V, String>) {
+        let key = self.metrics.columnar.arrow().key().measure_decoding(|| {
+            let mut key = key.take().unwrap_or_default();
+            keys.decode(idx, &mut key);
+            key
+        });
+        let val = self.metrics.columnar.arrow().val().measure_decoding(|| {
+            let mut val = val.take().unwrap_or_default();
+            vals.decode(idx, &mut val);
+            val
+        });
+        (Ok(key), Ok(val))
     }
 }
 
@@ -1257,6 +1317,8 @@ pub enum PartDecodeFormat {
         /// Will also decode the structured data, and validate it matches.
         validate_structured: bool,
     },
+    /// Decode from arrow data
+    Arrow,
 }
 
 impl PartDecodeFormat {
@@ -1279,6 +1341,7 @@ impl PartDecodeFormat {
             "row_with_validate" => PartDecodeFormat::Row {
                 validate_structured: true,
             },
+            "arrow" => PartDecodeFormat::Arrow,
             x => {
                 let default = PartDecodeFormat::default();
                 soft_panic_or_log!("Invalid part decode format: '{x}', falling back to {default}");
@@ -1296,6 +1359,7 @@ impl PartDecodeFormat {
             PartDecodeFormat::Row {
                 validate_structured: true,
             } => "row_with_validate",
+            PartDecodeFormat::Arrow => "arrow",
         }
     }
 }

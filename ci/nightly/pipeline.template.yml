@@ -256,8 +256,8 @@ steps:
               composition: testdrive
               args: [--default-size=8]
 
-      - id: testdrive-structured-persist
-        label: ":racing_car: testdrive with Structured Persist"
+      - id: testdrive-structured-persist-validate
+        label: ":racing_car: testdrive with Structured Persist (Row + Validate)"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
@@ -267,6 +267,20 @@ steps:
               composition: testdrive
               args: [
                 --system-param=persist_part_decode_format=row_with_validate,
+                --system-param=persist_batch_columnar_format=both_v2,
+              ]
+
+      - id: testdrive-structured-persist-arrow
+        label: ":racing_car: testdrive with Structured Persist (Only Structured)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [
+                --system-param=persist_part_decode_format=arrow,
                 --system-param=persist_batch_columnar_format=both_v2,
               ]
 
