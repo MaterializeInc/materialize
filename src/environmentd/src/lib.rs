@@ -125,6 +125,9 @@ pub struct Config {
     pub timestamp_oracle_url: Option<String>,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
+    /// Whether the Segment client is being used on the client side
+    /// (rather than the server side).
+    pub segment_client_side: bool,
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
@@ -557,7 +560,12 @@ impl Listeners {
         );
 
         // Initialize adapter.
-        let segment_client = config.segment_api_key.map(mz_segment::Client::new);
+        let segment_client = config.segment_api_key.map(|api_key| {
+            mz_segment::Client::new(mz_segment::Config {
+                api_key,
+                client_side: config.segment_client_side,
+            })
+        });
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),

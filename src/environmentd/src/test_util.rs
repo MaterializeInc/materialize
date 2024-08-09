@@ -519,6 +519,7 @@ impl Listeners {
                 storage_usage_collection_interval: config.storage_usage_collection_interval,
                 storage_usage_retention_period: config.storage_usage_retention_period,
                 segment_api_key: None,
+                segment_client_side: false,
                 egress_ips: vec![],
                 aws_account_id: None,
                 aws_privatelink_availability_zones: None,

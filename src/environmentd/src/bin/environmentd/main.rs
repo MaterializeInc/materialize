@@ -416,6 +416,13 @@ pub struct Args {
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
+    /// Whether the Segment client is being used on the client side
+    /// (rather than the server side).
+    ///
+    /// Enabling this causes the Segment server to record the IP address from
+    /// which the event was sent.
+    #[clap(long, env = "SEGMENT_CLIENT_SIDE")]
+    segment_client_side: bool,
     /// An SDK key for LaunchDarkly.
     ///
     /// Setting this in combination with [`Self::config_sync_loop_interval`]
@@ -974,6 +981,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 cluster_replica_sizes,
                 timestamp_oracle_url: args.timestamp_oracle_url,
                 segment_api_key: args.segment_api_key,
+                segment_client_side: args.segment_client_side,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
                 launchdarkly_key_map: args
                     .launchdarkly_key_map

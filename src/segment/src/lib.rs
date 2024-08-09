@@ -31,6 +31,17 @@ use uuid::Uuid;
 /// new events will be dropped.
 const MAX_PENDING_EVENTS: usize = 32_768;
 
+pub struct Config {
+    /// The API key to use to authenticate events with Segment.
+    pub api_key: String,
+    /// Whether this Segment client is being used on the client side (rather
+    /// than the server side).
+    ///
+    /// Enabling this causes the Segment server to record the IP address from
+    /// which the event was sent.
+    pub client_side: bool,
+}
+
 /// A [Segment] API client.
 ///
 /// Event delivery is best effort. There is no guarantee that a given event
@@ -39,6 +50,7 @@ const MAX_PENDING_EVENTS: usize = 32_768;
 /// [Segment]: https://segment.com
 #[derive(Clone)]
 pub struct Client {
+    client_side: bool,
     tx: Sender<BatchMessage>,
 }
 
@@ -50,7 +62,12 @@ impl fmt::Debug for Client {
 
 impl Client {
     /// Creates a new client.
-    pub fn new(api_key: String) -> Client {
+    pub fn new(
+        Config {
+            api_key,
+            client_side,
+        }: Config,
+    ) -> Client {
         let (tx, rx) = mpsc::channel(MAX_PENDING_EVENTS);
 
         let send_task = SendTask {
@@ -62,7 +79,7 @@ impl Client {
             async move { send_task.run(rx).await },
         );
 
-        Client { tx }
+        Client { client_side, tx }
     }
 
     /// Sends a new [track event] to Segment.
@@ -126,7 +143,32 @@ impl Client {
         }));
     }
 
-    fn send(&self, message: BatchMessage) {
+    fn send(&self, mut message: BatchMessage) {
+        if self.client_side {
+            // If running on the client side, pretend to be the Analytics.js
+            // library by force-setting the appropriate library name in the
+            // context. This is how Segment determines whether to attach an IP
+            // to the incoming requests.
+            let context = match &mut message {
+                BatchMessage::Alias(a) => &mut a.context,
+                BatchMessage::Group(i) => &mut i.context,
+                BatchMessage::Identify(i) => &mut i.context,
+                BatchMessage::Page(i) => &mut i.context,
+                BatchMessage::Screen(i) => &mut i.context,
+                BatchMessage::Track(t) => &mut t.context,
+            };
+            let context = context.get_or_insert_with(|| serde_json::json!({}));
+            context
+                .as_object_mut()
+                .expect("Segment context must be object")
+                .insert(
+                    "library".into(),
+                    serde_json::json!({
+                            "name": "analytics.js",
+                    }),
+                );
+        }
+
         match self.tx.try_send(message) {
             Ok(()) => (),
             Err(TrySendError::Closed(_)) => panic!("receiver must not drop first"),

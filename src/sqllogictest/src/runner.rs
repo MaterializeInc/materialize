@@ -1083,6 +1083,7 @@ impl<'a> RunnerInner<'a> {
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             segment_api_key: None,
+            segment_client_side: false,
             egress_ips: vec![],
             aws_account_id: None,
             aws_privatelink_availability_zones: None,
