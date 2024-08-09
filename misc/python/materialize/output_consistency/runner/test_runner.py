@@ -123,8 +123,8 @@ class ConsistencyTestRunner:
                 expression_count, time_guard
             )
 
-            expression, number_of_args = self.expression_generator.generate_expression(
-                operation
+            expression, number_of_args = (
+                self.expression_generator.generate_expression_for_operation(operation)
             )
             test_summary.accept_expression_generation_statistics(
                 operation, expression, number_of_args

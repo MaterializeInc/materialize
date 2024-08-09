@@ -166,12 +166,12 @@ class ExpressionGenerator:
             return operation.return_type_spec.type_category == DataTypeCategory.BOOLEAN
 
         boolean_operation = self.pick_random_operation(use_aggregation, accept_op)
-        expression, _ = self.generate_expression(
+        expression, _ = self.generate_expression_for_operation(
             boolean_operation, storage_layout, nesting_level
         )
         return expression
 
-    def generate_expression(
+    def generate_expression_for_operation(
         self,
         operation: DbOperationOrFunction,
         storage_layout: ValueStorageLayout | None = None,
@@ -399,7 +399,7 @@ class ExpressionGenerator:
             suitable_operations, weights
         )
 
-        nested_expression, _ = self.generate_expression(
+        nested_expression, _ = self.generate_expression_for_operation(
             operation, storage_layout, nesting_level
         )
 
