@@ -835,21 +835,33 @@ where
         }
 
         // Register the tables all in one batch.
-        //
-        // We cannot register tables at the table worker when in read-only mode.
-        // When coming out of read-only mode (via `allow_writes()`), we will
-        // register all tables that are known by that point.
         if !table_registers.is_empty() {
             let register_ts = register_ts
                 .expect("caller should have provided a register_ts when creating a table");
-            // This register call advances the logical upper of the table. The
-            // register call eventually circles that info back to the
-            // controller, but some tests fail if we don't synchronously update
-            // it in create_collections, so just do that now.
-            self.persist_table_worker
-                .register(register_ts, table_registers)
-                .await
-                .expect("table worker unexpectedly shut down");
+
+            if self.read_only {
+                // In read-only mode, we use a special read-only table worker
+                // that allows writing to migrated tables and will continually
+                // bump their shard upper so that it tracks the txn shard upper.
+                // We do this, so that they remain readable at a recent
+                // timestamp, which in turn allows dataflows that depend on them
+                // to (re-)hydrate.
+                //
+                // We only want to register migrated tables, though, and leave
+                // existing tables out/never write to them in read-only mode.
+                table_registers
+                    .retain(|(id, _write_handle)| migrated_storage_collections.contains(id));
+
+                self.persist_table_worker
+                    .register(register_ts, table_registers)
+                    .await
+                    .expect("table worker unexpectedly shut down");
+            } else {
+                self.persist_table_worker
+                    .register(register_ts, table_registers)
+                    .await
+                    .expect("table worker unexpectedly shut down");
+            }
         }
 
         self.append_shard_mappings(new_collections.into_iter(), 1)
@@ -2425,7 +2437,19 @@ where
             .expect("location should be valid");
 
         let persist_table_worker = if read_only {
-            persist_handles::PersistTableWriteWorker::new_read_only_mode()
+            let txns_write = txns_client
+                .open_writer(
+                    txns_id,
+                    Arc::new(RelationDesc::empty()),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: "txns".to_owned(),
+                        handle_purpose: "follow txns upper".to_owned(),
+                    },
+                )
+                .await
+                .expect("txns schema shouldn't change");
+            persist_handles::PersistTableWriteWorker::new_read_only_mode(txns_write)
         } else {
             let txns = TxnsHandle::open(
                 T::minimum(),
