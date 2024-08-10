@@ -23,7 +23,7 @@ use timely::progress::Timestamp;
 use timely::Container;
 
 use crate::logging::compute::ComputeEvent;
-use crate::typedefs::{KeyAgent, KeyValAgent, RowAgent, RowRowAgent, RowValAgent};
+use crate::typedefs::{KeyAgent, RowAgent, RowRowAgent, RowValAgent};
 
 /// Extension trait to arrange data.
 pub trait MzArrange: MzArrangeCore
@@ -270,36 +270,6 @@ where
     }
 }
 
-impl<G, K, V, T, R> ArrangementSize for Arranged<G, KeyValAgent<K, V, T, R>>
-where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord + Columnation,
-    K: Data + Columnation,
-    V: Data + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup + Ord + Columnation + 'static,
-{
-    fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.vals.heap_size(&mut callback);
-                batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
-            (size, capacity, allocations)
-        })
-    }
-}
-
 impl<G, K, T, R> ArrangementSize for Arranged<G, KeyAgent<K, T, R>>
 where
     G: Scope<Timestamp = T>,
@@ -415,8 +385,8 @@ mod flatcontainer {
     use differential_dataflow::lattice::Lattice;
     use differential_dataflow::operators::arrange::Arranged;
     use differential_dataflow::trace::TraceReader;
-    use mz_ore::flatcontainer::MzRegionPreference;
-    use timely::container::flatcontainer::{IntoOwned, Push, Region, ReserveItems};
+    use mz_ore::flatcontainer::{MzIndex, MzRegion, MzRegionPreference};
+    use timely::container::flatcontainer::{IntoOwned, Region};
     use timely::dataflow::Scope;
     use timely::progress::Timestamp;
     use timely::PartialOrder;
@@ -429,31 +399,10 @@ mod flatcontainer {
         Self: Clone,
         G: Scope<Timestamp = T::Owned>,
         G::Timestamp: Lattice + Ord + MzRegionPreference,
-        K: Region
-            + Clone
-            + Push<<K as Region>::Owned>
-            + for<'a> Push<<K as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<K as Region>::ReadItem<'a>>
-            + 'static,
-        V: Region
-            + Clone
-            + Push<<V as Region>::Owned>
-            + for<'a> Push<<V as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<V as Region>::ReadItem<'a>>
-            + 'static,
-        T: Region
-            + Clone
-            + Push<<T as Region>::Owned>
-            + for<'a> Push<<T as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<T as Region>::ReadItem<'a>>
-            + 'static,
-        R: Region
-            + Clone
-            + Push<<R as Region>::Owned>
-            + for<'a> Push<&'a <R as Region>::Owned>
-            + for<'a> Push<<R as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<R as Region>::ReadItem<'a>>
-            + 'static,
+        K: MzRegion<Index = MzIndex>,
+        V: MzRegion<Index = MzIndex>,
+        T: MzRegion<Index = MzIndex>,
+        R: MzRegion<Index = MzIndex>,
         K::Owned: Clone + Ord,
         V::Owned: Clone + Ord,
         T::Owned: Lattice + for<'a> PartialOrder<<T as Region>::ReadItem<'a>> + Timestamp,

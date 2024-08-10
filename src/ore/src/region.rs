@@ -19,6 +19,8 @@ use std::fmt::{Debug, Formatter};
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 
+pub use vec::LgAllocVec;
+
 /// A region allocator which holds items at stable memory locations.
 ///
 /// Items once inserted will not be moved, and their locations in memory
@@ -390,5 +392,350 @@ impl<T> Drop for MMapRegion<T> {
     fn drop(&mut self) {
         // Similar to dropping Region: Drop the allocation, don't drop the `inner` vector.
         lgalloc::deallocate(self.handle.take().unwrap());
+    }
+}
+
+mod vec {
+    use std::fmt::{Debug, Formatter};
+    use std::mem::{ManuallyDrop, MaybeUninit};
+    use std::ops::Deref;
+    use std::sync::atomic::AtomicUsize;
+
+    /// Configuration variable to dynamically configure the cut over point from heap to lgalloc.
+    /// TODO: Wire up a configuration mechanism to set this value.
+    static LGALLOC_VEC_HEAP_LIMIT_BYTES: AtomicUsize = AtomicUsize::new(64 << 10);
+
+    /// A fixed-length region in memory, which is either allocated from heap or lgalloc.
+    pub struct LgAllocVec<T> {
+        /// A handle to lgalloc. None for heap allocations, Some if the memory comes from lgalloc.
+        handle: Option<lgalloc::Handle>,
+        /// Slice representation of the memory. Elements 0..self.length are valid.
+        elements: ManuallyDrop<Box<[MaybeUninit<T>]>>,
+        /// The number of valid elements in `elements`
+        length: usize,
+    }
+
+    impl<T> LgAllocVec<T> {
+        /// Create a new [`LgAllocVec`] with the specified capacity. The actual capacity of the returned
+        /// array is at least as big as the requested capacity.
+        #[inline]
+        pub fn with_capacity(capacity: usize) -> Self {
+            // Allocate memory, fall-back to regular heap allocations if we cannot acquire memory through
+            // lgalloc.
+            let bytes = capacity * std::mem::size_of::<T>();
+            if bytes <= LGALLOC_VEC_HEAP_LIMIT_BYTES.load(std::sync::atomic::Ordering::Relaxed) {
+                Self::new_heap(capacity)
+            } else {
+                match Self::try_new_lgalloc(capacity) {
+                    Ok(vec) => vec,
+                    Err(_) => Self::new_heap(capacity),
+                }
+            }
+        }
+
+        /// Construct a new instance allocated on the heap.
+        #[inline]
+        fn new_heap(capacity: usize) -> Self {
+            let mut vec = Vec::with_capacity(capacity);
+            // SAFETY: We treat all elements as uninitialized and track initialized elements
+            // through `self.length`.
+            unsafe {
+                vec.set_len(vec.capacity());
+            }
+
+            Self {
+                handle: None,
+                elements: ManuallyDrop::new(vec.into_boxed_slice()),
+                length: 0,
+            }
+        }
+
+        /// Construct a new instance allocated through lgalloc, or an error should it fail.
+        #[inline]
+        fn try_new_lgalloc(capacity: usize) -> Result<Self, lgalloc::AllocError> {
+            let (ptr, actual_capacity, handle) = lgalloc::allocate::<MaybeUninit<T>>(capacity)?;
+            // We allocated sucessfully through lgalloc.
+            let handle = Some(handle);
+            // SAFETY: `ptr` is valid for constructing a slice:
+            // 1. Valid for reading and writing, and enough capacity.
+            // 2. Properly initialized (left for writing).
+            // 3. Not aliased.
+            // 4. Total size not longer than isize::MAX because lgalloc has a capacity limit.
+            let slice = unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), actual_capacity) };
+            // SAFETY: slice is valid, and we deallocate it usinge lgalloc.
+            let boxed = unsafe { Box::from_raw(slice) };
+            let elements = ManuallyDrop::new(boxed);
+
+            Ok(Self {
+                handle,
+                elements,
+                length: 0,
+            })
+        }
+
+        /// Visit contained allocations to determine their size and capacity.
+        #[inline]
+        pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+            let size_of_t = std::mem::size_of::<T>();
+            callback(self.len() * size_of_t, self.capacity() * size_of_t)
+        }
+
+        /// Move an element on the array. Panics if there is no more capacity.
+        #[inline]
+        pub fn push(&mut self, item: T) {
+            if self.len() == self.capacity() {
+                self.reserve(1);
+            }
+            self.elements[self.length].write(item);
+            self.length += 1;
+        }
+
+        /// Extend the array from a slice. Increases the capacity if required.
+        #[inline]
+        pub fn extend_from_slice(&mut self, slice: &[T])
+        where
+            T: Clone,
+        {
+            self.reserve(slice.len());
+            let mut iterator = slice.iter().cloned();
+            while let Some(element) = iterator.next() {
+                let len = self.len();
+                if len == self.capacity() {
+                    let (lower, _) = iterator.size_hint();
+                    self.reserve(lower.saturating_add(1));
+                }
+                unsafe {
+                    std::ptr::write(
+                        self.elements.as_mut_ptr().add(len),
+                        MaybeUninit::new(element),
+                    );
+                    self.set_len(len + 1);
+                }
+            }
+        }
+
+        /// Extend the array from a slice of copyable elements. Increases the capacity if required.
+        #[inline]
+        pub fn extend_from_copy_slice(&mut self, slice: &[T])
+        where
+            T: Copy,
+        {
+            let count = slice.len();
+            self.reserve(count);
+            let len = self.len();
+            unsafe {
+                #[allow(clippy::as_conversions)]
+                std::ptr::copy_nonoverlapping(
+                    slice.as_ptr(),
+                    self.elements.as_mut_ptr().add(len) as *const MaybeUninit<T> as *mut T,
+                    count,
+                );
+                self.set_len(len + count);
+            }
+        }
+
+        /// Move elements from a vector to the array. Increases the capacity if required.
+        #[inline]
+        pub fn append(&mut self, data: &mut Vec<T>) {
+            let count = data.len();
+            self.reserve(count);
+            let len = self.len();
+            unsafe {
+                data.set_len(0);
+                #[allow(clippy::as_conversions)]
+                std::ptr::copy_nonoverlapping(
+                    data.as_ptr(),
+                    self.elements.as_mut_ptr().add(len) as *const MaybeUninit<T> as *mut T,
+                    count,
+                );
+                self.set_len(len + count);
+            }
+        }
+
+        /// Update the length. Highly unsafe because it doesn't drop elements when reducing the length,
+        /// and doesn't initialize elements when increasing the length.
+        #[inline]
+        pub unsafe fn set_len(&mut self, length: usize) {
+            debug_assert!(length <= self.capacity());
+            self.length = length;
+        }
+
+        /// The number of elements in the array.
+        #[inline]
+        pub fn len(&self) -> usize {
+            self.length
+        }
+
+        /// Returns `true` if the array contains no elements.
+        #[inline]
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+
+        /// The number of elements this array can absorb.
+        #[inline]
+        pub fn capacity(&self) -> usize {
+            self.elements.len()
+        }
+
+        /// Remove all elements. Drops the contents, but leaves the allocation untouched.
+        #[inline]
+        pub fn clear(&mut self) {
+            let elems = &mut self.elements[..self.length];
+            // We are about to run the type's destructor, which may panic. Therefore we set the length
+            // of the array to zero so that if we have to unwind the stack we don't end up re-dropping
+            // in valid memory through the Drop impl of Array itself.
+            self.length = 0;
+            for e in elems {
+                // SAFETY: We know elements up to `length` are initialized.
+                unsafe {
+                    e.assume_init_drop();
+                }
+            }
+        }
+
+        /// The minimum capacity for a non-zero array.
+        const MIN_NON_ZERO_CAP: usize = if std::mem::size_of::<T>() == 1 {
+            8
+        } else if std::mem::size_of::<T>() <= 1024 {
+            4
+        } else {
+            1
+        };
+
+        /// Grow the array to at least `new_len` elements. Reallocates the underlying storage.
+        #[cold]
+        fn grow(&mut self, new_len: usize) {
+            let new_capacity = std::cmp::max(self.capacity() * 2, new_len);
+            let new_capacity = std::cmp::max(new_capacity, Self::MIN_NON_ZERO_CAP);
+            let mut new_vec = Self::with_capacity(new_capacity);
+
+            let src_ptr = self.elements.as_ptr();
+            let dst_ptr = new_vec.elements.as_mut_ptr();
+            let len = self.len();
+
+            unsafe {
+                // SAFETY: We forget the current contents momentarily.
+                self.set_len(0);
+                // SAFETY: `src_ptr` and `dst_ptr` are valid pointers to `len` elements.
+                std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, len);
+                // SAFETY: Surface exactly as many elements as we just copied..
+                new_vec.set_len(len);
+            }
+
+            std::mem::swap(&mut new_vec, self);
+        }
+
+        /// Reserve space for at least `additional` elements. The capacity is increased if necessary.
+        #[inline]
+        pub fn reserve(&mut self, additional: usize) {
+            let new_len = self.len() + additional;
+            if new_len > self.capacity() {
+                self.grow(new_len);
+            }
+        }
+
+        /// Iterate over the elements.
+        #[inline]
+        pub fn iter(&self) -> std::slice::Iter<'_, T> {
+            self.deref().iter()
+        }
+    }
+
+    impl<T: Clone> Clone for LgAllocVec<T> {
+        fn clone(&self) -> Self {
+            let mut new_vec = LgAllocVec::with_capacity(self.len());
+            new_vec.extend_from_slice(self);
+            new_vec
+        }
+
+        fn clone_from(&mut self, source: &Self) {
+            // TODO: Optimize for reuse of existing elements.
+            self.clear();
+            self.extend_from_slice(source);
+        }
+    }
+
+    impl<T> Default for LgAllocVec<T> {
+        #[inline]
+        fn default() -> Self {
+            Self {
+                handle: None,
+                elements: ManuallyDrop::new(Vec::new().into_boxed_slice()),
+                length: 0,
+            }
+        }
+    }
+
+    impl<T> Deref for LgAllocVec<T> {
+        type Target = [T];
+
+        #[inline]
+        fn deref(&self) -> &Self::Target {
+            // TODO: Use `slice_assume_init_ref` once stable.
+            // Context: https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.slice_assume_init_ref
+            // The following safety argument is adapted from the source.
+            // SAFETY: casting `elements` to a `*const [T]` is safe since the caller guarantees that
+            // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
+            // The pointer obtained is valid since it refers to memory owned by `elements` which is a
+            // reference and thus guaranteed to be valid for reads.
+            #[allow(clippy::as_conversions)]
+            unsafe {
+                &*(&self.elements[..self.length] as *const [MaybeUninit<T>] as *const [T])
+            }
+        }
+    }
+
+    impl<T> Drop for LgAllocVec<T> {
+        #[inline]
+        fn drop(&mut self) {
+            // Clear the contents, but don't drop the allocation.
+            self.clear();
+
+            if let Some(handle) = self.handle.take() {
+                // Memory allocated through lgalloc, deallocate accordingly.
+                lgalloc::deallocate(handle);
+            } else {
+                // Regular heap allocation
+                // SAFETY: `elements` is a sliced box allocated from the global allocator, drop it.
+                unsafe {
+                    ManuallyDrop::drop(&mut self.elements);
+                }
+            }
+        }
+    }
+
+    impl<T: Debug> Debug for LgAllocVec<T> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.deref().fmt(f)
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::*;
+
+        #[crate::test]
+        fn double_drop() {
+            static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+            struct DropGuard;
+
+            impl Drop for DropGuard {
+                fn drop(&mut self) {
+                    let drops = DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+                    // If this is the first time we're being dropped, panic.
+                    if drops == 0 {
+                        panic!();
+                    }
+                }
+            }
+
+            let mut array = LgAllocVec::with_capacity(1);
+            array.push(DropGuard);
+            let _ = mz_ore::panic::catch_unwind(move || array.clear());
+            assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+        }
     }
 }
