@@ -484,13 +484,11 @@ mz_show_sinks  cluster
 mz_show_sinks  cluster_id
 mz_show_sinks  name
 mz_show_sinks  schema_id
-mz_show_sinks  size
 mz_show_sinks  type
 mz_show_sources  cluster
 mz_show_sources  cluster_id
 mz_show_sources  name
 mz_show_sources  schema_id
-mz_show_sources  size
 mz_show_sources  type
 mz_sink_statistics  bytes_committed
 mz_sink_statistics  bytes_staged

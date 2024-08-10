@@ -24,16 +24,15 @@ _cluster&lowbar;name_ | The cluster to show sources from. If omitted, sources fr
 `SHOW SOURCES`'s output is a table, with this structure:
 
 ```nofmt
-name  | type | size | cluster
-------+------+------+--------
-...   | ...  | ...  | ...
+name  | type | cluster
+------+------+--------
+...   | ...  | ...
 ```
 
 Field | Meaning
 ------|--------
 **name** | The name of the source.
 **type** | The type of the source: `kafka`, `postgres`, `load-generator`, `progress`, or `subsource`.
-**size** | The [size](/sql/create-source/#sizing-a-source) of the source. Null if the source is created using the `IN CLUSTER` clause.
 **cluster** | The cluster the source is associated with.
 
 ## Examples
@@ -42,19 +41,19 @@ Field | Meaning
 SHOW SOURCES;
 ```
 ```nofmt
-            name    | type     | size  | cluster
---------------------+----------+-------+---------
- my_kafka_source    | kafka    |       | c1
- my_postgres_source | postgres |       | c2
+            name    | type     | cluster
+--------------------+----------+---------
+ my_kafka_source    | kafka    | c1
+ my_postgres_source | postgres | c2
 ```
 
 ```mzsql
 SHOW SOURCES IN CLUSTER c2;
 ```
 ```nofmt
-name               | type     | size     | cluster
--------------------+----------+----------+--------
-my_postgres_source | postgres |          | c2
+name               | type     | cluster
+-------------------+----------+--------
+my_postgres_source | postgres | c2
 ```
 
 ## Related pages

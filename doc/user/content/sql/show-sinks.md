@@ -26,16 +26,15 @@ _cluster&lowbar;name_ | The cluster to show sinks from. If omitted, sinks from a
 `SHOW SINKS`'s output is a table, with this structure:
 
 ```nofmt
-name  | type | size | cluster
-------+------+------+--------
-...   | ...  | ...  | ...
+name  | type | cluster
+------+------+--------
+...   | ...  | ...
 ```
 
 Field       | Meaning
 ------------|--------
 **name**    | The name of the sink.
 **type**    | The type of the sink: currently only `kafka` is supported.
-**size**    | The size of the sink. Null if the sink is created using the `IN CLUSTER` clause.
 **cluster** | The cluster the sink is associated with.
 
 ## Examples
@@ -44,19 +43,19 @@ Field       | Meaning
 SHOW SINKS;
 ```
 ```nofmt
-name          | type  | size    | cluster
---------------+-------+---------+--------
-my_sink       | kafka |         | c1
-my_other_sink | kafka |         | c2
+name          | type  | cluster
+--------------+-------+--------
+my_sink       | kafka | c1
+my_other_sink | kafka | c2
 ```
 
 ```mzsql
 SHOW SINKS IN CLUSTER c1;
 ```
 ```nofmt
-name    | type  | size    | cluster
---------+-------+---------+--------
-my_sink | kafka |         | c1
+name    | type  | cluster
+--------+-------+--------
+my_sink | kafka | c1
 ```
 
 ## Related pages

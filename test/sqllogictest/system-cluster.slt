@@ -76,7 +76,7 @@ query T multiline
 EXPLAIN SHOW SOURCES
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#1..=#3)
     ReadIndex on=mz_internal.mz_show_sources mz_show_sources_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -163,7 +163,7 @@ query T multiline
 EXPLAIN SHOW SINKS
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#1..=#3)
     ReadIndex on=mz_internal.mz_show_sinks mz_show_sinks_ind=[lookup value=("u3")]
 
 Used Indexes:

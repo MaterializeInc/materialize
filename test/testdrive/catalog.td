@@ -499,8 +499,8 @@ d2
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-name  type  size  cluster
--------------------------
+name  type  cluster
+-------------------
 
 > SHOW TABLES FROM mz_catalog
 name
@@ -561,26 +561,26 @@ mz_timezone_names
 # Check default sources, tables, and views in mz_internal.
 
 > SHOW SOURCES FROM mz_internal
-name                                           type   size  cluster
+name                                           type  cluster
 ------------------------------------------------------------------
-mz_aws_privatelink_connection_status_history source <null>  <null>
-mz_cluster_replica_frontiers                 source <null>  <null>
-mz_compute_dependencies                      source <null>  <null>
-mz_compute_error_counts_raw_unified          source <null>   <null>
-mz_compute_hydration_times                   source <null>  <null>
-mz_compute_operator_hydration_statuses_per_worker source <null> <null>
-mz_frontiers                                 source <null>  <null>
-mz_materialized_view_refreshes               source <null>  <null>
-mz_prepared_statement_history                source <null>  <null>
-mz_session_history                           source <null>  <null>
-mz_sink_statistics_raw                       source <null>  <null>
-mz_sink_status_history                       source <null>  <null>
-mz_source_statistics_raw                     source <null>  <null>
-mz_source_status_history                     source <null>  <null>
-mz_sql_text                                  source <null>  <null>
-mz_statement_execution_history               source <null>  <null>
-mz_statement_lifecycle_history               source <null>  <null>
-mz_storage_shards                            source <null>  <null>
+mz_aws_privatelink_connection_status_history source  <null>
+mz_cluster_replica_frontiers                 source  <null>
+mz_compute_dependencies                      source  <null>
+mz_compute_error_counts_raw_unified          source  <null>
+mz_compute_hydration_times                   source  <null>
+mz_compute_operator_hydration_statuses_per_worker source <null>
+mz_frontiers                                 source  <null>
+mz_materialized_view_refreshes               source  <null>
+mz_prepared_statement_history                source  <null>
+mz_session_history                           source  <null>
+mz_sink_statistics_raw                       source  <null>
+mz_sink_status_history                       source  <null>
+mz_source_statistics_raw                     source  <null>
+mz_source_status_history                     source  <null>
+mz_sql_text                                  source  <null>
+mz_statement_execution_history               source  <null>
+mz_statement_lifecycle_history               source  <null>
+mz_storage_shards                            source  <null>
 
 > SHOW TABLES FROM mz_internal
 name
@@ -669,35 +669,35 @@ pg_attribute_all_databases
 # Check default sources, tables, and views in mz_introspection.
 
 > SHOW SOURCES FROM mz_introspection
-mz_active_peeks_per_worker                   log   <null>   <null>
-mz_arrangement_batcher_allocations_raw       log   <null>   <null>
-mz_arrangement_batcher_capacity_raw          log   <null>   <null>
-mz_arrangement_batcher_records_raw           log   <null>   <null>
-mz_arrangement_batcher_size_raw              log   <null>   <null>
-mz_arrangement_batches_raw                   log   <null>   <null>
-mz_arrangement_heap_allocations_raw          log   <null>   <null>
-mz_arrangement_heap_capacity_raw             log   <null>   <null>
-mz_arrangement_heap_size_raw                 log   <null>   <null>
-mz_arrangement_records_raw                   log   <null>   <null>
-mz_arrangement_sharing_raw                   log   <null>   <null>
-mz_compute_error_counts_raw                  log   <null>   <null>
-mz_compute_exports_per_worker                log   <null>   <null>
-mz_compute_frontiers_per_worker              log   <null>   <null>
-mz_compute_hydration_times_per_worker        log   <null>   <null>
-mz_compute_import_frontiers_per_worker       log   <null>   <null>
-mz_compute_operator_durations_histogram_raw  log   <null>   <null>
-mz_dataflow_addresses_per_worker             log   <null>   <null>
-mz_dataflow_channels_per_worker              log   <null>   <null>
-mz_dataflow_operator_reachability_raw        log   <null>   <null>
-mz_dataflow_operators_per_worker             log   <null>   <null>
-mz_dataflow_shutdown_durations_histogram_raw log   <null>   <null>
-mz_message_counts_received_raw               log   <null>   <null>
-mz_message_counts_sent_raw                   log   <null>   <null>
-mz_message_batch_counts_received_raw         log   <null>   <null>
-mz_message_batch_counts_sent_raw             log   <null>   <null>
-mz_peek_durations_histogram_raw              log   <null>   <null>
-mz_scheduling_elapsed_raw                    log   <null>   <null>
-mz_scheduling_parks_histogram_raw            log   <null>   <null>
+mz_active_peeks_per_worker                   log   <null>
+mz_arrangement_batcher_allocations_raw       log   <null>
+mz_arrangement_batcher_capacity_raw          log   <null>
+mz_arrangement_batcher_records_raw           log   <null>
+mz_arrangement_batcher_size_raw              log   <null>
+mz_arrangement_batches_raw                   log   <null>
+mz_arrangement_heap_allocations_raw          log   <null>
+mz_arrangement_heap_capacity_raw             log   <null>
+mz_arrangement_heap_size_raw                 log   <null>
+mz_arrangement_records_raw                   log   <null>
+mz_arrangement_sharing_raw                   log   <null>
+mz_compute_error_counts_raw                  log   <null>
+mz_compute_exports_per_worker                log   <null>
+mz_compute_frontiers_per_worker              log   <null>
+mz_compute_hydration_times_per_worker        log   <null>
+mz_compute_import_frontiers_per_worker       log   <null>
+mz_compute_operator_durations_histogram_raw  log   <null>
+mz_dataflow_addresses_per_worker             log   <null>
+mz_dataflow_channels_per_worker              log   <null>
+mz_dataflow_operator_reachability_raw        log   <null>
+mz_dataflow_operators_per_worker             log   <null>
+mz_dataflow_shutdown_durations_histogram_raw log   <null>
+mz_message_counts_received_raw               log   <null>
+mz_message_counts_sent_raw                   log   <null>
+mz_message_batch_counts_received_raw         log   <null>
+mz_message_batch_counts_sent_raw             log   <null>
+mz_peek_durations_histogram_raw              log   <null>
+mz_scheduling_elapsed_raw                    log   <null>
+mz_scheduling_parks_histogram_raw            log   <null>
 
 > SHOW TABLES FROM mz_introspection
 

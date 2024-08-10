@@ -124,8 +124,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > SHOW SOURCES
-name    type   size   cluster
------------------------------
+name    type   cluster
+----------------------
 
 # [btv] uncomment if we bring back classic debezium mode
 # ! CREATE SOURCE fast_forwarded

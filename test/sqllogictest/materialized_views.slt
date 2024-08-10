@@ -516,10 +516,10 @@ statement error SHOW commands are not allowed in views
 CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
+CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type FROM (SHOW SINKS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
+CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type FROM (SHOW SOURCES);
 
 statement error SHOW commands are not allowed in views
 CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);

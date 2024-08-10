@@ -194,16 +194,16 @@ renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name               type   size                            cluster
+name               type      cluster
 -----------------------------------------------------------------
-mz_data_progress   progress  <null>                       <null>
-renamed_mz_data    kafka     ${arg.default-replica-size}  <VARIABLE_OUTPUT>
+mz_data_progress   progress  <null>
+renamed_mz_data    kafka     <VARIABLE_OUTPUT>
 
 # Sink was successfully renamed
 > SHOW SINKS
-name               type   size                            cluster
------------------------------------------------------------------
-renamed_sink       kafka  ${arg.default-replica-size}     <VARIABLE_OUTPUT>
+name               type   cluster
+---------------------------------
+renamed_sink       kafka  <VARIABLE_OUTPUT>
 
 # View was successfully renamed
 > SHOW VIEWS
