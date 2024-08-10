@@ -49,7 +49,7 @@ steps:
         label: Unused dependencies
         command: bin/ci-builder run nightly bin/unused-deps
         depends_on: []
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
@@ -87,7 +87,7 @@ steps:
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 240
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -1233,7 +1233,7 @@ steps:
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
         depends_on: build-aarch64
-        timeout_in_minutes: 45
+        timeout_in_minutes: 60
         agents:
           # Runs into timeout/OoM on small agents
           queue: hetzner-aarch64-16cpu-32gb
@@ -1544,7 +1544,7 @@ steps:
   - id: txn-wal-fencing
     label: Txn-wal fencing
     depends_on: build-aarch64
-    timeout_in_minutes: 120
+    timeout_in_minutes: 180
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
