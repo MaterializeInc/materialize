@@ -31,6 +31,24 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in (
+        "SmallClusters",
+        "AccumulateReductions",
+        "CreateIndex",
+        "ManySmallUpdates",
+        "FastPathOrderByLimit",
+        "FastPathFilterIndex",
+        "ParallelIngestion",
+        "SubscribeParallelTableWithIndex",
+        "DeltaJoinMaintained",
+        "Update",
+        "Retraction",
+    ):
+        # PR#28307 (Render regions for object build and let bindings) increases messages
+        min_ancestor_mz_version_per_commit[
+            "ffcafa5b5c3e83845a868cf6103048c045b4f155"
+        ] = MzVersion.parse_mz("v0.113.0")
+
     if "OptbenchTPCH" in scenario_class_name:
         # PR#28664 (Introduce MirScalarExpr::reduce_safely) increases wallclock
         min_ancestor_mz_version_per_commit[
