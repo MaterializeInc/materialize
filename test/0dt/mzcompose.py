@@ -17,7 +17,11 @@ from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
+from materialize.mzcompose.services.materialized import (
+    LEADER_STATUS_HEALTHCHECK,
+    DeploymentStatus,
+    Materialized,
+)
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -793,24 +797,44 @@ def workflow_basic(c: Composition) -> None:
         )
 
 
+def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
+    # TODO: Replace me with mz_internal.mz_cluster_replica_ports when it exists
+    internal_http = c.exec(
+        process,
+        "bash",
+        "-c",
+        'ps aux | grep -v grep | grep "cluster_id=s2" | sed -e "s#.* --internal-http-listen-addr=\\([^ ]*\\) .*#\\1#"',
+        capture=True,
+    ).stdout.strip()
+    metrics = c.exec(
+        process,
+        "curl",
+        "--silent",
+        "--unix-socket",
+        internal_http,
+        "localhost/metrics",
+        capture=True,
+    ).stdout
+
+    reused = 0
+    replaced = 0
+    for metric in metrics.splitlines():
+        if metric.startswith("mz_compute_reconciliation_reused_dataflows_count_total"):
+            reused += int(metric.split()[1])
+        elif metric.startswith(
+            "mz_compute_reconciliation_replaced_dataflows_count_total"
+        ):
+            replaced += int(metric.split()[1])
+
+    return reused, replaced
+
+
 def workflow_builtin_item_migrations(c: Composition) -> None:
     """Verify builtin item migrations"""
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "mz_old")
-    c.up("testdrive", persistent=True)
-
-    # Make sure cluster is owned by the system, so it doesn't get dropped
-    # between testdrive runs.
+    c.up("mz_old")
     c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '2-1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        ALTER SYSTEM SET enable_0dt_deployment = true;
-
-        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
-    """,
+        "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;",
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -833,67 +857,59 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
         service="mz_old",
     )[0][0]
 
-    # Restart in a new deploy generation with forced migrations, which will cause Materialize to
-    # boot in read-only mode and prepare builtin item migrations.
     with c.override(
         Materialized(
-            name="mz_old",
+            name="mz_new",
+            sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
             external_cockroach=True,
             force_migrations="all",
-        )
+            healthcheck=LEADER_STATUS_HEALTHCHECK,
+        ),
     ):
-        c.up("mz_old")
+        c.up("mz_new")
 
         new_mz_tables_gid = c.sql_query(
             "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
-            service="mz_old",
+            service="mz_new",
         )[0][0]
         new_mv_gid = c.sql_query(
             "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
-            service="mz_old",
+            service="mz_new",
         )[0][0]
         assert new_mz_tables_gid == mz_tables_gid
         assert new_mv_gid == mv_gid
         # mz_internal.mz_storage_shards won't update until this instance becomes the leader
 
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
-        c.promote_mz("mz_old")
-
-    # After promotion, the deployment should boot with a new shard ID for mz_tables.
-    with c.override(
-        Materialized(
-            name="mz_old",
-            healthcheck=[
-                "CMD-SHELL",
-                """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
-            ],
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            external_cockroach=True,
-            force_migrations="all",
-        )
-    ):
-        c.up("mz_old")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        c.promote_mz("mz_new")
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
             "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
-            service="mz_old",
+            service="mz_new",
         )[0][0]
         new_mv_gid = c.sql_query(
             "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
-            service="mz_old",
+            service="mz_new",
         )[0][0]
         assert new_mz_tables_gid == mz_tables_gid
         assert new_mv_gid == mv_gid
         new_mz_tables_shard_id = c.sql_query(
             f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
-            service="mz_old",
+            service="mz_new",
         )[0][0]
         new_mv_shard_id = c.sql_query(
             f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
-            service="mz_old",
+            service="mz_new",
         )[0][0]
         assert new_mz_tables_shard_id != mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
+
+        reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
+        assert reused > 0
+        assert (
+            replaced == 0
+        ), f"{replaced} dataflows have been replaced, expected all to be reused"
