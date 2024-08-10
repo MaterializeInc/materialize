@@ -4010,6 +4010,12 @@ async fn test_startup_cluster_notice_with_http_options() {
     insta::assert_json_snapshot!(notices, @r###"
     [
       {
+        "message": "session default cluster \"i_do_not_exist\" does not exist",
+        "code": "MZ005",
+        "severity": "notice",
+        "hint": "Pick an extant cluster with SET CLUSTER = name. Run SHOW CLUSTERS to see available clusters."
+      },
+      {
         "message": "cluster \"i_do_not_exist\" does not exist",
         "code": "MZ007",
         "severity": "notice",

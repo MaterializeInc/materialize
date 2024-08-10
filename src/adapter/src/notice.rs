@@ -52,7 +52,7 @@ pub enum AdapterNotice {
     },
     DefaultClusterDoesNotExist {
         name: String,
-        kind: Option<&'static str>,
+        kind: &'static str,
         suggested_action: String,
     },
     NoResolvableSearchPathSchema {
