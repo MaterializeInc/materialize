@@ -232,10 +232,6 @@ impl Client {
             .end_transaction(EndTransactionAction::Commit);
 
         let catalog = catalog.for_session(session);
-        if catalog.active_database().is_none() {
-            let db = session.vars().database().into();
-            session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
-        }
 
         let cluster_active = session.vars().cluster().to_string();
         if session.vars().welcome_message() {
@@ -277,13 +273,22 @@ Issue a SQL query to get started. Need help?
             )));
         }
 
+        if session.vars().current_object_missing_warnings() {
+            if catalog.active_database().is_none() {
+                let db = session.vars().database().into();
+                session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
+            }
+        }
+
         // Users stub their toe on their default cluster not existing, so we provide a notice to
         // help guide them on what do to.
         let cluster_var = session
             .vars()
             .inspect(CLUSTER.name())
             .expect("cluster should exist");
-        if catalog.resolve_cluster(Some(&cluster_active)).is_err() {
+        if session.vars().current_object_missing_warnings()
+            && catalog.resolve_cluster(Some(&cluster_active)).is_err()
+        {
             let cluster_notice = 'notice: {
                 if cluster_var.inspect_session_value().is_some() {
                     break 'notice Some(AdapterNotice::DefaultClusterDoesNotExist {

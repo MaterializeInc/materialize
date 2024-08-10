@@ -23,6 +23,7 @@ client_encoding                     UTF8                    "Sets the client's c
 client_min_messages                 notice                  "Sets the message levels that are sent to the client (PostgreSQL)."
 cluster                             <VARIES>                "Sets the current cluster (Materialize)."
 cluster_replica                     ""                      "Sets a target cluster replica for SELECT queries (Materialize)."
+current_object_missing_warnings     on                      "Whether to emit warnings when the current database, schema, or cluster is missing (Materialize)."
 database                            materialize             "Sets the current database (CockroachDB)."
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
 emit_introspection_query_notice     on                      "Whether to print a notice when querying per-replica introspection sources."

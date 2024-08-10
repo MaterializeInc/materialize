@@ -221,6 +221,27 @@ async fn test_conn_startup() {
         }
     }
 
+    // Connecting to a nonexistent database should work, and creating that
+    // database should work.
+    {
+        let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+        server
+            .connect()
+            .options("--current_object_missing_warnings=off --welcome_message=off")
+            .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+            .dbname("newdb2")
+            .await
+            .unwrap();
+
+        // Execute a query to ensure startup notices are flushed.
+        client.batch_execute("SELECT 1").await.unwrap();
+
+        drop(client);
+        if let Some(n) = notice_rx.recv().await {
+            panic!("unexpected notice generated: {n:#?}");
+        }
+    }
+
     // Connecting to an existing database should work.
     {
         let client = server.connect().dbname("newdb").await.unwrap();

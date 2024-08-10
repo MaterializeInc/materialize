@@ -332,8 +332,7 @@ impl fmt::Display for AdapterNotice {
                 write!(f, "cluster {} does not exist", name.quoted())
             }
             AdapterNotice::DefaultClusterDoesNotExist { kind, name, .. } => {
-                let kind = kind.map(|k| format!("{k} ")).unwrap_or(String::new());
-                write!(f, "{kind}default cluster {} does not exist", name.quoted())
+                write!(f, "{kind} default cluster {} does not exist", name.quoted())
             }
             AdapterNotice::NoResolvableSearchPathSchema { search_path } => {
                 write!(

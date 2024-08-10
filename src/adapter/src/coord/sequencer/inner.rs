@@ -1724,14 +1724,16 @@ impl Coordinator {
                     Ok(Self::send_immediate_rows(row))
                 }
                 None => {
-                    session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
-                        search_path: session
-                            .vars()
-                            .search_path()
-                            .into_iter()
-                            .map(|schema| schema.to_string())
-                            .collect(),
-                    });
+                    if session.vars().current_object_missing_warnings() {
+                        session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
+                            search_path: session
+                                .vars()
+                                .search_path()
+                                .into_iter()
+                                .map(|schema| schema.to_string())
+                                .collect(),
+                        });
+                    }
                     Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::Null])))
                 }
             };
@@ -1752,6 +1754,7 @@ impl Coordinator {
                 self.catalog().resolve_database(&variable.value()),
                 Err(CatalogError::UnknownDatabase(_))
             )
+            && session.vars().current_object_missing_warnings()
         {
             let name = variable.value();
             session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
@@ -1760,6 +1763,7 @@ impl Coordinator {
                 self.catalog().resolve_cluster(&variable.value()),
                 Err(CatalogError::UnknownCluster(_))
             )
+            && session.vars().current_object_missing_warnings()
         {
             let name = variable.value();
             session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
@@ -1838,6 +1842,7 @@ impl Coordinator {
                         self.catalog().resolve_database(vars.database()),
                         Err(CatalogError::UnknownDatabase(_))
                     )
+                    && session.vars().current_object_missing_warnings()
                 {
                     let name = vars.database().to_string();
                     session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
@@ -1846,6 +1851,7 @@ impl Coordinator {
                         self.catalog().resolve_cluster(vars.cluster()),
                         Err(CatalogError::UnknownCluster(_))
                     )
+                    && session.vars().current_object_missing_warnings()
                 {
                     let name = vars.cluster().to_string();
                     session.add_notice(AdapterNotice::ClusterDoesNotExist { name });

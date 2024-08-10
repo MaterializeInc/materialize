@@ -4074,7 +4074,7 @@ async fn test_startup_cluster_notice() {
                     "MZ005",
                 ),
             ),
-            message: "default cluster \"quickstart\" does not exist",
+            message: "system default cluster \"quickstart\" does not exist",
             detail: None,
             hint: Some(
                 "Set a default cluster for the current role with `ALTER ROLE <role> SET cluster TO <cluster>;`.",
