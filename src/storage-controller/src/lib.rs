@@ -207,6 +207,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Handle to a [StorageCollections].
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    /// Migrated storage collections that can be written even in read only mode.
+    migrated_storage_collections: BTreeSet<GlobalId>,
 }
 
 #[async_trait(?Send)]
@@ -491,6 +493,9 @@ where
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
+        self.migrated_storage_collections
+            .clone_from(migrated_storage_collections);
+
         self.storage_collections
             .create_collections_for_bootstrap(
                 storage_metadata,
@@ -544,11 +549,7 @@ where
                 // If the shard is being managed by txn-wal (initially, tables), then we need to
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites)
-                    // In read-only mode we cannot register migrated storage collections in the
-                    // txn-shard, so they must be excluded.
-                        if !(self.read_only && migrated_storage_collections.contains(&id)) =>
-                    {
+                    DataSource::Other(DataSourceOther::TableWrites) => {
                         Some(*self.txns_read.txns_id())
                     }
                     DataSource::Ingestion(_)
@@ -556,7 +557,6 @@ where
                     | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
-                    | DataSource::Other(DataSourceOther::TableWrites)
                     | DataSource::Other(DataSourceOther::Compute) => None,
                 };
 
@@ -877,7 +877,7 @@ where
                     // aware of read-only mode and will not attempt to write before told
                     // to do so.
                     //
-                    self.register_introspection_collection(id, *i, migrated_storage_collections)
+                    self.register_introspection_collection(id, *i)
                         .await?;
 
                 }
@@ -1510,16 +1510,12 @@ where
         StorageError<Self::Timestamp>,
     > {
         if self.read_only {
-            // While in read only mode, ONLY system tables that are not registered with the
-            // transaction shard can be written to. These are shards that have been migrated and
-            // need to be re-hydrated in read only mode.
-            if !commands.iter().all(|(id, _)| {
-                let collection = self
-                    .collections
-                    .get(id)
-                    .unwrap_or_else(|| panic!("unknown collection: {id:?}"));
-                id.is_system() && collection.collection_metadata.txns_shard.is_none()
-            }) {
+            // While in read only mode, ONLY collections that have been migrated
+            // and need to be re-hydrated in read only mode can be written to.
+            if !commands
+                .iter()
+                .all(|(id, _)| id.is_system() && self.migrated_storage_collections.contains(id))
+            {
                 return Err(StorageError::ReadOnly);
             }
         }
@@ -2462,6 +2458,7 @@ where
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
             storage_collections,
+            migrated_storage_collections: BTreeSet::new(),
         }
     }
 
@@ -2811,14 +2808,13 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
-        migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
         // In read-only mode we create a new shard for all migrated storage collections. So we
         // "trick" the write task into thinking that it's not in read-only mode so something is
         // advancing this new shard.
-        let force_writable = self.read_only && migrated_storage_collections.contains(&id);
+        let force_writable = self.read_only && self.migrated_storage_collections.contains(&id);
         if force_writable {
             assert!(id.is_system(), "unexpected non-system global id: {id:?}");
             info!("writing to migrated storage collection {id} in read-only mode");
