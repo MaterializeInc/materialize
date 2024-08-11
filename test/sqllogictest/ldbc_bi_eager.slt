@@ -3887,7 +3887,7 @@ Explained Query:
                 %1[#0]UK » %0:l7[#4]K
               ArrangeBy keys=[[#4]] // { arity: 5 }
                 Project (#0..=#3, #5) // { arity: 5 }
-                  Filter (#2{id}) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
+                  Filter (#1{id}) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
                     Get l7 // { arity: 6 }
               ArrangeBy keys=[[#0{max}]] // { arity: 1 }
                 Filter (#0{max}) IS NOT NULL // { arity: 1 }
@@ -3953,11 +3953,11 @@ Explained Query:
                 %0:l3[#0]Kef » %1:l3[#0]Kef
               ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
                 Project (#2, #3) // { arity: 2 }
-                  Filter (#0 = false) AND (#2{dst}) IS NOT NULL // { arity: 5 }
+                  Filter (#0 = false) AND (#1) IS NOT NULL // { arity: 5 }
                     Get l3 // { arity: 5 }
               ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
                 Project (#2, #3) // { arity: 2 }
-                  Filter (#0 = true) AND (#2{dst}) IS NOT NULL // { arity: 5 }
+                  Filter (#0 = true) AND (#1) IS NOT NULL // { arity: 5 }
                     Get l3 // { arity: 5 }
       cte l3 =
         TopK group_by=[#0, #1, #2{dst}] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
@@ -3972,7 +3972,7 @@ Explained Query:
                       ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
                     ArrangeBy keys=[[#2]] // { arity: 4 }
                       Project (#0..=#3) // { arity: 4 }
-                        Filter (#2) IS NOT NULL // { arity: 5 }
+                        Filter (#1) IS NOT NULL // { arity: 5 }
                           Get l0 // { arity: 5 }
               Project (#0..=#3, #9) // { arity: 5 }
                 Map ((#4 OR #8)) // { arity: 10 }
@@ -4004,12 +4004,12 @@ Explained Query:
             implementation
               %1[#0..=#2]UKKKA » %0:l1[#0..=#2]UKKK
             ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-              Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 3 }
+              Filter (#1) IS NOT NULL // { arity: 3 }
                 Get l1 // { arity: 3 }
             ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
               Distinct project=[#0..=#2] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
-                  Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 5 }
+                  Filter (#1) IS NOT NULL // { arity: 5 }
                     Get l0 // { arity: 5 }
       cte l1 =
         Distinct project=[#0..=#2] // { arity: 3 }
