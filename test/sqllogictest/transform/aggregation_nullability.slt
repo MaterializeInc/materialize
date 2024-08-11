@@ -280,25 +280,24 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#2 >= 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[sum(#0), max(#0)] // { arity: 3 }
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
-          implementation
-            %0:t1[#0]K » %1:t2[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
-                ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
-                ReadStorage materialize.public.t2 // { arity: 2 }
+  Reduce group_by=[#0] aggregates=[sum(#0), max(#0)] // { arity: 3 }
+    Project (#0) // { arity: 1 }
+      Join on=(#0 = #1) type=differential // { arity: 2 }
+        implementation
+          %0:t1[#0]Kif » %1:t2[#0]Kiif
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Filter (#0 >= 0) // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Filter (#0 >= 0) // { arity: 2 }
+              ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 
 Target cluster: quickstart
 
@@ -309,25 +308,25 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#1 >= 0) AND (#2 >= 0) // { arity: 3 }
+  Filter (#1 >= 0) // { arity: 3 }
     Reduce group_by=[#0] aggregates=[sum(#0), max(#0)] // { arity: 3 }
       Project (#0) // { arity: 1 }
         Join on=(#0 = #1) type=differential // { arity: 2 }
           implementation
-            %0:t1[#0]K » %1:t2[#0]K
+            %0:t1[#0]Kif » %1:t2[#0]Kiif
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+              Filter (#0 >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t1 // { arity: 2 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
+              Filter (#0 >= 0) // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 
 Target cluster: quickstart
 
@@ -387,24 +386,23 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#2 >= 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[sum((#0 + #1)), max(#0)] // { arity: 3 }
-      Project (#0, #2) // { arity: 2 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
-          implementation
-            %0:t1[#0]K » %1:t2[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
-                ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
-              ReadStorage materialize.public.t2 // { arity: 2 }
+  Reduce group_by=[#0] aggregates=[sum((#0 + #1)), max(#0)] // { arity: 3 }
+    Project (#0, #2) // { arity: 2 }
+      Join on=(#0 = #1) type=differential // { arity: 3 }
+        implementation
+          %0:t1[#0]Kif » %1:t2[#0]Kiif
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Filter (#0 >= 0) // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0 >= 0) // { arity: 2 }
+            ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 
 Target cluster: quickstart
 
@@ -415,25 +413,24 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#2 >= 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[sum((#0 + #0)), max(#0)] // { arity: 3 }
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
-          implementation
-            %0:t1[#0]K » %1:t2[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
-                ReadStorage materialize.public.t1 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
-                ReadStorage materialize.public.t2 // { arity: 2 }
+  Reduce group_by=[#0] aggregates=[sum((#0 + #0)), max(#0)] // { arity: 3 }
+    Project (#0) // { arity: 1 }
+      Join on=(#0 = #1) type=differential // { arity: 2 }
+        implementation
+          %0:t1[#0]Kif » %1:t2[#0]Kiif
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Filter (#0 >= 0) // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Filter (#0 >= 0) // { arity: 2 }
+              ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 Source materialize.public.t2
-  filter=((#0) IS NOT NULL)
+  filter=((#0 >= 0))
 
 Target cluster: quickstart
 

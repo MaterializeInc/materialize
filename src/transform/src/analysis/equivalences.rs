@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::ColumnType;
 
 use crate::analysis::{Analysis, Lattice};
@@ -198,13 +198,13 @@ impl Analysis for Equivalences {
             }
             MirRelationExpr::Reduce {
                 group_key,
-                aggregates: _,
+                aggregates,
                 ..
             } => {
                 let input_arity = depends.results::<Arity>().unwrap()[index - 1];
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
-                    // Introduce keys column equivalences as a map, then project to them as a projection.
+                    // Introduce keys column equivalences as a map, then project domwn to them.
                     for (pos, expr) in group_key.iter().enumerate() {
                         equivalences
                             .classes
@@ -215,12 +215,46 @@ impl Analysis for Equivalences {
                     // information in before applying the `project`, to set it up for success.
                     equivalences.minimize(&None);
 
+                    let mut result = equivalences.clone();
+                    result.project(input_arity..(input_arity + group_key.len()));
+
                     // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
                     // They also pass through equivalences of them and other constant columns (e.g. key columns).
                     // However, it is not correct to simply project onto these columns, as relationships amongst
                     // aggregate columns may no longer be preserved. MAX(col) != MIN(col) even though col = col.
+                    // The correct thing to do is treat the reduce as a join between single-aggregate reductions,
+                    // where each single MIN/MAX/ANY/ALL aggregate propagates equivalences.
+                    for (index, aggregate) in aggregates.iter().enumerate() {
+                        if aggregate_is_input(&aggregate.func) {
+                            let mut temp_equivs = equivalences.clone();
+                            temp_equivs.classes.push(vec![
+                                MirScalarExpr::column(input_arity + group_key.len()),
+                                aggregate.expr.clone(),
+                            ]);
+                            temp_equivs.minimize(&None);
+                            temp_equivs.project(input_arity..(input_arity + group_key.len() + 1));
+                            let columns = (0..group_key.len())
+                                .chain(std::iter::once(group_key.len() + index))
+                                .collect::<Vec<_>>();
+                            temp_equivs.permute(&columns[..]);
+                            result.classes.extend(temp_equivs.classes);
+                        }
+                    }
+
                     // TODO: COUNT ensures a non-null value.
-                    equivalences.project(input_arity..(input_arity + group_key.len()));
+                    let mut non_null_cols = vec![];
+                    for (index, aggregate) in aggregates.iter().enumerate() {
+                        if let AggregateFunc::Count = aggregate.func {
+                            non_null_cols.push(
+                                MirScalarExpr::Column(group_key.len() + index).call_is_null(),
+                            );
+                        }
+                    }
+                    if !non_null_cols.is_empty() {
+                        non_null_cols.push(MirScalarExpr::literal_false());
+                        result.classes.push(non_null_cols);
+                    }
+                    equivalences.clone_from(&result);
                 }
                 equivalences
             }
@@ -761,5 +795,42 @@ impl EquivalenceClasses {
                 _ => {}
             }
         }
+    }
+}
+
+/// True iff the aggregate function returns an input datum.
+fn aggregate_is_input(aggregate: &AggregateFunc) -> bool {
+    match aggregate {
+        AggregateFunc::MaxInt16
+        | AggregateFunc::MaxInt32
+        | AggregateFunc::MaxInt64
+        | AggregateFunc::MaxUInt16
+        | AggregateFunc::MaxUInt32
+        | AggregateFunc::MaxUInt64
+        | AggregateFunc::MaxMzTimestamp
+        | AggregateFunc::MaxFloat32
+        | AggregateFunc::MaxFloat64
+        | AggregateFunc::MaxBool
+        | AggregateFunc::MaxString
+        | AggregateFunc::MaxDate
+        | AggregateFunc::MaxTimestamp
+        | AggregateFunc::MaxTimestampTz
+        | AggregateFunc::MinInt16
+        | AggregateFunc::MinInt32
+        | AggregateFunc::MinInt64
+        | AggregateFunc::MinUInt16
+        | AggregateFunc::MinUInt32
+        | AggregateFunc::MinUInt64
+        | AggregateFunc::MinMzTimestamp
+        | AggregateFunc::MinFloat32
+        | AggregateFunc::MinFloat64
+        | AggregateFunc::MinBool
+        | AggregateFunc::MinString
+        | AggregateFunc::MinDate
+        | AggregateFunc::MinTimestamp
+        | AggregateFunc::MinTimestampTz
+        | AggregateFunc::Any
+        | AggregateFunc::All => true,
+        _ => false,
     }
 }
