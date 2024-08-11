@@ -362,34 +362,12 @@ impl EquivalenceClasses {
         let mut to_add = Vec::new();
         let mut to_add_true = Vec::new();
         let mut to_add_false = Vec::new();
+
         // Record columns that must be non-null, to introduce as explicit constraints.
         let mut non_null_cols = std::collections::BTreeSet::new();
-        for class in self.classes.iter_mut() {
-            use mz_repr::Datum;
-            // If a class leads with a literal, it might mean that some columns must be non-null.
-            match class[0].as_literal() {
-                Some(Ok(Datum::Null)) => {}
-                Some(Ok(Datum::False)) => {
-                    for expr in class.iter() {
-                        if let MirScalarExpr::CallUnary {
-                            func: mz_expr::UnaryFunc::IsNull(_),
-                            expr,
-                        } = expr
-                        {
-                            expr.non_null_requirements(&mut non_null_cols);
-                        } else {
-                            expr.non_null_requirements(&mut non_null_cols);
-                        }
-                    }
-                }
-                Some(Ok(_)) => {
-                    for expr in class.iter() {
-                        expr.non_null_requirements(&mut non_null_cols);
-                    }
-                }
-                _ => {}
-            }
+        self.non_null_requirements(&mut non_null_cols);
 
+        for class in self.classes.iter_mut() {
             if class.iter().any(|c| c.is_literal_true()) {
                 for expression in class.iter_mut() {
                     // Take ownership of the expression, to use when we match various patterns.
@@ -577,58 +555,12 @@ impl EquivalenceClasses {
             }
         }
 
-        use mz_repr::Datum;
         // Look for shared thoughts on non-null columns.
         let mut non_null_cols_self = std::collections::BTreeSet::new();
-        for class in self.classes.iter() {
-            match class[0].as_literal() {
-                Some(Ok(Datum::Null)) => {}
-                Some(Ok(Datum::False)) => {
-                    for expr in class.iter() {
-                        if let MirScalarExpr::CallUnary {
-                            func: mz_expr::UnaryFunc::IsNull(_),
-                            expr,
-                        } = expr
-                        {
-                            expr.non_null_requirements(&mut non_null_cols_self);
-                        } else {
-                            expr.non_null_requirements(&mut non_null_cols_self);
-                        }
-                    }
-                }
-                Some(Ok(_)) => {
-                    for expr in class.iter() {
-                        expr.non_null_requirements(&mut non_null_cols_self);
-                    }
-                }
-                _ => {}
-            }
-        }
+        self.non_null_requirements(&mut non_null_cols_self);
         let mut non_null_cols_other = std::collections::BTreeSet::new();
-        for class in other.classes.iter() {
-            match class[0].as_literal() {
-                Some(Ok(Datum::Null)) => {}
-                Some(Ok(Datum::False)) => {
-                    for expr in class.iter() {
-                        if let MirScalarExpr::CallUnary {
-                            func: mz_expr::UnaryFunc::IsNull(_),
-                            expr,
-                        } = expr
-                        {
-                            expr.non_null_requirements(&mut non_null_cols_other);
-                        } else {
-                            expr.non_null_requirements(&mut non_null_cols_other);
-                        }
-                    }
-                }
-                Some(Ok(_)) => {
-                    for expr in class.iter() {
-                        expr.non_null_requirements(&mut non_null_cols_other);
-                    }
-                }
-                _ => {}
-            }
-        }
+        other.non_null_requirements(&mut non_null_cols_other);
+
         let non_null_cols = non_null_cols_self
             .intersection(&non_null_cols_other)
             .map(|c| MirScalarExpr::Column(*c).call_is_null())
@@ -799,5 +731,35 @@ impl EquivalenceClasses {
             }
         }
         false
+    }
+
+    /// Adds to `columns` all column identifiers that must be non-null to satisfy `self`.
+    fn non_null_requirements(&self, columns: &mut std::collections::BTreeSet<usize>) {
+        use mz_repr::Datum;
+
+        for class in self.classes.iter() {
+            match class[0].as_literal() {
+                Some(Ok(Datum::Null)) => {}
+                Some(Ok(Datum::False)) => {
+                    for expr in class.iter() {
+                        if let MirScalarExpr::CallUnary {
+                            func: mz_expr::UnaryFunc::IsNull(_),
+                            expr,
+                        } = expr
+                        {
+                            expr.non_null_requirements(&mut *columns);
+                        } else {
+                            expr.non_null_requirements(&mut *columns);
+                        }
+                    }
+                }
+                Some(Ok(_)) => {
+                    for expr in class.iter() {
+                        expr.non_null_requirements(&mut *columns);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
