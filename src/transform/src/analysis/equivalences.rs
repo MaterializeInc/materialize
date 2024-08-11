@@ -272,7 +272,19 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
+        // Any columns announced by the type to be nonnullable should be marked as such.
         let expr_type = depends.results::<RelationType>().unwrap()[index].clone();
+        let mut nullable_cols = Vec::new();
+        for (index, col_type) in expr_type.as_ref().unwrap().iter().enumerate() {
+            if !col_type.nullable {
+                nullable_cols.push(MirScalarExpr::column(index).call_is_null());
+            }
+        }
+        if !nullable_cols.is_empty() {
+            nullable_cols.push(MirScalarExpr::literal_false());
+            equivalences.as_mut().map(|e| e.classes.push(nullable_cols));
+        }
+
         equivalences.as_mut().map(|e| e.minimize(&expr_type));
         equivalences
     }
@@ -363,6 +375,22 @@ impl EquivalenceClasses {
     ///
     /// Informally this means simplifying constraints, removing redundant constraints, and unifying equivalence classes.
     pub fn minimize(&mut self, columns: &Option<Vec<ColumnType>>) {
+        // Expand columns that must be non-null.
+        // We do this once, outside the loop, to allow it to *minimize* the classes.
+        // It is possible that `non_null_requirements` could learn new facts as expressions
+        // are simplified, but we'll leave that for the moment.
+        let mut non_null_cols = std::collections::BTreeSet::new();
+        self.non_null_requirements(&mut non_null_cols);
+        if !non_null_cols.is_empty() {
+            self.classes.push(
+                non_null_cols
+                    .iter()
+                    .map(|c| MirScalarExpr::Column(*c).call_is_null())
+                    .chain(std::iter::once(MirScalarExpr::literal_false()))
+                    .collect::<Vec<_>>(),
+            );
+        }
+
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
@@ -371,9 +399,15 @@ impl EquivalenceClasses {
         // We continue as long as any simplification has occurred.
         // An expression can be simplified, a duplication found, or two classes unified.
         let mut prev = None;
+        let mut counter = 0;
         while prev.as_ref() != Some(self) {
-            self.minimize_once(columns);
             prev = Some(self.clone());
+            if counter < 100 {
+                self.minimize_once(columns);
+                counter += 1;
+            } else {
+                mz_ore::soft_assert_or_log!(false, "EquivalenceClasses::minimize did not converge");
+            }
         }
     }
 
@@ -396,10 +430,6 @@ impl EquivalenceClasses {
         let mut to_add = Vec::new();
         let mut to_add_true = Vec::new();
         let mut to_add_false = Vec::new();
-
-        // Record columns that must be non-null, to introduce as explicit constraints.
-        let mut non_null_cols = std::collections::BTreeSet::new();
-        self.non_null_requirements(&mut non_null_cols);
 
         for class in self.classes.iter_mut() {
             if class.iter().any(|c| c.is_literal_true()) {
@@ -476,11 +506,6 @@ impl EquivalenceClasses {
                 }
             }
         }
-        to_add_false.extend(
-            non_null_cols
-                .iter()
-                .map(|c| MirScalarExpr::Column(*c).call_is_null()),
-        );
 
         self.classes.extend(to_add);
         if !to_add_true.is_empty() {
@@ -718,8 +743,8 @@ impl EquivalenceClasses {
     /// Perform any simplification, report if effective.
     pub fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
-        simplified = simplified || self.reduce_child(expr);
-        simplified = simplified || self.replace(expr);
+        simplified = self.reduce_child(expr) || simplified;
+        simplified = self.replace(expr) || simplified;
         simplified
     }
 
