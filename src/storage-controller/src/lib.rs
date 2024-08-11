@@ -2440,7 +2440,7 @@ where
             let txns_write = txns_client
                 .open_writer(
                     txns_id,
-                    Arc::new(RelationDesc::empty()),
+                    Arc::new(TxnsCodecRow::desc()),
                     Arc::new(UnitSchema),
                     Diagnostics {
                         shard_name: "txns".to_owned(),
