@@ -272,20 +272,23 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
+        let expr_type = &depends.results::<RelationType>().as_ref().unwrap()[index];
+
         // Any columns announced by the type to be nonnullable should be marked as such.
-        let expr_type = depends.results::<RelationType>().unwrap()[index].clone();
-        let mut nullable_cols = Vec::new();
-        for (index, col_type) in expr_type.as_ref().unwrap().iter().enumerate() {
-            if !col_type.nullable {
-                nullable_cols.push(MirScalarExpr::column(index).call_is_null());
+        if let Some(equivalences) = &mut equivalences {
+            let mut nullable_cols = Vec::new();
+            for (index, col_type) in expr_type.as_ref().unwrap().iter().enumerate() {
+                if !col_type.nullable {
+                    nullable_cols.push(MirScalarExpr::column(index).call_is_null());
+                }
+            }
+            if !nullable_cols.is_empty() {
+                nullable_cols.push(MirScalarExpr::literal_false());
+                equivalences.classes.push(nullable_cols);
             }
         }
-        if !nullable_cols.is_empty() {
-            nullable_cols.push(MirScalarExpr::literal_false());
-            equivalences.as_mut().map(|e| e.classes.push(nullable_cols));
-        }
 
-        equivalences.as_mut().map(|e| e.minimize(&expr_type));
+        equivalences.as_mut().map(|e| e.minimize(expr_type));
         equivalences
     }
 
@@ -535,7 +538,7 @@ impl EquivalenceClasses {
 
     /// Reduces each expression in each classes, using all *other* equivalences. Returns true iff any change.
     fn reduce_classes(&mut self) -> bool {
-        let mut stable = true;
+        let mut changed = false;
         for class_index in 0..self.classes.len() {
             for index in 0..self.classes[class_index].len() {
                 let mut cloned = self.classes[class_index][index].clone();
@@ -543,16 +546,19 @@ impl EquivalenceClasses {
                 let reduced = self.reduce_child(&mut cloned);
                 if reduced {
                     self.classes[class_index][index] = cloned;
-                    stable = false;
+                    changed = true;
                 }
             }
         }
-        stable
+        if changed {
+            self.tidy();
+        }
+        changed
     }
 
     /// Unifies classes that share an expression. Returns true iff any change.
     fn unify_classes(&mut self) -> bool {
-        let mut stable = true;
+        let mut changed = false;
         for index1 in 0..self.classes.len() {
             for index2 in 0..index1 {
                 if self.classes[index1]
@@ -561,11 +567,14 @@ impl EquivalenceClasses {
                 {
                     let prior = std::mem::take(&mut self.classes[index2]);
                     self.classes[index1].extend(prior);
-                    stable = false;
+                    changed = true;
                 }
             }
         }
-        stable
+        if changed {
+            self.tidy();
+        }
+        changed
     }
 
     /// Produce the equivalences present in both inputs.
