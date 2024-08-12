@@ -1335,7 +1335,9 @@ mod builtin_migration_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::{CatalogItem, Index, MaterializedView, Table};
+    use mz_catalog::memory::objects::{
+        CatalogItem, Index, MaterializedView, Table, TableDataSource,
+    };
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
@@ -1387,6 +1389,7 @@ mod builtin_migration_tests {
                     resolved_ids: ResolvedIds(BTreeSet::new()),
                     custom_logical_compaction_window: None,
                     is_retained_metrics_object: false,
+                    data_source: TableDataSource::TableWrites,
                 }),
                 SimplifiedItem::MaterializedView { referenced_names } => {
                     let table_list = referenced_names

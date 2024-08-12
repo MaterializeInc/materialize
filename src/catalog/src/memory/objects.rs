@@ -544,6 +544,7 @@ pub struct Table {
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    pub data_source: TableDataSource,
 }
 
 impl Table {
@@ -552,6 +553,16 @@ impl Table {
     pub fn timeline(&self) -> Timeline {
         Timeline::EpochMilliseconds
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum TableDataSource {
+    /// The table owns data created via INSERT/UPDATE/DELETE statements.
+    TableWrites,
+
+    /// The table receives its data from the identified `DataSourceDesc`.
+    /// This table type does not support INSERT/UPDATE/DELETE statements.
+    DataSource(DataSourceDesc),
 }
 
 #[derive(Debug, Clone, Serialize)]

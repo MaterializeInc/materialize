@@ -53,7 +53,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, Type,
+    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::{assert_none, instrument};
@@ -888,6 +888,23 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
+        let data_source = match table.data_source {
+            plan::TableDataSource::TableWrites => TableDataSource::TableWrites,
+            plan::TableDataSource::DataSource(data_source_plan) => match data_source_plan {
+                plan::DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                }),
+                o => {
+                    unreachable!("CREATE TABLE data source got {:?}", o)
+                }
+            },
+        };
         let table = Table {
             create_sql: Some(table.create_sql),
             desc: table.desc,
@@ -896,6 +913,7 @@ impl Coordinator {
             resolved_ids,
             custom_logical_compaction_window: table.compaction_window,
             is_retained_metrics_object: false,
+            data_source,
         };
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,

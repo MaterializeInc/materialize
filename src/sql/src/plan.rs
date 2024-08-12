@@ -1310,12 +1310,23 @@ pub struct CommentPlan {
 }
 
 #[derive(Clone, Debug)]
+pub enum TableDataSource {
+    /// The table owns data created via INSERT/UPDATE/DELETE statements.
+    TableWrites,
+
+    /// The table receives its data from the identified `DataSourceDesc`.
+    /// This table type does not support INSERT/UPDATE/DELETE statements.
+    DataSource(DataSourceDesc),
+}
+
+#[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
+    pub data_source: TableDataSource,
 }
 
 #[derive(Clone, Debug)]

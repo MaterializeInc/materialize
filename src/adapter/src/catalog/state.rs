@@ -30,7 +30,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
     Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, Type, View,
+    Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -814,6 +814,27 @@ impl CatalogState {
                 custom_logical_compaction_window: custom_logical_compaction_window
                     .or(table.compaction_window),
                 is_retained_metrics_object,
+                data_source: match table.data_source {
+                    mz_sql::plan::TableDataSource::TableWrites => TableDataSource::TableWrites,
+                    mz_sql::plan::TableDataSource::DataSource(data_source_desc) => {
+                        match data_source_desc {
+                            mz_sql::plan::DataSourceDesc::IngestionExport {
+                                ingestion_id,
+                                external_reference,
+                                details,
+                            } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
+                                ingestion_id,
+                                external_reference,
+                                details,
+                            }),
+                            _ => {
+                                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                    "unsupported data source for table"
+                                )))
+                            }
+                        }
+                    }
+                },
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
