@@ -142,12 +142,12 @@ When you define a source, Materialize will automatically:
     ```
 
     ```nofmt
-             name         |   type    |  size   |  cluster  |
-    ----------------------+-----------+---------+------------
-     mz_source            | mysql     |         |
-     mz_source_progress   | progress  |         |
-     table_1              | subsource |         |
-     table_2              | subsource |         |
+             name         |   type    |  cluster  |
+    ----------------------+-----------+------------
+     mz_source            | mysql     |
+     mz_source_progress   | progress  |
+     table_1              | subsource |
+     table_2              | subsource |
     ```
 
 1. Incrementally update any materialized or indexed views that depend on the

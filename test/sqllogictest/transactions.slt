@@ -792,8 +792,8 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,2,quickstart
-s_progress,progress,NULL,NULL
+s,load-generator,quickstart
+s_progress,progress,NULL
 COMPLETE 2
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.

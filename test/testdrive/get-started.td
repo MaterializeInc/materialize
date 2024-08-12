@@ -18,15 +18,15 @@ $ set-arg-default single-replica-cluster=quickstart
   FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
 
 > SHOW SOURCES
-name          type           size                         cluster
+name          type           cluster
 -----------------------------------------------------------------
-accounts      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-auctions      subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-bids          subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-demo          load-generator ${arg.default-replica-size}  ${arg.single-replica-cluster}
-demo_progress progress       <null> <null>
-organizations subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
-users         subsource      ${arg.default-replica-size}  ${arg.single-replica-cluster}
+accounts      subsource      ${arg.single-replica-cluster}
+auctions      subsource      ${arg.single-replica-cluster}
+bids          subsource      ${arg.single-replica-cluster}
+demo          load-generator ${arg.single-replica-cluster}
+demo_progress progress       <null>
+organizations subsource      ${arg.single-replica-cluster}
+users         subsource      ${arg.single-replica-cluster}
 
 > SHOW COLUMNS FROM auctions
 end_time false "timestamp with time zone"

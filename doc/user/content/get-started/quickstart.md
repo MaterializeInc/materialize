@@ -60,15 +60,15 @@ with.
     <p></p>
 
     ```nofmt
-            name            |      type      | size
-    ------------------------+----------------+------
-     accounts               | subsource      | null
-     auction_house          | load-generator | null
-     auction_house_progress | progress       | null
-     auctions               | subsource      | null
-     bids                   | subsource      | null
-     organizations          | subsource      | null
-     users                  | subsource      | null
+            name            |      type
+    ------------------------+-----------------
+     accounts               | subsource
+     auction_house          | load-generator
+     auction_house_progress | progress
+     auctions               | subsource
+     bids                   | subsource
+     organizations          | subsource
+     users                  | subsource
     ```
 
     For now, you'll focus on the `auctions` and `bids` data sets. Data will

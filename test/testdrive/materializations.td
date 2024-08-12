@@ -357,12 +357,12 @@ a  b
 1  2
 
 > SHOW SOURCES
-name     type    size    cluster
+name              type    cluster
 --------------------------------
-data              kafka     ${arg.default-replica-size}   ${arg.single-replica-cluster}
-data_progress     progress  <null>                        <null>
-mat_data          kafka     ${arg.default-replica-size}   ${arg.single-replica-cluster}
-mat_data_progress progress  <null>                        <null>
+data              kafka     ${arg.single-replica-cluster}
+data_progress     progress  <null>
+mat_data          kafka     ${arg.single-replica-cluster}
+mat_data_progress progress  <null>
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

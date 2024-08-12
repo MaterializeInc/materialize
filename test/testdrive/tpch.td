@@ -32,24 +32,19 @@ contains: unsupported scale factor -1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
 
-$ set-from-sql var=source-size
-SELECT size FROM (
-    SHOW SOURCES
-) WHERE name = 'gen'
-
 > SHOW SOURCES
-name           type            size             cluster
+name           type            cluster
 -------------------------------------------------------
- customer      subsource       ${source-size}   ${arg.single-replica-cluster}
- gen           load-generator  ${source-size}   ${arg.single-replica-cluster}
- gen_progress  progress        <null> <null>
- lineitem      subsource       ${source-size}   ${arg.single-replica-cluster}
- nation        subsource       ${source-size}   ${arg.single-replica-cluster}
- orders        subsource       ${source-size}   ${arg.single-replica-cluster}
- part          subsource       ${source-size}   ${arg.single-replica-cluster}
- partsupp      subsource       ${source-size}   ${arg.single-replica-cluster}
- region        subsource       ${source-size}   ${arg.single-replica-cluster}
- supplier      subsource       ${source-size}   ${arg.single-replica-cluster}
+ customer      subsource       ${arg.single-replica-cluster}
+ gen           load-generator  ${arg.single-replica-cluster}
+ gen_progress  progress        <null>
+ lineitem      subsource       ${arg.single-replica-cluster}
+ nation        subsource       ${arg.single-replica-cluster}
+ orders        subsource       ${arg.single-replica-cluster}
+ part          subsource       ${arg.single-replica-cluster}
+ partsupp      subsource       ${arg.single-replica-cluster}
+ region        subsource       ${arg.single-replica-cluster}
+ supplier      subsource       ${arg.single-replica-cluster}
 
 # SF * 150,000
 > SELECT count(*) FROM customer

@@ -736,9 +736,9 @@ ArrangeBy[[Column(13)]]                       1
 "ArrangeBy[[Column(1)]]"                     17
 "ArrangeBy[[Column(2)]]-errors"               9
 "ArrangeBy[[Column(2)]]"                     20
-"ArrangeBy[[Column(3)]]"                      3
-"ArrangeBy[[Column(4)]]-errors"               2
-"ArrangeBy[[Column(4)]]"                      5
+"ArrangeBy[[Column(3)]]"                      7
+"ArrangeBy[[Column(3)]]-errors"               2
+"ArrangeBy[[Column(4)]]"                      1
 "ArrangeBy[[Column(5)]]-errors"               2
 "ArrangeBy[[Column(5)]]"                      4
 "ArrangeBy[[Column(6)]]"                      1

@@ -56,8 +56,8 @@ name
 t
 
 > SHOW SOURCES;
-name    type  size  cluster
----------------------------
+name    type  cluster
+---------------------
 
 > SHOW INDEXES ON t;
 
@@ -251,8 +251,8 @@ v
 v
 
 > SHOW SOURCES;
-name    type   size   cluster
------------------------------
+name    type   cluster
+----------------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 

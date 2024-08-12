@@ -6164,7 +6164,6 @@ pub static MZ_SHOW_SOURCES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     sql: "SELECT
     sources.name,
     sources.type,
-    COALESCE(sources.size, clusters.size) AS size,
     clusters.name AS cluster,
     schema_id,
     cluster_id
@@ -6184,7 +6183,6 @@ pub static MZ_SHOW_SINKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     sql: "SELECT
         sinks.name,
         sinks.type,
-        COALESCE(sinks.size, clusters.size) AS size,
         clusters.name AS cluster,
         schema_id,
         cluster_id

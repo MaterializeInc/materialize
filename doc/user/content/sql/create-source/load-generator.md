@@ -280,15 +280,15 @@ To display the created subsources:
 SHOW SOURCES;
 ```
 ```nofmt
-          name          |      type      |  size
-------------------------+----------------+---------
- accounts               | subsource      |
- auction_house          | load-generator | 25cc
- auction_house_progress | progress       |
- auctions               | subsource      |
- bids                   | subsource      |
- organizations          | subsource      |
- users                  | subsource      |
+          name          |      type
+------------------------+----------------
+ accounts               | subsource
+ auction_house          | load-generator
+ auction_house_progress | progress
+ auctions               | subsource
+ bids                   | subsource
+ organizations          | subsource
+ users                  | subsource
 ```
 
 To examine the simulated bids:
@@ -321,16 +321,16 @@ SHOW SOURCES;
 ```
 
 ```nofmt
-          name          |      type      | size
-------------------------+----------------+------
- clicks                 | subsource      |
- conversion_predictions | subsource      |
- coupons                | subsource      |
- customers              | subsource      |
- impressions            | subsource      |
- leads                  | subsource      |
- marketing              | load-generator | 25cc
- marketing_progress     | progress       |
+          name          |      type
+------------------------+---------------
+ clicks                 | subsource
+ conversion_predictions | subsource
+ coupons                | subsource
+ customers              | subsource
+ impressions            | subsource
+ leads                  | subsource
+ marketing              | load-generator
+ marketing_progress     | progress
 ```
 
 To find all impressions and clicks associated with a campaign over the last 30 days:
@@ -396,18 +396,18 @@ To display the created subsources:
 SHOW SOURCES;
 ```
 ```nofmt
-      name     |      type      |  size
----------------+----------------+---------
- tpch          | load-generator | 50cc
- tpch_progress | progress       |
- supplier      | subsource      |
- region        | subsource      |
- partsupp      | subsource      |
- part          | subsource      |
- orders        | subsource      |
- nation        | subsource      |
- lineitem      | subsource      |
- customer      | subsource      |
+      name     |      type
+---------------+---------------
+ tpch          | load-generator
+ tpch_progress | progress
+ supplier      | subsource
+ region        | subsource
+ partsupp      | subsource
+ part          | subsource
+ orders        | subsource
+ nation        | subsource
+ lineitem      | subsource
+ customer      | subsource
 ```
 
 To run the Pricing Summary Report Query (Q1), which reports the amount of

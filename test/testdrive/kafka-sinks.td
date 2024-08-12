@@ -68,8 +68,8 @@ contains:Expected one of PARTITION or SNAPSHOT or VERSION
 contains:CREATE SINK...WITH (VERSION..) is not allowed
 
 > SHOW SINKS
-name               type   size  cluster
----------------------------------------
+name               type   cluster
+---------------------------------
 
 # # We should refuse to create a sink with an invalid schema registry URL.
 #
@@ -145,11 +145,11 @@ name               type   size  cluster
   ENVELOPE DEBEZIUM
 
 > SHOW SINKS
-name               type   size  cluster
+name               type   cluster
 ---------------------------------------
-snk1             kafka  ${arg.default-storage-size}  snk1_cluster
-snk2             kafka  ${arg.default-storage-size}  snk2_cluster
-snk3             kafka  ${arg.default-storage-size}  snk3_cluster
+snk1             kafka    snk1_cluster
+snk2             kafka    snk2_cluster
+snk3             kafka    snk3_cluster
 
 $ kafka-verify-data format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
@@ -309,20 +309,20 @@ contains:Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
 > SELECT bool_and(size IS NULL) FROM mz_sinks;
 true
 
-# Check that SHOW SINKS shows the size correctly
+# Check SHOW SINKS
 > SHOW SINKS
-name               type   size  cluster
+name               type      cluster
 ---------------------------------------
-cluster_c_sink        kafka  4                            c
-default_cluster_sink  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-sink_with_options     kafka  ${arg.default-storage-size}  sink_with_options_cluster
-snk1                  kafka  ${arg.default-storage-size}  snk1_cluster
-snk2                  kafka  ${arg.default-storage-size}  snk2_cluster
-snk3                  kafka  ${arg.default-storage-size}  snk3_cluster
-snk4                  kafka  ${arg.default-storage-size}  snk4_cluster
-snk5                  kafka  ${arg.default-storage-size}  snk5_cluster
-snk6                  kafka  ${arg.default-storage-size}  snk6_cluster
-snk7                  kafka  ${arg.default-storage-size}  snk7_cluster
-snk8                  kafka  ${arg.default-storage-size}  snk8_cluster
-snk9                  kafka  ${arg.default-storage-size}  snk9_cluster
-snk_unsigned          kafka  ${arg.default-storage-size}  snk_unsigned_cluster
+cluster_c_sink        kafka  c
+default_cluster_sink  kafka  ${arg.single-replica-cluster}
+sink_with_options     kafka  sink_with_options_cluster
+snk1                  kafka  snk1_cluster
+snk2                  kafka  snk2_cluster
+snk3                  kafka  snk3_cluster
+snk4                  kafka  snk4_cluster
+snk5                  kafka  snk5_cluster
+snk6                  kafka  snk6_cluster
+snk7                  kafka  snk7_cluster
+snk8                  kafka  snk8_cluster
+snk9                  kafka  snk9_cluster
+snk_unsigned          kafka  snk_unsigned_cluster

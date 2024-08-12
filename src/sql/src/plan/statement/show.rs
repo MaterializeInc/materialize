@@ -376,17 +376,11 @@ fn show_sources<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, size, cluster
+        "SELECT name, type, cluster
         FROM mz_internal.mz_show_sources
         WHERE {where_clause}"
     );
-    ShowSelect::new(
-        scx,
-        query,
-        filter,
-        None,
-        Some(&["name", "type", "size", "cluster"]),
-    )
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "cluster"]))
 }
 
 fn show_subsources<'a>(
@@ -493,17 +487,11 @@ fn show_sinks<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, size, cluster
+        "SELECT name, type, cluster
         FROM mz_internal.mz_show_sinks
         WHERE {where_clause}"
     );
-    ShowSelect::new(
-        scx,
-        query,
-        filter,
-        None,
-        Some(&["name", "type", "size", "cluster"]),
-    )
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "cluster"]))
 }
 
 fn show_types<'a>(
