@@ -1462,6 +1462,8 @@ pub fn plan_create_table_from_source(
     scx: &StatementContext,
     stmt: CreateTableFromSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE)?;
+
     let CreateTableFromSourceStatement {
         name,
         columns,
