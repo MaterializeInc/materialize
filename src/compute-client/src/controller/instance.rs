@@ -1481,52 +1481,48 @@ where
         Ok(hold)
     }
 
-    /// Apply global write frontier updates.
+    /// Advance the global write frontier of the given collection.
     ///
     /// Frontier regressions are gracefully ignored.
     ///
     /// # Panics
     ///
-    /// Panics if any of the `updates` references an absent collection.
+    /// Panics if the identified collection does not exist.
     #[mz_ore::instrument(level = "debug")]
-    fn maybe_update_global_write_frontiers(&mut self, updates: &BTreeMap<GlobalId, Antichain<T>>) {
-        // Compute and apply read capability downgrades that result from collection frontier
-        // advancements.
-        for (id, new_upper) in updates {
-            let collection = self.expect_collection_mut(*id);
+    fn maybe_update_global_write_frontier(&mut self, id: GlobalId, new_frontier: Antichain<T>) {
+        let collection = self.expect_collection_mut(id);
 
-            if !PartialOrder::less_than(&collection.write_frontier, new_upper) {
-                continue; // frontier has not advanced
-            }
-
-            collection.write_frontier.clone_from(new_upper);
-
-            let new_since = match &collection.read_policy {
-                Some(read_policy) => {
-                    // For readable collections the read frontier is determined by applying the
-                    // client-provided read policy to the write frontier.
-                    read_policy.frontier(new_upper.borrow())
-                }
-                None => {
-                    // Write-only collections cannot be read within the context of the compute
-                    // controller, so we can immediately advance their read frontier to the new write
-                    // frontier.
-                    new_upper.clone()
-                }
-            };
-
-            let _ = collection.implied_read_hold.try_downgrade(new_since);
-
-            // Report the frontier advancement internally and externally.
-            collection
-                .collection_introspection
-                .frontier_update(&new_upper);
-
-            self.deliver_response(ComputeControllerResponse::FrontierUpper {
-                id: *id,
-                upper: new_upper.clone(),
-            });
+        if !PartialOrder::less_than(&collection.write_frontier, &new_frontier) {
+            return; // frontier has not advanced
         }
+
+        collection.write_frontier.clone_from(&new_frontier);
+
+        // Relax the implied read hold according to the read policy.
+        let new_since = match &collection.read_policy {
+            Some(read_policy) => {
+                // For readable collections the read frontier is determined by applying the
+                // client-provided read policy to the write frontier.
+                read_policy.frontier(new_frontier.borrow())
+            }
+            None => {
+                // Write-only collections cannot be read within the context of the compute
+                // controller, so we can immediately advance their read frontier to the new write
+                // frontier.
+                new_frontier.clone()
+            }
+        };
+        let _ = collection.implied_read_hold.try_downgrade(new_since);
+
+        // Report the frontier advancement internally and externally.
+        collection
+            .collection_introspection
+            .frontier_update(&new_frontier);
+
+        self.deliver_response(ComputeControllerResponse::FrontierUpper {
+            id,
+            upper: new_frontier,
+        });
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends
@@ -1700,7 +1696,7 @@ where
         }
         if let Some(new_frontier) = frontiers.write_frontier {
             replica_collection.update_write_frontier(new_frontier.clone());
-            self.maybe_update_global_write_frontiers(&[(id, new_frontier)].into());
+            self.maybe_update_global_write_frontier(id, new_frontier);
         }
     }
 
@@ -1822,7 +1818,7 @@ where
         // frontier only based on responses from the targeted replica. Otherwise, another replica
         // could advance to the empty frontier, making us drop the subscribe on the targeted
         // replica prematurely.
-        self.maybe_update_global_write_frontiers(&[(subscribe_id, write_frontier)].into());
+        self.maybe_update_global_write_frontier(subscribe_id, write_frontier);
 
         match response {
             SubscribeResponse::Batch(batch) => {
