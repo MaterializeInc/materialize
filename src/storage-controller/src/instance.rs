@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::FutureExt;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::ReplicaId;
@@ -225,20 +225,20 @@ where
                 return Poll::Ready(Some(resp));
             }
 
-            let receives = self.replicas.values_mut().map(|r| r.recv());
-            let mut futs: FuturesUnordered<_> = receives.collect();
-
-            // `futs` is a cancel safe stream: It only awaits `Replica::recv`, which is documented as
-            // cancel safe. Thus dropping `futs` while awaiting its next element is guaranteed to never
-            // drop a replica response.
-            match std::task::ready!(futs.poll_next_unpin(cx)) {
-                Some(resp) => Poll::Ready(resp),
-                None => {
-                    // There are no live replicas left.
-                    // Remain pending to communicate that no response is ready.
-                    Poll::Pending
-                }
+            if self.replicas.is_empty() {
+                // There are no live replicas.
+                // Remain pending to communicate that no response is ready.
+                return Poll::Pending;
             }
+
+            let receives = self.replicas.values_mut().map(|r| r.recv());
+            let mut fut = futures::future::select_all(receives);
+
+            // `futs` is cancel safe: It only awaits `Replica::recv`, which is documented as cancel
+            // safe. Thus dropping `futs` while awaiting it is guaranteed to never drop a replica
+            // response.
+            fut.poll_unpin(cx)
+                .map(|(response, _index, _remaining)| response)
         })
     }
 }
