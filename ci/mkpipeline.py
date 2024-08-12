@@ -271,10 +271,16 @@ def prioritize_pipeline(pipeline: Any) -> None:
     """Prioritize builds against main or release branches"""
 
     tag = os.environ["BUILDKITE_TAG"]
+    branch = os.environ["BUILDKITE_BRANCH"]
     priority = None
 
+    # Release results are time sensitive
     if tag.startswith("v"):
         priority = 10
+
+    # main branch is less time sensitive than results on PRs
+    if branch == "main":
+        priority = -10
 
     def visit(config: Any) -> None:
         config["priority"] = config.get("priority", 0) + priority
