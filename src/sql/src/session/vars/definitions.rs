@@ -293,6 +293,13 @@ pub static CLUSTER_REPLICA: VarDefinition = VarDefinition::new(
     false,
 );
 
+pub static CURRENT_OBJECT_MISSING_WARNINGS: VarDefinition = VarDefinition::new(
+    "current_object_missing_warnings",
+    value!(bool; true),
+    "Whether to emit warnings when the current database, schema, or cluster is missing (Materialize).",
+    false,
+);
+
 pub static DATABASE: VarDefinition = VarDefinition::new_lazy(
     "database",
     lazy_value!(String; || DEFAULT_DATABASE_NAME.to_string()),

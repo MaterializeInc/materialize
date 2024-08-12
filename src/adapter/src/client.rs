@@ -232,10 +232,6 @@ impl Client {
             .end_transaction(EndTransactionAction::Commit);
 
         let catalog = catalog.for_session(session);
-        if catalog.active_database().is_none() {
-            let db = session.vars().database().into();
-            session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
-        }
 
         let cluster_active = session.vars().cluster().to_string();
         if session.vars().welcome_message() {
@@ -277,20 +273,29 @@ Issue a SQL query to get started. Need help?
             )));
         }
 
+        if session.vars().current_object_missing_warnings() {
+            if catalog.active_database().is_none() {
+                let db = session.vars().database().into();
+                session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
+            }
+        }
+
         // Users stub their toe on their default cluster not existing, so we provide a notice to
         // help guide them on what do to.
         let cluster_var = session
             .vars()
             .inspect(CLUSTER.name())
             .expect("cluster should exist");
-        if catalog.resolve_cluster(Some(&cluster_active)).is_err() {
+        if session.vars().current_object_missing_warnings()
+            && catalog.resolve_cluster(Some(&cluster_active)).is_err()
+        {
             let cluster_notice = 'notice: {
-                // If the user provided a cluster via a connection configuration parameter, do not
-                // notify them if that cluster does not exist. We omit the notice here because even
-                // if they were to update the role or system default, it would not make a
-                // difference since the connection parameter takes precedence over the defaults.
                 if cluster_var.inspect_session_value().is_some() {
-                    break 'notice None;
+                    break 'notice Some(AdapterNotice::DefaultClusterDoesNotExist {
+                        name: cluster_active,
+                        kind: "session",
+                        suggested_action: "Pick an extant cluster with SET CLUSTER = name. Run SHOW CLUSTERS to see available clusters.".into(),
+                    });
                 }
 
                 let role_default = catalog.get_role(catalog.active_role_id());
@@ -309,7 +314,7 @@ Issue a SQL query to get started. Need help?
                     // If there is no default, suggest a Role default.
                     None => Some(AdapterNotice::DefaultClusterDoesNotExist {
                         name: cluster_active,
-                        kind: None,
+                        kind: "system",
                         suggested_action: format!(
                             "Set a default cluster for the current role {alter_role}."
                         ),
@@ -317,7 +322,7 @@ Issue a SQL query to get started. Need help?
                     // If the default does not exist, suggest to change it.
                     Some(_) => Some(AdapterNotice::DefaultClusterDoesNotExist {
                         name: cluster_active,
-                        kind: Some("role"),
+                        kind: "role",
                         suggested_action: format!(
                             "Change the default cluster for the current role {alter_role}."
                         ),

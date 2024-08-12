@@ -668,6 +668,12 @@ impl SessionVars {
             .as_deref()
     }
 
+    /// Returns the value of the `current_object_missing_warnings` configuration
+    /// parameter.
+    pub fn current_object_missing_warnings(&self) -> bool {
+        *self.expect_value::<bool>(&CURRENT_OBJECT_MISSING_WARNINGS)
+    }
+
     /// Returns the value of the `DateStyle` configuration parameter.
     pub fn date_style(&self) -> &[&str] {
         &self.expect_value::<DateStyle>(&DATE_STYLE).0
@@ -1135,6 +1141,7 @@ impl SystemVars {
                 &CLIENT_MIN_MESSAGES,
                 &CLUSTER,
                 &CLUSTER_REPLICA,
+                &CURRENT_OBJECT_MISSING_WARNINGS,
                 &DATABASE,
                 &DATE_STYLE,
                 &EXTRA_FLOAT_DIGITS,

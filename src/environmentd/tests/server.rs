@@ -4048,6 +4048,12 @@ async fn test_startup_cluster_notice_with_http_options() {
     insta::assert_json_snapshot!(notices, @r###"
     [
       {
+        "message": "session default cluster \"i_do_not_exist\" does not exist",
+        "code": "MZ005",
+        "severity": "notice",
+        "hint": "Pick an extant cluster with SET CLUSTER = name. Run SHOW CLUSTERS to see available clusters."
+      },
+      {
         "message": "cluster \"i_do_not_exist\" does not exist",
         "code": "MZ007",
         "severity": "notice",
@@ -4106,7 +4112,7 @@ async fn test_startup_cluster_notice() {
                     "MZ005",
                 ),
             ),
-            message: "default cluster \"quickstart\" does not exist",
+            message: "system default cluster \"quickstart\" does not exist",
             detail: None,
             hint: Some(
                 "Set a default cluster for the current role with `ALTER ROLE <role> SET cluster TO <cluster>;`.",
