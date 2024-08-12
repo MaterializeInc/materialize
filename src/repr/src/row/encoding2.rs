@@ -80,7 +80,7 @@ struct DatumEncoder {
 }
 
 impl DatumEncoder {
-    fn push<'e, 'd>(&'e mut self, datum: Datum<'d>) -> Result<(), anyhow::Error> {
+    fn push(&mut self, datum: Datum) {
         assert!(
             !datum.is_null() || self.nullable,
             "tried pushing Null into non-nullable column"
@@ -90,8 +90,6 @@ impl DatumEncoder {
         if datum.is_null() {
             self.none_stats += 1;
         }
-
-        Ok(())
     }
 
     fn push_invalid(&mut self) {
@@ -1268,7 +1266,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
     fn append(&mut self, val: &Row) {
         let mut num_datums = 0;
         for (datum, encoder) in val.iter().zip(self.encoders.iter_mut()) {
-            encoder.push(datum).expect("failed to push datum");
+            encoder.push(datum);
             num_datums += 1;
         }
         assert_eq!(
