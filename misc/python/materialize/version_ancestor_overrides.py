@@ -149,6 +149,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#28307 (Render regions for object build and let bindings) introduces regressions against v0.112.0
+    "ffcafa5b5c3e83845a868cf6103048c045b4f155": MzVersion.parse_mz("v0.113.0"),
     # PR#23659 (txn-wal: enable in CI with "eager uppers") introduces regressions against v0.79.0
     "c4f520a57a3046e5074939d2ea345d1c72be7079": MzVersion.parse_mz("v0.80.0"),
     # PR#23421 (coord: smorgasbord of improvements for the crdb-backed timestamp oracle) introduces regressions against 0.78.13
