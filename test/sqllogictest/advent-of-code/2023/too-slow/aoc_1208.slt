@@ -1,0 +1,2424 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1208.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE steps_input (input TEXT);
+
+statement ok
+INSERT INTO steps_input
+VALUES ('LLRLRLRRRLRLRRRLRRRLRRLLRLLRRRLRLRRLLRLRLRRLRLRLLRLRRRLRLRRLRRLRRRLRRLRRLRRLLRRLLRRRLRRLRRLRRRLRLRRLRRLLLLRLRRLRLRRLLLRRLRRRLRRRLLRRRLRRRLRRLRRRLLLRRRLLLRRLRRLRRRLRRLRRRLRRLRRRLLRLRLRRRLRRLRLRLRRRLRLRLLLRRRLRRRLRRLRRLRLRRRLRRRLLRRRLRRLRLLLRRLLRRRLRRRLRRRLLRRRLLRRLRLRRRLRRLRRRR');
+
+statement ok
+CREATE TABLE paths (state TEXT, left TEXT, right TEXT);
+
+statement ok
+INSERT INTO paths VALUES ('BKM', 'CDC', 'PSH');
+
+statement ok
+INSERT INTO paths VALUES ('CBS', 'RPQ', 'GSM');
+
+statement ok
+INSERT INTO paths VALUES ('CDB', 'BQV', 'NHX');
+
+statement ok
+INSERT INTO paths VALUES ('SRC', 'TPK', 'PGR');
+
+statement ok
+INSERT INTO paths VALUES ('CLC', 'DVN', 'DVR');
+
+statement ok
+INSERT INTO paths VALUES ('GKD', 'HHH', 'FLR');
+
+statement ok
+INSERT INTO paths VALUES ('BFF', 'DXV', 'NMR');
+
+statement ok
+INSERT INTO paths VALUES ('MMD', 'TLN', 'KHH');
+
+statement ok
+INSERT INTO paths VALUES ('LFV', 'QBF', 'HJM');
+
+statement ok
+INSERT INTO paths VALUES ('GCR', 'QST', 'RRL');
+
+statement ok
+INSERT INTO paths VALUES ('DSN', 'VMF', 'PBB');
+
+statement ok
+INSERT INTO paths VALUES ('SSQ', 'FRV', 'FRV');
+
+statement ok
+INSERT INTO paths VALUES ('PRD', 'FVB', 'JQM');
+
+statement ok
+INSERT INTO paths VALUES ('HCP', 'RHM', 'QJH');
+
+statement ok
+INSERT INTO paths VALUES ('GPM', 'VJC', 'KPQ');
+
+statement ok
+INSERT INTO paths VALUES ('RSF', 'TFR', 'QGN');
+
+statement ok
+INSERT INTO paths VALUES ('GNQ', 'DBF', 'DBV');
+
+statement ok
+INSERT INTO paths VALUES ('MPR', 'XNM', 'GNQ');
+
+statement ok
+INSERT INTO paths VALUES ('SPT', 'HJK', 'MKP');
+
+statement ok
+INSERT INTO paths VALUES ('BCN', 'HFN', 'KFC');
+
+statement ok
+INSERT INTO paths VALUES ('XFQ', 'RMQ', 'NCD');
+
+statement ok
+INSERT INTO paths VALUES ('CQJ', 'PGL', 'KVX');
+
+statement ok
+INSERT INTO paths VALUES ('PHJ', 'VCG', 'VNT');
+
+statement ok
+INSERT INTO paths VALUES ('KFS', 'GFF', 'THH');
+
+statement ok
+INSERT INTO paths VALUES ('JQH', 'BHL', 'RLT');
+
+statement ok
+INSERT INTO paths VALUES ('JMR', 'TQP', 'SDD');
+
+statement ok
+INSERT INTO paths VALUES ('XMM', 'XRC', 'NXM');
+
+statement ok
+INSERT INTO paths VALUES ('XRH', 'NML', 'LHC');
+
+statement ok
+INSERT INTO paths VALUES ('JHA', 'FMP', 'JFL');
+
+statement ok
+INSERT INTO paths VALUES ('XKN', 'LPL', 'MPR');
+
+statement ok
+INSERT INTO paths VALUES ('CFQ', 'XBD', 'NNB');
+
+statement ok
+INSERT INTO paths VALUES ('NLF', 'BKM', 'CGR');
+
+statement ok
+INSERT INTO paths VALUES ('KJC', 'SPJ', 'RBF');
+
+statement ok
+INSERT INTO paths VALUES ('MRQ', 'DHX', 'QHV');
+
+statement ok
+INSERT INTO paths VALUES ('LQZ', 'FMN', 'SXC');
+
+statement ok
+INSERT INTO paths VALUES ('NQT', 'GND', 'NSV');
+
+statement ok
+INSERT INTO paths VALUES ('FQZ', 'RFH', 'LBP');
+
+statement ok
+INSERT INTO paths VALUES ('PPL', 'VCG', 'VNT');
+
+statement ok
+INSERT INTO paths VALUES ('JFL', 'TBR', 'BSP');
+
+statement ok
+INSERT INTO paths VALUES ('QGN', 'SRG', 'HPC');
+
+statement ok
+INSERT INTO paths VALUES ('TDQ', 'FKG', 'HCD');
+
+statement ok
+INSERT INTO paths VALUES ('TVM', 'QJJ', 'MJB');
+
+statement ok
+INSERT INTO paths VALUES ('QJM', 'QSP', 'CJB');
+
+statement ok
+INSERT INTO paths VALUES ('LPL', 'XNM', 'GNQ');
+
+statement ok
+INSERT INTO paths VALUES ('PRG', 'THM', 'KKG');
+
+statement ok
+INSERT INTO paths VALUES ('GRN', 'LVL', 'MQV');
+
+statement ok
+INSERT INTO paths VALUES ('VVN', 'XKF', 'MRQ');
+
+statement ok
+INSERT INTO paths VALUES ('BTG', 'LVS', 'FNX');
+
+statement ok
+INSERT INTO paths VALUES ('VRK', 'HMJ', 'TKP');
+
+statement ok
+INSERT INTO paths VALUES ('RFV', 'RMQ', 'NCD');
+
+statement ok
+INSERT INTO paths VALUES ('MXJ', 'DXJ', 'CNQ');
+
+statement ok
+INSERT INTO paths VALUES ('GKX', 'HSC', 'GTX');
+
+statement ok
+INSERT INTO paths VALUES ('TRX', 'NFM', 'SFF');
+
+statement ok
+INSERT INTO paths VALUES ('SXC', 'QRX', 'CTX');
+
+statement ok
+INSERT INTO paths VALUES ('DPF', 'MDX', 'KRB');
+
+statement ok
+INSERT INTO paths VALUES ('LQC', 'RPC', 'CBS');
+
+statement ok
+INSERT INTO paths VALUES ('KVC', 'NGT', 'XPR');
+
+statement ok
+INSERT INTO paths VALUES ('GBH', 'HJM', 'QBF');
+
+statement ok
+INSERT INTO paths VALUES ('PNF', 'GNG', 'FNV');
+
+statement ok
+INSERT INTO paths VALUES ('VSV', 'XMM', 'DRV');
+
+statement ok
+INSERT INTO paths VALUES ('HPN', 'VTB', 'RJC');
+
+statement ok
+INSERT INTO paths VALUES ('FVT', 'GRF', 'QFT');
+
+statement ok
+INSERT INTO paths VALUES ('DVC', 'SHX', 'DPF');
+
+statement ok
+INSERT INTO paths VALUES ('QHN', 'LNH', 'LJD');
+
+statement ok
+INSERT INTO paths VALUES ('QSV', 'XHV', 'PRT');
+
+statement ok
+INSERT INTO paths VALUES ('NVC', 'CDB', 'KRJ');
+
+statement ok
+INSERT INTO paths VALUES ('NCQ', 'HCS', 'KDS');
+
+statement ok
+INSERT INTO paths VALUES ('SXK', 'SFT', 'JXR');
+
+statement ok
+INSERT INTO paths VALUES ('NSV', 'TJC', 'LDN');
+
+statement ok
+INSERT INTO paths VALUES ('FNV', 'CSR', 'FHQ');
+
+statement ok
+INSERT INTO paths VALUES ('MHN', 'XSL', 'RSX');
+
+statement ok
+INSERT INTO paths VALUES ('TKG', 'JCV', 'MQT');
+
+statement ok
+INSERT INTO paths VALUES ('FHQ', 'RPP', 'HKT');
+
+statement ok
+INSERT INTO paths VALUES ('XCX', 'TCN', 'HKX');
+
+statement ok
+INSERT INTO paths VALUES ('VRT', 'TDB', 'RFQ');
+
+statement ok
+INSERT INTO paths VALUES ('SQR', 'LQR', 'RLS');
+
+statement ok
+INSERT INTO paths VALUES ('TGR', 'PJM', 'TQV');
+
+statement ok
+INSERT INTO paths VALUES ('LKR', 'MBR', 'TLD');
+
+statement ok
+INSERT INTO paths VALUES ('KVN', 'BHG', 'SHM');
+
+statement ok
+INSERT INTO paths VALUES ('GCH', 'DGR', 'KXL');
+
+statement ok
+INSERT INTO paths VALUES ('CHM', 'NXR', 'NXR');
+
+statement ok
+INSERT INTO paths VALUES ('VVJ', 'RNT', 'VJR');
+
+statement ok
+INSERT INTO paths VALUES ('QRX', 'SFN', 'RQX');
+
+statement ok
+INSERT INTO paths VALUES ('JRV', 'CVN', 'VHV');
+
+statement ok
+INSERT INTO paths VALUES ('PQM', 'SSX', 'DHQ');
+
+statement ok
+INSERT INTO paths VALUES ('NDL', 'SDF', 'RLB');
+
+statement ok
+INSERT INTO paths VALUES ('PCG', 'RFV', 'XFQ');
+
+statement ok
+INSERT INTO paths VALUES ('KLN', 'PFX', 'NLS');
+
+statement ok
+INSERT INTO paths VALUES ('RDS', 'PBB', 'VMF');
+
+statement ok
+INSERT INTO paths VALUES ('CCL', 'BNB', 'FSJ');
+
+statement ok
+INSERT INTO paths VALUES ('HTR', 'GNN', 'BHC');
+
+statement ok
+INSERT INTO paths VALUES ('HJK', 'QCS', 'XRH');
+
+statement ok
+INSERT INTO paths VALUES ('RMK', 'BQL', 'SKL');
+
+statement ok
+INSERT INTO paths VALUES ('SFT', 'FLV', 'KJC');
+
+statement ok
+INSERT INTO paths VALUES ('XBD', 'GRH', 'BTG');
+
+statement ok
+INSERT INTO paths VALUES ('VLG', 'PXN', 'CRR');
+
+statement ok
+INSERT INTO paths VALUES ('KFC', 'QMD', 'VHM');
+
+statement ok
+INSERT INTO paths VALUES ('KSX', 'GKL', 'SRM');
+
+statement ok
+INSERT INTO paths VALUES ('DQK', 'GPM', 'JFX');
+
+statement ok
+INSERT INTO paths VALUES ('PMP', 'LFL', 'SLN');
+
+statement ok
+INSERT INTO paths VALUES ('FRM', 'SCD', 'TBZ');
+
+statement ok
+INSERT INTO paths VALUES ('PGR', 'LBH', 'SRF');
+
+statement ok
+INSERT INTO paths VALUES ('GFT', 'QTJ', 'GCD');
+
+statement ok
+INSERT INTO paths VALUES ('QBQ', 'RPH', 'XSF');
+
+statement ok
+INSERT INTO paths VALUES ('MDR', 'GLS', 'RTV');
+
+statement ok
+INSERT INTO paths VALUES ('RFH', 'MKR', 'HVP');
+
+statement ok
+INSERT INTO paths VALUES ('DXV', 'MJS', 'PQF');
+
+statement ok
+INSERT INTO paths VALUES ('PCV', 'QTC', 'HTL');
+
+statement ok
+INSERT INTO paths VALUES ('PLH', 'JVT', 'BJT');
+
+statement ok
+INSERT INTO paths VALUES ('DQX', 'CRT', 'VVH');
+
+statement ok
+INSERT INTO paths VALUES ('JGJ', 'RNC', 'RPK');
+
+statement ok
+INSERT INTO paths VALUES ('HKD', 'BLG', 'NMD');
+
+statement ok
+INSERT INTO paths VALUES ('BRQ', 'TDC', 'SDB');
+
+statement ok
+INSERT INTO paths VALUES ('SMG', 'TVS', 'DCH');
+
+statement ok
+INSERT INTO paths VALUES ('TFR', 'SRG', 'SRG');
+
+statement ok
+INSERT INTO paths VALUES ('HXM', 'HTS', 'KSN');
+
+statement ok
+INSERT INTO paths VALUES ('DFD', 'MVH', 'KGP');
+
+statement ok
+INSERT INTO paths VALUES ('NML', 'DXP', 'KCM');
+
+statement ok
+INSERT INTO paths VALUES ('PQV', 'SKH', 'DQX');
+
+statement ok
+INSERT INTO paths VALUES ('JVT', 'MMS', 'SNV');
+
+statement ok
+INSERT INTO paths VALUES ('MDX', 'GPD', 'XDF');
+
+statement ok
+INSERT INTO paths VALUES ('MKR', 'PDL', 'JPG');
+
+statement ok
+INSERT INTO paths VALUES ('CGB', 'NLF', 'TCF');
+
+statement ok
+INSERT INTO paths VALUES ('XQP', 'JHM', 'KNX');
+
+statement ok
+INSERT INTO paths VALUES ('FBH', 'MNR', 'NCT');
+
+statement ok
+INSERT INTO paths VALUES ('BGN', 'JJB', 'SMG');
+
+statement ok
+INSERT INTO paths VALUES ('MPG', 'HVD', 'BKR');
+
+statement ok
+INSERT INTO paths VALUES ('QSL', 'XDK', 'PKP');
+
+statement ok
+INSERT INTO paths VALUES ('TDM', 'QVP', 'DVD');
+
+statement ok
+INSERT INTO paths VALUES ('FMP', 'BSP', 'TBR');
+
+statement ok
+INSERT INTO paths VALUES ('CDC', 'TSK', 'TBQ');
+
+statement ok
+INSERT INTO paths VALUES ('PSH', 'TSK', 'TBQ');
+
+statement ok
+INSERT INTO paths VALUES ('HJM', 'PKJ', 'HDD');
+
+statement ok
+INSERT INTO paths VALUES ('PGP', 'SMG', 'JJB');
+
+statement ok
+INSERT INTO paths VALUES ('PKD', 'FHH', 'NFJ');
+
+statement ok
+INSERT INTO paths VALUES ('MCG', 'MFR', 'MBT');
+
+statement ok
+INSERT INTO paths VALUES ('SFN', 'DXN', 'KSX');
+
+statement ok
+INSERT INTO paths VALUES ('XQJ', 'MMM', 'PQM');
+
+statement ok
+INSERT INTO paths VALUES ('QCT', 'SHR', 'GCG');
+
+statement ok
+INSERT INTO paths VALUES ('KVS', 'PTJ', 'PLH');
+
+statement ok
+INSERT INTO paths VALUES ('QMC', 'BKR', 'HVD');
+
+statement ok
+INSERT INTO paths VALUES ('NXF', 'VGR', 'NCG');
+
+statement ok
+INSERT INTO paths VALUES ('FXC', 'CCL', 'RTM');
+
+statement ok
+INSERT INTO paths VALUES ('DRV', 'XRC', 'NXM');
+
+statement ok
+INSERT INTO paths VALUES ('BGC', 'TRV', 'SJN');
+
+statement ok
+INSERT INTO paths VALUES ('LBP', 'MKR', 'HVP');
+
+statement ok
+INSERT INTO paths VALUES ('HQN', 'PGL', 'KVX');
+
+statement ok
+INSERT INTO paths VALUES ('JQC', 'NHP', 'HGG');
+
+statement ok
+INSERT INTO paths VALUES ('RPK', 'CMR', 'SQR');
+
+statement ok
+INSERT INTO paths VALUES ('KHR', 'CBJ', 'QHN');
+
+statement ok
+INSERT INTO paths VALUES ('RMS', 'LBD', 'TDQ');
+
+statement ok
+INSERT INTO paths VALUES ('DCH', 'NFK', 'JNS');
+
+statement ok
+INSERT INTO paths VALUES ('FLV', 'SPJ', 'RBF');
+
+statement ok
+INSERT INTO paths VALUES ('KXQ', 'MQK', 'KJH');
+
+statement ok
+INSERT INTO paths VALUES ('JVM', 'NGP', 'KVS');
+
+statement ok
+INSERT INTO paths VALUES ('DXJ', 'FRL', 'BVB');
+
+statement ok
+INSERT INTO paths VALUES ('RGC', 'RDS', 'DSN');
+
+statement ok
+INSERT INTO paths VALUES ('NLL', 'JKK', 'CLC');
+
+statement ok
+INSERT INTO paths VALUES ('SHD', 'QVF', 'PXM');
+
+statement ok
+INSERT INTO paths VALUES ('RXQ', 'QSL', 'GXT');
+
+statement ok
+INSERT INTO paths VALUES ('DVD', 'CDR', 'HCL');
+
+statement ok
+INSERT INTO paths VALUES ('BSP', 'NBX', 'RSM');
+
+statement ok
+INSERT INTO paths VALUES ('DBV', 'SRX', 'LST');
+
+statement ok
+INSERT INTO paths VALUES ('KRJ', 'NHX', 'BQV');
+
+statement ok
+INSERT INTO paths VALUES ('LTT', 'TJV', 'TBN');
+
+statement ok
+INSERT INTO paths VALUES ('RLQ', 'RMS', 'RBP');
+
+statement ok
+INSERT INTO paths VALUES ('PLN', 'QHS', 'PCV');
+
+statement ok
+INSERT INTO paths VALUES ('XKF', 'DHX', 'QHV');
+
+statement ok
+INSERT INTO paths VALUES ('LVS', 'VDH', 'SJL');
+
+statement ok
+INSERT INTO paths VALUES ('TLN', 'LVD', 'BFS');
+
+statement ok
+INSERT INTO paths VALUES ('HGB', 'GTX', 'HSC');
+
+statement ok
+INSERT INTO paths VALUES ('LKB', 'PNF', 'CRG');
+
+statement ok
+INSERT INTO paths VALUES ('CHN', 'BPF', 'QPF');
+
+statement ok
+INSERT INTO paths VALUES ('NMD', 'VTL', 'GMR');
+
+statement ok
+INSERT INTO paths VALUES ('MRL', 'LQB', 'RXN');
+
+statement ok
+INSERT INTO paths VALUES ('HKX', 'GCR', 'KBD');
+
+statement ok
+INSERT INTO paths VALUES ('VQN', 'TLD', 'MBR');
+
+statement ok
+INSERT INTO paths VALUES ('CTR', 'TMH', 'GBR');
+
+statement ok
+INSERT INTO paths VALUES ('VPN', 'LMR', 'RXQ');
+
+statement ok
+INSERT INTO paths VALUES ('FSL', 'GDL', 'SXG');
+
+statement ok
+INSERT INTO paths VALUES ('FGG', 'JKJ', 'LDT');
+
+statement ok
+INSERT INTO paths VALUES ('TCN', 'GCR', 'KBD');
+
+statement ok
+INSERT INTO paths VALUES ('RPH', 'QHP', 'RLQ');
+
+statement ok
+INSERT INTO paths VALUES ('NCA', 'SXC', 'FMN');
+
+statement ok
+INSERT INTO paths VALUES ('LPQ', 'LKR', 'VQN');
+
+statement ok
+INSERT INTO paths VALUES ('KXG', 'LVN', 'KHR');
+
+statement ok
+INSERT INTO paths VALUES ('KGL', 'SDB', 'TDC');
+
+statement ok
+INSERT INTO paths VALUES ('XJH', 'XKM', 'GCL');
+
+statement ok
+INSERT INTO paths VALUES ('JCV', 'SVP', 'HBS');
+
+statement ok
+INSERT INTO paths VALUES ('QSP', 'QNM', 'VRT');
+
+statement ok
+INSERT INTO paths VALUES ('RDR', 'DHR', 'MHX');
+
+statement ok
+INSERT INTO paths VALUES ('FMN', 'QRX', 'CTX');
+
+statement ok
+INSERT INTO paths VALUES ('CXJ', 'KGL', 'BRQ');
+
+statement ok
+INSERT INTO paths VALUES ('SRF', 'DLG', 'LKT');
+
+statement ok
+INSERT INTO paths VALUES ('XHP', 'TRX', 'LSD');
+
+statement ok
+INSERT INTO paths VALUES ('PNV', 'LFL', 'SLN');
+
+statement ok
+INSERT INTO paths VALUES ('MXM', 'TCN', 'HKX');
+
+statement ok
+INSERT INTO paths VALUES ('KDS', 'CMT', 'XQP');
+
+statement ok
+INSERT INTO paths VALUES ('GLS', 'DVC', 'XRR');
+
+statement ok
+INSERT INTO paths VALUES ('VHQ', 'CLC', 'JKK');
+
+statement ok
+INSERT INTO paths VALUES ('QBF', 'HDD', 'PKJ');
+
+statement ok
+INSERT INTO paths VALUES ('HSC', 'GFT', 'TKX');
+
+statement ok
+INSERT INTO paths VALUES ('LQM', 'TSS', 'GMG');
+
+statement ok
+INSERT INTO paths VALUES ('FFK', 'QXF', 'NRK');
+
+statement ok
+INSERT INTO paths VALUES ('NMK', 'MMG', 'BRX');
+
+statement ok
+INSERT INTO paths VALUES ('NFK', 'HSR', 'KTL');
+
+statement ok
+INSERT INTO paths VALUES ('VGR', 'MXJ', 'BRK');
+
+statement ok
+INSERT INTO paths VALUES ('VJR', 'BGC', 'QFH');
+
+statement ok
+INSERT INTO paths VALUES ('CMJ', 'XLD', 'QVQ');
+
+statement ok
+INSERT INTO paths VALUES ('PKB', 'SPT', 'NDR');
+
+statement ok
+INSERT INTO paths VALUES ('SRM', 'LFG', 'RBV');
+
+statement ok
+INSERT INTO paths VALUES ('NKH', 'XMS', 'STV');
+
+statement ok
+INSERT INTO paths VALUES ('SBC', 'CGS', 'VLK');
+
+statement ok
+INSERT INTO paths VALUES ('QGL', 'BQL', 'SKL');
+
+statement ok
+INSERT INTO paths VALUES ('GTX', 'TKX', 'GFT');
+
+statement ok
+INSERT INTO paths VALUES ('KJH', 'RVM', 'FQB');
+
+statement ok
+INSERT INTO paths VALUES ('NDD', 'NRQ', 'RDT');
+
+statement ok
+INSERT INTO paths VALUES ('VTD', 'JSJ', 'LSR');
+
+statement ok
+INSERT INTO paths VALUES ('RSX', 'BCR', 'LPQ');
+
+statement ok
+INSERT INTO paths VALUES ('JFX', 'VJC', 'KPQ');
+
+statement ok
+INSERT INTO paths VALUES ('GCL', 'RKV', 'TFH');
+
+statement ok
+INSERT INTO paths VALUES ('PTF', 'VRX', 'JND');
+
+statement ok
+INSERT INTO paths VALUES ('DDJ', 'FKH', 'NHM');
+
+statement ok
+INSERT INTO paths VALUES ('NFJ', 'CHM', 'NTV');
+
+statement ok
+INSERT INTO paths VALUES ('JGS', 'CCL', 'RTM');
+
+statement ok
+INSERT INTO paths VALUES ('BFX', 'FPR', 'SNC');
+
+statement ok
+INSERT INTO paths VALUES ('CMT', 'JHM', 'KNX');
+
+statement ok
+INSERT INTO paths VALUES ('RTM', 'FSJ', 'BNB');
+
+statement ok
+INSERT INTO paths VALUES ('MMA', 'KVC', 'LHQ');
+
+statement ok
+INSERT INTO paths VALUES ('JGL', 'TMF', 'PVQ');
+
+statement ok
+INSERT INTO paths VALUES ('GCD', 'GCH', 'LDX');
+
+statement ok
+INSERT INTO paths VALUES ('GXT', 'XDK', 'PKP');
+
+statement ok
+INSERT INTO paths VALUES ('HHH', 'SXK', 'XMK');
+
+statement ok
+INSERT INTO paths VALUES ('SKL', 'CXJ', 'XFB');
+
+statement ok
+INSERT INTO paths VALUES ('SQH', 'JQH', 'FBV');
+
+statement ok
+INSERT INTO paths VALUES ('NTV', 'NXR', 'JFC');
+
+statement ok
+INSERT INTO paths VALUES ('JXR', 'FLV', 'KJC');
+
+statement ok
+INSERT INTO paths VALUES ('VND', 'RPD', 'SFX');
+
+statement ok
+INSERT INTO paths VALUES ('GJS', 'QJH', 'RHM');
+
+statement ok
+INSERT INTO paths VALUES ('NVL', 'LVN', 'KHR');
+
+statement ok
+INSERT INTO paths VALUES ('CNQ', 'FRL', 'BVB');
+
+statement ok
+INSERT INTO paths VALUES ('KSQ', 'DBG', 'RXP');
+
+statement ok
+INSERT INTO paths VALUES ('FLT', 'SCD', 'SCD');
+
+statement ok
+INSERT INTO paths VALUES ('TJV', 'RDR', 'FLM');
+
+statement ok
+INSERT INTO paths VALUES ('AAA', 'DFD', 'PLS');
+
+statement ok
+INSERT INTO paths VALUES ('NLT', 'HVX', 'NDD');
+
+statement ok
+INSERT INTO paths VALUES ('FRR', 'FQX', 'XHP');
+
+statement ok
+INSERT INTO paths VALUES ('RSK', 'VHV', 'CVN');
+
+statement ok
+INSERT INTO paths VALUES ('LCF', 'NMK', 'KCR');
+
+statement ok
+INSERT INTO paths VALUES ('VBC', 'GKX', 'HGB');
+
+statement ok
+INSERT INTO paths VALUES ('CJB', 'VRT', 'QNM');
+
+statement ok
+INSERT INTO paths VALUES ('QNM', 'TDB', 'RFQ');
+
+statement ok
+INSERT INTO paths VALUES ('BQL', 'XFB', 'CXJ');
+
+statement ok
+INSERT INTO paths VALUES ('PVQ', 'TFG', 'JMB');
+
+statement ok
+INSERT INTO paths VALUES ('VCG', 'VVS', 'HTG');
+
+statement ok
+INSERT INTO paths VALUES ('GJF', 'CXS', 'GLG');
+
+statement ok
+INSERT INTO paths VALUES ('BJT', 'SNV', 'MMS');
+
+statement ok
+INSERT INTO paths VALUES ('BHL', 'PMP', 'PNV');
+
+statement ok
+INSERT INTO paths VALUES ('NDR', 'MKP', 'HJK');
+
+statement ok
+INSERT INTO paths VALUES ('CSD', 'GBR', 'TMH');
+
+statement ok
+INSERT INTO paths VALUES ('LXP', 'VGM', 'TKG');
+
+statement ok
+INSERT INTO paths VALUES ('KMS', 'RSN', 'GSK');
+
+statement ok
+INSERT INTO paths VALUES ('HBS', 'DSR', 'BLN');
+
+statement ok
+INSERT INTO paths VALUES ('LQR', 'RLN', 'NVC');
+
+statement ok
+INSERT INTO paths VALUES ('JSJ', 'KLT', 'CMJ');
+
+statement ok
+INSERT INTO paths VALUES ('QCS', 'LHC', 'NML');
+
+statement ok
+INSERT INTO paths VALUES ('MQV', 'DDV', 'LQZ');
+
+statement ok
+INSERT INTO paths VALUES ('MJG', 'LVL', 'LVL');
+
+statement ok
+INSERT INTO paths VALUES ('HTL', 'HDX', 'HKD');
+
+statement ok
+INSERT INTO paths VALUES ('HCD', 'LFV', 'GBH');
+
+statement ok
+INSERT INTO paths VALUES ('FTV', 'HTS', 'KSN');
+
+statement ok
+INSERT INTO paths VALUES ('QVQ', 'KJT', 'TDM');
+
+statement ok
+INSERT INTO paths VALUES ('LDN', 'LMS', 'HHM');
+
+statement ok
+INSERT INTO paths VALUES ('RHL', 'XJK', 'RJF');
+
+statement ok
+INSERT INTO paths VALUES ('LHQ', 'XPR', 'NGT');
+
+statement ok
+INSERT INTO paths VALUES ('LSD', 'SFF', 'NFM');
+
+statement ok
+INSERT INTO paths VALUES ('CVC', 'XBD', 'NNB');
+
+statement ok
+INSERT INTO paths VALUES ('LFB', 'JDR', 'PKB');
+
+statement ok
+INSERT INTO paths VALUES ('SHX', 'KRB', 'MDX');
+
+statement ok
+INSERT INTO paths VALUES ('FKG', 'LFV', 'GBH');
+
+statement ok
+INSERT INTO paths VALUES ('THH', 'BGN', 'PGP');
+
+statement ok
+INSERT INTO paths VALUES ('NNB', 'GRH', 'BTG');
+
+statement ok
+INSERT INTO paths VALUES ('XDK', 'MNQ', 'SXS');
+
+statement ok
+INSERT INTO paths VALUES ('RXP', 'MLN', 'NLT');
+
+statement ok
+INSERT INTO paths VALUES ('XDF', 'BFX', 'GTV');
+
+statement ok
+INSERT INTO paths VALUES ('RTV', 'DVC', 'XRR');
+
+statement ok
+INSERT INTO paths VALUES ('RXN', 'VJP', 'VXV');
+
+statement ok
+INSERT INTO paths VALUES ('SDF', 'NKH', 'QBR');
+
+statement ok
+INSERT INTO paths VALUES ('FLR', 'SXK', 'XMK');
+
+statement ok
+INSERT INTO paths VALUES ('BNB', 'DNG', 'NCQ');
+
+statement ok
+INSERT INTO paths VALUES ('JPG', 'KLN', 'QLT');
+
+statement ok
+INSERT INTO paths VALUES ('JMB', 'PKD', 'HLD');
+
+statement ok
+INSERT INTO paths VALUES ('DBG', 'MLN', 'NLT');
+
+statement ok
+INSERT INTO paths VALUES ('CXS', 'PLN', 'GXP');
+
+statement ok
+INSERT INTO paths VALUES ('QBR', 'STV', 'XMS');
+
+statement ok
+INSERT INTO paths VALUES ('MFR', 'QBQ', 'RNG');
+
+statement ok
+INSERT INTO paths VALUES ('LFG', 'CTR', 'CSD');
+
+statement ok
+INSERT INTO paths VALUES ('RSN', 'CFH', 'LTT');
+
+statement ok
+INSERT INTO paths VALUES ('TMH', 'RFR', 'RCJ');
+
+statement ok
+INSERT INTO paths VALUES ('VML', 'GKX', 'HGB');
+
+statement ok
+INSERT INTO paths VALUES ('BRK', 'DXJ', 'CNQ');
+
+statement ok
+INSERT INTO paths VALUES ('DVN', 'GBJ', 'NQB');
+
+statement ok
+INSERT INTO paths VALUES ('SHR', 'GQQ', 'KFS');
+
+statement ok
+INSERT INTO paths VALUES ('TGL', 'KBF', 'RCD');
+
+statement ok
+INSERT INTO paths VALUES ('VVH', 'MJG', 'GRN');
+
+statement ok
+INSERT INTO paths VALUES ('BHG', 'BMN', 'HPH');
+
+statement ok
+INSERT INTO paths VALUES ('KJB', 'FXC', 'JGS');
+
+statement ok
+INSERT INTO paths VALUES ('KMT', 'MBK', 'RTX');
+
+statement ok
+INSERT INTO paths VALUES ('QJJ', 'QSV', 'LLP');
+
+statement ok
+INSERT INTO paths VALUES ('LKT', 'VVJ', 'BCG');
+
+statement ok
+INSERT INTO paths VALUES ('GRS', 'LSM', 'LSM');
+
+statement ok
+INSERT INTO paths VALUES ('TXH', 'JGL', 'PMM');
+
+statement ok
+INSERT INTO paths VALUES ('HMM', 'RDS', 'DSN');
+
+statement ok
+INSERT INTO paths VALUES ('RML', 'RCH', 'VND');
+
+statement ok
+INSERT INTO paths VALUES ('RXK', 'RJF', 'XJK');
+
+statement ok
+INSERT INTO paths VALUES ('NHP', 'XKN', 'JHQ');
+
+statement ok
+INSERT INTO paths VALUES ('SJL', 'QDH', 'QCC');
+
+statement ok
+INSERT INTO paths VALUES ('XTD', 'PPL', 'PHJ');
+
+statement ok
+INSERT INTO paths VALUES ('XRC', 'KXK', 'GMB');
+
+statement ok
+INSERT INTO paths VALUES ('BCG', 'RNT', 'VJR');
+
+statement ok
+INSERT INTO paths VALUES ('LSJ', 'HFN', 'KFC');
+
+statement ok
+INSERT INTO paths VALUES ('JKJ', 'LXP', 'XBB');
+
+statement ok
+INSERT INTO paths VALUES ('GNG', 'CSR', 'FHQ');
+
+statement ok
+INSERT INTO paths VALUES ('KCM', 'JMD', 'VSV');
+
+statement ok
+INSERT INTO paths VALUES ('SHS', 'CKT', 'PRD');
+
+statement ok
+INSERT INTO paths VALUES ('KCX', 'PGG', 'CLB');
+
+statement ok
+INSERT INTO paths VALUES ('RLB', 'NKH', 'QBR');
+
+statement ok
+INSERT INTO paths VALUES ('XMK', 'JXR', 'SFT');
+
+statement ok
+INSERT INTO paths VALUES ('GRH', 'LVS', 'FNX');
+
+statement ok
+INSERT INTO paths VALUES ('NFM', 'RGC', 'HMM');
+
+statement ok
+INSERT INTO paths VALUES ('KXD', 'RSV', 'FBH');
+
+statement ok
+INSERT INTO paths VALUES ('GBJ', 'VRK', 'TXJ');
+
+statement ok
+INSERT INTO paths VALUES ('QCC', 'RMK', 'QGL');
+
+statement ok
+INSERT INTO paths VALUES ('KHT', 'PQD', 'RGT');
+
+statement ok
+INSERT INTO paths VALUES ('BJV', 'LQM', 'QMJ');
+
+statement ok
+INSERT INTO paths VALUES ('RDH', 'HPN', 'SVN');
+
+statement ok
+INSERT INTO paths VALUES ('QHV', 'LVF', 'PTX');
+
+statement ok
+INSERT INTO paths VALUES ('QFH', 'SJN', 'TRV');
+
+statement ok
+INSERT INTO paths VALUES ('NGT', 'KMT', 'FHF');
+
+statement ok
+INSERT INTO paths VALUES ('CSR', 'RPP', 'HKT');
+
+statement ok
+INSERT INTO paths VALUES ('HTS', 'XMP', 'XMP');
+
+statement ok
+INSERT INTO paths VALUES ('CTX', 'RQX', 'SFN');
+
+statement ok
+INSERT INTO paths VALUES ('CGR', 'CDC', 'PSH');
+
+statement ok
+INSERT INTO paths VALUES ('RRL', 'RMN', 'MMD');
+
+statement ok
+INSERT INTO paths VALUES ('RJF', 'BXG', 'BFF');
+
+statement ok
+INSERT INTO paths VALUES ('LNM', 'FRR', 'PBM');
+
+statement ok
+INSERT INTO paths VALUES ('VNT', 'VVS', 'HTG');
+
+statement ok
+INSERT INTO paths VALUES ('BPF', 'PRG', 'QLS');
+
+statement ok
+INSERT INTO paths VALUES ('FNZ', 'GCG', 'SHR');
+
+statement ok
+INSERT INTO paths VALUES ('GKL', 'LFG', 'RBV');
+
+statement ok
+INSERT INTO paths VALUES ('LSR', 'KLT', 'CMJ');
+
+statement ok
+INSERT INTO paths VALUES ('QFT', 'HQJ', 'XQJ');
+
+statement ok
+INSERT INTO paths VALUES ('HVP', 'JPG', 'PDL');
+
+statement ok
+INSERT INTO paths VALUES ('SKD', 'HTR', 'MBN');
+
+statement ok
+INSERT INTO paths VALUES ('SFF', 'RGC', 'HMM');
+
+statement ok
+INSERT INTO paths VALUES ('BMG', 'NDL', 'RKP');
+
+statement ok
+INSERT INTO paths VALUES ('TRV', 'KVN', 'MXP');
+
+statement ok
+INSERT INTO paths VALUES ('SFX', 'VLG', 'HCB');
+
+statement ok
+INSERT INTO paths VALUES ('MBK', 'VML', 'VBC');
+
+statement ok
+INSERT INTO paths VALUES ('SDD', 'SBD', 'SHT');
+
+statement ok
+INSERT INTO paths VALUES ('KFK', 'QJT', 'SBC');
+
+statement ok
+INSERT INTO paths VALUES ('XQM', 'TGR', 'XQQ');
+
+statement ok
+INSERT INTO paths VALUES ('RBP', 'LBD', 'TDQ');
+
+statement ok
+INSERT INTO paths VALUES ('TBQ', 'MHN', 'CCB');
+
+statement ok
+INSERT INTO paths VALUES ('CXG', 'VPN', 'DHJ');
+
+statement ok
+INSERT INTO paths VALUES ('BXG', 'NMR', 'DXV');
+
+statement ok
+INSERT INTO paths VALUES ('DSL', 'CLB', 'PGG');
+
+statement ok
+INSERT INTO paths VALUES ('JPH', 'KVS', 'NGP');
+
+statement ok
+INSERT INTO paths VALUES ('BKR', 'HBR', 'KSQ');
+
+statement ok
+INSERT INTO paths VALUES ('LCX', 'FRV', 'QDZ');
+
+statement ok
+INSERT INTO paths VALUES ('TKX', 'GCD', 'QTJ');
+
+statement ok
+INSERT INTO paths VALUES ('XLD', 'KJT', 'TDM');
+
+statement ok
+INSERT INTO paths VALUES ('SDB', 'LNM', 'GXM');
+
+statement ok
+INSERT INTO paths VALUES ('GBR', 'RCJ', 'RFR');
+
+statement ok
+INSERT INTO paths VALUES ('BTD', 'MLK', 'CRF');
+
+statement ok
+INSERT INTO paths VALUES ('XFB', 'BRQ', 'KGL');
+
+statement ok
+INSERT INTO paths VALUES ('MJB', 'LLP', 'QSV');
+
+statement ok
+INSERT INTO paths VALUES ('FGK', 'SKH', 'DQX');
+
+statement ok
+INSERT INTO paths VALUES ('PXQ', 'NHP', 'HGG');
+
+statement ok
+INSERT INTO paths VALUES ('BMN', 'MPG', 'QMC');
+
+statement ok
+INSERT INTO paths VALUES ('QTC', 'HKD', 'HDX');
+
+statement ok
+INSERT INTO paths VALUES ('FQB', 'DDJ', 'KDJ');
+
+statement ok
+INSERT INTO paths VALUES ('LMS', 'BSG', 'SQH');
+
+statement ok
+INSERT INTO paths VALUES ('HCB', 'CRR', 'PXN');
+
+statement ok
+INSERT INTO paths VALUES ('GQF', 'BJV', 'VTR');
+
+statement ok
+INSERT INTO paths VALUES ('PMM', 'PVQ', 'TMF');
+
+statement ok
+INSERT INTO paths VALUES ('CLB', 'MTK', 'LCF');
+
+statement ok
+INSERT INTO paths VALUES ('QSF', 'CBS', 'RPC');
+
+statement ok
+INSERT INTO paths VALUES ('VTB', 'PNQ', 'DJK');
+
+statement ok
+INSERT INTO paths VALUES ('KPQ', 'JTH', 'NXF');
+
+statement ok
+INSERT INTO paths VALUES ('NMR', 'MJS', 'PQF');
+
+statement ok
+INSERT INTO paths VALUES ('CFH', 'TBN', 'TJV');
+
+statement ok
+INSERT INTO paths VALUES ('GMG', 'KGG', 'SRQ');
+
+statement ok
+INSERT INTO paths VALUES ('NBX', 'JGJ', 'JQK');
+
+statement ok
+INSERT INTO paths VALUES ('CRF', 'DRH', 'BRS');
+
+statement ok
+INSERT INTO paths VALUES ('KBF', 'CGB', 'GSQ');
+
+statement ok
+INSERT INTO paths VALUES ('GNN', 'LMP', 'RML');
+
+statement ok
+INSERT INTO paths VALUES ('GRF', 'HQJ', 'XQJ');
+
+statement ok
+INSERT INTO paths VALUES ('DBF', 'LST', 'SRX');
+
+statement ok
+INSERT INTO paths VALUES ('LVF', 'RVN', 'KXD');
+
+statement ok
+INSERT INTO paths VALUES ('HPC', 'GRS', 'QNF');
+
+statement ok
+INSERT INTO paths VALUES ('PHH', 'NVL', 'KXG');
+
+statement ok
+INSERT INTO paths VALUES ('XPD', 'NRK', 'QXF');
+
+statement ok
+INSERT INTO paths VALUES ('RNC', 'CMR', 'SQR');
+
+statement ok
+INSERT INTO paths VALUES ('GSK', 'LTT', 'CFH');
+
+statement ok
+INSERT INTO paths VALUES ('JQM', 'VTF', 'KXQ');
+
+statement ok
+INSERT INTO paths VALUES ('SPJ', 'LFB', 'NQH');
+
+statement ok
+INSERT INTO paths VALUES ('XGH', 'DPT', 'GKD');
+
+statement ok
+INSERT INTO paths VALUES ('JDR', 'SPT', 'NDR');
+
+statement ok
+INSERT INTO paths VALUES ('FMQ', 'VVN', 'MLH');
+
+statement ok
+INSERT INTO paths VALUES ('HJH', 'JVM', 'JPH');
+
+statement ok
+INSERT INTO paths VALUES ('DHX', 'PTX', 'LVF');
+
+statement ok
+INSERT INTO paths VALUES ('HDD', 'FMQ', 'GMH');
+
+statement ok
+INSERT INTO paths VALUES ('VHM', 'TGL', 'TSJ');
+
+statement ok
+INSERT INTO paths VALUES ('GFF', 'BGN', 'PGP');
+
+statement ok
+INSERT INTO paths VALUES ('LHC', 'DXP', 'KCM');
+
+statement ok
+INSERT INTO paths VALUES ('RCH', 'RPD', 'SFX');
+
+statement ok
+INSERT INTO paths VALUES ('GMH', 'MLH', 'VVN');
+
+statement ok
+INSERT INTO paths VALUES ('SCD', 'FMP', 'JFL');
+
+statement ok
+INSERT INTO paths VALUES ('TJC', 'LMS', 'HHM');
+
+statement ok
+INSERT INTO paths VALUES ('MVH', 'XRJ', 'VKM');
+
+statement ok
+INSERT INTO paths VALUES ('MMG', 'XGH', 'CXK');
+
+statement ok
+INSERT INTO paths VALUES ('GQQ', 'GFF', 'THH');
+
+statement ok
+INSERT INTO paths VALUES ('VGM', 'MQT', 'JCV');
+
+statement ok
+INSERT INTO paths VALUES ('DGR', 'HJH', 'KNH');
+
+statement ok
+INSERT INTO paths VALUES ('LDT', 'LXP', 'XBB');
+
+statement ok
+INSERT INTO paths VALUES ('XBB', 'TKG', 'VGM');
+
+statement ok
+INSERT INTO paths VALUES ('XKM', 'RKV', 'TFH');
+
+statement ok
+INSERT INTO paths VALUES ('KSN', 'XMP', 'XGB');
+
+statement ok
+INSERT INTO paths VALUES ('GSM', 'TXH', 'CJK');
+
+statement ok
+INSERT INTO paths VALUES ('PJM', 'GJS', 'HCP');
+
+statement ok
+INSERT INTO paths VALUES ('ZZZ', 'PLS', 'DFD');
+
+statement ok
+INSERT INTO paths VALUES ('NCG', 'BRK', 'MXJ');
+
+statement ok
+INSERT INTO paths VALUES ('SRG', 'GRS', 'GRS');
+
+statement ok
+INSERT INTO paths VALUES ('RQX', 'KSX', 'DXN');
+
+statement ok
+INSERT INTO paths VALUES ('SFH', 'HXR', 'CXG');
+
+statement ok
+INSERT INTO paths VALUES ('DXP', 'JMD', 'VSV');
+
+statement ok
+INSERT INTO paths VALUES ('LQB', 'VJP', 'VXV');
+
+statement ok
+INSERT INTO paths VALUES ('CGS', 'CQJ', 'HQN');
+
+statement ok
+INSERT INTO paths VALUES ('CMR', 'LQR', 'RLS');
+
+statement ok
+INSERT INTO paths VALUES ('TSB', 'CKT', 'PRD');
+
+statement ok
+INSERT INTO paths VALUES ('HVX', 'NRQ', 'RDT');
+
+statement ok
+INSERT INTO paths VALUES ('CRG', 'GNG', 'FNV');
+
+statement ok
+INSERT INTO paths VALUES ('GQJ', 'PQD', 'RGT');
+
+statement ok
+INSERT INTO paths VALUES ('LRL', 'TGR', 'XQQ');
+
+statement ok
+INSERT INTO paths VALUES ('TPK', 'LBH', 'SRF');
+
+statement ok
+INSERT INTO paths VALUES ('QHS', 'HTL', 'QTC');
+
+statement ok
+INSERT INTO paths VALUES ('DHQ', 'SSQ', 'LCX');
+
+statement ok
+INSERT INTO paths VALUES ('LMR', 'GXT', 'QSL');
+
+statement ok
+INSERT INTO paths VALUES ('KKG', 'MNJ', 'QLB');
+
+statement ok
+INSERT INTO paths VALUES ('JTH', 'NCG', 'VGR');
+
+statement ok
+INSERT INTO paths VALUES ('CKV', 'GND', 'NSV');
+
+statement ok
+INSERT INTO paths VALUES ('PFX', 'KRH', 'BTD');
+
+statement ok
+INSERT INTO paths VALUES ('RKP', 'RLB', 'SDF');
+
+statement ok
+INSERT INTO paths VALUES ('VHV', 'TLM', 'PHH');
+
+statement ok
+INSERT INTO paths VALUES ('GXM', 'PBM', 'FRR');
+
+statement ok
+INSERT INTO paths VALUES ('QST', 'MMD', 'RMN');
+
+statement ok
+INSERT INTO paths VALUES ('PKJ', 'GMH', 'FMQ');
+
+statement ok
+INSERT INTO paths VALUES ('RDL', 'PGR', 'TPK');
+
+statement ok
+INSERT INTO paths VALUES ('CRT', 'MJG', 'MJG');
+
+statement ok
+INSERT INTO paths VALUES ('JQK', 'RPK', 'RNC');
+
+statement ok
+INSERT INTO paths VALUES ('FLM', 'MHX', 'DHR');
+
+statement ok
+INSERT INTO paths VALUES ('LHB', 'TQP', 'SDD');
+
+statement ok
+INSERT INTO paths VALUES ('GSQ', 'NLF', 'TCF');
+
+statement ok
+INSERT INTO paths VALUES ('HQJ', 'MMM', 'PQM');
+
+statement ok
+INSERT INTO paths VALUES ('RCJ', 'RXK', 'RHL');
+
+statement ok
+INSERT INTO paths VALUES ('LFL', 'KJB', 'QPB');
+
+statement ok
+INSERT INTO paths VALUES ('BRS', 'RDL', 'SRC');
+
+statement ok
+INSERT INTO paths VALUES ('RPC', 'RPQ', 'GSM');
+
+statement ok
+INSERT INTO paths VALUES ('JJB', 'DCH', 'TVS');
+
+statement ok
+INSERT INTO paths VALUES ('GMR', 'KMS', 'KLC');
+
+statement ok
+INSERT INTO paths VALUES ('XJX', 'SBC', 'QJT');
+
+statement ok
+INSERT INTO paths VALUES ('DJK', 'CFQ', 'CVC');
+
+statement ok
+INSERT INTO paths VALUES ('FQX', 'TRX', 'LSD');
+
+statement ok
+INSERT INTO paths VALUES ('GLG', 'GXP', 'PLN');
+
+statement ok
+INSERT INTO paths VALUES ('VTR', 'LQM', 'QMJ');
+
+statement ok
+INSERT INTO paths VALUES ('MNR', 'LKB', 'BTH');
+
+statement ok
+INSERT INTO paths VALUES ('XSF', 'QHP', 'RLQ');
+
+statement ok
+INSERT INTO paths VALUES ('RNT', 'BGC', 'QFH');
+
+statement ok
+INSERT INTO paths VALUES ('HPH', 'MPG', 'QMC');
+
+statement ok
+INSERT INTO paths VALUES ('CJK', 'PMM', 'JGL');
+
+statement ok
+INSERT INTO paths VALUES ('KRH', 'CRF', 'MLK');
+
+statement ok
+INSERT INTO paths VALUES ('TBZ', 'JFL', 'FMP');
+
+statement ok
+INSERT INTO paths VALUES ('XSL', 'LPQ', 'BCR');
+
+statement ok
+INSERT INTO paths VALUES ('TFH', 'GQF', 'VKF');
+
+statement ok
+INSERT INTO paths VALUES ('LST', 'RDH', 'MJT');
+
+statement ok
+INSERT INTO paths VALUES ('TSJ', 'RCD', 'KBF');
+
+statement ok
+INSERT INTO paths VALUES ('VXV', 'CHG', 'BMG');
+
+statement ok
+INSERT INTO paths VALUES ('DHR', 'RSK', 'JRV');
+
+statement ok
+INSERT INTO paths VALUES ('BVN', 'PXM', 'QVF');
+
+statement ok
+INSERT INTO paths VALUES ('VJC', 'NXF', 'JTH');
+
+statement ok
+INSERT INTO paths VALUES ('TXJ', 'TKP', 'HMJ');
+
+statement ok
+INSERT INTO paths VALUES ('JFC', 'XGT', 'FQZ');
+
+statement ok
+INSERT INTO paths VALUES ('QGS', 'FSL', 'HRD');
+
+statement ok
+INSERT INTO paths VALUES ('HVD', 'KSQ', 'HBR');
+
+statement ok
+INSERT INTO paths VALUES ('MCH', 'LSJ', 'BCN');
+
+statement ok
+INSERT INTO paths VALUES ('QDZ', 'LHQ', 'KVC');
+
+statement ok
+INSERT INTO paths VALUES ('DGF', 'BDS', 'SFH');
+
+statement ok
+INSERT INTO paths VALUES ('MQK', 'RVM', 'FQB');
+
+statement ok
+INSERT INTO paths VALUES ('RMQ', 'GQJ', 'KHT');
+
+statement ok
+INSERT INTO paths VALUES ('FRL', 'QSF', 'LQC');
+
+statement ok
+INSERT INTO paths VALUES ('PXN', 'XTD', 'BQR');
+
+statement ok
+INSERT INTO paths VALUES ('JHD', 'MJB', 'QJJ');
+
+statement ok
+INSERT INTO paths VALUES ('PKP', 'SXS', 'MNQ');
+
+statement ok
+INSERT INTO paths VALUES ('THM', 'MNJ', 'QLB');
+
+statement ok
+INSERT INTO paths VALUES ('BQV', 'RGS', 'FGG');
+
+statement ok
+INSERT INTO paths VALUES ('PBM', 'XHP', 'FQX');
+
+statement ok
+INSERT INTO paths VALUES ('CBJ', 'LNH', 'LJD');
+
+statement ok
+INSERT INTO paths VALUES ('SVP', 'DSR', 'BLN');
+
+statement ok
+INSERT INTO paths VALUES ('QMJ', 'GMG', 'TSS');
+
+statement ok
+INSERT INTO paths VALUES ('MNJ', 'FGK', 'PQV');
+
+statement ok
+INSERT INTO paths VALUES ('GXP', 'QHS', 'PCV');
+
+statement ok
+INSERT INTO paths VALUES ('XGT', 'LBP', 'RFH');
+
+statement ok
+INSERT INTO paths VALUES ('MBT', 'QBQ', 'RNG');
+
+statement ok
+INSERT INTO paths VALUES ('FPQ', 'XRV', 'DQK');
+
+statement ok
+INSERT INTO paths VALUES ('VVS', 'DRL', 'MDR');
+
+statement ok
+INSERT INTO paths VALUES ('KVX', 'VLR', 'MCG');
+
+statement ok
+INSERT INTO paths VALUES ('PQD', 'MJR', 'FPQ');
+
+statement ok
+INSERT INTO paths VALUES ('VBQ', 'FLT', 'FLT');
+
+statement ok
+INSERT INTO paths VALUES ('HFN', 'VHM', 'QMD');
+
+statement ok
+INSERT INTO paths VALUES ('KGG', 'HXM', 'FTV');
+
+statement ok
+INSERT INTO paths VALUES ('MXP', 'SHM', 'BHG');
+
+statement ok
+INSERT INTO paths VALUES ('BJJ', 'FLT', 'FRM');
+
+statement ok
+INSERT INTO paths VALUES ('VJP', 'BMG', 'CHG');
+
+statement ok
+INSERT INTO paths VALUES ('KDJ', 'FKH', 'NHM');
+
+statement ok
+INSERT INTO paths VALUES ('RNG', 'XSF', 'RPH');
+
+statement ok
+INSERT INTO paths VALUES ('BTH', 'CRG', 'PNF');
+
+statement ok
+INSERT INTO paths VALUES ('QDH', 'RMK', 'QGL');
+
+statement ok
+INSERT INTO paths VALUES ('XHV', 'SHD', 'BVN');
+
+statement ok
+INSERT INTO paths VALUES ('QTJ', 'LDX', 'GCH');
+
+statement ok
+INSERT INTO paths VALUES ('KQR', 'HRD', 'FSL');
+
+statement ok
+INSERT INTO paths VALUES ('TBF', 'RXN', 'LQB');
+
+statement ok
+INSERT INTO paths VALUES ('KRB', 'XDF', 'GPD');
+
+statement ok
+INSERT INTO paths VALUES ('NCT', 'BTH', 'LKB');
+
+statement ok
+INSERT INTO paths VALUES ('DPT', 'HHH', 'FLR');
+
+statement ok
+INSERT INTO paths VALUES ('MHX', 'RSK', 'JRV');
+
+statement ok
+INSERT INTO paths VALUES ('LMP', 'VND', 'RCH');
+
+statement ok
+INSERT INTO paths VALUES ('QMD', 'TGL', 'TSJ');
+
+statement ok
+INSERT INTO paths VALUES ('JNS', 'KTL', 'HSR');
+
+statement ok
+INSERT INTO paths VALUES ('MQC', 'RFV', 'XFQ');
+
+statement ok
+INSERT INTO paths VALUES ('JND', 'SJH', 'XJH');
+
+statement ok
+INSERT INTO paths VALUES ('VRX', 'SJH', 'XJH');
+
+statement ok
+INSERT INTO paths VALUES ('HTG', 'MDR', 'DRL');
+
+statement ok
+INSERT INTO paths VALUES ('NQB', 'TXJ', 'VRK');
+
+statement ok
+INSERT INTO paths VALUES ('PTX', 'RVN', 'KXD');
+
+statement ok
+INSERT INTO paths VALUES ('QJT', 'CGS', 'VLK');
+
+statement ok
+INSERT INTO paths VALUES ('BFS', 'CHN', 'SFK');
+
+statement ok
+INSERT INTO paths VALUES ('HCL', 'TBF', 'MRL');
+
+statement ok
+INSERT INTO paths VALUES ('GCG', 'GQQ', 'KFS');
+
+statement ok
+INSERT INTO paths VALUES ('PGG', 'LCF', 'MTK');
+
+statement ok
+INSERT INTO paths VALUES ('DHJ', 'LMR', 'RXQ');
+
+statement ok
+INSERT INTO paths VALUES ('VLR', 'MBT', 'MFR');
+
+statement ok
+INSERT INTO paths VALUES ('TBN', 'RDR', 'FLM');
+
+statement ok
+INSERT INTO paths VALUES ('RQB', 'GLG', 'CXS');
+
+statement ok
+INSERT INTO paths VALUES ('TDB', 'KCX', 'DSL');
+
+statement ok
+INSERT INTO paths VALUES ('CDL', 'GRF', 'QFT');
+
+statement ok
+INSERT INTO paths VALUES ('QPF', 'QLS', 'PRG');
+
+statement ok
+INSERT INTO paths VALUES ('CHG', 'NDL', 'RKP');
+
+statement ok
+INSERT INTO paths VALUES ('NHM', 'FTG', 'SKD');
+
+statement ok
+INSERT INTO paths VALUES ('SJH', 'GCL', 'XKM');
+
+statement ok
+INSERT INTO paths VALUES ('PGT', 'MQC', 'PCG');
+
+statement ok
+INSERT INTO paths VALUES ('SLN', 'QPB', 'KJB');
+
+statement ok
+INSERT INTO paths VALUES ('NRQ', 'PGT', 'LHS');
+
+statement ok
+INSERT INTO paths VALUES ('BRX', 'CXK', 'XGH');
+
+statement ok
+INSERT INTO paths VALUES ('BDS', 'CXG', 'HXR');
+
+statement ok
+INSERT INTO paths VALUES ('PTJ', 'BJT', 'JVT');
+
+statement ok
+INSERT INTO paths VALUES ('BQR', 'PPL', 'PHJ');
+
+statement ok
+INSERT INTO paths VALUES ('RPQ', 'CJK', 'TXH');
+
+statement ok
+INSERT INTO paths VALUES ('PXM', 'JMR', 'LHB');
+
+statement ok
+INSERT INTO paths VALUES ('RSV', 'MNR', 'NCT');
+
+statement ok
+INSERT INTO paths VALUES ('SXG', 'NDN', 'RSF');
+
+statement ok
+INSERT INTO paths VALUES ('BSG', 'JQH', 'FBV');
+
+statement ok
+INSERT INTO paths VALUES ('GND', 'LDN', 'TJC');
+
+statement ok
+INSERT INTO paths VALUES ('QLB', 'PQV', 'FGK');
+
+statement ok
+INSERT INTO paths VALUES ('GMB', 'KQR', 'QGS');
+
+statement ok
+INSERT INTO paths VALUES ('RLN', 'KRJ', 'CDB');
+
+statement ok
+INSERT INTO paths VALUES ('MLK', 'BRS', 'DRH');
+
+statement ok
+INSERT INTO paths VALUES ('NHX', 'FGG', 'RGS');
+
+statement ok
+INSERT INTO paths VALUES ('LLP', 'XHV', 'PRT');
+
+statement ok
+INSERT INTO paths VALUES ('BVB', 'QSF', 'LQC');
+
+statement ok
+INSERT INTO paths VALUES ('RVN', 'FBH', 'RSV');
+
+statement ok
+INSERT INTO paths VALUES ('KTL', 'XPD', 'FFK');
+
+statement ok
+INSERT INTO paths VALUES ('MJS', 'VTD', 'HNL');
+
+statement ok
+INSERT INTO paths VALUES ('HXR', 'VPN', 'DHJ');
+
+statement ok
+INSERT INTO paths VALUES ('NDN', 'TFR', 'QGN');
+
+statement ok
+INSERT INTO paths VALUES ('BCR', 'LKR', 'VQN');
+
+statement ok
+INSERT INTO paths VALUES ('MTK', 'NMK', 'KCR');
+
+statement ok
+INSERT INTO paths VALUES ('SNV', 'PXQ', 'JQC');
+
+statement ok
+INSERT INTO paths VALUES ('QJH', 'PTF', 'PCX');
+
+statement ok
+INSERT INTO paths VALUES ('MBR', 'VHQ', 'NLL');
+
+statement ok
+INSERT INTO paths VALUES ('XJK', 'BFF', 'BXG');
+
+statement ok
+INSERT INTO paths VALUES ('HDX', 'NMD', 'BLG');
+
+statement ok
+INSERT INTO paths VALUES ('VMF', 'CKV', 'NQT');
+
+statement ok
+INSERT INTO paths VALUES ('SKH', 'CRT', 'VVH');
+
+statement ok
+INSERT INTO paths VALUES ('XNM', 'DBV', 'DBF');
+
+statement ok
+INSERT INTO paths VALUES ('SRQ', 'HXM', 'FTV');
+
+statement ok
+INSERT INTO paths VALUES ('FTG', 'MBN', 'HTR');
+
+statement ok
+INSERT INTO paths VALUES ('VTL', 'KLC', 'KMS');
+
+statement ok
+INSERT INTO paths VALUES ('DNG', 'KDS', 'HCS');
+
+statement ok
+INSERT INTO paths VALUES ('XPR', 'FHF', 'KMT');
+
+statement ok
+INSERT INTO paths VALUES ('QLT', 'NLS', 'PFX');
+
+statement ok
+INSERT INTO paths VALUES ('BLN', 'TSB', 'SHS');
+
+statement ok
+INSERT INTO paths VALUES ('NGP', 'PTJ', 'PLH');
+
+statement ok
+INSERT INTO paths VALUES ('NCD', 'GQJ', 'KHT');
+
+statement ok
+INSERT INTO paths VALUES ('CCB', 'XSL', 'RSX');
+
+statement ok
+INSERT INTO paths VALUES ('TFG', 'PKD', 'HLD');
+
+statement ok
+INSERT INTO paths VALUES ('MKP', 'QCS', 'XRH');
+
+statement ok
+INSERT INTO paths VALUES ('RLT', 'PMP', 'PNV');
+
+statement ok
+INSERT INTO paths VALUES ('TSS', 'SRQ', 'KGG');
+
+statement ok
+INSERT INTO paths VALUES ('QXF', 'XFL', 'DGF');
+
+statement ok
+INSERT INTO paths VALUES ('RFR', 'RHL', 'RXK');
+
+statement ok
+INSERT INTO paths VALUES ('LBD', 'HCD', 'FKG');
+
+statement ok
+INSERT INTO paths VALUES ('SVN', 'RJC', 'VTB');
+
+statement ok
+INSERT INTO paths VALUES ('QHP', 'RBP', 'RMS');
+
+statement ok
+INSERT INTO paths VALUES ('LVL', 'DDV', 'DDV');
+
+statement ok
+INSERT INTO paths VALUES ('SNC', 'KNN', 'MCH');
+
+statement ok
+INSERT INTO paths VALUES ('MJR', 'DQK', 'XRV');
+
+statement ok
+INSERT INTO paths VALUES ('TKP', 'JHD', 'TVM');
+
+statement ok
+INSERT INTO paths VALUES ('KBD', 'RRL', 'QST');
+
+statement ok
+INSERT INTO paths VALUES ('RJC', 'PNQ', 'DJK');
+
+statement ok
+INSERT INTO paths VALUES ('NRK', 'DGF', 'XFL');
+
+statement ok
+INSERT INTO paths VALUES ('NSF', 'QCT', 'QCT');
+
+statement ok
+INSERT INTO paths VALUES ('DRH', 'RDL', 'SRC');
+
+statement ok
+INSERT INTO paths VALUES ('KNH', 'JVM', 'JPH');
+
+statement ok
+INSERT INTO paths VALUES ('RTX', 'VBC', 'VML');
+
+statement ok
+INSERT INTO paths VALUES ('HNL', 'LSR', 'JSJ');
+
+statement ok
+INSERT INTO paths VALUES ('KGP', 'XRJ', 'VKM');
+
+statement ok
+INSERT INTO paths VALUES ('VTF', 'KJH', 'MQK');
+
+statement ok
+INSERT INTO paths VALUES ('KXK', 'QGS', 'KQR');
+
+statement ok
+INSERT INTO paths VALUES ('XRR', 'SHX', 'DPF');
+
+statement ok
+INSERT INTO paths VALUES ('KNX', 'CDL', 'FVT');
+
+statement ok
+INSERT INTO paths VALUES ('VDH', 'QDH', 'QCC');
+
+statement ok
+INSERT INTO paths VALUES ('PGL', 'VLR', 'MCG');
+
+statement ok
+INSERT INTO paths VALUES ('KCR', 'BRX', 'MMG');
+
+statement ok
+INSERT INTO paths VALUES ('NXR', 'XGT', 'XGT');
+
+statement ok
+INSERT INTO paths VALUES ('DSR', 'TSB', 'SHS');
+
+statement ok
+INSERT INTO paths VALUES ('NXM', 'KXK', 'GMB');
+
+statement ok
+INSERT INTO paths VALUES ('QVP', 'CDR', 'HCL');
+
+statement ok
+INSERT INTO paths VALUES ('HMJ', 'JHD', 'TVM');
+
+statement ok
+INSERT INTO paths VALUES ('FHH', 'CHM', 'CHM');
+
+statement ok
+INSERT INTO paths VALUES ('GTV', 'FPR', 'SNC');
+
+statement ok
+INSERT INTO paths VALUES ('SFK', 'QPF', 'BPF');
+
+statement ok
+INSERT INTO paths VALUES ('XMS', 'MXM', 'XCX');
+
+statement ok
+INSERT INTO paths VALUES ('FPR', 'KNN', 'MCH');
+
+statement ok
+INSERT INTO paths VALUES ('SSX', 'SSQ', 'SSQ');
+
+statement ok
+INSERT INTO paths VALUES ('DXN', 'SRM', 'GKL');
+
+statement ok
+INSERT INTO paths VALUES ('VKM', 'GJF', 'RQB');
+
+statement ok
+INSERT INTO paths VALUES ('DVR', 'GBJ', 'NQB');
+
+statement ok
+INSERT INTO paths VALUES ('TMF', 'TFG', 'JMB');
+
+statement ok
+INSERT INTO paths VALUES ('XRV', 'GPM', 'JFX');
+
+statement ok
+INSERT INTO paths VALUES ('TJJ', 'QCT', 'FNZ');
+
+statement ok
+INSERT INTO paths VALUES ('KLT', 'XLD', 'QVQ');
+
+statement ok
+INSERT INTO paths VALUES ('SRX', 'MJT', 'RDH');
+
+statement ok
+INSERT INTO paths VALUES ('RGT', 'MJR', 'FPQ');
+
+statement ok
+INSERT INTO paths VALUES ('SHM', 'HPH', 'BMN');
+
+statement ok
+INSERT INTO paths VALUES ('TVS', 'NFK', 'JNS');
+
+statement ok
+INSERT INTO paths VALUES ('LVN', 'CBJ', 'QHN');
+
+statement ok
+INSERT INTO paths VALUES ('XRJ', 'RQB', 'GJF');
+
+statement ok
+INSERT INTO paths VALUES ('TQP', 'SBD', 'SHT');
+
+statement ok
+INSERT INTO paths VALUES ('BHC', 'LMP', 'RML');
+
+statement ok
+INSERT INTO paths VALUES ('TLD', 'NLL', 'VHQ');
+
+statement ok
+INSERT INTO paths VALUES ('NLS', 'BTD', 'KRH');
+
+statement ok
+INSERT INTO paths VALUES ('HSR', 'XPD', 'FFK');
+
+statement ok
+INSERT INTO paths VALUES ('JMD', 'DRV', 'XMM');
+
+statement ok
+INSERT INTO paths VALUES ('FRV', 'KVC', 'LHQ');
+
+statement ok
+INSERT INTO paths VALUES ('PBB', 'NQT', 'CKV');
+
+statement ok
+INSERT INTO paths VALUES ('KXL', 'KNH', 'HJH');
+
+statement ok
+INSERT INTO paths VALUES ('DDV', 'SXC', 'FMN');
+
+statement ok
+INSERT INTO paths VALUES ('TQV', 'HCP', 'GJS');
+
+statement ok
+INSERT INTO paths VALUES ('GPD', 'GTV', 'BFX');
+
+statement ok
+INSERT INTO paths VALUES ('RCD', 'GSQ', 'CGB');
+
+statement ok
+INSERT INTO paths VALUES ('JHQ', 'LPL', 'MPR');
+
+statement ok
+INSERT INTO paths VALUES ('FVB', 'KXQ', 'VTF');
+
+statement ok
+INSERT INTO paths VALUES ('MQT', 'HBS', 'SVP');
+
+statement ok
+INSERT INTO paths VALUES ('QVF', 'LHB', 'JMR');
+
+statement ok
+INSERT INTO paths VALUES ('LHS', 'PCG', 'MQC');
+
+statement ok
+INSERT INTO paths VALUES ('KLC', 'RSN', 'GSK');
+
+statement ok
+INSERT INTO paths VALUES ('MNQ', 'KFK', 'XJX');
+
+statement ok
+INSERT INTO paths VALUES ('KHH', 'BFS', 'LVD');
+
+statement ok
+INSERT INTO paths VALUES ('SJN', 'MXP', 'KVN');
+
+statement ok
+INSERT INTO paths VALUES ('FKH', 'SKD', 'FTG');
+
+statement ok
+INSERT INTO paths VALUES ('CXK', 'GKD', 'DPT');
+
+statement ok
+INSERT INTO paths VALUES ('LJD', 'QJM', 'TRC');
+
+statement ok
+INSERT INTO paths VALUES ('TVA', 'SHR', 'GCG');
+
+statement ok
+INSERT INTO paths VALUES ('QLS', 'KKG', 'THM');
+
+statement ok
+INSERT INTO paths VALUES ('PLS', 'MVH', 'KGP');
+
+statement ok
+INSERT INTO paths VALUES ('HKT', 'LRL', 'XQM');
+
+statement ok
+INSERT INTO paths VALUES ('MLH', 'MRQ', 'XKF');
+
+statement ok
+INSERT INTO paths VALUES ('FNX', 'SJL', 'VDH');
+
+statement ok
+INSERT INTO paths VALUES ('RFQ', 'KCX', 'DSL');
+
+statement ok
+INSERT INTO paths VALUES ('PNQ', 'CVC', 'CFQ');
+
+statement ok
+INSERT INTO paths VALUES ('KJT', 'DVD', 'QVP');
+
+statement ok
+INSERT INTO paths VALUES ('RBF', 'LFB', 'NQH');
+
+statement ok
+INSERT INTO paths VALUES ('LDX', 'DGR', 'KXL');
+
+statement ok
+INSERT INTO paths VALUES ('QPB', 'FXC', 'JGS');
+
+statement ok
+INSERT INTO paths VALUES ('PRT', 'BVN', 'SHD');
+
+statement ok
+INSERT INTO paths VALUES ('JHM', 'CDL', 'FVT');
+
+statement ok
+INSERT INTO paths VALUES ('MJT', 'SVN', 'HPN');
+
+statement ok
+INSERT INTO paths VALUES ('HRD', 'GDL', 'SXG');
+
+statement ok
+INSERT INTO paths VALUES ('BLG', 'GMR', 'VTL');
+
+statement ok
+INSERT INTO paths VALUES ('HLD', 'FHH', 'NFJ');
+
+statement ok
+INSERT INTO paths VALUES ('DTA', 'LBP', 'RFH');
+
+statement ok
+INSERT INTO paths VALUES ('CDR', 'MRL', 'TBF');
+
+statement ok
+INSERT INTO paths VALUES ('SHT', 'VBQ', 'BJJ');
+
+statement ok
+INSERT INTO paths VALUES ('DLG', 'BCG', 'VVJ');
+
+statement ok
+INSERT INTO paths VALUES ('QNF', 'LSM', 'ZZZ');
+
+statement ok
+INSERT INTO paths VALUES ('HBR', 'RXP', 'DBG');
+
+statement ok
+INSERT INTO paths VALUES ('XMP', 'NSF', 'NSF');
+
+statement ok
+INSERT INTO paths VALUES ('RMN', 'TLN', 'KHH');
+
+statement ok
+INSERT INTO paths VALUES ('RVM', 'KDJ', 'DDJ');
+
+statement ok
+INSERT INTO paths VALUES ('STV', 'MXM', 'XCX');
+
+statement ok
+INSERT INTO paths VALUES ('FBV', 'RLT', 'BHL');
+
+statement ok
+INSERT INTO paths VALUES ('TLM', 'NVL', 'KXG');
+
+statement ok
+INSERT INTO paths VALUES ('CVN', 'TLM', 'PHH');
+
+statement ok
+INSERT INTO paths VALUES ('FHF', 'RTX', 'MBK');
+
+statement ok
+INSERT INTO paths VALUES ('PCX', 'JND', 'VRX');
+
+statement ok
+INSERT INTO paths VALUES ('VKF', 'VTR', 'BJV');
+
+statement ok
+INSERT INTO paths VALUES ('DRL', 'GLS', 'RTV');
+
+statement ok
+INSERT INTO paths VALUES ('NQH', 'JDR', 'PKB');
+
+statement ok
+INSERT INTO paths VALUES ('CRR', 'BQR', 'XTD');
+
+statement ok
+INSERT INTO paths VALUES ('LBH', 'DLG', 'LKT');
+
+statement ok
+INSERT INTO paths VALUES ('MBN', 'GNN', 'BHC');
+
+statement ok
+INSERT INTO paths VALUES ('TSK', 'CCB', 'MHN');
+
+statement ok
+INSERT INTO paths VALUES ('HGG', 'XKN', 'JHQ');
+
+statement ok
+INSERT INTO paths VALUES ('LVD', 'CHN', 'SFK');
+
+statement ok
+INSERT INTO paths VALUES ('SXS', 'XJX', 'KFK');
+
+statement ok
+INSERT INTO paths VALUES ('LNH', 'TRC', 'QJM');
+
+statement ok
+INSERT INTO paths VALUES ('RPD', 'HCB', 'VLG');
+
+statement ok
+INSERT INTO paths VALUES ('XFL', 'SFH', 'BDS');
+
+statement ok
+INSERT INTO paths VALUES ('RKV', 'GQF', 'VKF');
+
+statement ok
+INSERT INTO paths VALUES ('RPP', 'LRL', 'XQM');
+
+statement ok
+INSERT INTO paths VALUES ('HCS', 'CMT', 'XQP');
+
+statement ok
+INSERT INTO paths VALUES ('XGB', 'NSF', 'TJJ');
+
+statement ok
+INSERT INTO paths VALUES ('MLN', 'NDD', 'HVX');
+
+statement ok
+INSERT INTO paths VALUES ('TDC', 'GXM', 'LNM');
+
+statement ok
+INSERT INTO paths VALUES ('VLK', 'HQN', 'CQJ');
+
+statement ok
+INSERT INTO paths VALUES ('MMM', 'SSX', 'SSX');
+
+statement ok
+INSERT INTO paths VALUES ('PQF', 'VTD', 'HNL');
+
+statement ok
+INSERT INTO paths VALUES ('RDT', 'PGT', 'LHS');
+
+statement ok
+INSERT INTO paths VALUES ('SBD', 'VBQ', 'VBQ');
+
+statement ok
+INSERT INTO paths VALUES ('RSM', 'JGJ', 'JQK');
+
+statement ok
+INSERT INTO paths VALUES ('CKT', 'FVB', 'JQM');
+
+statement ok
+INSERT INTO paths VALUES ('TCF', 'BKM', 'CGR');
+
+statement ok
+INSERT INTO paths VALUES ('RGS', 'JKJ', 'LDT');
+
+statement ok
+INSERT INTO paths VALUES ('KNN', 'BCN', 'LSJ');
+
+statement ok
+INSERT INTO paths VALUES ('MMS', 'JQC', 'PXQ');
+
+statement ok
+INSERT INTO paths VALUES ('JKK', 'DVN', 'DVR');
+
+statement ok
+INSERT INTO paths VALUES ('FSJ', 'DNG', 'NCQ');
+
+statement ok
+INSERT INTO paths VALUES ('GDL', 'NDN', 'RSF');
+
+statement ok
+INSERT INTO paths VALUES ('LSM', 'DFD', 'PLS');
+
+statement ok
+INSERT INTO paths VALUES ('PDL', 'QLT', 'KLN');
+
+statement ok
+INSERT INTO paths VALUES ('HHM', 'BSG', 'SQH');
+
+statement ok
+INSERT INTO paths VALUES ('XQQ', 'PJM', 'TQV');
+
+statement ok
+INSERT INTO paths VALUES ('RLS', 'RLN', 'NVC');
+
+statement ok
+INSERT INTO paths VALUES ('RHM', 'PCX', 'PTF');
+
+statement ok
+INSERT INTO paths VALUES ('RBV', 'CSD', 'CTR');
+
+statement ok
+INSERT INTO paths VALUES ('TRC', 'QSP', 'CJB');
+
+statement ok
+INSERT INTO paths VALUES ('TBR', 'RSM', 'NBX');
+
+query II
+WITH MUTUALLY RECURSIVE
+
+    route(step TEXT, steps INT) AS (
+        SELECT substring(input, steps, 1), steps
+        FROM steps_input, generate_series(1, length(input)) steps
+    ),
+
+    -- Part 1: Start at 'AAA` and go until `ZZZ`.
+    pos1(state TEXT, steps INT) AS (
+        SELECT 'AAA', 0
+        UNION ALL
+        SELECT
+            CASE WHEN route.step = 'L' THEN paths.left
+                 WHEN route.step = 'R' THEN paths.right
+                 ELSE '???'
+            END,
+            pos1.steps + 1
+        FROM paths, pos1, route
+        WHERE pos1.state = paths.state
+          AND 1 + (pos1.steps % 263) = route.steps
+          AND pos1.state != 'ZZZ'
+          AND pos1.state != '???'
+    ),
+    part1(part1 INT) AS (SELECT steps FROM pos1 WHERE pos1.state = 'ZZZ'),
+
+    -- Part 2: Start at all '**A` and go until all at '**Z'
+    pos2(start TEXT, state TEXT, steps INT) AS (
+        SELECT state, state, 0
+        FROM paths
+        WHERE substring(state, 3, 1) = 'A'
+        UNION ALL
+        SELECT
+            pos2.start,
+            CASE WHEN route.step = 'L' THEN paths.left
+                 WHEN route.step = 'R' THEN paths.right
+                 ELSE '???'
+            END,
+            pos2.steps + 1
+        FROM paths, pos2, route
+        WHERE pos2.state = paths.state
+          AND 1 + (pos2.steps % 263) = route.steps
+          AND substring(pos2.state, 3, 1) != 'Z'
+    )
+
+SELECT * FROM pos2 WHERE substring(state, 3, 1) = 'Z';
+----
+0
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+    route(step TEXT, steps INT) AS (
+        SELECT substring(input, steps, 1), steps
+        FROM steps_input, generate_series(1, length(input)) steps
+    ),
+
+    -- Part 1: Start at 'AAA` and go until `ZZZ`.
+    pos1(state TEXT, steps INT) AS (
+        SELECT 'AAA', 0
+        UNION ALL
+        SELECT
+            CASE WHEN route.step = 'L' THEN paths.left
+                 WHEN route.step = 'R' THEN paths.right
+                 ELSE '???'
+            END,
+            pos1.steps + 1
+        FROM paths, pos1, route
+        WHERE pos1.state = paths.state
+          AND 1 + (pos1.steps % 263) = route.steps
+          AND pos1.state != 'ZZZ'
+          AND pos1.state != '???'
+    ),
+    part1(part1 INT) AS (SELECT steps FROM pos1 WHERE pos1.state = 'ZZZ'),
+
+    -- Part 2: Start at all '**A` and go until all at '**Z'
+    pos2(start TEXT, state TEXT, steps INT) AS (
+        SELECT state, state, 0
+        FROM paths
+        WHERE substring(state, 3, 1) = 'A'
+        UNION ALL
+        SELECT
+            pos2.start,
+            CASE WHEN route.step = 'L' THEN paths.left
+                 WHEN route.step = 'R' THEN paths.right
+                 ELSE '???'
+            END,
+            pos2.steps + 1
+        FROM paths, pos2, route
+        WHERE pos2.state = paths.state
+          AND 1 + (pos2.steps % 263) = route.steps
+          AND substring(pos2.state, 3, 1) != 'Z'
+    )
+
+SELECT * FROM pos2 WHERE substring(state, 3, 1) = 'Z';
+----
+Explained Query:
+  Return
+    Filter ("Z" = substr(#1, 3, 1))
+      Get l0
+  With Mutually Recursive
+    cte l0 =
+      Union
+        Project (#0, #0, #3)
+          Filter ("A" = substr(#0, 3, 1))
+            Map (0)
+              ReadStorage materialize.public.paths
+        Project (#3, #8, #9)
+          Map (case when (#7 = "L") then #1 else case when (#7 = "R") then #2 else "???" end end, (#5 + 1))
+            Join on=(#0 = #4 AND #6 = (1 + (#5 % 263))) type=delta
+              ArrangeBy keys=[[#0]]
+                Filter ("Z" != substr(#0, 3, 1))
+                  ReadStorage materialize.public.paths
+              ArrangeBy keys=[[#1], [(1 + (#2 % 263))]]
+                Filter ("Z" != substr(#1, 3, 1))
+                  Get l0
+              ArrangeBy keys=[[#0]]
+                Project (#1, #2)
+                  Map (substr(#0, #1, 1))
+                    FlatMap generate_series(1, char_length(#0), 1)
+                      ReadStorage materialize.public.steps_input
+
+Source materialize.public.steps_input
+Source materialize.public.paths
+
+Target cluster: quickstart
+
+EOF
