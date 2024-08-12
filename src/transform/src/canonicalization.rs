@@ -99,14 +99,23 @@ impl crate::Transform for ReduceScalars {
                     }
                 }
                 MirRelationExpr::Join { equivalences, .. } => {
-                    let output_type = view
-                        .value::<RelationType>()
-                        .expect("RelationType required")
-                        .as_ref()
-                        .unwrap();
+                    let mut children: Vec<_> = view.children_rev().collect::<Vec<_>>();
+                    children.reverse();
+                    let input_types = children
+                        .iter()
+                        .flat_map(|c| {
+                            c.value::<RelationType>()
+                                .expect("RelationType required")
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .cloned()
+                        })
+                        .collect::<Vec<_>>();
+
                     for class in equivalences.iter_mut() {
                         for expr in class.iter_mut() {
-                            expr.reduce(output_type);
+                            expr.reduce(&input_types[..]);
                         }
                         class.sort();
                         class.dedup();
