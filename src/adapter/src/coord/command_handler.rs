@@ -1007,7 +1007,10 @@ impl Coordinator {
         // coordinator thread.
         if !matches!(
             stmt,
-            Statement::CreateSource(_) | Statement::AlterSource(_) | Statement::CreateSink(_)
+            Statement::CreateSource(_)
+                | Statement::AlterSource(_)
+                | Statement::CreateSink(_)
+                | Statement::CreateTableFromSource(_)
         ) {
             return false;
         }
