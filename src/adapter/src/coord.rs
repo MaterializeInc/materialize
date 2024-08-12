@@ -2149,13 +2149,6 @@ impl Coordinator {
             init_read_policy_start.elapsed()
         );
 
-        debug!("startup: coordinator init: bootstrap: announcing completion of initialization to controller");
-        // Announce the completion of initialization.
-        self.controller.initialization_complete();
-
-        // Initialize unified introspection.
-        self.bootstrap_introspection_subscribes().await;
-
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(
             self.catalog().state().resolve_builtin_table_updates(
@@ -2314,6 +2307,14 @@ impl Coordinator {
         ])
         .instrument(info_span!("coord::bootstrap::final"))
         .await;
+
+        debug!("startup: coordinator init: bootstrap: announcing completion of initialization to controller");
+        // Announce the completion of initialization.
+        self.controller.initialization_complete();
+
+        // Initialize unified introspection.
+        self.bootstrap_introspection_subscribes().await;
+
         info!(
             "startup: coordinator init: bootstrap: concurrently update builtin tables and cleanup secrets complete in {:?}", final_steps_start.elapsed()
         );
