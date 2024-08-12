@@ -1,0 +1,313 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1202.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES ('Game 1: 1 red, 4 green, 4 blue; 3 red, 4 blue; 2 red, 1 green; 1 green, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 2: 20 green, 1 red; 1 blue, 4 red; 1 green, 1 red, 1 blue; 1 green, 1 red, 1 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 3: 8 red, 1 blue, 5 green; 9 red, 3 blue, 3 green; 3 green, 4 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 4: 0 blue, 8 red, 4 green; 7 green, 8 blue, 9 red; 2 green, 5 red, 1 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 5: 20 red, 10 blue, 9 green; 2 blue, 3 red, 7 green; 1 green, 3 blue');
+
+statement ok
+CREATE TABLE aoc_1202 (game_id TEXT, set_id TEXT, green_cnt INT, red_cnt INT, blue_cnt INT);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 1', 'set_0', 4, 1, 4), ('Game 1', 'set_1', 0, 3, 4), ('Game 1', 'set_2', 1, 2, 0), ('Game 1', 'set_3', 1, 1, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 2', 'set_0', 20, 1, 0), ('Game 2', 'set_1', 0, 4, 1), ('Game 2', 'set_2', 1, 1, 1), ('Game 2', 'set_3', 1, 1, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 3', 'set_0', 5, 8, 1), ('Game 3', 'set_1', 3, 9, 3), ('Game 3', 'set_2', 3, 4, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 4', 'set_0', 4, 8, 0), ('Game 4', 'set_1', 7, 9, 8), ('Game 4', 'set_2', 2, 5, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 5', 'set_0', 9, 20, 10), ('Game 5', 'set_1', 7, 3, 2), ('Game 5', 'set_2', 1, 0, 3);
+
+query I
+WITH game_cnt AS (
+SELECT split_part(game_id,' ', 2)::int AS game_id,
+       COUNT(set_id) AS total_set_cnt,
+       COUNT(set_id) FILTER (WHERE (green_cnt <= 13) AND (red_cnt <= 12) AND (blue_cnt <= 14)) AS possible_set_cnt
+FROM aoc_1202
+GROUP BY game_id
+)
+SELECT SUM(game_id) FROM game_cnt WHERE total_set_cnt = possible_set_cnt;
+----
+8
+
+query T multiline
+EXPLAIN WITH game_cnt AS (
+        SELECT split_part(game_id,' ', 2)::int AS game_id,
+               COUNT(set_id) AS total_set_cnt,
+               COUNT(set_id) FILTER (WHERE (green_cnt <= 13) AND (red_cnt <= 12) AND (blue_cnt <= 14)) AS possible_set_cnt
+        FROM aoc_1202
+        GROUP BY game_id
+        )
+        SELECT SUM(game_id) FROM game_cnt WHERE total_set_cnt = possible_set_cnt;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(text_to_integer(split_string(#0, " ", 2)))]
+        Project (#0)
+          Filter (#1 = #2)
+            Reduce group_by=[#0] aggregates=[count(#1), count(case when ((#2 <= 13) AND (#3 <= 12) AND (#4 <= 14)) then #1 else null end)]
+              ReadStorage materialize.public.aoc_1202
+
+Source materialize.public.aoc_1202
+
+Target cluster: quickstart
+
+EOF
+
+query I
+WITH game_min AS (
+SELECT split_part(game_id,' ', 2)::int AS game_id,
+       MAX(green_cnt) AS green_min,
+       MAX(red_cnt) AS red_min,
+       MAX(blue_cnt) AS blue_min
+FROM aoc_1202
+GROUP BY split_part(game_id,' ', 2)::int
+)
+SELECT SUM(green_min*red_min*blue_min) FROM game_min;
+----
+2567
+
+query T multiline
+EXPLAIN WITH game_min AS (
+SELECT split_part(game_id,' ', 2)::int AS game_id,
+       MAX(green_cnt) AS green_min,
+       MAX(red_cnt) AS red_min,
+       MAX(blue_cnt) AS blue_min
+FROM aoc_1202
+GROUP BY split_part(game_id,' ', 2)::int
+)
+SELECT SUM(green_min*red_min*blue_min) FROM game_min;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(((#0 * #1) * #2))]
+        Project (#1..=#3)
+          Reduce group_by=[text_to_integer(split_string(#0, " ", 2))] aggregates=[max(#1), max(#2), max(#3)]
+            Project (#0, #2..=#4)
+              ReadStorage materialize.public.aoc_1202
+
+Source materialize.public.aoc_1202
+
+Target cluster: quickstart
+
+EOF
+
+query II
+with mutually recursive
+    -- Parse the input up
+    lines(line TEXT) as (select regexp_split_to_table(input, '\n') as line from input),
+    games(game TEXT, report TEXT) as (select regexp_split_to_array(line, ':')[1], regexp_split_to_array(line, ':')[2] from lines),
+    round(game TEXT, visible TEXT) as (select game, regexp_split_to_table(report, ';') from games),
+    bacon(game TEXT, color TEXT) as (select game, regexp_split_to_table(visible, ',') from round),
+    parsed(game INT, color TEXT, number INT) as (
+        select
+            substring(game, 5)::INT as game,
+            regexp_split_to_array(color, ' ')[3] as color,
+            regexp_split_to_array(color, ' ')[2]::INT as number
+        from bacon
+    ),
+    -- PART 1
+    limits(color TEXT, number INT) as (SELECT * FROM (VALUES ('red', 12), ('green', 13), ('blue', 14))),
+    bad_news(game INT) as (
+        select game
+        from parsed, limits
+        where parsed.color = limits.color
+          AND parsed.number > limits.number
+    ),
+    plausible(game INT) as (select distinct parsed.game from parsed left join bad_news on(parsed.game = bad_news.game) where bad_news.game IS NULL),
+    part1(part1 BIGINT) as (select SUM(game) from plausible),
+    -- PART 2
+    maximum(game INT, color TEXT, number INT) as (select game, color, max(number) from parsed GROUP BY game, color),
+    red(game INT) as (select game from maximum, generate_series(1, number) where color = 'red'),
+    blue(game INT) as (select game from maximum, generate_series(1, number) where color = 'blue'),
+    green(game INT) as (select game from maximum, generate_series(1, number) where color = 'green'),
+    power(game INT, product BIGINT) as (SELECT red.game, count(*) from red, blue, green where red.game = blue.game and blue.game = green.game GROUP BY red.game),
+    part2(part2 BIGINT) as (select sum(product)::BIGINT from power)
+select * from part1, part2;
+----
+8  2567
+
+query T multiline
+EXPLAIN with mutually recursive
+    -- Parse the input up
+    lines(line TEXT) as (select regexp_split_to_table(input, '\n') as line from input),
+    games(game TEXT, report TEXT) as (select regexp_split_to_array(line, ':')[1], regexp_split_to_array(line, ':')[2] from lines),
+    round(game TEXT, visible TEXT) as (select game, regexp_split_to_table(report, ';') from games),
+    bacon(game TEXT, color TEXT) as (select game, regexp_split_to_table(visible, ',') from round),
+    parsed(game INT, color TEXT, number INT) as (
+        select
+            substring(game, 5)::INT as game,
+            regexp_split_to_array(color, ' ')[3] as color,
+            regexp_split_to_array(color, ' ')[2]::INT as number
+        from bacon
+    ),
+    -- PART 1
+    limits(color TEXT, number INT) as (SELECT * FROM (VALUES ('red', 12), ('green', 13), ('blue', 14))),
+    bad_news(game INT) as (
+        select game
+        from parsed, limits
+        where parsed.color = limits.color
+          AND parsed.number > limits.number
+    ),
+    plausible(game INT) as (select distinct parsed.game from parsed left join bad_news on(parsed.game = bad_news.game) where bad_news.game IS NULL),
+    part1(part1 BIGINT) as (select SUM(game) from plausible),
+    -- PART 2
+    maximum(game INT, color TEXT, number INT) as (select game, color, max(number) from parsed GROUP BY game, color),
+    red(game INT) as (select game from maximum, generate_series(1, number) where color = 'red'),
+    blue(game INT) as (select game from maximum, generate_series(1, number) where color = 'blue'),
+    green(game INT) as (select game from maximum, generate_series(1, number) where color = 'green'),
+    power(game INT, product BIGINT) as (SELECT red.game, count(*) from red, blue, green where red.game = blue.game and blue.game = green.game GROUP BY red.game),
+    part2(part2 BIGINT) as (select sum(product)::BIGINT from power)
+select * from part1, part2;
+----
+Explained Query:
+  Return
+    CrossJoin type=differential
+      ArrangeBy keys=[[]]
+        Union
+          Get l3
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l3
+              Constant
+                - ()
+      ArrangeBy keys=[[]]
+        Project (#1)
+          Map (numeric_to_bigint(#0))
+            Union
+              Get l5
+              Map (null)
+                Union
+                  Negate
+                    Project ()
+                      Get l5
+                  Constant
+                    - ()
+  With
+    cte l5 =
+      Reduce aggregates=[sum(#0)]
+        Project (#1)
+          Reduce group_by=[#0] aggregates=[count(*)]
+            Project (#0)
+              Join on=(#0 = #1 = #2) type=delta
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "red")
+                          Get l4
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "blue")
+                          Get l4
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "green")
+                          Get l4
+    cte l4 =
+      Reduce group_by=[#0, #1] aggregates=[max(#2)]
+        Get l1
+    cte l3 =
+      Reduce aggregates=[sum(#0)]
+        Distinct project=[#0]
+          Union
+            Negate
+              Project (#0)
+                Join on=(#0 = #1) type=differential
+                  Get l2
+                  ArrangeBy keys=[[#0]]
+                    Distinct project=[#0]
+                      Project (#0)
+                        Filter (#3 > #5)
+                          Join on=(#0 = #1 AND #2 = #4) type=delta
+                            Get l2
+                            ArrangeBy keys=[[#0], [#1]]
+                              Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                                Get l0
+                            ArrangeBy keys=[[#0]]
+                              Constant
+                                - ("red", 12)
+                                - ("blue", 14)
+                                - ("green", 13)
+            Project (#0)
+              Get l0
+    cte l2 =
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          Get l1
+    cte l1 =
+      Filter (#0) IS NOT NULL
+        Get l0
+    cte l0 =
+      Project (#3, #5, #6)
+        Map (text_to_integer(substr(#0, 5)), regexp_split_to_array[" ", case_insensitive=false](#2), array_index(#4, 3), text_to_integer(array_index(#4, 2)))
+          FlatMap unnest_array(regexp_split_to_array[",", case_insensitive=false](#1))
+            Project (#0, #2)
+              FlatMap unnest_array(regexp_split_to_array[";", case_insensitive=false](#1))
+                Project (#3, #4)
+                  Map (regexp_split_to_array[":", case_insensitive=false](#1), array_index(#2, 1), array_index(#2, 2))
+                    FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+                      ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

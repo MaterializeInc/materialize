@@ -1,0 +1,445 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1203.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'...14...954......104...98..........11...222.........38.104....708..........................217..................330.................19..
+.......@...................*...............................*.664........677................@....459.........187..........73.............
+....41............178.....398....*...548..495..........983.........99.........282......409........*...........$.248...............165...
+......261......300...............704.&.......*.......*........9.65..904.....6....*773....=.....680../511...2*.....=..99*....*..../......
+..........200..............398.......22...100...........&...........10.......*.......73.....833...*...........*......300.............22.
+..................@.100....*...........*...............*....19...300.....*.................@....954.......................200...........
+.....-....&..@............828...........@268..844....534...................563.........409........$..........244.........722.286........');
+
+
+query II
+WITH MUTUALLY RECURSIVE
+    -- PART 0
+    -- Parse the input as lines of text with line numbers.
+    lines(line TEXT, row_idx INT) AS (
+        SELECT
+           regexp_split_to_array(input, '\n')[row_idx],
+           row_idx
+         FROM
+            input,
+            generate_series(1, (SELECT COUNT(*)::INT FROM (SELECT regexp_split_to_table(input, '\n') FROM input))) as row_idx
+    ),
+    chars(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT
+            substring(line, start, 1),
+            row_idx,
+            start
+        FROM
+            lines,
+            generate_series(1, length(line)) as start
+        WHERE
+            substring(line, start, 1) != '.'
+    ),
+    numerals(number TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    symbols(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol NOT IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    -- PART 1
+    -- Recursively build up ranges of numerals that are "active", in the sense of being adjacent to a symbol.
+    -- Each range has an accumulated number (as a string), a row index, a column index and length of the run.
+    active(number TEXT, row_idx INT, col_idx INT, length INT) AS (
+        -- Base case: numerals adjacent to a symbol
+        SELECT numerals.*, 1
+        FROM
+            numerals,
+            symbols,
+            generate_series(-1, 1) row_off,
+            generate_series(-1, 1) col_off
+        WHERE numerals.row_idx = symbols.row_idx + row_off
+          AND numerals.col_idx = symbols.col_idx + col_off
+        UNION
+        -- Inductive case 1: Join to the left
+        SELECT numerals.number || active.number, numerals.row_idx, numerals.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx - 1
+        UNION
+        -- Inductive case 2: Join to the right
+        SELECT active.number || numerals.number, numerals.row_idx, active.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx + active.length
+    ),
+    parts(number INT, row_idx INT, col_idx INT, length INT) AS (
+        SELECT active.number::INT, row_idx, col_idx, length
+        FROM active
+        WHERE (active.row_idx, active.col_idx-1) NOT IN (SELECT row_idx, col_idx FROM numerals)
+          AND (active.row_idx, active.col_idx+length) NOT IN (SELECT row_idx, col_idx FROM numerals)
+    ),
+    part1(part1 BIGINT) AS ( SELECT SUM(parts.number::INT) FROM parts ),
+    -- PART 2
+    -- A "gear" is a `*` adjacent to exactly two part numbers. We want the sum over gears of their product.
+    -- A gear is identified by a location, which we will want to attempt to join with part numbers.
+    gear_adjacent(row_idx INT, col_idx INT, number INT, part_row INT, part_col INT) AS (
+        SELECT DISTINCT symbols.row_idx, symbols.col_idx, parts.number, parts.row_idx, parts.col_idx
+        FROM
+            symbols,
+            generate_series(-1, 1) gear_r_off,
+            generate_series(-1, 1) gear_c_off,
+            parts,
+            generate_series(parts.col_idx, parts.col_idx + parts.length - 1) part_col
+        WHERE symbols.symbol = '*'
+          AND symbols.row_idx + gear_r_off = parts.row_idx
+          AND symbols.col_idx + gear_c_off = part_col
+    ),
+    gears(row_idx INT, col_idx INT) AS (
+        SELECT row_idx, col_idx
+        FROM gear_adjacent
+        GROUP BY row_idx, col_idx
+        HAVING COUNT(*) = 2
+    ),
+    gear_products(row_idx INT, col_idx INT, product INT) AS (
+        SELECT DISTINCT gears.row_idx, gears.col_idx, p1.number * p2.number
+        FROM gears, gear_adjacent p1, gear_adjacent p2
+        WHERE gears.row_idx = p1.row_idx
+          AND gears.col_idx = p1.col_idx
+          AND gears.row_idx = p2.row_idx
+          AND gears.col_idx = p2.col_idx
+          AND (p1.part_row != p2.part_row OR p1.part_col != p2.part_col)
+    ),
+    part2(part2 BIGINT) AS ( SELECT SUM(product) FROM gear_products)
+
+SELECT * FROM part1, part2;
+----
+11374  1587570
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+    -- PART 0
+    -- Parse the input as lines of text with line numbers.
+    lines(line TEXT, row_idx INT) AS (
+        SELECT
+           regexp_split_to_array(input, '\n')[row_idx],
+           row_idx
+         FROM
+            input,
+            generate_series(1, (SELECT COUNT(*)::INT FROM (SELECT regexp_split_to_table(input, '\n') FROM input))) as row_idx
+    ),
+    chars(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT
+            substring(line, start, 1),
+            row_idx,
+            start
+        FROM
+            lines,
+            generate_series(1, length(line)) as start
+        WHERE
+            substring(line, start, 1) != '.'
+    ),
+    numerals(number TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    symbols(symbol TEXT, row_idx INT, col_idx INT) AS (
+        SELECT symbol, row_idx, col_idx
+        FROM chars
+        WHERE symbol NOT IN ( VALUES ('0'), ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7'), ('8'), ('9') )
+    ),
+    -- PART 1
+    -- Recursively build up ranges of numerals that are "active", in the sense of being adjacent to a symbol.
+    -- Each range has an accumulated number (as a string), a row index, a column index and length of the run.
+    active(number TEXT, row_idx INT, col_idx INT, length INT) AS (
+        -- Base case: numerals adjacent to a symbol
+        SELECT numerals.*, 1
+        FROM
+            numerals,
+            symbols,
+            generate_series(-1, 1) row_off,
+            generate_series(-1, 1) col_off
+        WHERE numerals.row_idx = symbols.row_idx + row_off
+          AND numerals.col_idx = symbols.col_idx + col_off
+        UNION
+        -- Inductive case 1: Join to the left
+        SELECT numerals.number || active.number, numerals.row_idx, numerals.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx - 1
+        UNION
+        -- Inductive case 2: Join to the right
+        SELECT active.number || numerals.number, numerals.row_idx, active.col_idx, active.length + 1
+        FROM numerals, active
+        WHERE numerals.row_idx = active.row_idx
+          AND numerals.col_idx = active.col_idx + active.length
+    ),
+    parts(number INT, row_idx INT, col_idx INT, length INT) AS (
+        SELECT active.number::INT, row_idx, col_idx, length
+        FROM active
+        WHERE (active.row_idx, active.col_idx-1) NOT IN (SELECT row_idx, col_idx FROM numerals)
+          AND (active.row_idx, active.col_idx+length) NOT IN (SELECT row_idx, col_idx FROM numerals)
+    ),
+    part1(part1 BIGINT) AS ( SELECT SUM(parts.number::INT) FROM parts ),
+    -- PART 2
+    -- A "gear" is a `*` adjacent to exactly two part numbers. We want the sum over gears of their product.
+    -- A gear is identified by a location, which we will want to attempt to join with part numbers.
+    gear_adjacent(row_idx INT, col_idx INT, number INT, part_row INT, part_col INT) AS (
+        SELECT DISTINCT symbols.row_idx, symbols.col_idx, parts.number, parts.row_idx, parts.col_idx
+        FROM
+            symbols,
+            generate_series(-1, 1) gear_r_off,
+            generate_series(-1, 1) gear_c_off,
+            parts,
+            generate_series(parts.col_idx, parts.col_idx + parts.length - 1) part_col
+        WHERE symbols.symbol = '*'
+          AND symbols.row_idx + gear_r_off = parts.row_idx
+          AND symbols.col_idx + gear_c_off = part_col
+    ),
+    gears(row_idx INT, col_idx INT) AS (
+        SELECT row_idx, col_idx
+        FROM gear_adjacent
+        GROUP BY row_idx, col_idx
+        HAVING COUNT(*) = 2
+    ),
+    gear_products(row_idx INT, col_idx INT, product INT) AS (
+        SELECT DISTINCT gears.row_idx, gears.col_idx, p1.number * p2.number
+        FROM gears, gear_adjacent p1, gear_adjacent p2
+        WHERE gears.row_idx = p1.row_idx
+          AND gears.col_idx = p1.col_idx
+          AND gears.row_idx = p2.row_idx
+          AND gears.col_idx = p2.col_idx
+          AND (p1.part_row != p2.part_row OR p1.part_col != p2.part_col)
+    ),
+    part2(part2 BIGINT) AS ( SELECT SUM(product) FROM gear_products)
+
+SELECT * FROM part1, part2;
+----
+Explained Query:
+  Return
+    Return
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Union
+            Get l13
+            Map (null)
+              Union
+                Negate
+                  Project ()
+                    Get l13
+                Constant
+                  - ()
+        ArrangeBy keys=[[]]
+          Union
+            Get l17
+            Map (null)
+              Union
+                Negate
+                  Project ()
+                    Get l17
+                Constant
+                  - ()
+    With
+      cte l17 =
+        Reduce aggregates=[sum(#0)]
+          Project (#2)
+            Distinct project=[#0, #1, (#2 * #3)]
+              Project (#0, #1, #5, #10)
+                Filter (#2 = 2) AND ((#6 != #11) OR (#7 != #12))
+                  Join on=(#0 = #3 = #8 AND #1 = #4 = #9) type=delta
+                    ArrangeBy keys=[[#0, #1]]
+                      Reduce group_by=[#0, #1] aggregates=[count(*)]
+                        Project (#0, #1)
+                          Get l15
+                    Get l16
+                    Get l16
+      cte l16 =
+        ArrangeBy keys=[[#0, #1]]
+          Get l15
+      cte l15 =
+        Distinct project=[#0, #1, #4, #2, #3]
+          Project (#0, #1, #3, #4, #6)
+            Filter (#7 = (#1 + #2))
+              FlatMap generate_series(#4, ((#4 + #5) - 1), 1)
+                Project (#0, #1, #3..=#7)
+                  Join on=(#4 = (#0 + #2)) type=delta
+                    ArrangeBy keys=[[]]
+                      Project (#0, #1)
+                        Filter (#2 = "*")
+                          Get l4
+                    Get l14
+                    Get l14
+                    ArrangeBy keys=[[#0]]
+                      Get l12
+      cte l14 =
+        ArrangeBy keys=[[]]
+          Constant
+            - (0)
+            - (-1)
+            - (1)
+      cte l13 =
+        Reduce aggregates=[sum(#0)]
+          Project (#3)
+            Get l12
+      cte l12 =
+        Project (#1..=#3, #7)
+          Map (text_to_integer(#0))
+            Join on=(#1 = #4 AND #2 = #5 AND #3 = #6) type=differential
+              ArrangeBy keys=[[#1..=#3]]
+                Get l10
+              ArrangeBy keys=[[#0..=#2]]
+                Union
+                  Negate
+                    Distinct project=[#0..=#2]
+                      Project (#0..=#2)
+                        Filter (#5 OR (#5) IS NULL)
+                          Map (((#0 = #3) AND (#4 = (#1 + #2))))
+                            CrossJoin type=differential
+                              ArrangeBy keys=[[]]
+                                Get l11
+                              ArrangeBy keys=[[]]
+                                Get l9
+                  Get l11
+      cte l11 =
+        Distinct project=[#0..=#2]
+          Project (#1..=#3)
+            Get l10
+      cte l10 =
+        Project (#0..=#3)
+          Join on=(#1 = #4 AND #2 = #5) type=differential
+            ArrangeBy keys=[[#1, #2]]
+              Get l7
+            ArrangeBy keys=[[#0, #1]]
+              Union
+                Negate
+                  Distinct project=[#0, #1]
+                    Project (#0, #1)
+                      Join on=(#0 = #2 AND #3 = (#1 - 1)) type=differential
+                        ArrangeBy keys=[[#0, (#1 - 1)]]
+                          Get l8
+                        ArrangeBy keys=[[#0, #1]]
+                          Get l9
+                Get l8
+      cte l9 =
+        Project (#0, #1)
+          Get l2
+      cte l8 =
+        Distinct project=[#0, #1]
+          Project (#1, #2)
+            Get l7
+  With Mutually Recursive
+    cte l7 =
+      Distinct project=[#0..=#3]
+        Union
+          Distinct project=[#0..=#3]
+            Union
+              Project (#2, #0, #1, #7)
+                Map (1)
+                  Join on=(#0 = (#3 + #5) AND #1 = (#4 + #6)) type=delta
+                    ArrangeBy keys=[[]]
+                      Get l2
+                    ArrangeBy keys=[[]]
+                      Project (#0, #1)
+                        Get l4
+                    Get l5
+                    Get l5
+              Project (#7, #0, #1, #8)
+                Map ((#2 || #3), (#6 + 1))
+                  Join on=(#0 = #4 AND #1 = (#5 - 1)) type=differential
+                    Get l6
+                    ArrangeBy keys=[[#1, (#2 - 1)]]
+                      Get l7
+          Project (#7, #0, #5, #8)
+            Map ((#3 || #2), (#6 + 1))
+              Join on=(#0 = #4 AND #1 = (#5 + #6)) type=differential
+                Get l6
+                ArrangeBy keys=[[#1, (#2 + #3)]]
+                  Filter (#3) IS NOT NULL
+                    Get l7
+    cte l6 =
+      ArrangeBy keys=[[#0, #1]]
+        Get l2
+    cte l5 =
+      ArrangeBy keys=[[]]
+        Constant
+          - (0)
+          - (-1)
+          - (1)
+    cte l4 =
+      Project (#0..=#2)
+        Join on=(#2 = #3) type=differential
+          ArrangeBy keys=[[#2]]
+            Get l1
+          ArrangeBy keys=[[#0]]
+            Union
+              Negate
+                Distinct project=[#0]
+                  Project (#0)
+                    Filter (#0 = #1)
+                      FlatMap wrap1("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+                        Get l3
+              Get l3
+    cte l3 =
+      Distinct project=[#0]
+        Project (#2)
+          Get l1
+    cte l2 =
+      Project (#0..=#2)
+        Join on=(#2 = #3) type=differential
+          ArrangeBy keys=[[#2]]
+            Get l1
+          ArrangeBy keys=[[#0]]
+            Distinct project=[#0]
+              Project (#0)
+                Filter (#0 = #1)
+                  FlatMap wrap1("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+                    Distinct project=[#0]
+                      Project (#2)
+                        Get l1
+    cte l1 =
+      Project (#0, #2, #3)
+        Filter (#3 != ".")
+          Map (substr(#1, #2, 1))
+            FlatMap generate_series(1, char_length(#1), 1)
+              Project (#1, #2)
+                Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
+                  CrossJoin type=differential
+                    ArrangeBy keys=[[]]
+                      ReadStorage materialize.public.input
+                    ArrangeBy keys=[[]]
+                      Project (#1)
+                        FlatMap generate_series(1, #0, 1)
+                          Project (#1)
+                            Map (bigint_to_integer(#0))
+                              Union
+                                Get l0
+                                Map (0)
+                                  Union
+                                    Negate
+                                      Project ()
+                                        Get l0
+                                    Constant
+                                      - ()
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+            ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

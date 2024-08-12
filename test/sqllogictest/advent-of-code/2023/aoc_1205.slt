@@ -1,0 +1,1376 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1205.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'seeds: 141812878 853583433 69532151 734372491 182396959 4723992392 8947211973 5 4238233746 414976297 3674819199 51868842
+<EMPTY_LINE>
+seed-to-soil map:
+47738968 98357 182795944
+7626588292 7848955494 927588242
+34324971 6812781938 837374212
+2166766538 726174459 6843311291
+239754864 684391 555585341
+418284536 8839949654 642749254
+9423585483 8225843682 329442345
+8712565737 9399753119 5
+74289536 9359574415 717691786
+<EMPTY_LINE>
+soil-to-fertilizer map:
+8986393527 4888517941 585279262
+7613871113 9877446651 84269233
+2423271674 7586366221 7659569
+3622861142 916381775 74546981
+3996339781 3244535459 98765225
+586791635 8419253759 59179897
+7576358959 6127297299 519542837
+7876479671 6556651697 2721518
+8412917365 865866259 75627132
+8919467753 2818783878 5
+4729257824 8988777624 275397538
+2626168725 5 375375337
+7963626731 8731755354 562155822
+4484955989 2 31166388
+6394952326 9434564563 344217764
+5818263571 8292867479 46133627
+6635767943 663896613 39649384
+1179179943 58595967 326966131
+461712455 2756694296 566766331
+267854195 942359332 92191415
+1676162127 2415173728 7527572
+8235458679 517558444 8481131
+2193675972 5252589743 48214883
+4312181391 5588755717 5725572
+451918428 7726618552 39256967
+4734828421 378251365 56849366
+7864169188 795712941 852726511
+6498165846 819955597 825591722
+6737759128 1943367748 153632389
+81836871 3619315963 5999745237
+5533126476 1625724578 11196339
+814358688 9878499637 982477257
+4386394269 3737453299 68828912
+1 535278815 55
+9455234351 63518366 96697897
+298142454 9711262844 545237968
+6548387663 5498764299 556695254
+4421182848 3813437218 18532535
+<EMPTY_LINE>
+fertilizer-to-water map:
+5188185212 713592736 572122634
+3996516993 8368372653 29257663
+7629744559 8723951436 36722366
+517117434 6799613578 62912912
+7444887598 1378359775 142239913
+8946622323 461231638 98648353
+895954325 5555555 419161656
+1269235415 8199792497 62639226
+277191562 35368196 783296989
+2994552458 6347418557 828619684
+7 245618496 85983123
+599564274 6975655213 441448691
+7312274117 4916534261 32238555
+444977452 8543586232 53382156
+682172835 2567878724 62974419
+8912874438 5539912916 51886594
+4257175799 1517431879 97672792
+9481282796 996563263 8713257
+8269679713 2281488697 77222754
+2566468873 4747453236 37516457
+9491212658 1459322382 56814988
+142239541 25962654 99568155
+3475998687 9 537527222
+7223664422 4413723656 2795999379
+5781744284 5851593946 52411132
+2615616119 2198338791 93894182
+725796923 6293593866 672373647
+5291123587 1 45165371
+<EMPTY_LINE>
+water-to-light map:
+9483826148 971239373 57981779
+866572267 5355262121 658481698
+6149496513 2245492751 89485475
+7743881746 5949772182 31781539
+915838939 73797715 9628255536
+49687174 729495672 53487321
+1774464825 4513912578 89436881
+734978995 62382679 39621782
+8579142462 9 79959373
+3999434125 1722538882 315735941
+9758171681 5256942648 79846743
+676724382 222319917 43462458
+9842566327 2265547154 99978196
+3885113248 6341877917 53731483
+7451763582 1 22747236
+2222665944 8558249644 858131997
+2222613482 1369627666 23224913
+2122417343 892313426 54167146
+9888331148 1128482359 94371883
+55684927 195154981 59748169
+8819525361 7614218117 73293139
+241798649 664138941 854619722
+9716684718 3664657195 253795579
+3431191398 9414159725 8345323
+4742633341 757873782 42893665
+5976897431 6681469458 1532556
+5 947566478 61872123
+8793878654 8231529123 34617151
+136924369 6845534171 1385592
+538695647 894877235 85583498
+3327525594 1748821684 434778753
+<EMPTY_LINE>
+light-to-temperature map:
+6778296876 1588184826 9373785
+5958282911 253795579 867819861
+422679395 2761173364 193474551
+253795579 4218627316 4
+5652112248 987641937 721917256
+2349984397 7942568282 71771239
+8969933137 5781654773 394652
+1898117348 8342374669 537694616
+4219243162 8214944547 736996395
+5912961492 8868498531 27622883
+346958533 4173157962 51979735
+1916631453 9117978288 18581458
+2945679922 4497199716 5152578
+9179535252 5162391577 549347823
+<EMPTY_LINE>
+temperature-to-humidity map:
+7239471736 657945134 92565479
+4691325348 8569173453 532754925
+5919891224 6397216467 3372871
+3822197491 2782624568 698583215
+6125121482 639986598 98215788
+6574396598 665121945 619454968
+2412529992 2776226287 1626339
+2272785524 417214458 621918434
+5629812155 68588342 911161561
+9324482921 2524842229 67458368
+5932612196 2357165667 93374591
+1274118925 4785728782 685125685
+4352611699 7119321598 69449264
+6387566129 5474547438 5352628
+3928922836 7972535629 916644549
+1662726326 6558668448 362791743
+836597248 451582864 36438897
+738226654 681268313 785154987
+9563614959 8661586162 448483715
+9984139884 5113486123 19999477
+2755987212 2214749752 872249174
+887416884 6486692479 38549881
+<EMPTY_LINE>
+humidity-to-location map:
+858893435 311438446 562265762
+2454586869 3679665416 225353643
+9519322712 63232264 128625398
+441771557 9 2371977356
+5 8193625898 775413179
+1952973915 6235154499 759143921
+6572 58451 75391174
+6941443142 589862612 261347316');
+
+statement ok
+UPDATE input SET input = replace(input, '<EMPTY_LINE>', '');
+
+query I
+WITH seeds AS (
+    SELECT
+        regexp_split_to_table(
+            regexp_split_to_array(
+                regexp_split_to_array(input, '\n')[1],
+                ': '
+            )[2],
+            ' '
+        )::bigint AS seed
+    FROM
+        input
+),
+seed_to_soil_lines AS (
+    SELECT
+        regexp_split_to_array(
+            regexp_split_to_table(
+                regexp_match(input, 'seed-to-soil map:\n([0-9 \n]*?)\n\n')[1],
+                '\n'
+            ),
+            ' '
+        )::bigint[] AS line
+    FROM
+        input
+),
+seed_to_soil AS (
+    SELECT
+        line[1] AS dst_base,
+        line[2] AS src_base,
+        line[3] AS len
+    FROM
+        seed_to_soil_lines
+),
+soil_to_fertilizer_lines AS (
+    SELECT
+        regexp_split_to_array(
+            regexp_split_to_table(
+                regexp_match(input, 'soil-to-fertilizer map:\n([0-9 \n]*?)\n\n')[1],
+                '\n'
+            ),
+            ' '
+        )::bigint[] AS line
+    FROM
+        input
+),
+soil_to_fertilizer AS (
+    SELECT
+        line[1] AS dst_base,
+        line[2] AS src_base,
+        line[3] AS len
+    FROM
+        soil_to_fertilizer_lines
+),
+fertilizer_to_water_lines AS (
+    SELECT
+        regexp_split_to_array(
+            regexp_split_to_table(
+                regexp_match(input, 'fertilizer-to-water map:\n([0-9 \n]*?)\n\n')[1],
+                '\n'
+            ),
+            ' '
+        )::bigint[] AS line
+    FROM
+        input
+),
+fertilizer_to_water AS (
+    SELECT
+        line[1] AS dst_base,
+        line[2] AS src_base,
+        line[3] AS len
+    FROM
+        fertilizer_to_water_lines
+),
+water_to_light_lines AS (
+    SELECT
+        regexp_split_to_array(
+            regexp_split_to_table(
+                regexp_match(input, 'water-to-light map:\n([0-9 \n]*?)\n\n')[1],
+                '\n'
+            ),
+            ' '
+        )::bigint[] AS line
+    FROM
+        input
+),
+water_to_light AS (
+    SELECT
+        line[1] AS dst_base,
+        line[2] AS src_base,
+        line[3] AS len
+    FROM
+        water_to_light_lines
+),
+light_to_temperature_lines AS (
+    SELECT
+        regexp_split_to_array(
+            regexp_split_to_table(
+                regexp_match(input, 'light-to-temperature map:\n([0-9 \n]*?)\n\n')[1],
+                '\n'
+            ),
+            ' '
+        )::bigint[] AS line
+    FROM
+        input
+),
+light_to_temperature AS (
+    SELECT
+        line[1] AS dst_base,
+        line[2] AS src_base,
+        line[3] AS len
+    FROM
+        light_to_temperature_lines
+),
+temperature_to_humidity_lines AS (
+    SELECT
+        regexp_split_to_array(
+            regexp_split_to_table(
+                regexp_match(input, 'temperature-to-humidity map:\n([0-9 \n]*?)\n\n')[1],
+                '\n'
+            ),
+            ' '
+        )::bigint[] AS line
+    FROM
+        input
+),
+temperature_to_humidity AS (
+    SELECT
+        line[1] AS dst_base,
+        line[2] AS src_base,
+        line[3] AS len
+    FROM
+        temperature_to_humidity_lines
+),
+humidity_to_location_lines AS (
+    SELECT
+        regexp_split_to_array(
+            regexp_split_to_table(
+                regexp_match(input, 'humidity-to-location map:\n([0-9 \n]*)')[1],
+                '\n'
+            ),
+            ' '
+        )::bigint[] AS line
+    FROM
+        input
+),
+humidity_to_location AS (
+    SELECT
+        line[1] AS dst_base,
+        line[2] AS src_base,
+        line[3] AS len
+    FROM
+        humidity_to_location_lines
+),
+soil AS (
+    SELECT
+        seed,
+        coalesce(
+            MAX(
+                CASE
+                    WHEN seed >= src_base AND seed < src_base + len
+                    THEN dst_base + (seed - src_base)
+                    ELSE null
+                END
+            ),
+            seed
+        ) AS soil
+    FROM
+        seeds, seed_to_soil
+    GROUP BY seed
+),
+fertilizer AS (
+    SELECT
+        soil,
+        coalesce(
+            MAX(
+                CASE
+                    WHEN soil >= src_base AND soil < src_base + len
+                    THEN dst_base + (soil - src_base)
+                    ELSE null
+                END
+            ),
+            soil
+        ) AS fertilizer
+    FROM
+        soil, soil_to_fertilizer
+    GROUP BY soil
+),
+water AS (
+    SELECT
+        fertilizer,
+        coalesce(
+            MAX(
+                CASE
+                    when fertilizer >= src_base AND fertilizer < src_base + len
+                    then dst_base + (fertilizer - src_base)
+                    else null
+                END
+            ),
+            fertilizer
+        ) AS water
+    FROM
+        fertilizer, fertilizer_to_water
+    GROUP BY fertilizer
+),
+light AS (
+    SELECT
+        water,
+        coalesce(
+            MAX(
+                CASE
+                    WHEN water >= src_base AND water < src_base + len
+                    THEN dst_base + (water - src_base)
+                    ELSE null
+                END
+            ),
+            water
+        ) AS light
+    FROM
+        water, water_to_light
+    GROUP BY water
+),
+temperature AS (
+    SELECT
+        light,
+        coalesce(
+            MAX(
+                CASE
+                    WHEN light >= src_base AND light < src_base + len
+                    THEN dst_base + (light - src_base)
+                    ELSE null
+                END
+            ),
+            light
+        ) AS temperature
+    FROM
+        light, light_to_temperature
+    GROUP BY light
+),
+humidity AS (
+    SELECT
+        temperature,
+        coalesce(
+            MAX(
+                CASE
+                    WHEN temperature >= src_base AND temperature < src_base + len
+                    THEN dst_base + (temperature - src_base)
+                    ELSE null
+                END
+            ),
+            temperature
+        ) AS humidity
+    FROM
+        temperature, temperature_to_humidity
+    GROUP BY temperature
+),
+location AS (
+    SELECT
+        humidity,
+        coalesce(
+            MAX(
+                CASE
+                    WHEN humidity >= src_base AND humidity < src_base + len
+                    THEN dst_base + (humidity - src_base)
+                    ELSE null
+                END
+            ),
+            humidity
+        ) AS location
+    FROM
+        humidity, humidity_to_location
+    GROUP BY humidity
+)
+SELECT
+    MIN(location) AS answer
+FROM
+    location;
+----
+2364832465
+
+query T multiline
+EXPLAIN WITH seeds AS (
+            SELECT
+                regexp_split_to_table(
+                    regexp_split_to_array(
+                        regexp_split_to_array(input, '\n')[1],
+                        ': '
+                    )[2],
+                    ' '
+                )::bigint AS seed
+            FROM
+                input
+        ),
+        seed_to_soil_lines AS (
+            SELECT
+                regexp_split_to_array(
+                    regexp_split_to_table(
+                        regexp_match(input, 'seed-to-soil map:\n([0-9 \n]*?)\n\n')[1],
+                        '\n'
+                    ),
+                    ' '
+                )::bigint[] AS line
+            FROM
+                input
+        ),
+        seed_to_soil AS (
+            SELECT
+                line[1] AS dst_base,
+                line[2] AS src_base,
+                line[3] AS len
+            FROM
+                seed_to_soil_lines
+        ),
+        soil_to_fertilizer_lines AS (
+            SELECT
+                regexp_split_to_array(
+                    regexp_split_to_table(
+                        regexp_match(input, 'soil-to-fertilizer map:\n([0-9 \n]*?)\n\n')[1],
+                        '\n'
+                    ),
+                    ' '
+                )::bigint[] AS line
+            FROM
+                input
+        ),
+        soil_to_fertilizer AS (
+            SELECT
+                line[1] AS dst_base,
+                line[2] AS src_base,
+                line[3] AS len
+            FROM
+                soil_to_fertilizer_lines
+        ),
+        fertilizer_to_water_lines AS (
+            SELECT
+                regexp_split_to_array(
+                    regexp_split_to_table(
+                        regexp_match(input, 'fertilizer-to-water map:\n([0-9 \n]*?)\n\n')[1],
+                        '\n'
+                    ),
+                    ' '
+                )::bigint[] AS line
+            FROM
+                input
+        ),
+        fertilizer_to_water AS (
+            SELECT
+                line[1] AS dst_base,
+                line[2] AS src_base,
+                line[3] AS len
+            FROM
+                fertilizer_to_water_lines
+        ),
+        water_to_light_lines AS (
+            SELECT
+                regexp_split_to_array(
+                    regexp_split_to_table(
+                        regexp_match(input, 'water-to-light map:\n([0-9 \n]*?)\n\n')[1],
+                        '\n'
+                    ),
+                    ' '
+                )::bigint[] AS line
+            FROM
+                input
+        ),
+        water_to_light AS (
+            SELECT
+                line[1] AS dst_base,
+                line[2] AS src_base,
+                line[3] AS len
+            FROM
+                water_to_light_lines
+        ),
+        light_to_temperature_lines AS (
+            SELECT
+                regexp_split_to_array(
+                    regexp_split_to_table(
+                        regexp_match(input, 'light-to-temperature map:\n([0-9 \n]*?)\n\n')[1],
+                        '\n'
+                    ),
+                    ' '
+                )::bigint[] AS line
+            FROM
+                input
+        ),
+        light_to_temperature AS (
+            SELECT
+                line[1] AS dst_base,
+                line[2] AS src_base,
+                line[3] AS len
+            FROM
+                light_to_temperature_lines
+        ),
+        temperature_to_humidity_lines AS (
+            SELECT
+                regexp_split_to_array(
+                    regexp_split_to_table(
+                        regexp_match(input, 'temperature-to-humidity map:\n([0-9 \n]*?)\n\n')[1],
+                        '\n'
+                    ),
+                    ' '
+                )::bigint[] AS line
+            FROM
+                input
+        ),
+        temperature_to_humidity AS (
+            SELECT
+                line[1] AS dst_base,
+                line[2] AS src_base,
+                line[3] AS len
+            FROM
+                temperature_to_humidity_lines
+        ),
+        humidity_to_location_lines AS (
+            SELECT
+                regexp_split_to_array(
+                    regexp_split_to_table(
+                        regexp_match(input, 'humidity-to-location map:\n([0-9 \n]*)')[1],
+                        '\n'
+                    ),
+                    ' '
+                )::bigint[] AS line
+            FROM
+                input
+        ),
+        humidity_to_location AS (
+            SELECT
+                line[1] AS dst_base,
+                line[2] AS src_base,
+                line[3] AS len
+            FROM
+                humidity_to_location_lines
+        ),
+        soil AS (
+            SELECT
+                seed,
+                coalesce(
+                    MAX(
+                        CASE
+                            WHEN seed >= src_base AND seed < src_base + len
+                            THEN dst_base + (seed - src_base)
+                            ELSE null
+                        END
+                    ),
+                    seed
+                ) AS soil
+            FROM
+                seeds, seed_to_soil
+            GROUP BY seed
+        ),
+        fertilizer AS (
+            SELECT
+                soil,
+                coalesce(
+                    MAX(
+                        CASE
+                            WHEN soil >= src_base AND soil < src_base + len
+                            THEN dst_base + (soil - src_base)
+                            ELSE null
+                        END
+                    ),
+                    soil
+                ) AS fertilizer
+            FROM
+                soil, soil_to_fertilizer
+            GROUP BY soil
+        ),
+        water AS (
+            SELECT
+                fertilizer,
+                coalesce(
+                    MAX(
+                        CASE
+                            when fertilizer >= src_base AND fertilizer < src_base + len
+                            then dst_base + (fertilizer - src_base)
+                            else null
+                        END
+                    ),
+                    fertilizer
+                ) AS water
+            FROM
+                fertilizer, fertilizer_to_water
+            GROUP BY fertilizer
+        ),
+        light AS (
+            SELECT
+                water,
+                coalesce(
+                    MAX(
+                        CASE
+                            WHEN water >= src_base AND water < src_base + len
+                            THEN dst_base + (water - src_base)
+                            ELSE null
+                        END
+                    ),
+                    water
+                ) AS light
+            FROM
+                water, water_to_light
+            GROUP BY water
+        ),
+        temperature AS (
+            SELECT
+                light,
+                coalesce(
+                    MAX(
+                        CASE
+                            WHEN light >= src_base AND light < src_base + len
+                            THEN dst_base + (light - src_base)
+                            ELSE null
+                        END
+                    ),
+                    light
+                ) AS temperature
+            FROM
+                light, light_to_temperature
+            GROUP BY light
+        ),
+        humidity AS (
+            SELECT
+                temperature,
+                coalesce(
+                    MAX(
+                        CASE
+                            WHEN temperature >= src_base AND temperature < src_base + len
+                            THEN dst_base + (temperature - src_base)
+                            ELSE null
+                        END
+                    ),
+                    temperature
+                ) AS humidity
+            FROM
+                temperature, temperature_to_humidity
+            GROUP BY temperature
+        ),
+        location AS (
+            SELECT
+                humidity,
+                coalesce(
+                    MAX(
+                        CASE
+                            WHEN humidity >= src_base AND humidity < src_base + len
+                            THEN dst_base + (humidity - src_base)
+                            ELSE null
+                        END
+                    ),
+                    humidity
+                ) AS location
+            FROM
+                humidity, humidity_to_location
+            GROUP BY humidity
+        )
+        SELECT
+            MIN(location) AS answer
+        FROM
+            location;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[min(coalesce(#1, #0))]
+        Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)]
+          CrossJoin type=differential
+            ArrangeBy keys=[[]]
+              Project (#2)
+                Map (coalesce(#1, #0))
+                  Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)]
+                    CrossJoin type=differential
+                      ArrangeBy keys=[[]]
+                        Project (#2)
+                          Map (coalesce(#1, #0))
+                            Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)]
+                              CrossJoin type=differential
+                                ArrangeBy keys=[[]]
+                                  Project (#2)
+                                    Map (coalesce(#1, #0))
+                                      Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)]
+                                        CrossJoin type=differential
+                                          ArrangeBy keys=[[]]
+                                            Project (#2)
+                                              Map (coalesce(#1, #0))
+                                                Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)]
+                                                  CrossJoin type=differential
+                                                    ArrangeBy keys=[[]]
+                                                      Project (#2)
+                                                        Map (coalesce(#1, #0))
+                                                          Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)]
+                                                            CrossJoin type=differential
+                                                              ArrangeBy keys=[[]]
+                                                                Project (#2)
+                                                                  Map (coalesce(#1, #0))
+                                                                    Reduce group_by=[#0] aggregates=[max(case when ((#0 < (#2 + #3)) AND (#0 >= #2)) then (#1 + (#0 - #2)) else null end)]
+                                                                      CrossJoin type=differential
+                                                                        ArrangeBy keys=[[]]
+                                                                          Project (#2)
+                                                                            Map (text_to_bigint(#1))
+                                                                              FlatMap unnest_array(regexp_split_to_array[" ", case_insensitive=false](array_index(regexp_split_to_array[": ", case_insensitive=false](array_index(regexp_split_to_array["\n", case_insensitive=false](#0), 1)), 2)))
+                                                                                ReadStorage materialize.public.input
+                                                                        ArrangeBy keys=[[]]
+                                                                          Project (#3..=#5)
+                                                                            Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3))
+                                                                              FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["seed-to-soil map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0), 1)))
+                                                                                ReadStorage materialize.public.input
+                                                              ArrangeBy keys=[[]]
+                                                                Project (#3..=#5)
+                                                                  Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3))
+                                                                    FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["soil-to-fertilizer map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0), 1)))
+                                                                      ReadStorage materialize.public.input
+                                                    ArrangeBy keys=[[]]
+                                                      Project (#3..=#5)
+                                                        Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3))
+                                                          FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["fertilizer-to-water map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0), 1)))
+                                                            ReadStorage materialize.public.input
+                                          ArrangeBy keys=[[]]
+                                            Project (#3..=#5)
+                                              Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3))
+                                                FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["water-to-light map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0), 1)))
+                                                  ReadStorage materialize.public.input
+                                ArrangeBy keys=[[]]
+                                  Project (#3..=#5)
+                                    Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3))
+                                      FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["light-to-temperature map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0), 1)))
+                                        ReadStorage materialize.public.input
+                      ArrangeBy keys=[[]]
+                        Project (#3..=#5)
+                          Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3))
+                            FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["temperature-to-humidity map:\n([0-9 \n]*?)\n\n", case_insensitive=false](#0), 1)))
+                              ReadStorage materialize.public.input
+            ArrangeBy keys=[[]]
+              Project (#3..=#5)
+                Map (arraytoarray(regexp_split_to_array[" ", case_insensitive=false](#1)), array_index(#2, 1), array_index(#2, 2), array_index(#2, 3))
+                  FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](array_index(regexp_match["humidity-to-location map:\n([0-9 \n]*)", case_insensitive=false](#0), 1)))
+                    ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF
+
+
+query II
+WITH MUTUALLY RECURSIVE
+    blocks(head TEXT, body TEXT) AS (
+        SELECT
+            split_part(regexp_split_to_table(input, '\n\n'), ':', 1),
+            split_part(regexp_split_to_table(input, '\n\n'), ':', 2)
+        FROM
+            input
+    ),
+    seeds(seed BIGINT) AS (
+        SELECT regexp_split_to_table(trim(body), ' ')::BIGINT
+        FROM blocks
+        WHERE head = 'seeds'
+    ),
+    entry0(src_name TEXT, dst_name TEXT, dst_idx TEXT, src_idx TEXT, len TEXT) AS (
+        SELECT
+            split_part(split_part(head, ' ', 1), '-', 1),
+            split_part(split_part(head, ' ', 1), '-', 3),
+            split_part(regexp_split_to_table(body, '\n'), ' ', 1),
+            split_part(regexp_split_to_table(body, '\n'), ' ', 2),
+            split_part(regexp_split_to_table(body, '\n'), ' ', 3)
+        FROM
+            blocks
+        WHERE
+            head != 'seeds'
+    ),
+    entry(src_name TEXT, dst_name TEXT, src_idx BIGINT, dst_idx BIGINT, len BIGINT) AS (
+        SELECT
+            src_name,
+            dst_name,
+            src_idx::BIGINT,
+            dst_idx::BIGINT,
+            len::BIGINT
+        FROM
+            entry0
+        WHERE
+            src_idx != ''
+    ),
+
+    -- PART 1
+    -- Our active inventory of .. "stuff"
+    active(name TEXT, idx BIGINT) AS (
+        SELECT 'seed', seed FROM seeds
+        UNION ALL
+        SELECT
+            intent.dst_name,
+            COALESCE(intent.idx + (entry.dst_idx - entry.src_idx), idx)
+        FROM intent LEFT JOIN entry ON (
+            intent.src_name = entry.src_name AND
+            intent.dst_name = entry.dst_name AND
+            intent.idx BETWEEN entry.src_idx AND entry.src_idx + len - 1)
+    ),
+    -- We would like to perform this mapping, but must find a range.
+    intent(src_name TEXT, dst_name TEXT, idx BIGINT) AS (
+        SELECT DISTINCT entry.src_name, dst_name, idx
+        FROM active, entry
+        WHERE active.name = entry.src_name
+    ),
+    part1(part1 BIGINT) AS (
+        SELECT MIN(idx) FROM active WHERE name = 'location'
+    ),
+
+    -- PART 2
+    -- Now we are doing *ranges* of seeds, rather than seed identifiers.
+    -- They are big ranges, so we'll need to be smarter!
+    seeds2(start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT
+            regexp_split_to_array(trim(body), ' ')[2*x-1]::BIGINT,
+            regexp_split_to_array(trim(body), ' ')[2*x-1]::BIGINT + regexp_split_to_array(trim(body), ' ')[2*x]::BIGINT
+        FROM
+            blocks,
+            generate_series(1, array_length(regexp_split_to_array(trim(body), ' '), 1)/2) x
+        WHERE head = 'seeds'
+    ),
+    active2(name TEXT, start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT 'seed', start_idx, end_idx
+        FROM seeds2
+        UNION
+        SELECT
+            dst_name,
+            clipped_start + (entry_dst - entry_start),
+            clipped_end   + (entry_dst - entry_start)
+        FROM intersection
+        UNION
+        SELECT
+            name,
+            start_idx,
+            end_idx
+        FROM hole
+    ),
+    -- We would like to perform this mapping, but must find a range.
+    intent2(src_name TEXT, dst_name TEXT, start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT DISTINCT entry.src_name, dst_name, start_idx, end_idx
+        FROM active2, entry
+        WHERE active2.name = entry.src_name
+    ),
+    -- Each mapping has a potential intersection with a requested range.
+    intersection(src_name TEXT, dst_name TEXT, start_idx BIGINT, end_idx BIGINT, entry_start BIGINT, entry_end BIGINT, clipped_start BIGINT, clipped_end BIGINT, entry_dst BIGINT) AS (
+        SELECT
+            intent2.src_name,
+            intent2.dst_name,
+            intent2.start_idx,
+            intent2.end_idx,
+            entry.src_idx,
+            entry.src_idx + entry.len,
+            GREATEST(start_idx, entry.src_idx),
+            LEAST(end_idx, entry.src_idx + entry.len),
+            entry.dst_idx
+        FROM intent2, entry
+        WHERE intent2.src_name = entry.src_name
+          AND intent2.dst_name = entry.dst_name
+          AND GREATEST(intent2.start_idx, entry.src_idx)
+            < LEAST(intent2.end_idx, entry.src_idx + entry.len)
+    ),
+    -- We may have holes in our intervals. Each intersection's start and end is the end and
+    -- start, respectively, of some hole we may have that needs to remain the identity.
+    hole(name TEXT, start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT * FROM (
+            SELECT
+                dst_name,
+                clipped_end start_idx,
+                (
+                    SELECT COALESCE(MIN(i2.clipped_start), i1.end_idx)
+                    FROM intersection i2
+                    WHERE i2.clipped_start >= i1.clipped_end
+                    AND i2.clipped_start < i1.end_idx
+                    AND i1.src_name = i2.src_name
+                    AND i1.dst_name = i2.dst_name
+                    AND i1.start_idx = i2.start_idx
+                    AND i1.end_idx = i2.end_idx
+                ) end_idx
+            FROM intersection i1
+            UNION
+            SELECT DISTINCT
+                dst_name,
+                start_idx,
+                (
+                    SELECT COALESCE(MIN(i2.clipped_start), i1.end_idx)
+                    FROM intersection i2
+                    WHERE i2.clipped_start >= i1.start_idx
+                    AND i2.clipped_start < i1.end_idx
+                    AND i1.src_name = i2.src_name
+                    AND i1.dst_name = i2.dst_name
+                    AND i1.start_idx = i2.start_idx
+                    AND i1.end_idx = i2.end_idx
+                )
+            FROM intent2 i1
+        )
+        WHERE start_idx < end_idx
+    ),
+    part2(part2 BIGINT) AS ( SELECT MIN(start_idx) FROM active2 WHERE name = 'location')
+
+SELECT * FROM part1, part2;
+----
+60602459  5
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+    blocks(head TEXT, body TEXT) AS (
+        SELECT
+            split_part(regexp_split_to_table(input, '\n\n'), ':', 1),
+            split_part(regexp_split_to_table(input, '\n\n'), ':', 2)
+        FROM
+            input
+    ),
+    seeds(seed BIGINT) AS (
+        SELECT regexp_split_to_table(trim(body), ' ')::BIGINT
+        FROM blocks
+        WHERE head = 'seeds'
+    ),
+    entry0(src_name TEXT, dst_name TEXT, dst_idx TEXT, src_idx TEXT, len TEXT) AS (
+        SELECT
+            split_part(split_part(head, ' ', 1), '-', 1),
+            split_part(split_part(head, ' ', 1), '-', 3),
+            split_part(regexp_split_to_table(body, '\n'), ' ', 1),
+            split_part(regexp_split_to_table(body, '\n'), ' ', 2),
+            split_part(regexp_split_to_table(body, '\n'), ' ', 3)
+        FROM
+            blocks
+        WHERE
+            head != 'seeds'
+    ),
+    entry(src_name TEXT, dst_name TEXT, src_idx BIGINT, dst_idx BIGINT, len BIGINT) AS (
+        SELECT
+            src_name,
+            dst_name,
+            src_idx::BIGINT,
+            dst_idx::BIGINT,
+            len::BIGINT
+        FROM
+            entry0
+        WHERE
+            src_idx != ''
+    ),
+
+    -- PART 1
+    -- Our active inventory of .. "stuff"
+    active(name TEXT, idx BIGINT) AS (
+        SELECT 'seed', seed FROM seeds
+        UNION ALL
+        SELECT
+            intent.dst_name,
+            COALESCE(intent.idx + (entry.dst_idx - entry.src_idx), idx)
+        FROM intent LEFT JOIN entry ON (
+            intent.src_name = entry.src_name AND
+            intent.dst_name = entry.dst_name AND
+            intent.idx BETWEEN entry.src_idx AND entry.src_idx + len - 1)
+    ),
+    -- We would like to perform this mapping, but must find a range.
+    intent(src_name TEXT, dst_name TEXT, idx BIGINT) AS (
+        SELECT DISTINCT entry.src_name, dst_name, idx
+        FROM active, entry
+        WHERE active.name = entry.src_name
+    ),
+    part1(part1 BIGINT) AS (
+        SELECT MIN(idx) FROM active WHERE name = 'location'
+    ),
+
+    -- PART 2
+    -- Now we are doing *ranges* of seeds, rather than seed identifiers.
+    -- They are big ranges, so we'll need to be smarter!
+    seeds2(start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT
+            regexp_split_to_array(trim(body), ' ')[2*x-1]::BIGINT,
+            regexp_split_to_array(trim(body), ' ')[2*x-1]::BIGINT + regexp_split_to_array(trim(body), ' ')[2*x]::BIGINT
+        FROM
+            blocks,
+            generate_series(1, array_length(regexp_split_to_array(trim(body), ' '), 1)/2) x
+        WHERE head = 'seeds'
+    ),
+    active2(name TEXT, start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT 'seed', start_idx, end_idx
+        FROM seeds2
+        UNION
+        SELECT
+            dst_name,
+            clipped_start + (entry_dst - entry_start),
+            clipped_end   + (entry_dst - entry_start)
+        FROM intersection
+        UNION
+        SELECT
+            name,
+            start_idx,
+            end_idx
+        FROM hole
+    ),
+    -- We would like to perform this mapping, but must find a range.
+    intent2(src_name TEXT, dst_name TEXT, start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT DISTINCT entry.src_name, dst_name, start_idx, end_idx
+        FROM active2, entry
+        WHERE active2.name = entry.src_name
+    ),
+    -- Each mapping has a potential intersection with a requested range.
+    intersection(src_name TEXT, dst_name TEXT, start_idx BIGINT, end_idx BIGINT, entry_start BIGINT, entry_end BIGINT, clipped_start BIGINT, clipped_end BIGINT, entry_dst BIGINT) AS (
+        SELECT
+            intent2.src_name,
+            intent2.dst_name,
+            intent2.start_idx,
+            intent2.end_idx,
+            entry.src_idx,
+            entry.src_idx + entry.len,
+            GREATEST(start_idx, entry.src_idx),
+            LEAST(end_idx, entry.src_idx + entry.len),
+            entry.dst_idx
+        FROM intent2, entry
+        WHERE intent2.src_name = entry.src_name
+          AND intent2.dst_name = entry.dst_name
+          AND GREATEST(intent2.start_idx, entry.src_idx)
+            < LEAST(intent2.end_idx, entry.src_idx + entry.len)
+    ),
+    -- We may have holes in our intervals. Each intersection's start and end is the end and
+    -- start, respectively, of some hole we may have that needs to remain the identity.
+    hole(name TEXT, start_idx BIGINT, end_idx BIGINT) AS (
+        SELECT * FROM (
+            SELECT
+                dst_name,
+                clipped_end start_idx,
+                (
+                    SELECT COALESCE(MIN(i2.clipped_start), i1.end_idx)
+                    FROM intersection i2
+                    WHERE i2.clipped_start >= i1.clipped_end
+                    AND i2.clipped_start < i1.end_idx
+                    AND i1.src_name = i2.src_name
+                    AND i1.dst_name = i2.dst_name
+                    AND i1.start_idx = i2.start_idx
+                    AND i1.end_idx = i2.end_idx
+                ) end_idx
+            FROM intersection i1
+            UNION
+            SELECT DISTINCT
+                dst_name,
+                start_idx,
+                (
+                    SELECT COALESCE(MIN(i2.clipped_start), i1.end_idx)
+                    FROM intersection i2
+                    WHERE i2.clipped_start >= i1.start_idx
+                    AND i2.clipped_start < i1.end_idx
+                    AND i1.src_name = i2.src_name
+                    AND i1.dst_name = i2.dst_name
+                    AND i1.start_idx = i2.start_idx
+                    AND i1.end_idx = i2.end_idx
+                )
+            FROM intent2 i1
+        )
+        WHERE start_idx < end_idx
+    ),
+    part2(part2 BIGINT) AS ( SELECT MIN(start_idx) FROM active2 WHERE name = 'location')
+SELECT * FROM part1, part2;
+----
+Explained Query:
+  Return
+    Return
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Union
+            Get l5
+            Map (null)
+              Union
+                Negate
+                  Project ()
+                    Get l5
+                Constant
+                  - ()
+        ArrangeBy keys=[[]]
+          Union
+            Get l17
+            Map (null)
+              Union
+                Negate
+                  Project ()
+                    Get l17
+                Constant
+                  - ()
+    With
+      cte l17 =
+        Reduce aggregates=[min(#0)]
+          Project (#1)
+            Filter (#0 = "location")
+              Get l6
+  With Mutually Recursive
+    cte l16 =
+      Distinct project=[#0..=#2]
+        Union
+          Project (#1, #7, #23)
+            Join on=(#0 = #9 = #18 AND #1 = #10 = #19 AND #2 = #11 = #20 AND #3 = #12 = #21 AND #4 = #13 AND #5 = #14 AND #6 = #15 AND #7 = #16 = #22 AND #8 = #17) type=delta
+              ArrangeBy keys=[[#0..=#8], [#0..=#3, #7]]
+                Get l8
+              ArrangeBy keys=[[#0..=#8]]
+                Get l9
+              ArrangeBy keys=[[#0..=#4]]
+                Union
+                  Filter (#4 < #5)
+                    Get l12
+                  Map (error("more than one record produced in subquery"))
+                    Project (#0..=#4)
+                      Filter error("more than one record produced in subquery") AND (#5 > 1)
+                        Reduce group_by=[#0..=#4] aggregates=[count(*)]
+                          Project (#0..=#4)
+                            Get l12
+          Distinct project=[#1, #0, #2]
+            Project (#1, #3, #12)
+              Join on=(#0 = #4 = #8 AND #1 = #5 = #10 AND #2 = #6 = #11 AND #3 = #7 = #9) type=delta
+                Get l15
+                Get l15
+                ArrangeBy keys=[[#0..=#3]]
+                  Union
+                    Filter (#2 < #4)
+                      Get l14
+                    Map (error("more than one record produced in subquery"))
+                      Project (#0..=#3)
+                        Filter error("more than one record produced in subquery") AND (#4 > 1)
+                          Reduce group_by=[#0..=#3] aggregates=[count(*)]
+                            Project (#0..=#3)
+                              Get l14
+    cte l15 =
+      ArrangeBy keys=[[#0..=#3]]
+        Get l7
+    cte l14 =
+      Project (#0..=#3, #5)
+        Map (coalesce(#4, #3))
+          Union
+            Get l13
+            Project (#0..=#3, #8)
+              Map (null)
+                Join on=(#0 = #4 AND #1 = #7 AND #2 = #5 AND #3 = #6) type=differential
+                  ArrangeBy keys=[[#0, #2, #3, #1]]
+                    Union
+                      Negate
+                        Project (#0..=#3)
+                          Get l13
+                      Project (#0, #3, #1, #2)
+                        Get l7
+                  ArrangeBy keys=[[#0..=#3]]
+                    Get l7
+    cte l13 =
+      Reduce group_by=[#0, #3, #1, #2] aggregates=[min(#4)]
+        Project (#0..=#3, #8)
+          Join on=(#0 = #4 AND #1 = #6 AND #2 = #7 AND #3 = #5) type=differential
+            ArrangeBy keys=[[#0..=#3]]
+              Filter (#1) IS NOT NULL AND (#2) IS NOT NULL
+                Get l7
+            ArrangeBy keys=[[#0, #2, #3, #1]]
+              Project (#0..=#3, #6)
+                Filter (#6 < #3) AND (#6 >= #2)
+                  Get l8
+    cte l12 =
+      Project (#0..=#4, #6)
+        Map (coalesce(#5, #3))
+          Union
+            Get l11
+            Project (#0..=#4, #10)
+              Map (null)
+                Join on=(#0 = #5 AND #1 = #6 AND #2 = #7 AND #3 = #8 AND #4 = #9) type=differential
+                  ArrangeBy keys=[[#0..=#4]]
+                    Union
+                      Negate
+                        Project (#0..=#4)
+                          Get l11
+                      Get l10
+                  ArrangeBy keys=[[#0..=#4]]
+                    Get l10
+    cte l11 =
+      Reduce group_by=[#0..=#4] aggregates=[min(#5)]
+        Project (#0..=#4, #9)
+          Filter (#9 >= #4)
+            Join on=(#0 = #5 AND #1 = #6 AND #2 = #7 AND #3 = #8) type=differential
+              ArrangeBy keys=[[#0..=#3]]
+                Filter (#2) IS NOT NULL AND (#3) IS NOT NULL
+                  Get l10
+              ArrangeBy keys=[[#0..=#3]]
+                Project (#0..=#3, #6)
+                  Filter (#2) IS NOT NULL AND (#6 < #3)
+                    Get l8
+    cte l10 =
+      Distinct project=[#0..=#4]
+        Project (#0..=#3, #7)
+          Get l9
+    cte l9 =
+      Distinct project=[#0..=#8]
+        Get l8
+    cte l8 =
+      Project (#0, #3, #1, #2, #6, #10, #9, #11, #7)
+        Filter (#9 < #11)
+          Map (greatest(#1, #6), (#6 + #8), least(#2, #10))
+            Join on=(#0 = #4 AND #3 = #5) type=differential
+              ArrangeBy keys=[[#0, #3]]
+                Get l7
+              ArrangeBy keys=[[#0, #1]]
+                Get l1
+    cte l7 =
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l6
+          ArrangeBy keys=[[#0]]
+            Distinct project=[#0, #1]
+              Project (#0, #1)
+                Get l1
+    cte l6 =
+      Distinct project=[#0..=#2]
+        Union
+          Distinct project=[#0..=#2]
+            Union
+              Project (#6, #4, #5)
+                Map (regexp_split_to_array[" ", case_insensitive=false](btrim(#0)), (2 * #1), text_to_bigint(array_index(#2, integer_to_bigint((#3 - 1)))), (#4 + text_to_bigint(array_index(#2, integer_to_bigint(#3)))), "seed")
+                  FlatMap generate_series(1, ((regexp_split_to_array[" ", case_insensitive=false](btrim(#0)) array_length 1) / 2), 1)
+                    Project (#1)
+                      Filter (#0 = "seeds")
+                        Get l0
+              Project (#1, #10, #11)
+                Map ((#8 - #4), (#6 + #9), (#7 + #9))
+                  Get l8
+          Get l16
+    cte l5 =
+      Reduce aggregates=[min(#0)]
+        Project (#1)
+          Filter (#0 = "location")
+            Get l3
+    cte l4 =
+      Project (#0, #3, #1)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Distinct project=[#0, #1]
+              Get l3
+          ArrangeBy keys=[[#0]]
+            Distinct project=[#0, #1]
+              Project (#0, #1)
+                Get l1
+    cte l3 =
+      Union
+        Project (#3, #2)
+          Map (text_to_bigint(#1), "seed")
+            FlatMap unnest_array(regexp_split_to_array[" ", case_insensitive=false](btrim(#0)))
+              Project (#1)
+                Filter (#0 = "seeds")
+                  Get l0
+        Project (#0, #4)
+          Map (coalesce((#1 + (#3 - #2)), #1))
+            Union
+              Project (#1..=#4)
+                Get l2
+              Project (#1, #2, #6, #7)
+                Map (null, null)
+                  Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential
+                    ArrangeBy keys=[[#0..=#2]]
+                      Union
+                        Negate
+                          Distinct project=[#0..=#2]
+                            Project (#0..=#2)
+                              Get l2
+                        Get l4
+                    ArrangeBy keys=[[#0..=#2]]
+                      Get l4
+    cte l2 =
+      Project (#0..=#2, #5, #6)
+        Filter (#2 >= #5) AND (#2 <= ((#5 + #7) - 1))
+          Join on=(#0 = #3 AND #1 = #4) type=differential
+            ArrangeBy keys=[[#0, #1]]
+              Get l4
+            ArrangeBy keys=[[#0, #1]]
+              Get l1
+    cte l1 =
+      Project (#5..=#9)
+        Filter (#3 != "")
+          Map (split_string(#2, " ", 2), split_string(#0, " ", 1), split_string(#4, "-", 1), split_string(#4, "-", 3), text_to_bigint(#3), text_to_bigint(split_string(#2, " ", 1)), text_to_bigint(split_string(#2, " ", 3)))
+            FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#1))
+              Filter (#0 != "seeds")
+                Get l0
+    cte l0 =
+      Project (#2, #3)
+        Map (split_string(#1, ":", 1), split_string(#1, ":", 2))
+          FlatMap unnest_array(regexp_split_to_array["\n\n", case_insensitive=false](#0))
+            ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF
