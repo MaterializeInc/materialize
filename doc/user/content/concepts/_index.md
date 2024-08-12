@@ -11,6 +11,7 @@ aliases:
   - /overview/api-components/
   - /overview/key-concepts/
   - /get-started/key-concepts/
+  - /overview
 ---
 
 The pages in this section introduces some of the key concepts in Materialize:
