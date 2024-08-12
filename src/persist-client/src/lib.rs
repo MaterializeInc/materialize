@@ -43,7 +43,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
-use crate::schema::{SchemaId, SCHEMA_REGISTER, SCHEMA_REQUIRE};
+use crate::schema::SchemaId;
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
@@ -545,24 +545,17 @@ impl PersistClient {
         // `PersistClient::compare_and_append_schema(current_schema_id,
         // next_schema)`. Presumably this would then be passed in to open_writer
         // instead of us implicitly registering it here.
-        let schema_id = if SCHEMA_REGISTER.get(&self.cfg) {
-            // NB: The overwhelming common case is that this schema is already
-            // registered. In this case, the cmd breaks early and nothing is
-            // written to (or read from) CRDB.
-            let (schema, maintenance) = machine.register_schema(&*key_schema, &*val_schema).await;
-            maintenance.start_performing(&machine, &gc);
-            if SCHEMA_REQUIRE.get(&self.cfg) {
-                soft_assert_or_log!(
-                    schema.is_some(),
-                    "unable to register schemas {:?} {:?}",
-                    key_schema,
-                    val_schema,
-                );
-            }
-            schema
-        } else {
-            None
-        };
+        // NB: The overwhelming common case is that this schema is already
+        // registered. In this case, the cmd breaks early and nothing is
+        // written to (or read from) CRDB.
+        let (schema_id, maintenance) = machine.register_schema(&*key_schema, &*val_schema).await;
+        maintenance.start_performing(&machine, &gc);
+        soft_assert_or_log!(
+            schema_id.is_some(),
+            "unable to register schemas {:?} {:?}",
+            key_schema,
+            val_schema,
+        );
 
         let writer_id = WriterId::new();
         let schemas = Schemas {

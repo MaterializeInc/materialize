@@ -136,11 +136,6 @@ where
         dyncfgs: ConfigSet,
         metrics: Arc<Metrics>,
         txns_id: ShardId,
-        // TODO(txn): Get rid of these once the persist schema stuff finishes
-        // rolling out. Once every shard in prod has a schema, we can look up
-        // the latest one instead of falling back to these.
-        key_schema: Arc<K::Schema>,
-        val_schema: Arc<V::Schema>,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
         let (mut txns_write, txns_read) = client
@@ -180,8 +175,6 @@ where
                 client: Arc::new(client),
                 data_write_for_apply: BTreeMap::new(),
                 data_write_for_commit: BTreeMap::new(),
-                key_schema,
-                val_schema,
             },
         }
     }
@@ -707,8 +700,6 @@ pub(crate) struct DataHandles<K: Codec, V: Codec, T, D> {
     /// of shards, but this is not required. A shard can be in either and not
     /// the other.
     data_write_for_commit: BTreeMap<ShardId, DataWriteCommit<K, V, T, D>>,
-    key_schema: Arc<K::Schema>,
-    val_schema: Arc<V::Schema>,
 }
 
 impl<K, V, T, D> DataHandles<K, V, T, D>
@@ -727,10 +718,13 @@ where
             .expect("codecs have not changed");
         let (key_schema, val_schema) = match schemas {
             Some((_, key_schema, val_schema)) => (Arc::new(key_schema), Arc::new(val_schema)),
-            None => {
-                tracing::warn!("falling back to default schemas for {}", data_id);
-                (Arc::clone(&self.key_schema), Arc::clone(&self.val_schema))
-            }
+            // - For new shards we will always have at least one schema
+            //   registered by the time we reach this point, because that
+            //   happens at txn-registration time.
+            // - For pre-existing shards, every txns shard will have had
+            //   open_writer called on it at least once in the previous release,
+            //   so the schema should exist.
+            None => unreachable!("data shard {} should have a schema", data_id),
         };
         let wrapped = self
             .client
@@ -918,7 +912,6 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
     use mz_persist_client::PersistLocation;
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use rand::rngs::SmallRng;
     use rand::{RngCore, SeedableRng};
     use timely::progress::Antichain;
@@ -943,8 +936,6 @@ mod tests {
                 dyncfgs,
                 Arc::new(Metrics::new(&MetricsRegistry::new())),
                 txns_id,
-                Arc::new(StringSchema),
-                Arc::new(UnitSchema),
             )
             .await
         }

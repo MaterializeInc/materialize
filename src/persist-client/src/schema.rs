@@ -11,7 +11,6 @@
 
 use std::str::FromStr;
 
-use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -46,18 +45,6 @@ impl TryFrom<String> for SchemaId {
         Ok(SchemaId(usize::cast_from(schema_id)))
     }
 }
-
-pub(crate) const SCHEMA_REGISTER: Config<bool> = Config::new(
-    "persist_schema_register",
-    true,
-    "register schemas with the shard when opening a read or write handle",
-);
-
-pub(crate) const SCHEMA_REQUIRE: Config<bool> = Config::new(
-    "persist_schema_require",
-    true,
-    "error if schema registration is unsuccessful when opening a read or write handle",
-);
 
 #[cfg(test)]
 mod tests {
