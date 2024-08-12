@@ -11,6 +11,7 @@ use std::env;
 
 fn main() {
     env::set_var("PROTOC", mz_build_tools::protoc());
+    std::env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
 
     let mut config = prost_build::Config::new();
     config.btree_map(["."]);
@@ -22,6 +23,13 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
-        .compile_with_config(config, &["postgres-util/src/desc.proto"], &[".."])
+        .compile_with_config(
+            config,
+            &[
+                "postgres-util/src/desc.proto",
+                "postgres-util/src/tunnel.proto",
+            ],
+            &[".."],
+        )
         .unwrap_or_else(|e| panic!("{e}"))
 }

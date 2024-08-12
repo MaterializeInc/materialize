@@ -15,9 +15,12 @@ use std::time::Duration;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
 use mz_ore::task;
+use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
@@ -25,6 +28,8 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tracing::{info, warn};
 
 use crate::PostgresError;
+
+include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.tunnel.rs"));
 
 macro_rules! bail_generic {
     ($fmt:expr, $($arg:tt)*) => {
@@ -91,12 +96,12 @@ impl Client {
         self.server_version.as_deref()
     }
 
-    /// Reports whether the server version indicates that the server is
-    /// YugabyteDB (rather than stock PostgreSQL).
-    pub fn is_yugabyte(&self) -> bool {
-        self.server_version
-            .as_ref()
-            .map_or(false, |v| v.contains("-YB-"))
+    /// Reports the postgres flavor as indicated by the server version.
+    pub fn server_flavor(&self) -> PostgresFlavor {
+        match self.server_version.as_ref() {
+            Some(v) if v.contains("-YB-") => PostgresFlavor::Yugabyte,
+            _ => PostgresFlavor::Vanilla,
+        }
     }
 }
 
@@ -111,6 +116,34 @@ impl Deref for Client {
 impl DerefMut for Client {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+pub enum PostgresFlavor {
+    /// A normal PostgreSQL server.
+    Vanilla,
+    /// A Yugabyte server.
+    Yugabyte,
+}
+
+impl RustType<ProtoPostgresFlavor> for PostgresFlavor {
+    fn into_proto(&self) -> ProtoPostgresFlavor {
+        let kind = match self {
+            PostgresFlavor::Vanilla => proto_postgres_flavor::Kind::Vanilla(()),
+            PostgresFlavor::Yugabyte => proto_postgres_flavor::Kind::Yugabyte(()),
+        };
+        ProtoPostgresFlavor { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoPostgresFlavor) -> Result<Self, TryFromProtoError> {
+        let flavor = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("kind"))?;
+        Ok(match flavor {
+            proto_postgres_flavor::Kind::Vanilla(()) => PostgresFlavor::Vanilla,
+            proto_postgres_flavor::Kind::Yugabyte(()) => PostgresFlavor::Yugabyte,
+        })
     }
 }
 
