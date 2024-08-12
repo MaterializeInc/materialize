@@ -271,7 +271,7 @@ def prioritize_pipeline(pipeline: Any) -> None:
     """Prioritize builds against main or release branches"""
 
     tag = os.environ["BUILDKITE_TAG"]
-    branch = os.environ["BUILDKITE_BRANCH"]
+    branch = os.getenv("BUILDKITE_BRANCH")
     priority = None
 
     # Release results are time sensitive
