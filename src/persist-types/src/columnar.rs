@@ -313,8 +313,6 @@ pub trait ColumnDecoder<T> {
 pub trait ColumnEncoder<T> {
     /// Type of column that this encoder returns when finalized.
     type FinishedColumn: arrow::array::Array + Debug + 'static;
-    /// Type of statistics this encoder returns when finalized.
-    type FinishedStats: DynStats + 'static;
 
     /// Appends `val` onto this encoder.
     fn append(&mut self, val: &T);
@@ -323,7 +321,7 @@ pub trait ColumnEncoder<T> {
     fn append_null(&mut self);
 
     /// Finish this encoder, returning an immutable column and statistics.
-    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats);
+    fn finish(self) -> Self::FinishedColumn;
 }
 
 /// Description of a type that we encode into Persist.
@@ -336,8 +334,7 @@ pub trait Schema2<T>: Debug + Send + Sync {
     /// Type that is able to decode values of `T` from [`Self::ArrowColumn`].
     type Decoder: ColumnDecoder<T> + Debug;
     /// Type that is able to encoder values of `T`.
-    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn, FinishedStats = Self::Statistics>
-        + Debug;
+    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug;
 
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
@@ -396,7 +393,7 @@ pub struct OpaqueData;
 pub fn codec_to_schema2<A: Codec + Default>(
     schema: &A::Schema,
     data: &BinaryArray,
-) -> anyhow::Result<(ArrayRef, ColumnarStats)> {
+) -> anyhow::Result<ArrayRef> {
     let mut encoder = Schema2::encoder(schema)?;
 
     let mut value: A = A::default();
@@ -416,8 +413,7 @@ pub fn codec_to_schema2<A: Codec + Default>(
         }
     }
 
-    let (col, stats) = encoder.finish();
-    Ok((Arc::new(col), stats.into_columnar_stats()))
+    Ok(Arc::new(encoder.finish()))
 }
 
 /// Helper to convert from structured data to codec-encoded data.

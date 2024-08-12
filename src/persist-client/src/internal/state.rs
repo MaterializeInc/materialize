@@ -890,7 +890,7 @@ where
             // To be defensive, create an empty batch and inspect the resulting
             // data type (as opposed to something like allowing the `Schema2` to
             // declare the DataType).
-            let (array, _stats) = Schema2::encoder(schema).expect("valid schema").finish();
+            let array = Schema2::encoder(schema).expect("valid schema").finish();
             let proto = Array::data_type(&array).into_proto();
             prost::Message::encode_to_vec(&proto).into()
         }

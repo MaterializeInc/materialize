@@ -137,27 +137,21 @@ where
     let records = updates.records();
 
     if format.is_structured() {
-        let (key, key_stats) = match updates {
-            BlobTraceUpdates::Row(_) => codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
-                .map_err(|e| e.to_string())?,
-            BlobTraceUpdates::Both(_, ext) => (
-                Arc::clone(&ext.key),
-                schemas
-                    .key
-                    .decoder_any(&ext.key)
-                    .map_err(|e| e.to_string())?
-                    .stats(),
-            ),
+        let ext = match updates.structured() {
+            Some(ext) => ext.clone(),
+            None => ColumnarRecordsStructuredExt {
+                key: codec_to_schema2::<K>(schemas.key.as_ref(), records.keys())
+                    .map_err(|e| e.to_string())?,
+                val: codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
+                    .map_err(|e| e.to_string())?,
+            },
         };
 
-        let val = match updates {
-            BlobTraceUpdates::Row(_) => {
-                let (val, _) = codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
-                    .map_err(|e| e.to_string())?;
-                val
-            }
-            BlobTraceUpdates::Both(_, ext) => Arc::clone(&ext.val),
-        };
+        let key_stats = schemas
+            .key
+            .decoder_any(ext.key.as_ref())
+            .map_err(|e| e.to_string())?
+            .stats();
         let key_stats = match key_stats.into_non_null_values() {
             Some(ColumnStatKinds::Struct(stats)) => stats,
             key_stats => Err(format!(
@@ -165,10 +159,7 @@ where
             ))?,
         };
 
-        Ok((
-            Some(ColumnarRecordsStructuredExt { key, val }),
-            PartStats { key: key_stats },
-        ))
+        Ok((Some(ext), PartStats { key: key_stats }))
     } else {
         let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
         for ((k, v), t, d) in records.iter() {

@@ -1324,7 +1324,6 @@ impl RowColumnarEncoder {
 
 impl ColumnEncoder<Row> for RowColumnarEncoder {
     type FinishedColumn = StructArray;
-    type FinishedStats = OptionStats<StructStats>;
 
     fn append(&mut self, val: &Row) {
         let mut num_datums = 0;
@@ -1349,7 +1348,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
         self.nullability.append(false);
     }
 
-    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
+    fn finish(self) -> Self::FinishedColumn {
         let RowColumnarEncoder {
             encoders,
             col_names,
@@ -1357,32 +1356,23 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
             ..
         } = self;
 
-        let (arrays, fields, stats): (Vec<_>, Vec<_>, Vec<_>) = col_names
+        let (arrays, fields): (Vec<_>, Vec<_>) = col_names
             .iter()
             .zip_eq(encoders)
-            .map(|((col_idx, col_name), encoder)| {
+            .map(|((col_idx, _col_name), encoder)| {
                 let nullable = encoder.nullable;
-                let (array, stats) = encoder.finish();
-                let stats = (col_name.to_string(), stats);
+                let (array, _stats) = encoder.finish();
                 let field = Field::new(col_idx.to_string(), array.data_type().clone(), nullable);
 
-                (array, field, stats)
+                (array, field)
             })
             .multiunzip();
 
         let null_buffer = NullBuffer::from(BooleanBuffer::from(nullability));
-        let length = null_buffer.len();
 
         let array = StructArray::new(Fields::from(fields), arrays, Some(null_buffer));
-        let stats = OptionStats {
-            none: array.logical_nulls().map_or(0, |n| n.null_count()),
-            some: StructStats {
-                len: length,
-                cols: stats.into_iter().collect(),
-            },
-        };
 
-        (array, stats)
+        array
     }
 }
 
@@ -1758,7 +1748,7 @@ mod tests {
         for row in &rows {
             encoder.append(row);
         }
-        let (col, encoded_stats) = encoder.finish();
+        let col = encoder.finish();
 
         // Exercise reallocating columns with lgalloc.
         let col = realloc_array(&col, metrics);
@@ -1778,13 +1768,18 @@ mod tests {
         }
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col.clone()).unwrap();
+        let stats = decoder.stats();
+        let stats = match stats.values {
+            ColumnStatKinds::Struct(stats) => stats,
+            e => panic!("expected struct stats; got {e:?}"),
+        };
 
         // Collect all of our lower and upper bounds.
         let arena = RowArena::new();
         let (stats, stat_nulls): (Vec<_>, Vec<_>) = desc
             .iter()
             .map(|(name, ty)| {
-                let col_stats = encoded_stats.some.cols.get(name.as_str()).unwrap();
+                let col_stats = stats.cols.get(name.as_str()).unwrap();
                 let (lower, upper) =
                     crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
@@ -1833,11 +1828,6 @@ mod tests {
                 }
             }
         }
-        // Assert calculating stats from the decoder gives the same results as the encoder does.
-        assert_eq!(
-            format!("{:?}", decoder.stats()),
-            format!("{:?}", encoded_stats.into_columnar_stats())
-        );
 
         // Validate that the null counts in our stats matched the actual counts.
         for (col_idx, (stats_count, actual_count)) in
@@ -1851,7 +1841,7 @@ mod tests {
 
         // Validate that we can convert losslessly to codec and back
         let codec = schema2_to_codec::<Row>(desc, &col).unwrap();
-        let (col2, _) = codec_to_schema2::<Row>(desc, &codec).unwrap();
+        let col2 = codec_to_schema2::<Row>(desc, &codec).unwrap();
         assert_eq!(col2.as_ref(), &col);
 
         // Validate that we only generate supported array types
@@ -1968,7 +1958,7 @@ mod tests {
 
         encoder.append(&og_row);
         encoder.append(&og_row_2);
-        let (col, _stats) = encoder.finish();
+        let col = encoder.finish();
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
 
@@ -2007,7 +1997,7 @@ mod tests {
         }
 
         encoder.append(&og_row);
-        let (col, _stats) = encoder.finish();
+        let col = encoder.finish();
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();
@@ -2052,7 +2042,7 @@ mod tests {
 
         encoder.append(&og_row);
         encoder.append(&null_row);
-        let (col, _stats) = encoder.finish();
+        let col = encoder.finish();
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();

@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Array, BinaryArray, BinaryBuilder, NullArray, StructArray};
+use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
 use bytes::{BufMut, Bytes};
 use columnation::Columnation;
@@ -1977,7 +1977,6 @@ impl SourceDataColumnarEncoder {
 
 impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     type FinishedColumn = StructArray;
-    type FinishedStats = StructStats;
 
     #[inline]
     fn append(&mut self, val: &SourceData) {
@@ -1999,42 +1998,19 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
         panic!("appending a null into SourceDataColumnarEncoder is not supported");
     }
 
-    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
+    fn finish(self) -> Self::FinishedColumn {
         let SourceDataColumnarEncoder {
             row_encoder,
             mut err_encoder,
         } = self;
 
         let err_column = BinaryBuilder::finish(&mut err_encoder);
-        let err_stats = OptionStats::<PrimitiveStats<Vec<u8>>>::from_column(&err_column).finish();
-        let (row_column, row_stats): (Arc<dyn Array>, _) = match row_encoder {
+        let row_column: ArrayRef = match row_encoder {
             SourceDataRowColumnarEncoder::Row(encoder) => {
-                let (column, stats) = encoder.finish();
-                (Arc::new(column), stats)
+                let column = encoder.finish();
+                Arc::new(column)
             }
-            SourceDataRowColumnarEncoder::EmptyRow => {
-                let column = Arc::new(NullArray::new(err_column.len()));
-                let stats = OptionStats {
-                    none: err_column.len() - err_column.null_count(),
-                    some: StructStats {
-                        len: err_column.len(),
-                        cols: BTreeMap::default(),
-                    },
-                };
-                (column, stats)
-            }
-        };
-
-        let stats = [
-            (
-                Self::OK_COLUMN_NAME.to_string(),
-                row_stats.into_columnar_stats(),
-            ),
-            (Self::ERR_COLUMN_NAME.to_string(), err_stats),
-        ];
-        let stats = StructStats {
-            len: row_column.len(),
-            cols: stats.into_iter().map(|(name, s)| (name, s)).collect(),
+            SourceDataRowColumnarEncoder::EmptyRow => Arc::new(NullArray::new(err_column.len())),
         };
 
         assert_eq!(row_column.len(), err_column.len());
@@ -2044,9 +2020,7 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
             Field::new(Self::ERR_COLUMN_NAME, err_column.data_type().clone(), true),
         ];
         let arrays: Vec<Arc<dyn Array>> = vec![row_column, Arc::new(err_column)];
-        let array = StructArray::new(Fields::from(fields), arrays, None);
-
-        (array, stats)
+        StructArray::new(Fields::from(fields), arrays, None)
     }
 }
 
@@ -2150,7 +2124,7 @@ mod tests {
         for data in &datas {
             encoder.append(data);
         }
-        let (col, _stats) = encoder.finish();
+        let col = encoder.finish();
 
         // Reallocate our arrays with lgalloc.
         let col = realloc_array(&col, &metrics);
@@ -2259,13 +2233,13 @@ mod tests {
             for data in &datas[..half] {
                 encoder_a.append(data);
             }
-            let (col_a, _stats) = encoder_a.finish();
+            let col_a = encoder_a.finish();
 
             let mut encoder_b = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
             for data in &datas[half..] {
                 encoder_b.append(data);
             }
-            let (col_b, _stats) = encoder_b.finish();
+            let col_b = encoder_b.finish();
 
             // The DataType of the resulting column should not change based on what data was
             // encoded.

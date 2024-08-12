@@ -152,7 +152,6 @@ impl ColumnDecoder<()> for UnitColumnar {
 
 impl ColumnEncoder<()> for UnitColumnar {
     type FinishedColumn = NullArray;
-    type FinishedStats = NoneStats;
 
     fn append(&mut self, _val: &()) {
         self.len += 1;
@@ -162,8 +161,8 @@ impl ColumnEncoder<()> for UnitColumnar {
         self.len += 1;
     }
 
-    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
-        (NullArray::new(self.len), NoneStats)
+    fn finish(self) -> Self::FinishedColumn {
+        NullArray::new(self.len)
     }
 }
 
@@ -252,7 +251,6 @@ pub struct SimpleColumnarEncoder<T: SimpleColumnarData>(T::ArrowBuilder);
 
 impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
     type FinishedColumn = T::ArrowColumn;
-    type FinishedStats = NoneStats;
 
     fn append(&mut self, val: &T) {
         T::push(val, &mut self.0);
@@ -260,7 +258,7 @@ impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
     fn append_null(&mut self) {
         T::push_null(&mut self.0)
     }
-    fn finish(mut self) -> (Self::FinishedColumn, Self::FinishedStats) {
+    fn finish(mut self) -> Self::FinishedColumn {
         let array = ArrayBuilder::finish(&mut self.0);
         let array = array
             .as_any()
@@ -268,7 +266,7 @@ impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
             .expect("created using StringBuilder")
             .clone();
 
-        (array, NoneStats)
+        array
     }
 }
 
@@ -1333,7 +1331,6 @@ pub struct TodoColumnarEncoder<T>(PhantomData<T>);
 
 impl<T> ColumnEncoder<T> for TodoColumnarEncoder<T> {
     type FinishedColumn = StructArray;
-    type FinishedStats = NoneStats;
 
     fn append(&mut self, _val: &T) {
         panic!("TODO")
@@ -1343,7 +1340,7 @@ impl<T> ColumnEncoder<T> for TodoColumnarEncoder<T> {
         panic!("TODO")
     }
 
-    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
+    fn finish(self) -> Self::FinishedColumn {
         panic!("TODO")
     }
 }
