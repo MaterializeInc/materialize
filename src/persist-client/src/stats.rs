@@ -15,7 +15,7 @@ use std::sync::Arc;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
-use mz_persist_types::columnar::codec_to_schema2;
+use mz_persist_types::columnar::{codec_to_schema2, ColumnDecoder, Schema2};
 use mz_persist_types::part::PartBuilder;
 use mz_persist_types::stats::{ColumnStatKinds, PartStats};
 use mz_persist_types::Codec;
@@ -137,11 +137,19 @@ where
     let records = updates.records();
 
     if format.is_structured() {
-        // At the moment, the only way to collect stats is to re-encode the key column.
-        // However, we only need to re-encode the structured values if they weren't passed in.
-        // TODO(bkirwi): reuse the existing encoded data once we have separate stats collection methods.
-        let (key, key_stats) = codec_to_schema2::<K>(schemas.key.as_ref(), records.keys())
-            .map_err(|e| e.to_string())?;
+        let (key, key_stats) = match updates {
+            BlobTraceUpdates::Row(_) => codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
+                .map_err(|e| e.to_string())?,
+            BlobTraceUpdates::Both(_, ext) => (
+                Arc::clone(&ext.key),
+                schemas
+                    .key
+                    .decoder_any(&ext.key)
+                    .map_err(|e| e.to_string())?
+                    .stats(),
+            ),
+        };
+
         let val = match updates {
             BlobTraceUpdates::Row(_) => {
                 let (val, _) = codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
