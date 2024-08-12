@@ -618,6 +618,7 @@ mz_compute_hydration_statuses
 mz_compute_operator_hydration_statuses
 mz_global_frontiers
 mz_hydration_statuses
+mz_materialization_dependencies
 mz_materialization_lag
 mz_notices
 mz_notices_redacted

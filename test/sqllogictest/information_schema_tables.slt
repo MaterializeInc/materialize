@@ -353,6 +353,10 @@ mz_kafka_sources
 BASE TABLE
 materialize
 mz_internal
+mz_materialization_dependencies
+VIEW
+materialize
+mz_internal
 mz_materialization_lag
 VIEW
 materialize
