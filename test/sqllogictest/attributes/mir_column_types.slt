@@ -94,18 +94,18 @@ SELECT t.* FROM u LEFT OUTER JOIN t on t.a = u.d
 Explained Query:
   Return // { types: "(integer?, text?, date?)" }
     Union // { types: "(integer?, text?, date?)" }
-      Map (null, null, null) // { types: "(integer?, text?, date?)" }
-        Union // { types: "()" }
-          Negate // { types: "()" }
-            Project () // { types: "()" }
-              Join on=(#0 = #1) type=differential // { types: "(integer, integer)" }
-                Get l0 // { types: "(integer)" }
-                ArrangeBy keys=[[#0]] // { types: "(integer)" }
-                  Distinct project=[#0] // { types: "(integer)" }
-                    Project (#0) // { types: "(integer)" }
-                      Get l1 // { types: "(integer, text?, date?)" }
-          Project () // { types: "()" }
-            ReadStorage materialize.public.u // { types: "(integer?)" }
+      Negate // { types: "(integer?, text?, date?)" }
+        Project (#2..=#4) // { types: "(integer?, text?, date?)" }
+          Map (null, null, null) // { types: "(integer, integer, integer?, text?, date?)" }
+            Join on=(#0 = #1) type=differential // { types: "(integer, integer)" }
+              Get l0 // { types: "(integer)" }
+              ArrangeBy keys=[[#0]] // { types: "(integer)" }
+                Distinct project=[#0] // { types: "(integer)" }
+                  Project (#0) // { types: "(integer)" }
+                    Get l1 // { types: "(integer, text?, date?)" }
+      Project (#1..=#3) // { types: "(integer?, text?, date?)" }
+        Map (null, null, null) // { types: "(integer?, integer?, text?, date?)" }
+          ReadStorage materialize.public.u // { types: "(integer?)" }
       Get l1 // { types: "(integer, text?, date?)" }
   With
     cte l1 =

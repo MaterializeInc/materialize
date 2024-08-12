@@ -1248,8 +1248,8 @@ SELECT sum(a*b*c*d) FROM t4
 WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
 ----
 Explained Query:
-  Return // { arity: 1, types: "(bigint?)", keys: "()" }
-    Union // { arity: 1, types: "(bigint?)", keys: "()" }
+  Return // { arity: 1, types: "(bigint?)", keys: "([])" }
+    Union // { arity: 1, types: "(bigint?)", keys: "([])" }
       Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
       Negate // { arity: 1, types: "(bigint?)", keys: "()" }
         Project (#1) // { arity: 1, types: "(bigint?)", keys: "([])" }

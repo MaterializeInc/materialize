@@ -570,13 +570,12 @@ materialize.public.q06:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[sum((#0{l_extendedprice} * #1{l_discount}))] // { arity: 1 }
@@ -999,7 +998,7 @@ EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q11;
 ----
 materialize.public.q11_primary_idx:
-  ArrangeBy keys=[[#0{ps_partkey}]] // { arity: 2 }
+  ArrangeBy keys=[[#0{ps_partkey}, #1{value}]] // { arity: 2 }
     ReadGlobalFromSameDataflow materialize.public.q11 // { arity: 2 }
 
 materialize.public.q11:
@@ -1146,20 +1145,20 @@ materialize.public.q13:
       Project (#1) // { arity: 1 }
         Reduce group_by=[#0{c_custkey}] aggregates=[count(#1{o_orderkey})] // { arity: 2 }
           Union // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Project (#0{c_custkey}) // { arity: 1 }
-                    Join on=(#0{c_custkey} = #8{c_custkey}) type=differential // { arity: 9 }
-                      implementation
-                        %1[#0]UKA » %0:l0[#0]KA
-                      Get l0 // { arity: 8 }
-                      ArrangeBy keys=[[#0{c_custkey}]] // { arity: 1 }
-                        Distinct project=[#0{c_custkey}] // { arity: 1 }
-                          Project (#0{c_custkey}) // { arity: 1 }
-                            Get l1 // { arity: 2 }
-                Project (#0{c_custkey}) // { arity: 1 }
-                  ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
+            Negate // { arity: 2 }
+              Project (#0{c_custkey}, #9) // { arity: 2 }
+                Map (null) // { arity: 10 }
+                  Join on=(#0{c_custkey} = #8{c_custkey}) type=differential // { arity: 9 }
+                    implementation
+                      %1[#0]UKA » %0:l0[#0]KA
+                    Get l0 // { arity: 8 }
+                    ArrangeBy keys=[[#0{c_custkey}]] // { arity: 1 }
+                      Distinct project=[#0{c_custkey}] // { arity: 1 }
+                        Project (#0{c_custkey}) // { arity: 1 }
+                          Get l1 // { arity: 2 }
+            Project (#0{c_custkey}, #8) // { arity: 2 }
+              Map (null) // { arity: 9 }
+                ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
             Get l1 // { arity: 2 }
   With
     cte l1 =
@@ -1213,17 +1212,16 @@ materialize.public.q14_primary_idx:
 
 materialize.public.q14:
   Return // { arity: 1 }
-    Project (#2) // { arity: 1 }
-      Map (((100 * #0{sum}) / #1{sum})) // { arity: 3 }
-        Union // { arity: 2 }
+    Union // { arity: 1 }
+      Project (#2) // { arity: 1 }
+        Map (((100 * #0{sum}) / #1{sum})) // { arity: 3 }
           Get l0 // { arity: 2 }
-          Map (null, null) // { arity: 2 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l0 // { arity: 2 }
-              Constant // { arity: 0 }
-                - ()
+      Negate // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Map (null) // { arity: 3 }
+            Get l0 // { arity: 2 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[sum(case when like["PROMO%"](varchar_to_text(#2{p_type})) then (#0{l_extendedprice} * (1 - #1{l_discount})) else 0 end), sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 2 }
@@ -1452,17 +1450,16 @@ materialize.public.q17_primary_idx:
 
 materialize.public.q17:
   Return // { arity: 1 }
-    Project (#1) // { arity: 1 }
-      Map ((#0{sum_l_extendedprice} / 7)) // { arity: 2 }
-        Union // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#1) // { arity: 1 }
+        Map ((#0{sum_l_extendedprice} / 7)) // { arity: 2 }
           Get l2 // { arity: 1 }
-          Map (null) // { arity: 1 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l2 // { arity: 1 }
-              Constant // { arity: 0 }
-                - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l2 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l2 =
       Reduce aggregates=[sum(#0{l_extendedprice})] // { arity: 1 }
@@ -1654,13 +1651,12 @@ materialize.public.q19:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 1 }

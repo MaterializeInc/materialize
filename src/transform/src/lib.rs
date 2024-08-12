@@ -610,6 +610,7 @@ impl Optimizer {
                     Box::new(reduction_pushdown::ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
                     // unique with maps
+                    Box::new(canonicalize_mfp::CanonicalizeMfp),
                     Box::new(reduce_elision::ReduceElision),
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.

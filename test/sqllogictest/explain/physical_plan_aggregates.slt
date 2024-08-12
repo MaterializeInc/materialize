@@ -214,28 +214,22 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT array_agg(b ORDER BY b ASC), array_agg(
 ----
 Explained Query:
   Return
-    Mfp
-      project=(#0, #1, #3)
-      map=((#2 > 0))
-      Union
-        ArrangeBy
-          input_key=[]
-          raw=true
-          Get::PassArrangements l0
-            raw=false
-            arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
-        Mfp
-          project=(#0..=#2)
+    Union consolidate_output=true
+      Get::Arrangement l0
+        project=(#0, #1, #3)
+        map=((#2 > 0))
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+      Negate
+        Get::Arrangement l0
+          project=(#4, #5, #3)
           map=(null, null, null)
-          Union consolidate_output=true
-            Negate
-              Get::Arrangement l0
-                project=()
-                key=
-                raw=false
-                arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
-            Constant
-              - ()
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+      Constant
+        - (null, null, null)
   With
     cte l0 =
       Reduce::Collation
@@ -313,27 +307,21 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT sum(a), jsonb_agg(b), array_agg(b), arr
 ----
 Explained Query:
   Return
-    Mfp
-      project=(#0..=#2, #2)
-      Union
-        ArrangeBy
-          input_key=[]
-          raw=true
-          Get::PassArrangements l0
-            raw=false
-            arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
-        Mfp
-          project=(#0..=#2)
+    Union consolidate_output=true
+      Get::Arrangement l0
+        project=(#0..=#2, #2)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+      Negate
+        Get::Arrangement l0
+          project=(#3..=#5, #5)
           map=(null, null, null)
-          Union consolidate_output=true
-            Negate
-              Get::Arrangement l0
-                project=()
-                key=
-                raw=false
-                arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
-            Constant
-              - ()
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0..=#2) }
+      Constant
+        - (null, null, null, null)
   With
     cte l0 =
       Reduce::Collation

@@ -723,18 +723,16 @@ EXPLAIN OPTIMIZED PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Explained Query:
   Return
-    Project (#4, #3)
-      Map (sqrtf64(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = 0) then null else #2 end))) / bigint_to_double(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
-        Union
-          Project (#0..=#2, #1)
+    Union
+      Project (#3, #1)
+        Map (sqrtf64(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = 0) then null else #2 end))) / bigint_to_double(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
+          Get l0
+      Negate
+        Project (#3, #4)
+          Map (null, null)
             Get l0
-          Map (null, null, 0, null)
-            Union
-              Negate
-                Project ()
-                  Get l0
-              Constant
-                - ()
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]

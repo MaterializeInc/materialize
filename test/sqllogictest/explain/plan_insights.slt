@@ -862,7 +862,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    Union\n      Get l0\n      Map (0)\n        Union\n          Negate\n            Project ()\n              Get l0\n          Constant\n            - ()\n  With\n    cte l0 =\n      Reduce aggregates=[count(*)]\n        Project ()\n          ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: other\n",
+        "text": "Explained Query:\n  Return\n    Union\n      Get l0\n      Negate\n        Project (#1)\n          Map (0)\n            Get l0\n      Constant\n        - (0)\n  With\n    cte l0 =\n      Reduce aggregates=[count(*)]\n        Project ()\n          ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: other\n",
         "json": {
           "plans": [
             {
@@ -945,76 +945,81 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                       },
                       "inputs": [
                         {
-                          "Map": {
+                          "Negate": {
                             "input": {
-                              "Union": {
-                                "base": {
-                                  "Negate": {
+                              "Project": {
+                                "input": {
+                                  "Map": {
                                     "input": {
-                                      "Project": {
-                                        "input": {
-                                          "Get": {
-                                            "id": {
-                                              "Local": 0
-                                            },
-                                            "typ": {
-                                              "column_types": [
-                                                {
-                                                  "scalar_type": "Int64",
-                                                  "nullable": false
-                                                }
-                                              ],
-                                              "keys": [
-                                                []
-                                              ]
-                                            },
-                                            "access_strategy": "UnknownOrLocal"
-                                          }
+                                      "Get": {
+                                        "id": {
+                                          "Local": 0
                                         },
-                                        "outputs": []
+                                        "typ": {
+                                          "column_types": [
+                                            {
+                                              "scalar_type": "Int64",
+                                              "nullable": false
+                                            }
+                                          ],
+                                          "keys": [
+                                            []
+                                          ]
+                                        },
+                                        "access_strategy": "UnknownOrLocal"
                                       }
-                                    }
+                                    },
+                                    "scalars": [
+                                      {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                46
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "Int64",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    ]
                                   }
                                 },
-                                "inputs": [
-                                  {
-                                    "Constant": {
-                                      "rows": {
-                                        "Ok": [
-                                          [
-                                            {
-                                              "data": []
-                                            },
-                                            1
-                                          ]
-                                        ]
-                                      },
-                                      "typ": {
-                                        "column_types": [],
-                                        "keys": []
-                                      }
-                                    }
-                                  }
+                                "outputs": [
+                                  1
                                 ]
                               }
-                            },
-                            "scalars": [
-                              {
-                                "Literal": [
+                            }
+                          }
+                        },
+                        {
+                          "Constant": {
+                            "rows": {
+                              "Ok": [
+                                [
                                   {
-                                    "Ok": {
-                                      "data": [
-                                        46
-                                      ]
-                                    }
+                                    "data": [
+                                      46
+                                    ]
                                   },
-                                  {
-                                    "scalar_type": "Int64",
-                                    "nullable": false
-                                  }
+                                  1
                                 ]
-                              }
-                            ]
+                              ]
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int64",
+                                  "nullable": false
+                                }
+                              ],
+                              "keys": [
+                                []
+                              ]
+                            }
                           }
                         }
                       ]

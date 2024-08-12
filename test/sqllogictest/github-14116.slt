@@ -40,14 +40,13 @@ Explained Query:
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }
           Get l1 // { arity: 1 }
-          Map (null) // { arity: 1 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Distinct project=[] // { arity: 0 }
-                  Project () // { arity: 0 }
-                    Get l1 // { arity: 1 }
-              Constant // { arity: 0 }
-                - ()
+          Negate // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Distinct project=[] // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l1 // { arity: 1 }
+          Constant // { arity: 1 }
+            - (null)
   With
     cte l1 =
       Union // { arity: 1 }
