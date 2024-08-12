@@ -47,6 +47,18 @@ def connect(**kwargs):
         # dbt prints notices to stdout, which is very distracting because dbt
         # can establish many new connections during `dbt run`.
         "--welcome_message=off",
+        # Disable warnings about the session's default database or cluster not
+        # existing, as these get quite spammy, especially with multiple threads.
+        #
+        # Details: it's common for the default cluster for the role dbt is
+        # connecting as (often `quickstart`) to be absent. For many dbt
+        # deployments, clusters are explicitly specified on a model-by-model
+        # basis, and there in fact is no natural "default" cluster. So warning
+        # repeatedly that the default cluster doesn't exist isn't helpful, since
+        # each DDL statement will specify a different, valid cluster. If a DDL
+        # statement ever specifies an invalid cluster, dbt will still produce an
+        # error about the invalid cluster, even with this setting enabled.
+        "--current_object_missing_warnings=off",
         *(kwargs.get("options") or []),
     ]
     kwargs["options"] = " ".join(options)

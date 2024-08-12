@@ -31,6 +31,24 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in (
+        "SmallClusters",
+        "AccumulateReductions",
+        "CreateIndex",
+        "ManySmallUpdates",
+        "FastPathOrderByLimit",
+        "FastPathFilterIndex",
+        "ParallelIngestion",
+        "SubscribeParallelTableWithIndex",
+        "DeltaJoinMaintained",
+        "Update",
+        "Retraction",
+    ):
+        # PR#28307 (Render regions for object build and let bindings) increases messages
+        min_ancestor_mz_version_per_commit[
+            "ffcafa5b5c3e83845a868cf6103048c045b4f155"
+        ] = MzVersion.parse_mz("v0.113.0")
+
     if "OptbenchTPCH" in scenario_class_name:
         # PR#28664 (Introduce MirScalarExpr::reduce_safely) increases wallclock
         min_ancestor_mz_version_per_commit[
@@ -131,6 +149,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#28307 (Render regions for object build and let bindings) introduces regressions against v0.112.0
+    "ffcafa5b5c3e83845a868cf6103048c045b4f155": MzVersion.parse_mz("v0.113.0"),
     # PR#23659 (txn-wal: enable in CI with "eager uppers") introduces regressions against v0.79.0
     "c4f520a57a3046e5074939d2ea345d1c72be7079": MzVersion.parse_mz("v0.80.0"),
     # PR#23421 (coord: smorgasbord of improvements for the crdb-backed timestamp oracle) introduces regressions against 0.78.13

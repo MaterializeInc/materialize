@@ -179,9 +179,7 @@ def workflow_silent_connection_drop(
             ],
         ),
     ):
-        c.kill("postgres")
-        c.rm("postgres", destroy_volumes=True)
-        c.up("materialized", "postgres")
+        c.up("postgres")
 
         pg_conn = pg8000.connect(
             host="localhost",
@@ -191,6 +189,8 @@ def workflow_silent_connection_drop(
         )
 
         _verify_exactly_n_replication_slots_exist(pg_conn, n=0)
+
+        c.up("materialized")
 
         c.run_testdrive_files(
             "--no-reset",
@@ -308,9 +308,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         # Otherwise we are running all workflows
         for name in c.workflows:
-            # clear postgres to avoid issues with special arguments conflicting with existing state
+            # clear postgres and materialized to avoid issues with special arguments conflicting with existing state
             c.kill("postgres")
             c.rm("postgres")
+            c.kill("materialized")
+            c.rm("materialized")
 
             if name == "default":
                 continue

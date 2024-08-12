@@ -60,8 +60,20 @@ http
 http
 {"query":"'"}
 ----
-400 Bad Request
-unterminated quoted string
+200 OK
+{"results":[{"error":{"message":"unterminated quoted string","code":"42601","position":0},"notices":[]}]}
+
+http
+{"query": "SELECTttt * from t"}
+----
+200 OK
+{"results":[{"error":{"message":"Expected a keyword at the beginning of a statement, found identifier \"selectttt\"","code":"42601","position":0},"notices":[]}]}
+
+http
+{"queries": [{"query": "select 1"}, {"query": "selectttt 2"}, {"query": "select 3"}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[]},{"error":{"message":"Expected a keyword at the beginning of a statement, found identifier \"selectttt\"","code":"42601","position":0},"notices":[]}]}
 
 # Tables
 http
@@ -226,14 +238,14 @@ http
 http
 {"query":"subscribe (select * from t)"}
 ----
-400 Bad Request
-unsupported via this API: SUBSCRIBE (SELECT * FROM t)
+200 OK
+{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"copy (select 1) to stdout"}
 ----
-400 Bad Request
-unsupported via this API: COPY (SELECT 1) TO STDOUT
+200 OK
+{"results":[{"error":{"message":"unsupported via this API: COPY (SELECT 1) TO STDOUT","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"EXPLAIN SELECT 1"}
@@ -447,8 +459,8 @@ http
 http
 {"queries":[{"query":"subscribe (select * from t)","params":[]}]}
 ----
-400 Bad Request
-unsupported via this API: SUBSCRIBE (SELECT * FROM t)
+200 OK
+{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
 
 # Test detail and hint error fields.
 http

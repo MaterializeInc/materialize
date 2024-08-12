@@ -6699,6 +6699,22 @@ SELECT * FROM sinks"#,
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_MATERIALIZATION_DEPENDENCIES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_materialization_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_MATERIALIZATION_DEPENDENCIES_OID,
+    column_defs: None,
+    sql: "
+SELECT object_id, dependency_id
+FROM mz_internal.mz_compute_dependencies
+UNION ALL
+SELECT s.id, d.referenced_object_id AS dependency_id
+FROM mz_internal.mz_object_dependencies d
+JOIN mz_catalog.mz_sinks s ON (s.id = d.object_id)
+JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_MATERIALIZATION_LAG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_materialization_lag",
     schema: MZ_INTERNAL_SCHEMA,
@@ -6714,20 +6730,11 @@ WITH MUTUALLY RECURSIVE
         UNION ALL
         SELECT id FROM mz_catalog.mz_sinks
     ),
-    -- Compute dependencies enriched with sink dependencies.
-    dataflow_dependencies (id text, dep_id text) AS (
-        SELECT object_id, dependency_id
-        FROM mz_internal.mz_compute_dependencies
-        UNION ALL
-        SELECT object_id, referenced_object_id
-        FROM mz_internal.mz_object_dependencies
-        JOIN mz_catalog.mz_sinks ON (id = object_id)
-    ),
     -- Direct dependencies of materializations.
     direct_dependencies (id text, dep_id text) AS (
-        SELECT id, dep_id
-        FROM materializations
-        JOIN dataflow_dependencies USING (id)
+        SELECT m.id, d.dependency_id
+        FROM materializations m
+        JOIN mz_internal.mz_materialization_dependencies d ON (m.id = d.object_id)
     ),
     -- All transitive dependencies of materializations.
     transitive_dependencies (id text, dep_id text) AS (
@@ -6735,7 +6742,7 @@ WITH MUTUALLY RECURSIVE
         UNION
         SELECT td.id, dd.dep_id
         FROM transitive_dependencies td
-        JOIN dataflow_dependencies dd ON (dd.id = td.dep_id)
+        JOIN direct_dependencies dd ON (dd.id = td.dep_id)
     ),
     -- Root dependencies of materializations (sources and tables).
     root_dependencies (id text, dep_id text) AS (
@@ -6743,7 +6750,7 @@ WITH MUTUALLY RECURSIVE
         FROM transitive_dependencies td
         WHERE NOT EXISTS (
             SELECT 1
-            FROM dataflow_dependencies dd
+            FROM direct_dependencies dd
             WHERE dd.id = td.dep_id
         )
     ),
@@ -7755,6 +7762,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
+        Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),

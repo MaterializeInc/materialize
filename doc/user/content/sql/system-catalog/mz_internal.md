@@ -361,6 +361,19 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 | `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
 | `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
 
+## `mz_materialization_dependencies`
+
+The `mz_materialization_dependencies` view describes the dependency structure between each materialization (materialized view, index, or sink) and the sources of its data.
+
+In contrast to [`mz_object_dependencies`](#mz_object_dependencies), this view only lists dependencies in the dataflow layer.
+SQL objects that don't exist in the dataflow layer (such as views) are omitted.
+
+<!-- RELATION_SPEC mz_internal.mz_materialization_dependencies -->
+| Field       | Type     | Meaning                                                                                                                                                                                                                                                                                            |
+| ----------- | -------- | --------                                                                                                                                                                                                                                                                                           |
+| `object_id`     | [`text`] | The ID of a materialization. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_sinks.id`](#mz_subscriptions).                                                           |
+| `dependency_id` | [`text`] | The ID of a dataflow dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+
 ## `mz_materialization_lag`
 
 The `mz_materialization_lag` view describes the difference between the input
