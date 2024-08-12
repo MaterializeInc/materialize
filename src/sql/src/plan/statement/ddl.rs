@@ -799,6 +799,10 @@ pub fn plan_create_source(
         CreateSourceConnection::Postgres {
             connection,
             options,
+        }
+        | CreateSourceConnection::Yugabyte {
+            connection,
+            options,
         } => {
             let connection_item = scx.get_item_by_resolved_name(connection)?;
 

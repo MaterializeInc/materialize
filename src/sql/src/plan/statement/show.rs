@@ -961,7 +961,8 @@ fn humanize_sql_for_show_create(
                 .collect();
 
             match &mut stmt.connection {
-                CreateSourceConnection::Postgres { options, .. } => {
+                CreateSourceConnection::Postgres { options, .. }
+                | CreateSourceConnection::Yugabyte { options, .. } => {
                     options.retain_mut(|o| {
                         match o.name {
                             // Dropping a subsource does not remove any `TEXT

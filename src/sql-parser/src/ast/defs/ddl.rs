@@ -845,6 +845,7 @@ pub enum CreateConnectionType {
     Postgres,
     Ssh,
     MySql,
+    Yugabyte,
 }
 
 impl AstDisplay for CreateConnectionType {
@@ -870,6 +871,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::MySql => {
                 f.write_str("MYSQL");
+            }
+            Self::Yugabyte => {
+                f.write_str("YUGABYTE");
             }
         }
     }
@@ -1139,6 +1143,10 @@ pub enum CreateSourceConnection<T: AstInfo> {
         connection: T::ItemName,
         options: Vec<PgConfigOption<T>>,
     },
+    Yugabyte {
+        connection: T::ItemName,
+        options: Vec<PgConfigOption<T>>,
+    },
     MySql {
         connection: T::ItemName,
         options: Vec<MySqlConfigOption<T>>,
@@ -1169,6 +1177,18 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 options,
             } => {
                 f.write_str("POSTGRES CONNECTION ");
+                f.write_node(connection);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
+            }
+            CreateSourceConnection::Yugabyte {
+                connection,
+                options,
+            } => {
+                f.write_str("YUGABYTE CONNECTION ");
                 f.write_node(connection);
                 if !options.is_empty() {
                     f.write_str(" (");

@@ -2073,6 +2073,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_yugabyte_connection,
+        desc: "Create a YUGABYTE connection",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

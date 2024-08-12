@@ -599,7 +599,7 @@ async fn purify_create_source(
         CreateSourceConnection::Kafka { .. } => {
             &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
         }
-        CreateSourceConnection::Postgres { .. } => {
+        CreateSourceConnection::Postgres { .. } | CreateSourceConnection::Yugabyte { .. } => {
             &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
         }
         CreateSourceConnection::MySql { .. } => {
@@ -723,6 +723,10 @@ async fn purify_create_source(
             }
         }
         CreateSourceConnection::Postgres {
+            connection,
+            options,
+        }
+        | CreateSourceConnection::Yugabyte {
             connection,
             options,
         } => {
