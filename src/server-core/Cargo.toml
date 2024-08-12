@@ -11,8 +11,10 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
+async-trait = { version = "0.1.68" }
 clap = { version = "3.2.24", features = ["derive", "env"] }
 openssl = { version = "0.10.48", features = ["vendored"] }
+scopeguard = "1.1.0"
 socket2 = "0.5.3"
 tokio-stream = "0.1.11"
 tracing = "0.1.37"
@@ -20,6 +22,7 @@ futures = "0.3.25"
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 tokio = "1.38.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+uuid = { version = "1.7.0", features = ["v4"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

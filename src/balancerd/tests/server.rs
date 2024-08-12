@@ -301,6 +301,7 @@ async fn test_balancer() {
 
         // Test de-duplication in the frontegg resolver. This is a bit racy so use a retry loop.
         Retry::default()
+            .max_duration(Duration::from_secs(30))
             .retry_async(|_| async {
                 let start_auth_count = *frontegg_server.auth_requests.lock().unwrap();
                 const CONNS: u64 = 10;
@@ -345,6 +346,7 @@ async fn test_balancer() {
             port = balancer_https_internal.port()
         );
         Retry::default()
+            .max_duration(Duration::from_secs(30))
             .retry_async(|_| async {
                 let resp = client
                     .get(&metrics_url)

@@ -19,6 +19,8 @@ use tokio_postgres::error::SqlState;
 
 use crate::ErrorResponse;
 
+pub const CONN_UUID_KEY: &str = "mz_connection_uuid";
+
 #[derive(Debug)]
 pub enum Conn<A> {
     Unencrypted(A),
@@ -26,6 +28,13 @@ pub enum Conn<A> {
 }
 
 impl<A> Conn<A> {
+    pub fn inner_mut(&mut self) -> &mut A {
+        match self {
+            Conn::Unencrypted(inner) => inner,
+            Conn::Ssl(inner) => inner.get_mut(),
+        }
+    }
+
     /// Returns an error if tls_mode is incompatible with this connection's stream type.
     pub fn ensure_tls_compatibility(
         &self,

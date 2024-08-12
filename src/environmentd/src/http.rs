@@ -45,7 +45,7 @@ use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
 use mz_repr::user::ExternalUserMetadata;
-use mz_server_core::{ConnectionHandler, ReloadingSslContext, Server};
+use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
 use mz_sql::session::vars::{
@@ -56,7 +56,6 @@ use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 use tokio::sync::{oneshot, watch};
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::{Service, ServiceBuilder};
@@ -214,7 +213,7 @@ impl HttpServer {
 impl Server for HttpServer {
     const NAME: &'static str = "http";
 
-    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
+    fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
         let router = self.router.clone();
         let tls_config = self.tls.clone();
         let conn = TokioIo::new(conn);
@@ -434,7 +433,7 @@ async fn internal_http_auth(mut req: Request, next: Next) -> impl IntoResponse {
 impl Server for InternalHttpServer {
     const NAME: &'static str = "internal_http";
 
-    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
+    fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
         let router = self.router.clone();
         let service = hyper::service::service_fn(move |req| router.clone().call(req));
 
