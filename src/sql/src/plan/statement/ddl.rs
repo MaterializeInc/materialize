@@ -70,9 +70,9 @@ use mz_sql_parser::ast::{
     PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
     ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    Statement, TableConstraint, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -411,13 +411,6 @@ pub fn describe_create_table_from_source(
     _: CreateTableFromSourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
-}
-
-pub fn plan_create_table_from_source(
-    _scx: &StatementContext,
-    _stmt: CreateTableFromSourceStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    bail_unsupported!("CREATE TABLE .. FROM SOURCE")
 }
 
 pub fn describe_create_webhook_source(
@@ -1446,6 +1439,38 @@ pub fn plan_create_subsource(
         timeline: Timeline::EpochMilliseconds,
         in_cluster: None,
     }))
+}
+
+generate_extracted_config!(
+    TableFromSourceOption,
+    (TextColumns, Vec::<Ident>, Default(vec![])),
+    (IgnoreColumns, Vec::<Ident>, Default(vec![])),
+    (Details, String)
+);
+
+pub fn plan_create_table_from_source(
+    _scx: &StatementContext,
+    stmt: CreateTableFromSourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let CreateTableFromSourceStatement {
+        name: _,
+        columns: _,
+        constraints: _,
+        if_not_exists: _,
+        source: _,
+        external_reference: _,
+        with_options,
+    } = &stmt;
+
+    let TableFromSourceOptionExtracted {
+        text_columns: _,
+        ignore_columns: _,
+        details: _,
+        seen: _,
+    } = with_options.clone().try_into()?;
+
+    // TODO(roshan): Implement this
+    bail_unsupported!("CREATE TABLE .. FROM SOURCE")
 }
 
 generate_extracted_config!(

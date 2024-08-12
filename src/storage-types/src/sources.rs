@@ -1178,8 +1178,8 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
 }
 
 /// Details necessary to store in the `Details` option of a source export
-/// statement (currently only `CREATE SUBSOURCE` statements), to generate the
-/// appropriate `SourceExportDetails` struct during planning.
+/// statement (`CREATE SUBSOURCE` and `CREATE TABLE .. FROM SOURCE` statements),
+/// to generate the appropriate `SourceExportDetails` struct during planning.
 /// NOTE that this is serialized as proto to the catalog, so any changes here
 /// must be backwards compatible or will require a migration.
 /// We only support `CREATE SUBSOURCE` statements for Postgres and MySQL
