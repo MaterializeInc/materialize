@@ -1,0 +1,1534 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1225.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'zsx: hvl
+zsj: gmx xgd tbb
+rbb: pbx gtj
+frz: qfr nhc
+zzf: gqd pxp
+qcr: zbz vmz
+htd: jln
+mkd: qrx
+ndl: xcv bvt
+jdr: tfb tbn gmz
+hcz: tjc nrh
+qnx: jxg
+qjf: ztk jsl
+rgq: spq srx cgs jhj
+fhl: nzp
+tdv: zss
+fqz: zqc
+zbt: hxc cbh kpc fls rvq
+xqn: lhc prp hgk tjb
+qfx: plj gmb
+bmx: xxh
+hhj: xrj
+bbl: mmp hhr xqk frz
+tjl: klk
+tbh: psc tsm jjc
+dbb: tst bck
+pxp: jsf
+bqm: snb fhj zpm vmv xht
+fzp: rgv bjv xgd zpr
+pkq: mjx rzz rgj
+bsv: nlz rkc jkg zfc
+ppz: cdc ssm dpm
+tbq: tbh nqh gnk gjs
+zgp: zcd bxz qns
+xxq: blc msk
+mkf: gkz qfr ggx
+nts: mhv cpc jkv bpl
+kqs: bht
+tqv: cbn xtd hsb jsf
+crx: dlb snb
+bzm: jjv
+mrt: lpm
+kds: zqx lpn tnv xzx
+qss: xgd tvt bmg cfc
+pcn: vlk nvp xnh qjf
+hxt: hzg mgc kbb hkl
+mjv: tmp ndj ktf
+nnr: grs
+tsm: grj
+cls: jgz tvf
+kpr: ljq vdp
+xzk: pgx jdq qdp
+zjs: bdm grp snb ffv mqf
+sxr: grs cpc
+xzg: fsf xzk
+cdz: qxr
+qtr: bzc
+jvd: nkk kkt
+jjh: nnr kjt
+jdb: njt tsk njp ptz
+zdg: hrn psc lcf
+qcp: cbs mmm lsm bmx
+ncs: gkb pjm mkd lmj
+rcj: qhv
+scz: bhx bqx brj
+kjn: pkb lsm bkr mlg
+cqn: qhb rkt ksf jln
+csl: svz qfc
+jgp: bht gsb czx
+qzr: btb rnv
+klk: tbb
+kqz: nbk zdd qln dss pql
+vnh: dnj bgn knn cdz
+kzl: xkv jsl
+mtv: lmh zkj vcv
+dzp: zbp qhb ndv
+zzx: fhl
+pjf: mvr sxs hpn vrl
+njt: bzc
+pzq: gch
+brt: rsb
+cbg: bfb qzn xtb
+qhl: xfs
+xtd: bsr fnm
+hfm: gpf kxj kzc
+mpm: bkc jgz lmg
+gfm: gjb nnr cbs pqm
+qhf: cmn zpr jjh
+jdx: jjc
+bpx: pjc
+rpr: qvv rpm vgg gjb cjj
+cvl: zvg btf
+gdh: kbx vvb hbn
+lvc: qnd vml rdc kcp
+gxb: nbb
+dxn: hpr tsq qxn rsg pvx vrl
+jmn: tbt
+dzv: lpt xkb bmg
+ffv: rvq
+sft: tvz pgx
+dmp: vtm qcr hdr rbr
+pbp: grs
+lrn: qzn vkd cfm
+psh: dqc ftk zhr
+lkk: gnx qnb zdd kff
+kgv: rdc lht ffm
+ncb: tsk clx dtx
+szh: dtf fvk grp
+pjp: zbz pqq hvq bhf
+xlb: cmn
+fbn: mqm
+qdq: gxn dcs
+ggx: qfh gqd
+bmp: zkn gjl zjp
+kfn: gkb ntk lrr
+kff: rlx lcx qdt
+kfz: ntn hpn xdz llk
+cbm: cjj
+vfb: dgs rzh tpf rsk fzh
+dvq: gjz bmt mzl mrg
+xnz: nfp bsr dpm
+xtb: fsd
+mls: pbj zzf
+rhl: vmf
+jrx: fdb
+jvk: cpm rhv
+hqd: vgh gmx sff jkg
+zss: nkn
+nft: jkp bzm jrq
+hpl: mcn xcv qst sgt
+vbl: zjk kxj mbg
+kqh: qgk rsj jzp dvf
+fjg: ggl
+dbn: zvs mmq
+qhb: hjs nhr
+xql: ngr tdv
+knx: bzm lnm mln
+hvc: tbk bjq fpk xlb
+gqz: nxx qcp
+pmp: vzc lmt
+mhj: kkl xgr rvk
+djc: dtd lmn zcd bzm
+nqf: vml phl nzt tbl
+mbk: mch vcv qlr dqr drf hvz ktx
+gvl: bhn
+hzn: tqn
+pps: zgv rnd vbg
+txv: rqh lmc bhv
+mqj: rhv
+lgn: cbh
+bkc: xnf
+nbk: hvl
+xkn: gch
+qns: vcv lqr
+glc: zvs mxn
+ndg: kht hfx rkg
+mpz: msk
+ztj: hpr
+cql: fkr gtn
+xvb: lkb tst mmg ghk
+vfq: dnb fdb qkf mmr cnb
+tkr: vmh hvl znt ltd
+tfm: bgr xll dkh qhn
+ztv: mmp rpj
+bmr: ztk hcc gmb
+ttv: zbn rjr vrg bjg
+ncf: mpz jlp rhg
+qdp: nlb
+vdp: vgh
+sqz: nbb cfg gsx pmr
+nlf: gkz lhj
+tjb: smq btb
+cmc: gvk
+tsq: kpj
+czp: hbn src
+gps: sft mzq bzj czx
+lvg: tsq rlg jmz
+qch: fpg qxb gmn rpm
+qpz: mnn
+tzd: zsj btq znn
+dfv: gdj xpr vks
+jpt: psc dvd hqd cbq
+lvv: fhn qns hcc plb
+tmf: lfl lvg dbp vfx
+rhg: lqz
+cfg: nkl vtk plj
+vbr: zmg xtb xhz fjr
+tmp: xbf dxb
+vmh: nlb hpx
+shx: xkn xbf gqf
+sdb: jnj bhd vln bcp
+qmr: vnc rpq qln lhj
+rpn: tll mnm qpc xvx
+qrg: sxl lsz
+bdm: htd dxb dbn
+jlp: kgn cht fhj
+svl: cbm xxm
+mjr: vqg ngt mbg
+mzq: czt
+xtf: jgh nbt zsn vdc
+nhc: gsx xhv
+kzj: grp ktr
+mld: cbg jvx pns pbj vck
+lqr: rpj
+gkz: zjp
+fsz: vsz bck smr mvv
+jpr: kpj xsn fvk
+qst: zsd
+ghf: fjn pbj mtb
+hcv: ffs mxp sgt gbp
+sht: ncf qst sqc mjj
+bfb: ctz pnr qzr
+rkt: lrg svl tbx mjr
+ltb: cmc ldn jxd
+cbs: ffs
+lcp: klf cdc fgf
+xmb: rdl hpr ljq plq
+znn: pqm
+mgr: gtj rhb nhc
+mmf: btf vjd tnv pfq hzz dlk
+gln: lmd
+qvv: hhj jpk
+fql: ktx ftr
+qrm: vcr nmq slg pxp dds
+dqh: gch gkb qlz
+bvt: qmk
+pdr: rnz ckq nkt tvf
+nrb: lmh cdc
+gtk: vjk hxc
+tnv: vjm lmt
+bvx: vtk pqq csl
+gfx: tkj lpt mkd bgr ckq
+rmt: gcr rjn xdc nqh tbl
+mqf: jhj spq
+bhf: nkk
+trq: pbp
+nsj: xgr
+mlr: rpv gmk rbr qnv
+bbh: rsg vts vdp rlf tfb
+srg: cdc ghf
+fpl: dlq snj dzj
+qlk: zss grj
+rqt: ndv kbz rbk vzg
+mrg: dvx qxz xtb jpv
+sfq: txj gmx
+gdj: hcc
+plq: rnd gxm
+rql: tvf czj jqr vjk
+hkz: htb lrr zbp xxq
+ksx: vcr hll qqt
+vvb: mln dgl
+lkb: btk lqd
+xvz: rfz jnm gqd vbn
+rfg: nft bjg qcr fgd
+xvn: ndl svl zbf btq
+dpn: rvq ztj cpc
+ktt: prx
+xlk: srv hvq gjl nfp rfj
+jqr: cfc vvr rzh brt
+ptt: qxn kzj
+jgb: fbn qlr
+sgb: qfc pjc lqp
+gss: qvv kxj cht
+jkp: fqz tjb
+mpk: pcv gkk hxc nlm lnp hhj
+sjd: dqm dnt zbf kmk
+dgs: kmv
+sff: vdj gxm fzh
+vms: xmh bjt nbg ndj
+xxm: vxn
+pvn: znz phv xbx
+lcb: jvx thq zsn lmk jnm
+vkd: ppd vlk mlr
+qnm: xhz pvz bhn
+ctc: lzg ldn hsb xdc
+nxj: gjl qqh vck qxr
+crl: zml tjb
+xrl: pgx
+hng: ndj dnt hvr kmg qpz pxh
+bvc: cnr
+gxr: qgb
+txt: lvg bkr
+shg: ckf
+dzx: xql vzg fpx
+nvb: gjs htd ctx
+hpq: ggp
+fjc: zbf
+jcl: vcg jdh zvs
+tjm: vxd sck vdj
+fdc: trb lzn jpg
+jhb: tzm blc rpm srx
+chp: hhj hfj tml sjd lxc
+hfh: zbf jnk vjk
+lxc: szl jmf srd
+vbg: vgh
+kcp: lxm gtj
+tcz: ctd xmb vzh
+vkg: hgk tbl jvd zkn
+pxh: gtn xxc fpv
+rzh: ptz ljd
+lbf: kpl jsp hxh
+xvs: gpt xhf
+pfz: rpv mtb xzp
+hjd: ggt pzh vvb slg
+gnl: vmf cpt
+gqb: tlq gjs mmq sgk
+lxd: qvp ngl
+xjq: xqh mgd xrl
+rrd: blc msz xlq mqj htb
+blk: shg bns xvc xsb
+fjs: cnd dnr fzn
+nnd: zbz vmh
+vjd: ppz vrn
+lxm: vmz vsz
+dsz: slz nkh gsx hhd gxr clr mjb
+ctd: ktr gmn
+hfg: rbr hhr lkb lzd jzp
+tlk: bhv rkc
+lrh: bkc mkd kjs zgv dfn dnt
+rcz: kzc jhx
+msx: rlq bfk
+xzf: tvf vvk rkx
+bxj: gjz btb
+qcb: ctx xnf lqz
+llt: qdq rhb nzp
+dbl: nxr szl hmm flf jkg
+vjm: nqf ghk qnc
+gxn: knn bkt dsr jmn
+mlp: zrf jqk gst tbn
+hzl: cgz dzj cgs sbc
+qdc: rqj
+xrh: qcp vhr
+ngb: jxg mls pfz ffj
+xfm: vgh dzp
+rmb: vbg
+chj: xrl pvz tgj
+rpm: fzs
+lsm: gpf fkr
+qdt: bmr gmk vks
+vxd: rqg vlg gzk xlq lsz
+txf: vgh mhv zct vpc
+rzt: vbg zlt fzs
+htl: xrj ptt mbp
+pmr: dbb
+zxr: gsb
+mvx: xbt vrn fbf
+smn: ggp bmd
+prx: fsf
+pql: bqx gcl
+khs: rfj
+fdh: szh jhx
+zsn: xbt bqs
+jlz: zqc ngl ztv gdh bft
+mss: hzm kgn tjk
+lnm: jcm lcg
+zds: ptz zgv rzz
+rpq: bpx gzl
+cvk: vns
+cst: pmr pqf kqs
+tfb: vqx vfr
+dlb: zgv
+ngl: kkt psp
+vhr: lgn zsd
+pbj: jks
+gqt: dxb zlt bjv xxz mmm
+ccp: tml bkf xlb cls
+bmt: rpj dbz fbf pkz
+fhn: bfc zzf hzz bnl
+nzg: hbb kzc cpt ktf
+sps: qng ftj
+hlf: clr lpn ldf kbn
+gfr: fhl fzk
+tcb: cql fff htl lsm
+brm: bqs
+snb: zfc
+qhn: xdz
+fvk: vlg tsk cjj
+ksm: vfn nzt mlr llt
+xbh: zvh bgg nhr tbg
+npf: btb bvc zqj dbz
+rjp: xlq rgv qrx tbg
+njp: jqf fmn
+lmt: gfp
+cfm: hpx fnz mcm jdf
+htc: vgr mcm tjb jvd
+hgn: jnv
+bgb: dfv trp jcm glt qnv
+ngv: jmf pqn xsn rgj
+nxr: ksf gbk tlk
+qfp: dxc qhn
+fkl: xvk zsd
+bpl: trb
+jqk: tsk tqp
+llk: pbp xmj
+nxl: dvf grc hsb
+smr: smn
+ckp: fjg sxs
+hzm: gcx bjv
+tkq: vmv ptz lfl
+cxd: rlg tjk sfz
+mrm: psc zvs
+xfh: pjm mxp vdt gcx nqz
+mnb: bfh nnr
+ksc: pcv jkv lcl mcn
+fpx: qlk ckp rlf
+xvc: znx
+nzd: lpm cfv nbk
+qnb: grq pqk rvk
+bgg: zdg fkr xxc
+rxk: xzg bht
+zqz: ffm jkp ssc hhd
+zfz: cpt sff sbj
+zpr: mtq vzg
+lzq: rhg mmq zvh xmh
+tll: mrn lrn fgd
+xgj: fcf nxx sbj zrg
+vvg: dbb dqc hnq gqk zqj
+mcm: zsx
+bkt: jdq jgh gmb
+xfr: jrm
+pck: dkg
+nqz: kjt
+vlc: vns
+mln: ghk
+xxh: mjj
+rnv: tvz
+tdb: ffq vmf clx nqx
+gmk: zxr qbx
+dqr: fnz tfs nmg
+nqx: vns csf ctx
+kbn: qxr
+ctx: vns
+nmg: knx klf kkl jsp
+tfs: nbn qzf qzr
+sxf: kmk zkh tcz dvd
+dpg: mtv vrn skt fzn bhn
+gnx: plb hfg qgs
+ksf: ntn xvk rtg
+sqj: svz qnc khs
+xdb: ddc nqt khs
+ffk: znx xhv
+czt: rbr nzt
+ssr: tqp mjv
+zqc: xvc
+qnd: ltd kbn ddc
+gzg: btf nkk
+rqm: hkg cgz czj xmj
+phl: lfn kkl
+phz: cgs bhz mpz
+ftz: cjg dqc nzt gzv
+flf: rvf jkv ncf
+ckq: nhr mmr dkq
+dlh: frq lnp txf tvf
+lnq: tsm bmx
+rkx: cnb
+ljq: trq xbf
+bmk: hgn lpc glc
+cgd: xdq prb sfq
+xgd: rsb
+ggp: ffj
+qgs: brm mvx dgl
+jcz: lqp
+vdt: kzc
+mqk: cbs tbh drj kpc
+cnr: mch zxr
+mnn: bpl
+zxj: xnf hbb
+tgg: pkz hfx
+vfr: hpn grp fjc
+jkd: rbv ksl jmz jcs ncb
+hfj: frq
+vqg: mzs jnk
+jcf: qzn ssd nlf xhz
+xfb: phl psp qfx
+mtf: gph hcc qnm rkg cdc
+hbv: cht jkr rqc
+ldh: rfz bfx dcs xkv
+rvk: fbf xrn
+tmj: xrh pkb mtg hsc
+prp: ktx grc
+bfh: grp mnn
+lpm: djb
+ckh: lnp
+lzc: gkz bgn bkt gxb
+pzh: nsj bqp
+jxp: qxn xnr msx kph
+lkv: xks gkg jln msx
+nbt: slg hgk ffl
+tzm: fkl kzj sqf
+tvp: bmx jxr pjd
+ggg: hrp hgk sdf kgv
+tbl: vzc
+zvr: cxj bqp qnx
+xkb: msk sbc hvr
+dpv: xhz brm bts lqd
+srv: fzk vcr smr
+pkv: kkt brm xgm cpk
+gbj: klr pcn sps dtt
+rqc: zdg rvf
+rbx: vjd dvx nbb fqz
+nmq: rkg hdh ghf
+lfn: ztk
+hvz: jcz nvj
+qcl: lrg bdd fnj
+sgj: lnm rhb rml dsj
+vdc: hsv ztk tbt qcq
+cqx: dkh cfc
+lsn: vtm vhf gnh
+pfq: sgb kbx smq slb
+kbb: vdp
+vkv: ntz xds cbq rqc pnb
+cfc: rvf vts zsd
+qbx: lpn
+pvz: znt
+jtb: brc rlq sgt tjl kfp
+mgc: txt brt
+pch: pck vpc bkf
+kjs: tjl dbd brc
+vqx: bzc
+zcz: lnm jhm jdv pqf
+cfv: lhj
+tbb: nxn
+qvp: pvg pxp qqh nzc lzg
+rlx: tbt
+zhc: bcp jnt rsk
+dvf: qdc qqh
+qkr: rcv lsm jvk vns
+zkh: lpc tgn
+dtj: sqc
+dzc: hll zsx trp
+sgr: lzd gvl bnl vhv zxr
+vcq: hbb vxn
+vhf: pbx smr zbn
+vkn: psf sgg lrv fjg
+hrp: csv jcz jfz
+dnb: rrv glr htb
+gqf: gjb
+lmj: ljd zds
+zps: cnb trb gkk
+dnt: tvp
+jdh: tsk tjs hkl jdx
+kmg: mbm pps ngr
+dnj: xrn zbz zqx
+ktg: bjj cdc xpr jxd mzp pqd
+kch: gfp
+xzp: rjn bzj
+dch: slb gxc gtj gfr pkx mzl
+dnd: cls fjg xxm
+lht: rhb xvc
+zlr: rjr tbl zrp grn
+zqx: mgd
+rbq: hjs tkv
+zdl: lmh bmp
+bfg: gxb sft zbz bts
+rfc: hzl kpr
+jnf: qsk bmk ktr sml xzf
+lmg: lsz
+gds: skc kmv sxl tsk
+qfh: jzv xrn
+cbr: htb dzj jvk fkl
+vmf: qlk vvk
+xnr: tqn jln bfs lbp gmf dbd
+qfv: jjv lxd vgr
+xgl: fpv vbb hfj qpz vdp
+qmz: lkk jdj qnv mtf gvk
+pxj: pdm rlx mqm
+kmv: mss
+vtv: ffk pmr nsj hpq
+tqp: hsc llk
+brj: zqc xvs
+vbn: mmg vzc
+hvp: rzt nqz fzs kmr
+chq: qfh qfr zdk ltb
+xcf: psh bzj thq dbt rxk crl
+gkq: tjc
+dfc: rvf jxr njp
+qvt: txv kxj
+hff: psc pzq
+fcf: rcj
+nvp: vks jdf znt
+shc: czp lmh
+clr: mcm
+dpz: nxl btb qdc pqk kzr pkf
+jpk: fhj zvs qhv
+lcn: tmp lmc msk
+pdg: xbk ltz zdl fnz
+txl: rcs mrv
+drj: rcj bvt mlh
+cjv: zqs nbb
+mcf: hlp pgx smn
+zlt: pjd
+kxj: msz
+dkq: htb gmx rcc
+shn: ffk lgr bns
+pst: bvx gph dvf qjf
+cxj: gnh zbn
+tpp: ztv zsx xqx xfb
+gcr: hbz czt
+gxm: xks
+skc: sxr mrv bmg
+slb: bxz
+kqg: slb gkq mch jxd
+rlq: qhb
+nqt: xsr dtt fnm
+gkm: prx
+ktf: pck
+xnh: mnq dss bfc mls
+xhf: jdf
+mcs: fhl lpm tvz
+zxt: mpz mmq cmn rrv
+jcq: lgn sbq msx
+zgx: jrm plb jrq
+lhz: lrr bhz pkb mbp
+dbt: ssm
+xsb: vgr bpp pdm
+hpn: dnp rsg
+rdc: xsr sjb
+vsl: mbf bkr crx
+tjg: pvn smr dnr znz
+vml: gsm vbn
+nbc: lfn dqs vzc
+gst: sfz hkl
+xbf: xmj
+vvr: dtx nfs dkg
+rdd: xzg rqj zbz
+zkj: tjj
+dtx: ndv rcc tzh
+mrv: svl
+grv: bqp jdd pmp vbn
+cvm: vzg std dzm gqf mbf hvr
+cnb: pzq glc
+xdn: ckp lrv hgn rgq
+lts: grn nvj fgd
+hjr: hpx slz gmk mmg
+bcv: hkg ndj nxn mlg
+vcj: xsn nqz
+lqz: sgh
+bcp: gmn zfc njt
+hhb: jqf rzh czj xxh
+sgt: vlg
+sjb: pqf nzc
+bhv: kfp jkq
+sjc: mzl zzx pnr phv
+tbk: qhv pck
+fbl: brt xrj cmj hqd bzc cgz
+cpk: rbb rxk lsl ksd msm
+lzg: sjb
+rcv: fpx zhk
+bmg: pkb
+fdl: gfr qxr zvg pvg
+zrt: jfz lqr vmz
+rvx: cql zxj gss bfk
+qxn: rkc
+tmc: sfq ztj jnv
+ztk: ckf
+fjv: vqr bns cnd dtt ssd
+qng: dmn djc lmh
+jkr: tvr mjj lrr clx
+xzx: nlb bsr ghk
+pjm: bfk zrg gqz vfx
+jdv: gvl vvp gnf htc
+jxd: lqp
+xnf: vcj
+rgr: cdf ltz xbk xfb lcg
+trx: hrp dbk lbf mqm xqh kqh
+nlm: zlt
+ffn: ggl hrn kpc
+fgf: dgl
+nzh: zxj xds bfs xvk
+lpn: bqs
+zxx: mrm gmz jnt
+fpp: psp xzk cnd
+ckz: grc dcs jgp zzf
+mch: pmp
+qgb: gjl
+cmj: gqp mxn
+ksd: cmc rnv lqr
+rpv: ctz jrq
+xcm: qbd dsf vzh
+hvn: rbb sdc
+dvx: rfj bjj
+ndh: sbm xsb
+tcg: cbn jdd pkz
+zjk: tkq ktr rnz
+zpm: tjl dnp
+tbn: fpv
+zdv: nvq rgv lcf hzn pch hmm
+xhh: ngz bhf psj svz
+kbm: kfl vfn pvg zqs
+gcq: jdd lts gln pqd
+lmk: bgn bzj
+lfl: tsq
+fxk: bxz vvp mtf jqv
+lld: sdt rsd xkv thq
+pzd: ndj dsf tvf ptt
+cbh: lrv
+khm: tbb glr qst sgh
+xxc: lcf
+ntt: bgn xrl czx jks
+hzg: shx zss rlf gqf
+ngt: lmc kbb tbq
+vsz: jcm
+sck: gtk rcc gpf
+zrx: ldf mtf cfv pgt
+mmr: vjk
+xlt: hcz cfm fnm bvc
+jsp: cst
+qmn: gmz gzk bkr kjt
+mbm: vzg kmv
+xvk: sxs
+dnr: fbn tcg
+dcp: jnf vfb msz spq
+lzf: jgb kcp kbn
+vcr: jkc
+pvx: qmk
+zrf: txl hjs rqg bzc
+djb: rfz
+frq: xxz
+ffm: gph qdq
+fgh: pjj ffj lhc ppz
+psf: ksl rhl tbq bgl
+vln: sgh cqn ctb ckh
+pqn: vpc vfr fdh qvt rcv
+sdc: znx hzz
+mnq: tbt mgd
+drs: cdz xbt
+qnc: ctz
+bml: crx tdv lbp vpl
+nbg: dzm ckp jhx
+qbd: rqg ztj rqc
+hll: pdm
+cdv: pzq sfz czj rnr
+mtq: kzc
+ltz: pqf gvf nzp
+cgm: kzl mgd gdj nrb
+ncg: pdm bnq vph khs gln
+tjk: gch hfj nlm
+bns: fsf mzp
+hxh: gkm
+gzx: xnr rkc lcn znn
+pbx: hbn
+tvc: ftk pqq fjf dbk
+snf: nrb rsj gpv
+stj: lcg pgt kzl
+xlq: rlg
+ltd: lfn slb fhl
+xcj: tfm rqg dtj zsm
+sbc: grp
+dtd: hhr xqk
+pjj: qdq zvg lcx
+lbb: rxd pxj ztv
+vhv: ftr hpq
+lfq: vcj gbk dkq
+qsd: vkv zkh dkc tjk
+rbv: jkq msn frq
+bjt: jkv hxc kpn
+xtj: xgd ntk
+ckf: rfj
+zks: hdr plj bxj dpz
+lzd: xqp vgr
+qln: mvv hsv
+fls: rrv crs
+srs: dxn kfn mqj zbp
+pls: ktt gxr dbz mcs
+qfr: jsf
+dqm: tbk dbn zhc
+txj: tjs btq jrx
+jcs: mtq hnv
+vvk: qmk
+cmn: jqf
+fzz: dtj pck ght
+szn: cqx rlf rqh sxf mvf
+zfh: lrv dfx rkx pnb bjv
+zbn: xqh grn ktt
+gcx: kbz
+rtg: dlb ntk
+jxr: mtq
+pvb: gts fzn lmn tgj
+fcb: fcf
+ffs: rzz xrj
+vtj: dkg dtj hmq
+gxc: trp lkb
+fpc: sgg xtj dtf ndl fpl rfc
+ngr: qkf ntk glc
+jsl: gqd
+gtj: lcg
+gdn: srd bnn rvx ffn
+klr: ksx xmt hpq pdd
+prb: fjc crs rhg cmj
+mzr: lsn gzg qnx vmz vqn
+ctn: vcj cgs qcb
+nkl: gcl pkx gvk
+nkn: tvf vdj
+bft: qgb vrg
+bts: jdf
+gql: ngg tzd qtr xrh hbv
+mvr: kpn nxn
+hdr: grc nbq jnm
+xxn: jcq tdb pvx qrg
+snj: qhv szl btq
+rjn: tst nzp plj
+ttl: dnr gsm zzx hll
+xvx: cfv qln trh jmn
+dfn: jmz bgl
+fjr: kbx cxj bkt
+zkn: svz
+lbp: cpt gbk
+clh: rkg ldf jsl ndg
+vzb: dsf ktr txl xxz
+xnl: mjx nkt
+rfq: mmr mgc xdz qhl gqp njt cgd
+rtd: std ngg rkx mqf
+ftn: msz tgn fcb
+knn: czt bhf
+zfv: xzp ftk nsj czx
+vpc: jkq
+jhm: ddc
+vrn: ckf
+glr: dzm
+ltn: bfq dxc trh rgj
+xbk: dzc jxg btk
+fzx: mbm std xmj
+vmz: xbt
+rnz: dtf dlb
+gch: jjc
+ptx: bpp
+rdb: scb bsr
+pnb: qfp mxp
+hjx: fgf qqt vmh kfl
+hnd: psf qxs gnl tdv fcf
+ngc: bgl tpf tfm sbc
+zbp: ggl
+sbq: jdx
+ntn: cvk bfq vzh
+jdz: lpm hlp dbt zvg
+cgz: qrx
+nlz: mjx
+dsj: lmd bjj lfn
+dqs: xrl hvz csv
+bjq: pcv cgz bfh
+qgk: gkm
+ftr: skt bxz
+hbb: pbp bpl
+dbd: jdx
+sth: hff qtr xcv ndl
+kxs: tkv xtj hvc gpf
+rbk: vlg
+fvh: mgr qtp ttv kkt hnq
+jpg: bnn bdd tml mbp
+rkc: xks
+dmn: lqd trh
+ssc: vht jpv kpl
+rbj: nlf zqj zqs ndh vbr
+qzn: jgb
+fmn: hmm
+zbz: mmp lqd
+pqq: tbt
+kxq: xfm gkv ntz std vcq
+ccb: mzj lxm nrh ptx hsv
+tzf: zbn pdd rbb
+rlg: dzj
+jzv: xpr gcf
+dbh: xqh mhj smn qcq brm sdt
+ldn: pvg
+czj: hxc
+tqm: lmc kmv qkf xnl
+fhc: tgn clx rnd pck
+tpf: tvr
+vrg: xfr
+kfp: fhj cjf
+btk: jpv
+msn: sff
+hxq: zlt lnq vzh dzx
+hsj: vxn gmn kbb nlz
+qxb: dfn zhk rzz
+bjg: cmc gnh
+mcg: vdt dqh vtn mzs dnp
+slg: hlp
+qxz: sdt fpp xzx
+sgg: jjc qhb
+gcc: gtk rsr zxx nvb
+mvf: sxl ssr hqn
+fjn: lhc qnc
+bfs: qmk qhl
+mgs: ctn gbp xft xth
+vck: lhj
+lmd: xrl
+bgr: fmn xxq
+nvj: bgd xqk
+xbx: mqm hbn
+ngz: rpj ndh gln
+bhp: jrm qgb gxb pnr gxr
+zjp: nbk jrq
+zsm: dnd srx dpn
+kkr: dkh vdj snb
+jgz: rbk
+tvr: nfs kpn
+slz: ssd
+sbm: vlk xfb
+rqh: jgz
+tbg: dkh vlc
+gnk: gnl hrn
+bkf: nxn tkv
+kdf: lmd gts hxh kfl
+mlh: xxm lgn vzg
+qqt: mln
+nkg: jnt rbq
+jdj: kfl
+rsl: sqc bhz fmn crs
+xhl: jzp dbz qdp vmh
+grc: prx
+fzh: sbq fdb
+nbm: zct jjh lbp bhz jqk
+jkj: jsl hhd tnv
+vht: vqn gpt
+dqc: rfj
+ftj: bvx nfp
+jch: rtd tbn lmj vtn bgl
+sgc: bcp rgj vtj jcl
+tql: jdq znx sbm fbf
+lcl: gqt xkn xgd spq hff
+mjq: vmf qrg qbm jqf
+xdf: rsg xfs kgn jtb kfn qpz
+ncc: tkv lfl tsk ckp
+cds: sqj thq pql cjk qhm
+mlg: mbf dbd npz
+gdq: frq srx vfx cht
+msm: src xgr mqm jbm
+llx: qbx ltb brm ktt gcq
+ppd: src znt
+xmt: cdz kch
+gsx: lmh
+gpq: grs vxn
+sss: lhj bhx kbn shg
+blc: gbk
+lgr: cdc rfz
+zdd: hcc
+zrp: xtb dds cdz
+ggt: gvl jpv kbx bkh
+nfp: jgh
+bpv: kfp jjc fzs
+ntx: fnm xfr bmd bnl jdq
+xxp: gdj srg bts qnd crl ksx
+nxn: xsn rcc
+mfz: cjk lxd gsm gzl xfr
+gkk: cht
+txx: hfx bmt gcf tvz
+jhx: pqm
+zvk: pvx qvt hfm ckh
+drf: hpx bvc pfq
+tfc: nbq vtk qpc zdd
+lpt: cxd rbq xkb
+crs: lnp
+gqk: pdm
+bpd: jdz rdd lts rsd
+qtp: vrg pkx jdj
+trp: trh jkc
+jqv: zzx pbx dpm mzq
+lvr: qgk mrt sdc cvl qfv
+ldc: vfn ktt qdc ffm zdl gqk
+bhq: vvk dgs qhf bnn
+bdl: jgb
+bkh: vtm jkc
+mfn: zqx tqv mrn gsb
+ctb: dsf gst cxd mtq
+ght: qfp lfl phz
+jnt: rnd xbf
+qxs: bkr hsj klk
+sqc: gpq vlg
+nfs: sxs rsb gnl
+vph: gpt fsd
+xdq: nnr gst gcx
+czr: frz gkq glt qfx
+jht: nnr fvk mhv cfc
+tsk: nkn
+psp: xtb
+cps: gxm fls psc hzm
+vpv: lqd sft jsp tfs
+gpv: bck qdp pqq
+dtt: rqj
+jnk: rvq
+tvt: fjc nhr rcj
+cqm: nbq srg gvk zkj
+cxp: gqz ljd mrm dzv
+rcs: hpr cvk
+fgd: cdz
+cnd: jmn zjp
+thd: pql qnx gcl gqk
+hbg: tjj bpx xvs
+hhd: hfx xjq gmb
+lsl: hvl cnr jhm
+vxn: sgh
+nfl: lgn kbb rmb qlz
+xrz: shg nlb drs
+mmm: nqz
+tkp: bfs qzq tgn hrn
+rsr: fnj rhv nnr
+kbp: ggl zvh bpv xmh rlq
+jkq: nqh lcf grj fpv
+txg: kpn gst mnb rgj hng
+ckb: cqx lsz mvr zfz
+qkv: zqs hvq
+ndj: hbb
+zjj: bdl hvl brj ghk
+mzs: vjk ffs
+qps: txj hvr rcc znn
+ssm: fbn scb
+rbr: vtk
+dlk: shc kpl ppd
+dpr: lqp csv dvf rfj ldf
+skv: jrm cjv cbn bfc czp
+qzf: ltz pkz csv
+dbp: xdz qzq msn cpc
+nkh: qfc xtr rzl
+hnq: clr
+vgb: ckh pqm mpm
+ppj: lzg mzl zsn rfz
+xqk: zkn
+tqn: rrv tgn
+dlq: kgn rhl lnq
+bgd: bqx
+ldz: gmz rdl dxb msz
+tqh: tvf gqf cbh lqz
+ngn: tfc phv ngz hvn
+tzp: plb nzd zgx lpn
+zml: dcs klf gvf kpl
+kpj: trq
+gbp: mhv rhv cbq drj qkf
+zqj: csl
+jnj: rfc mxn ftn
+hsv: gnf
+nvq: hkl gpf jnn
+bfx: dbb kqs knn mzq jks
+qsk: rmb zxt jcq
+sfz: zvs
+cpm: srd hpn
+rzl: scb rlx bgd gjz jks
+qbm: lfq hzg ltn qhv rcs
+kmk: xbf kpr
+tlq: bvt lcn cbm
+xqx: gfr frz xnz
+grq: xhv jxg
+nmt: fjs gsm btb tzf
+ftk: vqr
+hsc: vts fpv
+zrg: xks
+rdl: hnv bjv
+ghj: jnv psc ksl
+mtb: tjc bpp
+dkc: gnl bdm bjs
+fff: jkg rcz glr
+xft: zfc vxd
+vvp: tgg mmg
+gcl: svz
+tgj: vck qfc mrt
+smq: rnv
+qlr: vcv vzc
+vrl: nlz
+gft: pjc dbt zqc qqt
+zhr: svz dmn zxr
+mvv: qkv hzz
+tmq: ffj cpk dds chj
+vmv: jjc
+mtg: pkq sxr hzm zxx
+lcx: kkl bqx
+hnv: vfx vmv
+vtn: fdb
+lzn: gpf mqj pbp
+kph: rfn vqx hfh dvd
+ffl: hsb fzn
+pdd: skt fgf
+qlz: htb gpf
+pjc: rjr
+pfr: djb pfq czr pzh
+nkt: hrn nlm lqz
+kzc: gzk
+rsd: qcq qxr
+nnb: flf tlk cbq vhr
+hmq: mbf tbx jpr hjs
+rxd: qfx skt bzj
+bcb: gkm ctz gfp
+zgb: dqh xfm dfc qtr
+fhb: mkf fdl znz vlk
+sgk: dgs fhc tfm
+xxz: zgv
+kmr: jrx xft qhn
+skq: tmc fdh qhv rmb nfc
+gzl: snf cvl
+cjk: hnq xbt xhv
+ffq: jrx zxx jgz
+pqd: mcf gts
+xdc: pgx
+hbz: qkv cdf fgf
+mrn: qcr xqp
+tkj: dfx cfc fpv
+cdf: hlp jgp
+vqr: ngl qbx dss
+cjg: btk zsn xhf
+jkk: mjb tjc xzp pvz
+kht: bck gzg lcp gkq
+xth: qrx nqh kmr kpj
+nkb: grj jkg vtn gkg lfl spk
+jgh: vcv
+fzk: fql vht
+bhd: zhk hmq
+fkk: nkg qhn jdr hzl
+dqd: cnb zpr xnl fcb lnp
+bnq: qqt ksd lgr
+lmn: nnd lmt
+xhs: nkg fzz fzx vgb
+gph: hvq
+mxp: bjt htd
+qnv: ptx
+bht: plb
+kzr: hcz dnr qvp xzx
+psj: bjj fdb jcz
+ntk: brc
+jbm: xhf bdl zqc
+mqq: nft hdh stj bmd
+llm: pck trq rvq
+knp: dtd bqs dss xdc rpq xmt
+zcd: qnc ldn
+gkv: dkg dqh rlq
+klf: rsj xpr
+vks: ckf
+rnr: xmb cjf hhj
+pmb: gxc qgk bfc lhc
+ckv: bnl tzf nbc ffl bcb shn
+pkf: gvf mnq fnz xtr
+hhk: scz jkc cjv lmk
+sqf: lpt xql ncf
+hkg: zxj tvr
+gmf: tzh vsl xkn njp
+znz: bdl
+dbk: hhr xsr
+cfz: btf bmd grn ztk bpx
+qhm: rkg mzj bhn
+gnf: gqd prx
+fsd: smq
+zsb: csv xrz kch bqp
+jhk: mcn ntk tbx qcl
+kpc: xfs
+gnh: vmh
+xll: xxh mnb gpq
+gqp: hgn kbz vcg
+pns: bkh zcd jzp
+pnj: fsf vfn rjn rhb ffj
+lrv: hrn
+lrg: cnb bmx mnn
+xkv: bpp xgr
+pgt: gqd bgd xhz
+scq: xdb ckf trh zvr
+csf: qlz gkk tbx hzn xds
+nfc: rsb mjx srx
+lpc: dnp mjj
+hdh: fqz gvf jzv
+tzh: sbq vqx
+qpc: nzc qcq
+qzq: gkb
+scn: dds smn shc mlr mzj
+jfz: jbm dss
+txh: zpm qrg drj ndv
+gjz: grq
+jnv: msz zvh
+bjk: vhv ddc vsz pcn
+bdd: sfz tsm
+dgl: xtr
+mzl: cbn
+xds: zct
+ngg: xql sbj rbv
+nbn: jdj fsd bmt
+dpm: plj
+nxc: mhv hbb ssr jmz
+jnn: vgg cvk sjd
+ndq: bkr lrv fjc
+dsr: src xrn pbx
+spk: brc qzq xmh
+zmg: tst nrb phv
+vnc: mls jsf ftj
+gdt: xkn tpf tvp dxc
+gjt: ndq mbp mrv lmg zhk
+bjs: gnk txt xcm vcq kjs msn
+mzp: jjv smr
+vgg: zfc
+tcm: gtn gzk ffv bkc lmj qch xfm
+mnm: fbf bck hvn
+pqk: jhm knn
+ljd: rrv
+nxx: gjb grp
+bnn: bzc jnv
+xqp: vqn bpp
+sml: cjf trb nzg
+rfn: srd tvp vts
+tjs: vrl
+xtq: hbg jkj nnd ktx nxl
+spq: rrv
+tjj: jxg gjl
+bxz: plb
+zdk: nrh pfq zsb qfh
+bhn: ggp gcf drs
+jvx: ntt kqs
+lmh: rqj
+dfx: hzm tsk
+fpk: vdt xcv qhb jnk
+klj: hng rhl jqf hzm
+dtf: xxz
+vpl: fdc hvr plq fdb ktf
+jmf: cxd kmv
+jhz: ggx kch lmh jnm
+mmp: rsj
+mdz: vgg bhd hzn pcv qbm
+fnj: zct ggl
+hmm: sbj dzm
+vcg: lfl
+sdf: tgg lht klf
+src: jdd
+gzv: scz xhh nlb
+dbg: nrh ppz gts dzc
+pkx: gpt
+vbb: cbm bmk clx
+gtx: gcf knx zrt rjr rdb
+xht: vlc rcz ghj
+npz: mjx klk rvq
+ntp: jxr cjf qst vcg vbl
+jhj: mmm fkr jcs cjj lmg
+rgv: mcn
+hqn: rtg zps rbk
+dvd: jmz
+pjd: rlf xfs
+fjf: bxz nzc xtd zkj
+rsk: kbz kkr bcp
+nbq: qfr fjn
+clz: fql hxh sps bxj
+glt: mjb xbx
+qbt: vtv lbb bmt zrx
+mzj: xsr xrl
+rml: txx xhv gsb
+fpg: fjg fcb lrr
+ntz: vqg tml
+xpn: tvt dbd ctd xlb
+bhx: dnr hxh ptx
+bfk: kjt
+rjq: gjs rqh drj zlt
+rsj: nkk lmd
+xgm: znx scb bjg
+vtm: rlx pnr xtr
+szl: zrg
+hxj: rdb lzf vph mrt brj zgp
+dxc: btq
+xsv: jjv jcm lqp gcr
+bfq: tjs gtn
+ssd: jsf djb
+sdt: gfp
+bcx: prp bft slz svz
+xpl: bcp cpm sxl lsz
+gkg: xxc mxn mjx
+pnx: llm tjm ffv ksl
+vqn: qqh
+mjb: mch
+mbg: qhl vlc');
+
+query I
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 50)
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as line
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+
+    edges(src TEXT, dst TEXT) AS (
+        SELECT
+            trim(':' FROM regexp_split_to_array(line, ' ')[1]),
+            trim(',' FROM regexp_split_to_array(line, ' ')[x])
+        FROM
+            lines, generate_series(2, array_length(regexp_split_to_array(line, ' '), 1)) x
+    ),
+
+    symm(src TEXT, dst TEXT) AS (
+        SELECT src, dst FROM edges
+        UNION ALL
+        SELECT dst, src FROM edges
+    ),
+
+    init(src TEXT, val NUMERIC) AS (
+        SELECT src, CASE WHEN src < 'n' THEN 1.0 ELSE -1.0 END
+        FROM (SELECT src FROM edges UNION ALL SELECT dst FROM edges)
+    ),
+    -- determine the second eigenvector of the adjacency matrix
+    weight(src TEXT, val NUMERIC) AS (
+        SELECT * FROM init
+        EXCEPT ALL
+        SELECT * FROM init_delayed
+        UNION ALL
+        SELECT symm.src, SUM((val - (SELECT AVG(val) FROM weight))/(SELECT STDDEV(val) FROM weight))
+        FROM symm, weight
+        WHERE symm.dst = weight.src
+        GROUP BY symm.src
+    ),
+
+    init_delayed(src TEXT, val NUMERIC) AS ( SELECT * FROM init ),
+
+    part1(part1 BIGINT) AS (
+        SELECT
+            (SELECT COUNT(*) FROM weight WHERE val < 0.0) *
+            (SELECT COUNT(*) FROM weight WHERE val > 0.0)
+    ),
+
+    potato(x INT) AS ( SELECT 1 )
+
+SELECT * FROM part1;
+----
+589036
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 50)
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as line
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+
+    edges(src TEXT, dst TEXT) AS (
+        SELECT
+            trim(':' FROM regexp_split_to_array(line, ' ')[1]),
+            trim(',' FROM regexp_split_to_array(line, ' ')[x])
+        FROM
+            lines, generate_series(2, array_length(regexp_split_to_array(line, ' '), 1)) x
+    ),
+
+    symm(src TEXT, dst TEXT) AS (
+        SELECT src, dst FROM edges
+        UNION ALL
+        SELECT dst, src FROM edges
+    ),
+
+    init(src TEXT, val NUMERIC) AS (
+        SELECT src, CASE WHEN src < 'n' THEN 1.0 ELSE -1.0 END
+        FROM (SELECT src FROM edges UNION ALL SELECT dst FROM edges)
+    ),
+    -- determine the second eigenvector of the adjacency matrix
+    weight(src TEXT, val NUMERIC) AS (
+        SELECT * FROM init
+        EXCEPT ALL
+        SELECT * FROM init_delayed
+        UNION ALL
+        SELECT symm.src, SUM((val - (SELECT AVG(val) FROM weight))/(SELECT STDDEV(val) FROM weight))
+        FROM symm, weight
+        WHERE symm.dst = weight.src
+        GROUP BY symm.src
+    ),
+
+    init_delayed(src TEXT, val NUMERIC) AS ( SELECT * FROM init ),
+
+    part1(part1 BIGINT) AS (
+        SELECT
+            (SELECT COUNT(*) FROM weight WHERE val < 0.0) *
+            (SELECT COUNT(*) FROM weight WHERE val > 0.0)
+    ),
+
+    potato(x INT) AS ( SELECT 1 )
+
+SELECT * FROM part1;
+----
+Explained Query:
+  Return
+    Return
+      Project (#2)
+        Map ((#0 * #1))
+          CrossJoin type=differential
+            ArrangeBy keys=[[]]
+              Union
+                Get l9
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l9
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l11
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l11
+                    Constant
+                      - ()
+    With
+      cte l11 =
+        Union
+          Get l10
+          Map (0)
+            Union
+              Negate
+                Project ()
+                  Get l10
+              Constant
+                - ()
+      cte l10 =
+        Reduce aggregates=[count(*)]
+          Project ()
+            Filter (#1 > 0)
+              Get l6
+      cte l9 =
+        Union
+          Get l8
+          Map (0)
+            Union
+              Negate
+                Project ()
+                  Get l8
+              Constant
+                - ()
+      cte l8 =
+        Reduce aggregates=[count(*)]
+          Project ()
+            Filter (#1 < 0)
+              Get l6
+  With Mutually Recursive
+    cte [recursion_limit=50, return_at_limit] l7 =
+      Get l1
+    cte [recursion_limit=50, return_at_limit] l6 =
+      Union
+        Threshold
+          Union
+            Get l1
+            Negate
+              Get l7
+        Reduce group_by=[#0] aggregates=[sum(((#1 - #2) / #3))]
+          Project (#0, #3..=#5)
+            Join on=(#1 = #2) type=delta
+              ArrangeBy keys=[[], [#1]]
+                Union
+                  Filter (#1) IS NOT NULL
+                    Get l0
+                  Project (#1, #0)
+                    Filter (#0) IS NOT NULL
+                      Get l0
+              ArrangeBy keys=[[#0]]
+                Filter (#0) IS NOT NULL
+                  Get l6
+              ArrangeBy keys=[[]]
+                Union
+                  Get l3
+                  Map (null)
+                    Union
+                      Negate
+                        Project ()
+                          Get l3
+                      Constant
+                        - ()
+              ArrangeBy keys=[[]]
+                Union
+                  Get l5
+                  Map (null)
+                    Union
+                      Negate
+                        Project ()
+                          Get l5
+                      Constant
+                        - ()
+    cte l5 =
+      Project (#3)
+        Map (sqrtnumeric(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_numeric(case when (#2 = 0) then null else #2 end))) / bigint_to_numeric(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
+          Union
+            Get l4
+            Map (null, null, 0)
+              Union
+                Negate
+                  Project ()
+                    Get l4
+                Constant
+                  - ()
+    cte l4 =
+      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+        Project (#1)
+          Get l6
+    cte l3 =
+      Project (#2)
+        Map ((#0 / bigint_to_numeric(case when (#1 = 0) then null else #1 end)))
+          Union
+            Get l2
+            Map (null, 0)
+              Union
+                Negate
+                  Project ()
+                    Get l2
+                Constant
+                  - ()
+    cte l2 =
+      Reduce aggregates=[sum(#0), count(#0)]
+        Project (#1)
+          Get l6
+    cte l1 =
+      Map (case when (#0 < "n") then 1 else -1 end)
+        Union
+          Project (#0)
+            Get l0
+          Project (#1)
+            Get l0
+    cte l0 =
+      Project (#3, #4)
+        Map (regexp_split_to_array[" ", case_insensitive=false](#0), btrim(array_index(#2, 1), ":"), btrim(array_index(#2, integer_to_bigint(#1)), ","))
+          FlatMap generate_series(2, (regexp_split_to_array[" ", case_insensitive=false](#0) array_length 1), 1)
+            Project (#2)
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
+                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
+                  ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF
