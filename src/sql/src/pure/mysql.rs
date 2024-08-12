@@ -17,7 +17,7 @@ use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    ExternalReferences, Ident, IdentError, MySqlConfigOptionName, WithOptionValue,
+    ExternalReferences, Ident, IdentError, MySqlConfigOptionName, TableConstraint, WithOptionValue,
 };
 use mz_sql_parser::ast::{UnresolvedItemName, Value};
 use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
@@ -66,77 +66,13 @@ pub fn generate_create_subsource_statements(
     let mut subsources = Vec::with_capacity(requested_subsources.len());
 
     for (subsource_name, purified_export) in requested_subsources {
-        let PurifiedExportDetails::MySql {
-            table,
-            text_columns,
-            ignore_columns,
-            initial_gtid_set,
-        } = purified_export.details
-        else {
-            unreachable!("purified export details must be mysql")
-        };
-
-        // Figure out the schema of the subsource
-        let mut columns = vec![];
-        for c in table.columns.iter() {
-            match c.column_type {
-                // This column is intentionally ignored, so we don't generate a column for it in
-                // the subsource.
-                None => {}
-                Some(ref column_type) => {
-                    let name = Ident::new(&c.name)?;
-
-                    let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
-                    let data_type = scx.resolve_type(ty)?;
-                    let mut col_options = vec![];
-
-                    if !column_type.nullable {
-                        col_options.push(mz_sql_parser::ast::ColumnOptionDef {
-                            name: None,
-                            option: mz_sql_parser::ast::ColumnOption::NotNull,
-                        });
-                    }
-                    columns.push(ColumnDef {
-                        name,
-                        data_type,
-                        collation: None,
-                        options: col_options,
-                    });
-                }
-            }
-        }
-
-        let mut constraints = vec![];
-        for key in table.keys.iter() {
-            let columns: Result<Vec<Ident>, _> = key.columns.iter().map(Ident::new).collect();
-
-            let constraint = mz_sql_parser::ast::TableConstraint::Unique {
-                name: Some(Ident::new(&key.name)?),
-                columns: columns?,
-                is_primary: key.is_primary,
-                // MySQL always permits multiple nulls values in unique indexes.
-                nulls_not_distinct: false,
-            };
-
-            // We take the first constraint available to be the primary key.
-            if key.is_primary {
-                constraints.insert(0, constraint);
-            } else {
-                constraints.push(constraint);
-            }
-        }
-
-        let details = SourceExportStatementDetails::MySql {
-            table,
-            initial_gtid_set,
-        };
+        let (columns, constraints, text_columns, ignore_columns, details, external_reference) =
+            generate_source_export_statement_values(scx, purified_export)?;
 
         let mut with_options = vec![
             CreateSubsourceOption {
                 name: CreateSubsourceOptionName::ExternalReference,
-                value: Some(WithOptionValue::UnresolvedItemName(
-                    purified_export.external_reference,
-                )),
+                value: Some(WithOptionValue::UnresolvedItemName(external_reference)),
             },
             CreateSubsourceOption {
                 name: CreateSubsourceOptionName::Details,
@@ -149,24 +85,14 @@ pub fn generate_create_subsource_statements(
         if let Some(text_columns) = text_columns {
             with_options.push(CreateSubsourceOption {
                 name: CreateSubsourceOptionName::TextColumns,
-                value: Some(WithOptionValue::Sequence(
-                    text_columns
-                        .into_iter()
-                        .map(WithOptionValue::Ident::<Aug>)
-                        .collect::<Vec<_>>(),
-                )),
+                value: Some(WithOptionValue::Sequence(text_columns)),
             });
         }
 
         if let Some(ignore_columns) = ignore_columns {
             with_options.push(CreateSubsourceOption {
                 name: CreateSubsourceOptionName::IgnoreColumns,
-                value: Some(WithOptionValue::Sequence(
-                    ignore_columns
-                        .into_iter()
-                        .map(WithOptionValue::Ident::<Aug>)
-                        .collect::<Vec<_>>(),
-                )),
+                value: Some(WithOptionValue::Sequence(ignore_columns)),
             });
         }
 
@@ -183,6 +109,110 @@ pub fn generate_create_subsource_statements(
     }
 
     Ok(subsources)
+}
+
+pub(super) fn generate_source_export_statement_values(
+    scx: &StatementContext,
+    purified_export: PurifiedSourceExport,
+) -> Result<
+    (
+        Vec<ColumnDef<Aug>>,
+        Vec<TableConstraint<Aug>>,
+        Option<Vec<WithOptionValue<Aug>>>,
+        Option<Vec<WithOptionValue<Aug>>>,
+        SourceExportStatementDetails,
+        UnresolvedItemName,
+    ),
+    PlanError,
+> {
+    let PurifiedExportDetails::MySql {
+        table,
+        text_columns,
+        ignore_columns,
+        initial_gtid_set,
+    } = purified_export.details
+    else {
+        unreachable!("purified export details must be mysql")
+    };
+
+    // Figure out the schema of the subsource
+    let mut columns = vec![];
+    for c in table.columns.iter() {
+        match c.column_type {
+            // This column is intentionally ignored, so we don't generate a column for it in
+            // the subsource.
+            None => {}
+            Some(ref column_type) => {
+                let name = Ident::new(&c.name)?;
+
+                let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
+                let data_type = scx.resolve_type(ty)?;
+                let mut col_options = vec![];
+
+                if !column_type.nullable {
+                    col_options.push(mz_sql_parser::ast::ColumnOptionDef {
+                        name: None,
+                        option: mz_sql_parser::ast::ColumnOption::NotNull,
+                    });
+                }
+                columns.push(ColumnDef {
+                    name,
+                    data_type,
+                    collation: None,
+                    options: col_options,
+                });
+            }
+        }
+    }
+
+    let mut constraints = vec![];
+    for key in table.keys.iter() {
+        let columns: Result<Vec<Ident>, _> = key.columns.iter().map(Ident::new).collect();
+
+        let constraint = mz_sql_parser::ast::TableConstraint::Unique {
+            name: Some(Ident::new(&key.name)?),
+            columns: columns?,
+            is_primary: key.is_primary,
+            // MySQL always permits multiple nulls values in unique indexes.
+            nulls_not_distinct: false,
+        };
+
+        // We take the first constraint available to be the primary key.
+        if key.is_primary {
+            constraints.insert(0, constraint);
+        } else {
+            constraints.push(constraint);
+        }
+    }
+
+    let details = SourceExportStatementDetails::MySql {
+        table,
+        initial_gtid_set,
+    };
+
+    let text_columns = text_columns.map(|mut columns| {
+        columns.sort();
+        columns
+            .into_iter()
+            .map(WithOptionValue::Ident::<Aug>)
+            .collect()
+    });
+
+    let ignore_columns = ignore_columns.map(|mut columns| {
+        columns.sort();
+        columns
+            .into_iter()
+            .map(WithOptionValue::Ident::<Aug>)
+            .collect()
+    });
+    Ok((
+        columns,
+        constraints,
+        text_columns,
+        ignore_columns,
+        details,
+        purified_export.external_reference,
+    ))
 }
 
 /// Map a list of column references to a map of table references to column names.
@@ -302,7 +332,7 @@ pub(super) struct PurifiedSourceExports {
 // fields necessary to generate relevant statements and update statement options
 pub(super) async fn purify_source_exports(
     conn: &mut mz_mysql_util::MySqlConn,
-    external_references: &mut Option<ExternalReferences>,
+    external_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
     ignore_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
@@ -312,7 +342,7 @@ pub(super) async fn purify_source_exports(
     // a 'schema' is the same as a 'database', and a fully qualified table
     // name is 'schema_name.table_name' (there is no db_name)
     let table_schema_request = match external_references
-        .as_mut()
+        .as_ref()
         .ok_or(MySqlSourcePurificationError::RequiresExternalReferences)?
     {
         ExternalReferences::All => mz_mysql_util::SchemaRequest::All,
@@ -384,7 +414,7 @@ pub(super) async fn purify_source_exports(
 
     let mut validated_source_exports = vec![];
     match external_references
-        .as_mut()
+        .as_ref()
         .ok_or(MySqlSourcePurificationError::RequiresExternalReferences)?
     {
         ExternalReferences::All => {
