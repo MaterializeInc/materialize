@@ -36,7 +36,9 @@ use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
 };
-use crate::stats::{BytesStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
+use crate::stats::{
+    BytesStats, ColumnarStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats,
+};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
 /// An implementation of [Schema] for [()].
@@ -141,6 +143,10 @@ impl ColumnDecoder<()> for UnitColumnar {
         } else {
             panic!("index out of bounds, idx: {idx}, len: {}", self.len);
         }
+    }
+
+    fn stats(&self) -> ColumnarStats {
+        ColumnarStats::NONE
     }
 }
 
@@ -283,6 +289,10 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     }
     fn is_null(&self, idx: usize) -> bool {
         self.0.is_null(idx)
+    }
+
+    fn stats(&self) -> ColumnarStats {
+        ColumnarStats::NONE
     }
 }
 
@@ -1348,6 +1358,10 @@ impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
     }
 
     fn is_null(&self, _idx: usize) -> bool {
+        panic!("TODO")
+    }
+
+    fn stats(&self) -> ColumnarStats {
         panic!("TODO")
     }
 }

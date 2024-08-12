@@ -54,6 +54,11 @@ pub struct ColumnarStats {
 }
 
 impl ColumnarStats {
+    pub const NONE: Self = ColumnarStats {
+        nulls: None,
+        values: ColumnStatKinds::None,
+    };
+
     /// Downcast this instasnce of [`ColumnarStats`] into `T::Stats`, if the
     /// inner type is a `T::Stats`.
     pub fn downcast<T: Data>(&self) -> Option<T::Stats> {

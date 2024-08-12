@@ -33,7 +33,9 @@ use mz_persist_types::dyn_col::DynColumnMut;
 use mz_persist_types::dyn_struct::{
     DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
 };
-use mz_persist_types::stats::{DynStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
+use mz_persist_types::stats::{
+    ColumnarStats, DynStats, OptionStats, PrimitiveStats, StatsFn, StructStats,
+};
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -1879,6 +1881,40 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
         assert!(!err_null || !row_null, "SourceData should never be null!");
 
         false
+    }
+
+    fn stats(&self) -> ColumnarStats {
+        let err_stats =
+            OptionStats::<PrimitiveStats<Vec<u8>>>::from_column(&self.err_decoder).finish();
+        let row_stats = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(encoder) => encoder.stats(),
+            SourceDataRowColumnarDecoder::EmptyRow => {
+                let stats = OptionStats {
+                    none: self.err_decoder.len() - self.err_decoder.null_count(),
+                    some: StructStats {
+                        len: self.err_decoder.len(),
+                        cols: BTreeMap::default(),
+                    },
+                };
+                stats.into_columnar_stats()
+            }
+        };
+
+        let stats = [
+            (
+                SourceDataColumnarEncoder::OK_COLUMN_NAME.to_string(),
+                row_stats.into_columnar_stats(),
+            ),
+            (
+                SourceDataColumnarEncoder::ERR_COLUMN_NAME.to_string(),
+                err_stats,
+            ),
+        ];
+        let stats = StructStats {
+            len: self.err_decoder.len(),
+            cols: stats.into_iter().map(|(name, s)| (name, s)).collect(),
+        };
+        stats.into_columnar_stats()
     }
 }
 

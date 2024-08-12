@@ -28,8 +28,8 @@ use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
-    BytesStats, ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats,
-    StructStats,
+    BytesStats, ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, OptionStats,
+    PrimitiveStats, StructStats,
 };
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use prost::Message;
@@ -1119,6 +1119,44 @@ impl DatumColumnDecoder {
             None => packer.push(Datum::Null),
         }
     }
+
+    fn stats(&self) -> ColumnStatKinds {
+        match self {
+            DatumColumnDecoder::Bool(a) => PrimitiveStats::<bool>::from_column(a).into(),
+            DatumColumnDecoder::U8(a) => PrimitiveStats::<u8>::from_column(a).into(),
+            DatumColumnDecoder::U16(a) => PrimitiveStats::<u16>::from_column(a).into(),
+            DatumColumnDecoder::U32(a) => PrimitiveStats::<u32>::from_column(a).into(),
+            DatumColumnDecoder::U64(a) => PrimitiveStats::<u64>::from_column(a).into(),
+            DatumColumnDecoder::I16(a) => PrimitiveStats::<i16>::from_column(a).into(),
+            DatumColumnDecoder::I32(a) => PrimitiveStats::<i32>::from_column(a).into(),
+            DatumColumnDecoder::I64(a) => PrimitiveStats::<i64>::from_column(a).into(),
+            DatumColumnDecoder::F32(a) => PrimitiveStats::<f32>::from_column(a).into(),
+            DatumColumnDecoder::F64(a) => PrimitiveStats::<f64>::from_column(a).into(),
+            DatumColumnDecoder::Numeric(a) => NumericStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::String(a) => PrimitiveStats::<String>::from_column(a).into(),
+            DatumColumnDecoder::Bytes(a) => PrimitiveStats::<Vec<u8>>::from_column(a).into(),
+            DatumColumnDecoder::Date(a) => PrimitiveStats::<i32>::from_column(a).into(),
+            DatumColumnDecoder::Time(a) => NaiveTimeStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Timestamp(a) => {
+                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+            }
+            DatumColumnDecoder::TimestampTz(a) => {
+                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+            }
+            DatumColumnDecoder::MzTimestamp(a) => PrimitiveStats::<u64>::from_column(a).into(),
+            DatumColumnDecoder::Interval(a) => IntervalStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Uuid(a) => UuidStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::AclItem(_)
+            | DatumColumnDecoder::MzAclItem(_)
+            | DatumColumnDecoder::Range(_) => ColumnStatKinds::None,
+            DatumColumnDecoder::Json(a) => stats_for_json(a.iter()).values,
+            DatumColumnDecoder::Array { .. }
+            | DatumColumnDecoder::List { .. }
+            | DatumColumnDecoder::Map { .. }
+            | DatumColumnDecoder::Record { .. }
+            | DatumColumnDecoder::RecordEmpty(_) => ColumnStatKinds::None,
+        }
+    }
 }
 
 impl Schema2<Row> for RelationDesc {
@@ -1141,7 +1179,14 @@ impl Schema2<Row> for RelationDesc {
 /// A [`ColumnDecoder`] for a [`Row`].
 #[derive(Debug)]
 pub struct RowColumnarDecoder {
-    decoders: Vec<DatumColumnDecoder>,
+    /// The length of all columns in this decoder; matching all child arrays and the null array
+    /// if present.
+    len: usize,
+    /// Field-specific information: the user-readable field name, the null count (or None if the
+    /// column is non-nullable), and the decoder which wraps the column-specific array.
+    decoders: Vec<(Arc<str>, Option<usize>, DatumColumnDecoder)>,
+    /// The null buffer for this row, if present. (At time of writing, all rows are assumed to be
+    /// logically nullable.)
     nullability: Option<NullBuffer>,
 }
 
@@ -1164,7 +1209,7 @@ impl RowColumnarDecoder {
         let mut decoders = Vec::with_capacity(desc_columns.len());
 
         // The columns of the `StructArray` are named with their column index.
-        for (col_idx, col_type) in desc_columns.iter().enumerate() {
+        for (col_idx, (col_name, col_type)) in desc.iter().enumerate() {
             let field_name = col_idx.to_string();
             let column = col.column_by_name(&field_name).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1172,11 +1217,13 @@ impl RowColumnarDecoder {
                     col.column_names()
                 )
             })?;
+            let null_count = col_type.nullable.then(|| column.null_count());
             let decoder = array_to_decoder(column, &col_type.scalar_type)?;
-            decoders.push(decoder);
+            decoders.push((col_name.as_str().into(), null_count, decoder));
         }
 
         Ok(RowColumnarDecoder {
+            len: col.len(),
             decoders,
             nullability: col.logical_nulls(),
         })
@@ -1187,7 +1234,7 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
     fn decode(&self, idx: usize, val: &mut Row) {
         let mut packer = val.packer();
 
-        for decoder in &self.decoders {
+        for (_, _, decoder) in &self.decoders {
             decoder.get(idx, &mut packer);
         }
     }
@@ -1197,6 +1244,28 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
             return false;
         };
         nullability.is_null(idx)
+    }
+
+    fn stats(&self) -> ColumnarStats {
+        let stats = OptionStats {
+            some: StructStats {
+                len: self.len,
+                cols: self
+                    .decoders
+                    .iter()
+                    .map(|(name, null_count, decoder)| {
+                        let name = name.to_string();
+                        let stats = ColumnarStats {
+                            nulls: null_count.map(|count| ColumnNullStats { count }),
+                            values: decoder.stats(),
+                        };
+                        (name, stats)
+                    })
+                    .collect(),
+            },
+            none: self.nullability.as_ref().map_or(0, |n| n.null_count()),
+        };
+        stats.into_columnar_stats()
     }
 }
 
@@ -1689,7 +1758,7 @@ mod tests {
         for row in &rows {
             encoder.append(row);
         }
-        let (col, stats) = encoder.finish();
+        let (col, encoded_stats) = encoder.finish();
 
         // Exercise reallocating columns with lgalloc.
         let col = realloc_array(&col, metrics);
@@ -1715,7 +1784,7 @@ mod tests {
         let (stats, stat_nulls): (Vec<_>, Vec<_>) = desc
             .iter()
             .map(|(name, ty)| {
-                let col_stats = stats.some.cols.get(name.as_str()).unwrap();
+                let col_stats = encoded_stats.some.cols.get(name.as_str()).unwrap();
                 let (lower, upper) =
                     crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
@@ -1764,6 +1833,11 @@ mod tests {
                 }
             }
         }
+        // Assert calculating stats from the decoder gives the same results as the encoder does.
+        assert_eq!(
+            format!("{:?}", decoder.stats()),
+            format!("{:?}", encoded_stats.into_columnar_stats())
+        );
 
         // Validate that the null counts in our stats matched the actual counts.
         for (col_idx, (stats_count, actual_count)) in
