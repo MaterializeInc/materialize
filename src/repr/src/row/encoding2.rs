@@ -1925,8 +1925,8 @@ mod tests {
             "a",
             ScalarType::Record {
                 fields: vec![
-                    (ColumnName::from("foo"), ScalarType::Int64.nullable(true)),
-                    (ColumnName::from("bar"), ScalarType::String.nullable(false)),
+                    (ColumnName::from("foo"), ScalarType::Int64.nullable(false)),
+                    (ColumnName::from("bar"), ScalarType::String.nullable(true)),
                     (
                         ColumnName::from("baz"),
                         ScalarType::List {
