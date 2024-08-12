@@ -31,7 +31,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 ----
 Project (#0)
   Return
-    InnerJoin (true AND (#0 = #1))
+    InnerJoin (#0 = #1)
       Get l0
       Get l0
   With
@@ -69,7 +69,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 ----
 Return // { arity: 1 }
   Project (#0) // { arity: 1 }
-    Filter (true AND (#0 = #1)) // { arity: 2 }
+    Filter (#0 = #1) // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l0 // { arity: 1 }
