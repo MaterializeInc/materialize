@@ -50,10 +50,10 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
-    ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::{
-    listen, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
+    listen, Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, TlsCertConfig, TlsMode,
 };
 use openssl::ssl::{NameType, Ssl};
@@ -368,7 +368,8 @@ struct InternalHttpServer {
 impl mz_server_core::Server for InternalHttpServer {
     const NAME: &'static str = "internal_http";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
+    // TODO(jkosh44) consider forwarding the connection UUID to the adapter.
+    fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let router = self.router.clone();
         let service = hyper::service::service_fn(move |req| router.clone().call(req));
         let conn = TokioIo::new(conn);
@@ -595,11 +596,7 @@ impl PgwireBalancer {
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
-        // Ignore error returns because they are not actionable, and not even useful to record
-        // metrics of. For example, running psql in a shell then exiting with ctrl+D produces an
-        // error, even though it was an intended exit by the user. Those connections should not get
-        // recorded as errors, as that's probably a misleading metric.
-        let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+        let res = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
         if let Some(tenant) = &resolved.tenant {
             metrics
                 .tenant_connections_tx(tenant)
@@ -608,6 +605,7 @@ impl PgwireBalancer {
                 .tenant_connections_rx(tenant)
                 .inc_by(u64::cast_from(client_counter.read));
         }
+        res?;
 
         Ok(())
     }
@@ -668,12 +666,14 @@ impl PgwireBalancer {
 impl mz_server_core::Server for PgwireBalancer {
     const NAME: &'static str = "pgwire_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
+    fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
         let cancellation_resolver = self.cancellation_resolver.clone();
+        let conn_uuid = Uuid::new_v4();
+        conn.uuid_handle().set(Some(conn_uuid));
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
@@ -688,8 +688,24 @@ impl mz_server_core::Server for PgwireBalancer {
                         // `SslRequest`. This is considered a graceful termination.
                         None => return Ok(()),
 
-                        Some(FrontendStartupMessage::Startup { version, params }) => {
+                        Some(FrontendStartupMessage::Startup {
+                            version,
+                            mut params,
+                        }) => {
                             let mut conn = FramedConn::new(conn);
+
+                            debug!(%conn_uuid, "starting new pgwire connection in balancer");
+                            let prev =
+                                params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
+                            if prev.is_some() {
+                                return Ok(conn
+                                    .send(ErrorResponse::fatal(
+                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        format!("invalid parameter '{CONN_UUID_KEY}'"),
+                                    ))
+                                    .await?);
+                            }
+
                             Self::run(
                                 &mut conn,
                                 version,
@@ -988,7 +1004,8 @@ impl HttpsBalancer {
 impl mz_server_core::Server for HttpsBalancer {
     const NAME: &'static str = "https_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
+    // TODO(jkosh44) consider forwarding the connection UUID to the adapter.
+    fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let tls_context = self.tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let resolve_template = Arc::clone(&self.resolve_template);

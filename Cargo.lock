@@ -5877,6 +5877,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -6204,14 +6205,17 @@ name = "mz-server-core"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "futures",
  "mz-ore",
  "openssl",
+ "scopeguard",
  "socket2 0.5.7",
  "tokio",
  "tokio-stream",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

@@ -9,26 +9,34 @@
 
 //! Methods common to servers listening for TCP connections.
 
+use std::fmt;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use anyhow::bail;
+use async_trait::async_trait;
 use futures::stream::{BoxStream, Stream, StreamExt};
 use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
+use mz_ore::netio::AsyncReady;
+use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+use scopeguard::ScopeGuard;
 use socket2::{SockRef, TcpKeepalive};
+use tokio::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::{IntervalStream, TcpListenerStream};
 use tracing::{debug, error, warn};
+use uuid::Uuid;
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
 /// The number of retries matches the Linux default.
@@ -42,13 +50,97 @@ const KEEPALIVE: TcpKeepalive = TcpKeepalive::new()
 /// A future that handles a connection.
 pub type ConnectionHandler = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send>>;
 
+/// A wrapper around a [`TcpStream`] that can identify a connection across
+/// processes.
+pub struct Connection {
+    conn_uuid: Arc<Mutex<Option<Uuid>>>,
+    tcp_stream: TcpStream,
+}
+
+impl Connection {
+    fn new(tcp_stream: TcpStream) -> Connection {
+        Connection {
+            conn_uuid: Arc::new(Mutex::new(None)),
+            tcp_stream,
+        }
+    }
+
+    /// Returns a handle to the connection UUID.
+    pub fn uuid_handle(&self) -> ConnectionUuidHandle {
+        ConnectionUuidHandle(Arc::clone(&self.conn_uuid))
+    }
+}
+
+impl AsyncRead for Connection {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.tcp_stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Connection {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.tcp_stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.tcp_stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.tcp_stream).poll_shutdown(cx)
+    }
+}
+
+#[async_trait]
+impl AsyncReady for Connection {
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.tcp_stream.ready(interest).await
+    }
+}
+
+/// A handle that permits getting and setting the UUID for a [`Connection`].
+///
+/// A connection's UUID is a globally unique value that can identify a given
+/// connection across environments and process boundaries. Connection UUIDs are
+/// never reused.
+///
+/// This is distinct from environmentd's concept of a "connection ID", which is
+/// a `u32` that only identifies a connection within a given environment and
+/// only during its lifetime. These connection IDs are frequently reused.
+pub struct ConnectionUuidHandle(Arc<Mutex<Option<Uuid>>>);
+
+impl ConnectionUuidHandle {
+    /// Gets the UUID for the connection, if it exists.
+    pub fn get(&self) -> Option<Uuid> {
+        *self.0.lock().expect("lock poisoned")
+    }
+
+    /// Sets the UUID for this connection.
+    pub fn set(&self, conn_uuid: Option<Uuid>) {
+        *self.0.lock().expect("lock poisoned") = conn_uuid;
+    }
+
+    /// Returns a displayble that renders a possibly missing connection UUID.
+    pub fn display(&self) -> impl fmt::Display {
+        self.get().display_or("<unknown>")
+    }
+}
+
 /// A server handles incoming network connections.
 pub trait Server {
     /// Returns the name of the connection handler for use in e.g. log messages.
     const NAME: &'static str;
 
     /// Handles a single connection.
-    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler;
+    fn handle_connection(&self, conn: Connection) -> ConnectionHandler;
 }
 
 /// A stream of incoming connections.
@@ -133,22 +225,44 @@ where
                     error!("failed enabling keepalive: {e}");
                     continue;
                 }
+                let conn = Connection::new(conn);
+                let conn_uuid = conn.uuid_handle();
                 let fut = server.handle_connection(conn);
-                set.spawn_named(|| &task_name, async {
-                    if let Err(e) = fut.await {
+                set.spawn_named(|| &task_name, async move {
+                    let guard = scopeguard::guard((), |_| {
                         debug!(
-                            "error handling connection in {}: {}",
-                            S::NAME,
-                            e.display_with_causes()
+                            server = S::NAME,
+                            conn_uuid = %conn_uuid.display(),
+                            "dropping connection without explicit termination",
                         );
+                    });
+
+                    match fut.await {
+                        Ok(()) => {
+                            debug!(
+                                server = S::NAME,
+                                conn_uuid = %conn_uuid.display(),
+                                "successfully handled connection",
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                server = S::NAME,
+                                conn_uuid = %conn_uuid.display(),
+                                "error handling connection: {}",
+                                e.display_with_causes(),
+                            );
+                        }
                     }
+
+                    let () = ScopeGuard::into_inner(guard);
                 });
             }
             // Actively cull completed tasks from the JoinSet so it does not grow unbounded. This
             // method is cancel safe.
             res = set.join_next(), if set.len() > 0 => {
                 if let Some(Err(e)) = res {
-                    debug!(
+                    warn!(
                         "error joining connection in {}: {}",
                         S::NAME,
                         e.display_with_causes()
@@ -169,7 +283,7 @@ where
         let timedout = tokio::time::timeout(wait, async {
             while let Some(res) = set.join_next().await {
                 if let Err(e) = res {
-                    debug!(
+                    warn!(
                         "error joining connection in {}: {}",
                         S::NAME,
                         e.display_with_causes()

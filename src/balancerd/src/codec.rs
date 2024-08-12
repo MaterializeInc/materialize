@@ -50,9 +50,6 @@ where
     /// The underlying connection, `inner`, is expected to be something like a
     /// TCP stream. Anything that implements [`AsyncRead`] and [`AsyncWrite`]
     /// will do.
-    ///
-    /// The supplied `conn_id` is used to identify the connection in logging
-    /// messages.
     pub fn new(inner: Conn<A>) -> FramedConn<A> {
         FramedConn {
             inner: Framed::new(inner, Codec::new()).buffer(32),
