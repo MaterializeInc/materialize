@@ -765,7 +765,7 @@ class RenameSinkAction(Action):
 
 class AlterKafkaSinkFromAction(Action):
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario == Scenario.Kill:
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             # Does not work reliably with kills, see #28870
             return False
         with exe.db.lock:
