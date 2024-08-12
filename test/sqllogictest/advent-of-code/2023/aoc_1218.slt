@@ -1,0 +1,1078 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1218.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'R 3 (#63d832)
+U 3 (#398283)
+R 7 (#019692)
+U 3 (#08ace3)
+R 4 (#0b82e2)
+U 7 (#4622d3)
+R 7 (#5e5962)
+U 2 (#477063)
+R 6 (#161af0)
+U 4 (#03c053)
+L 7 (#3702c0)
+U 6 (#13aab1)
+L 5 (#4f57a0)
+U 9 (#13aab3)
+L 3 (#28e970)
+U 3 (#03c051)
+L 6 (#06ce80)
+U 4 (#6715a3)
+L 5 (#1d7ed2)
+U 4 (#0cd5d3)
+R 3 (#065442)
+U 4 (#3e7751)
+R 11 (#7b2012)
+U 5 (#3e7753)
+R 4 (#2d3a22)
+D 4 (#39e333)
+R 4 (#234572)
+U 4 (#0c3133)
+R 4 (#2cd520)
+U 6 (#2350e3)
+L 2 (#382b80)
+U 4 (#666d63)
+L 2 (#14ac90)
+U 8 (#0e74d3)
+L 7 (#6e3980)
+U 3 (#0e0f93)
+L 6 (#0327f0)
+U 4 (#7b7e23)
+L 7 (#0781d0)
+D 4 (#323763)
+L 2 (#3a6dc2)
+D 3 (#438341)
+L 8 (#48e102)
+U 7 (#443151)
+L 3 (#48e100)
+U 3 (#2e7171)
+L 3 (#5eeb12)
+U 9 (#457323)
+L 6 (#0b1e62)
+U 3 (#275c53)
+R 4 (#790432)
+U 5 (#2a10b3)
+R 2 (#362f80)
+U 9 (#1a0ac3)
+L 6 (#0e1fb0)
+U 4 (#1a0ac1)
+R 6 (#3fd360)
+U 3 (#1f45e3)
+L 3 (#28a492)
+U 6 (#2e0743)
+L 5 (#24bf22)
+D 6 (#04b9a3)
+L 4 (#4938d2)
+U 5 (#52b893)
+L 5 (#45d622)
+U 5 (#577231)
+L 10 (#59e412)
+U 5 (#216723)
+L 9 (#3b9752)
+U 3 (#3cf473)
+L 3 (#378a72)
+U 8 (#024c53)
+L 3 (#227c62)
+U 3 (#3584b3)
+L 4 (#0aa5f2)
+U 4 (#41a303)
+R 5 (#44ad42)
+U 3 (#1f62b3)
+R 6 (#48a5b2)
+U 9 (#2059f3)
+L 6 (#3ecbf0)
+U 3 (#77fd43)
+R 4 (#30b6c0)
+U 5 (#77fd41)
+R 5 (#287630)
+U 5 (#31f623)
+R 4 (#1d73c2)
+D 8 (#6502b3)
+R 7 (#309ce0)
+D 6 (#47a3f1)
+R 5 (#52a160)
+D 7 (#0f4cf1)
+R 4 (#402e02)
+D 4 (#2ccbc1)
+R 3 (#1b83f2)
+U 4 (#5e25a1)
+R 10 (#5bb1f0)
+U 2 (#003561)
+R 5 (#52a162)
+D 6 (#2c5741)
+R 4 (#1a7870)
+D 7 (#252a61)
+R 5 (#1c9d90)
+D 4 (#382f43)
+R 9 (#46c2b0)
+U 4 (#382f41)
+R 2 (#203ce0)
+U 7 (#2fa273)
+R 9 (#20b5e0)
+U 6 (#35c0c3)
+R 5 (#5e6572)
+U 6 (#576073)
+L 2 (#5e6570)
+U 4 (#1a2373)
+L 8 (#5b8770)
+U 2 (#4bda03)
+L 5 (#25f2f0)
+U 7 (#10d833)
+L 3 (#0351c0)
+U 2 (#43d0b3)
+L 5 (#0ef3f0)
+U 3 (#334c13)
+L 4 (#1db5b0)
+U 5 (#6a72d1)
+R 6 (#2c8c60)
+U 8 (#213fd1)
+R 4 (#11f250)
+U 6 (#6ae721)
+R 5 (#4344c0)
+U 5 (#458fd3)
+R 2 (#432920)
+U 10 (#26e5e3)
+R 4 (#432922)
+D 4 (#1fb143)
+R 10 (#3b9d20)
+D 4 (#6a72d3)
+R 3 (#2482c0)
+D 6 (#182003)
+R 5 (#1188e0)
+D 7 (#0269a3)
+R 7 (#6546b0)
+D 4 (#35f3e3)
+R 2 (#6c4e32)
+D 5 (#2e7783)
+R 9 (#0a8162)
+D 3 (#2adbe3)
+R 4 (#165430)
+D 3 (#0d2653)
+L 5 (#70a1c0)
+D 11 (#071353)
+L 2 (#023310)
+U 11 (#235ef3)
+L 5 (#0e81f2)
+D 3 (#5c6903)
+L 3 (#0e81f0)
+D 7 (#2439d3)
+R 4 (#043130)
+D 4 (#10e873)
+R 3 (#687d10)
+D 2 (#15f193)
+R 8 (#4ce370)
+D 3 (#56d3c3)
+R 8 (#51fe00)
+U 4 (#38c5d3)
+R 7 (#407810)
+U 3 (#15ba73)
+R 4 (#378c80)
+U 4 (#353003)
+R 3 (#4aa0b0)
+U 4 (#3f7523)
+R 6 (#5fa2a0)
+U 4 (#3d17f3)
+R 2 (#522f12)
+U 8 (#151f23)
+R 3 (#695000)
+U 7 (#5a3623)
+R 7 (#695002)
+U 8 (#27c0d3)
+R 4 (#43b4d2)
+D 2 (#001bd3)
+R 6 (#0bbad0)
+D 4 (#00a7d3)
+R 3 (#5ba7d0)
+D 4 (#00a7d1)
+R 2 (#2e8140)
+D 4 (#1b7453)
+R 4 (#0886e0)
+U 10 (#2729b1)
+R 6 (#1402f0)
+U 2 (#164871)
+R 2 (#617d90)
+U 5 (#5de851)
+R 5 (#0bc280)
+U 5 (#2ce7f1)
+R 3 (#053980)
+D 3 (#399321)
+R 2 (#32e680)
+D 6 (#3153f1)
+R 6 (#3d1340)
+U 6 (#3153f3)
+R 8 (#28ebc0)
+D 6 (#0d5821)
+R 4 (#0d06d0)
+D 5 (#20d631)
+L 7 (#05e6a0)
+D 5 (#366131)
+L 6 (#35ae20)
+U 5 (#16e031)
+L 5 (#443930)
+D 8 (#16e033)
+R 3 (#0a2ed0)
+D 3 (#366133)
+R 7 (#068550)
+D 4 (#43bfd1)
+R 2 (#085000)
+D 11 (#457341)
+L 5 (#3b7a10)
+U 8 (#46f1f1)
+L 4 (#54b0b0)
+D 6 (#11f3b1)
+L 4 (#021272)
+D 9 (#0c1ff3)
+L 4 (#04efb2)
+U 5 (#1aa211)
+L 4 (#14a1c2)
+U 4 (#595f61)
+R 4 (#4a77e2)
+U 3 (#740173)
+L 4 (#248402)
+U 3 (#0c1ff1)
+L 3 (#23ef42)
+D 5 (#47a5f1)
+L 3 (#24e8a2)
+D 3 (#2da323)
+L 7 (#50eeb2)
+D 3 (#2da321)
+R 7 (#3c58e2)
+D 4 (#485ce1)
+R 5 (#40e320)
+D 3 (#1c1411)
+R 3 (#529210)
+D 6 (#4e83e1)
+L 3 (#1ebb00)
+D 8 (#0c2201)
+L 6 (#350ca0)
+D 9 (#54bc91)
+L 4 (#5fcf50)
+D 4 (#54bc93)
+L 4 (#19b310)
+D 5 (#16cc21)
+L 9 (#0fd7a0)
+D 6 (#3525b3)
+L 4 (#5e8390)
+D 5 (#15f2e3)
+L 8 (#276dc0)
+D 3 (#48e813)
+R 4 (#2a3100)
+D 2 (#75c903)
+R 12 (#2cc4d0)
+D 4 (#1bbd53)
+L 10 (#564fa0)
+D 3 (#14ac33)
+L 6 (#1a96d0)
+D 4 (#14ac31)
+L 5 (#3d0410)
+D 3 (#544af3)
+L 2 (#077e70)
+D 7 (#0481f3)
+L 4 (#2421a0)
+U 7 (#3feb53)
+L 2 (#637780)
+U 5 (#3fcce3)
+L 3 (#4714a2)
+U 5 (#0f3443)
+L 3 (#4714a0)
+U 5 (#423993)
+L 6 (#3d38e2)
+U 4 (#33f533)
+L 3 (#3d38e0)
+U 5 (#10dbf3)
+L 4 (#4521a0)
+D 5 (#4c16f1)
+L 6 (#1b8112)
+D 8 (#29d051)
+L 7 (#1b8110)
+D 3 (#285e91)
+R 6 (#4b0670)
+D 9 (#5afbc3)
+R 2 (#4121e2)
+U 9 (#327a93)
+R 5 (#7a3110)
+D 4 (#28f153)
+R 5 (#1616f0)
+D 11 (#462e13)
+R 2 (#3b0c62)
+D 4 (#0ca623)
+L 6 (#553ba2)
+U 6 (#336513)
+L 4 (#4121e0)
+D 6 (#0b6563)
+L 7 (#41b260)
+D 6 (#05aee3)
+R 3 (#214cf0)
+D 5 (#2095f1)
+R 4 (#170fd0)
+D 6 (#55d153)
+R 3 (#4e85e0)
+U 7 (#55d151)
+R 4 (#225cd0)
+U 4 (#0c8b11)
+R 3 (#44e640)
+D 7 (#13ce51)
+R 5 (#4689e0)
+D 3 (#184b51)
+R 3 (#32d310)
+D 4 (#43d091)
+R 10 (#65a832)
+D 2 (#2ce521)
+R 2 (#65a830)
+D 4 (#19d9a1)
+R 3 (#32d312)
+D 5 (#04b0d1)
+R 6 (#4689e2)
+D 8 (#5e14e1)
+R 3 (#44e642)
+D 5 (#072581)
+R 3 (#2e24a0)
+D 3 (#54ca81)
+R 6 (#4cb5f0)
+D 5 (#54ca83)
+R 6 (#2a00a0)
+D 3 (#2db571)
+R 3 (#35d720)
+U 7 (#6d2ee1)
+R 6 (#037162)
+U 3 (#46e9f1)
+R 3 (#037160)
+U 5 (#291061)
+R 5 (#35d722)
+D 7 (#014fd1)
+R 2 (#0c4970)
+D 5 (#1545c1)
+R 2 (#18b292)
+D 3 (#136e83)
+R 9 (#4693f2)
+U 4 (#475813)
+R 4 (#0cf192)
+D 9 (#35d773)
+R 3 (#187a12)
+U 9 (#1b30e3)
+R 6 (#40b002)
+U 5 (#1ce931)
+R 6 (#03b502)
+U 9 (#318ba1)
+R 3 (#32b7d2)
+U 5 (#53d473)
+R 9 (#1f88b2)
+U 6 (#53d471)
+R 3 (#2bba02)
+U 10 (#380191)
+R 6 (#026e22)
+U 5 (#255881)
+R 8 (#0ee252)
+U 7 (#2df1b1)
+L 8 (#566410)
+U 6 (#270801)
+R 5 (#566412)
+U 6 (#292e81)
+R 2 (#151902)
+U 4 (#498431)
+R 3 (#5065a2)
+U 3 (#528e81)
+R 3 (#293c32)
+D 8 (#0b55d1)
+R 7 (#5a8810)
+D 8 (#43d5f1)
+L 7 (#23e8a2)
+D 9 (#1656a3)
+R 2 (#61b762)
+D 7 (#1656a1)
+R 3 (#1b41a2)
+D 4 (#2cc941)
+R 3 (#4da6e2)
+D 5 (#26e561)
+R 7 (#141d30)
+D 5 (#4e0ae1)
+R 5 (#141d32)
+U 10 (#31b561)
+R 3 (#30a7f2)
+D 6 (#1d3491)
+R 7 (#615f02)
+D 8 (#262251)
+R 2 (#5eb0f2)
+D 8 (#4fbcd1)
+R 8 (#092b72)
+D 7 (#33b0e1)
+R 8 (#000e02)
+D 4 (#6ea1d3)
+L 4 (#3a53e2)
+D 6 (#1dfaf3)
+L 6 (#3783b2)
+U 6 (#2393e3)
+L 3 (#444532)
+D 3 (#4b4aa3)
+L 7 (#731a90)
+U 8 (#43cbb3)
+L 2 (#430230)
+D 8 (#2e2343)
+L 7 (#1b2572)
+D 2 (#34e4b3)
+L 3 (#1c8e30)
+D 7 (#38bb73)
+L 5 (#1c8e32)
+U 7 (#20bf23)
+L 5 (#40ae22)
+U 5 (#44cab1)
+L 4 (#6ad392)
+D 8 (#172fb1)
+L 4 (#6ad390)
+D 6 (#3264e1)
+L 7 (#4cfe92)
+D 5 (#1cec91)
+L 4 (#1e5f22)
+D 2 (#096771)
+L 7 (#204912)
+D 5 (#11b4c1)
+L 2 (#5c6f52)
+D 6 (#5d7d51)
+L 6 (#051320)
+D 7 (#157551)
+L 5 (#713010)
+U 10 (#06f7c1)
+L 2 (#0488a0)
+U 3 (#4aa351)
+L 4 (#01ec90)
+U 6 (#022761)
+L 6 (#1d8ae2)
+U 10 (#3b4c21)
+L 3 (#227ef2)
+D 8 (#537021)
+L 4 (#51f892)
+D 8 (#045211)
+L 4 (#1a7422)
+U 11 (#305931)
+L 4 (#022c92)
+U 5 (#286df1)
+L 7 (#3e0860)
+D 2 (#7c10c1)
+L 9 (#29c3e0)
+D 6 (#7c10c3)
+R 4 (#294bf0)
+D 4 (#0f1f51)
+R 7 (#668ef0)
+D 6 (#155e51)
+L 4 (#7037c0)
+D 5 (#2079b1)
+L 7 (#10c960)
+D 4 (#59ade1)
+L 3 (#056d80)
+D 2 (#4c1e11)
+L 5 (#5a8410)
+D 8 (#4e1f01)
+L 3 (#04cf10)
+D 4 (#111073)
+R 5 (#1e9630)
+D 5 (#2ae013)
+R 6 (#5f15d0)
+D 7 (#07d273)
+R 5 (#1595d0)
+D 6 (#5ead03)
+R 5 (#1ed6c0)
+D 3 (#517b03)
+R 5 (#5479a0)
+D 5 (#2079b3)
+R 5 (#0457b0)
+D 4 (#1a0c61)
+R 5 (#75fb60)
+D 3 (#39b0e1)
+R 2 (#017e62)
+D 10 (#042d71)
+R 2 (#30be42)
+D 3 (#036981)
+R 11 (#547592)
+D 4 (#036983)
+R 9 (#254712)
+D 3 (#1ff8b1)
+R 3 (#7150b0)
+D 4 (#51bff1)
+R 5 (#3aa890)
+D 4 (#182541)
+R 5 (#4b4440)
+U 7 (#0a0dd1)
+R 2 (#60bed0)
+U 4 (#4454f1)
+R 4 (#60a1d0)
+D 11 (#5196e1)
+R 3 (#220fb0)
+U 4 (#30fe01)
+R 2 (#11bb22)
+U 3 (#7638e1)
+R 12 (#23df92)
+U 4 (#0d7c73)
+L 3 (#013cd2)
+U 6 (#552823)
+R 10 (#63a562)
+U 2 (#2b4073)
+L 10 (#219962)
+U 6 (#22c291)
+L 3 (#299ef2)
+D 9 (#35df31)
+L 3 (#299ef0)
+D 5 (#354341)
+L 5 (#0d7872)
+U 6 (#0e8551)
+L 4 (#1694f0)
+U 5 (#04d241)
+L 4 (#1e22a0)
+U 3 (#1675e1)
+R 8 (#6a3520)
+U 4 (#43d971)
+R 6 (#0a3d50)
+U 5 (#0810f1)
+R 8 (#0ac890)
+U 4 (#199941)
+R 8 (#227f00)
+U 5 (#1d24c1)
+R 5 (#76b082)
+D 6 (#431c01)
+R 4 (#76b080)
+D 4 (#1e4641)
+R 2 (#364ce0)
+D 8 (#2d5d53)
+L 2 (#715300)
+D 4 (#1f5db3)
+L 6 (#715302)
+D 5 (#3b65b3)
+R 8 (#3b01a0)
+D 3 (#0fff93)
+L 8 (#6193d0)
+D 5 (#568341)
+L 5 (#099722)
+D 6 (#2367a1)
+L 4 (#38d052)
+D 3 (#2c55c1)
+L 5 (#4b7912)
+D 4 (#2fad91)
+L 7 (#6555e2)
+D 9 (#01e1f1)
+L 6 (#3715b2)
+D 9 (#6b0571)
+L 4 (#37a162)
+D 6 (#351e61)
+L 10 (#476672)
+D 4 (#3365a1)
+L 4 (#7602e2)
+D 3 (#389d61)
+L 11 (#3c6b42)
+D 2 (#1eb623)
+L 3 (#0f8dd2)
+D 8 (#327a53)
+L 5 (#22d202)
+D 6 (#3c4e43)
+L 5 (#11cc52)
+D 7 (#54e801)
+R 7 (#64dd42)
+D 2 (#54e803)
+R 3 (#17df32)
+D 6 (#3c4e41)
+L 5 (#085592)
+D 3 (#76f573)
+L 3 (#11b6a0)
+D 9 (#0af683)
+L 3 (#59ebd0)
+D 9 (#53e233)
+L 7 (#301410)
+D 9 (#13a933)
+L 2 (#02c6e0)
+D 7 (#7281e1)
+L 8 (#1b32f0)
+D 4 (#302dd3)
+L 8 (#0f8dd0)
+U 3 (#324da3)
+R 3 (#5ae350)
+U 4 (#123e03)
+R 10 (#5ae352)
+U 4 (#40c433)
+L 6 (#1a6712)
+U 2 (#028233)
+L 5 (#48daa2)
+U 3 (#016db3)
+L 2 (#626b62)
+U 4 (#016db1)
+L 8 (#175412)
+D 3 (#620bf3)
+L 2 (#2aad12)
+D 5 (#51ade3)
+L 2 (#027162)
+D 8 (#25cf43)
+L 4 (#358932)
+U 5 (#0c3221)
+L 8 (#160bc2)
+U 4 (#7a43c1)
+L 8 (#3e3cc2)
+U 4 (#125a41)
+L 8 (#3b05c2)
+U 4 (#257931)
+L 5 (#5309a2)
+U 11 (#257491)
+L 4 (#137332)
+U 4 (#510e71)
+L 4 (#49e9e2)
+U 7 (#510e73)
+L 5 (#351842)
+U 6 (#3a2c51)
+L 3 (#15f9e2)
+D 9 (#10a691)
+L 4 (#494502)
+D 5 (#6700b1)
+L 3 (#21c702)
+D 8 (#3fd0e1)
+R 7 (#320fc2)
+D 10 (#4cae21)
+L 4 (#320fc0)
+U 7 (#00df01)
+L 7 (#1ad0e2)
+U 8 (#08a7a1)
+L 4 (#416432)
+U 2 (#340d71)
+L 11 (#427ae2)
+D 6 (#015901)
+L 2 (#3efe92)
+D 4 (#661ce1)
+L 9 (#036ee0)
+U 5 (#2bee51)
+L 8 (#6109e0)
+U 7 (#44b4d1)
+L 5 (#1d00b0)
+U 3 (#193b71)
+R 5 (#2e2a82)
+U 8 (#1c92b1)
+R 3 (#2352d2)
+U 6 (#575653)
+R 8 (#581cd2)
+U 4 (#575651)
+R 7 (#3d7032)
+U 2 (#1c92b3)
+R 6 (#04d222)
+D 4 (#254db1)
+R 4 (#0e3e02)
+D 7 (#2b9141)
+R 5 (#590112)
+U 8 (#2c6c91)
+R 3 (#14ece2)
+U 3 (#57fdd3)
+R 5 (#0790d2)
+U 11 (#3906f3)
+L 5 (#094042)
+U 7 (#248bb3)
+L 5 (#469400)
+U 8 (#3ded63)
+L 5 (#469402)
+U 6 (#2c1963)
+L 3 (#3267f2)
+U 3 (#1582c3)
+L 5 (#36c8a2)
+U 8 (#254623)
+L 4 (#5f1562)
+U 2 (#254621)
+L 4 (#36b082)
+U 5 (#1582c1)
+L 5 (#25cef2)
+U 3 (#4f5c53)
+L 6 (#295b42)
+U 6 (#54bf93)
+L 3 (#4b4342)
+U 4 (#0ed5a3)
+L 4 (#1f6322)
+D 9 (#012c93)
+L 5 (#301460)
+U 9 (#0261c1)
+L 4 (#365120)
+U 4 (#0261c3)
+R 6 (#4e0430)
+U 2 (#2a8513)
+R 7 (#2d10f0)
+U 4 (#58fbc1)
+R 6 (#27cd20)
+U 7 (#58fbc3)
+R 5 (#321b20)
+U 11 (#3305e3)
+R 3 (#13a830)
+U 2 (#5d8af1)
+R 5 (#2785e0)
+U 10 (#2c9fc3)
+R 3 (#4b7650)
+U 8 (#269fb3)
+R 6 (#18f6e2)
+U 5 (#659f93)
+R 7 (#18f6e0)
+U 6 (#23c603)
+L 3 (#393572)
+U 6 (#3a2c53)
+L 5 (#300bc2)
+U 5 (#459453)
+R 5 (#78fbb2)
+U 3 (#31eaa3)
+L 5 (#1e5392)
+U 3 (#0d2263)
+L 6 (#52a660)
+D 6 (#6382a3)
+L 7 (#52a662)
+D 4 (#303a73)
+R 7 (#3b54e2)
+D 4 (#49d3f1)
+L 4 (#128532)
+D 3 (#223ab1)
+L 3 (#05e4d2)
+D 5 (#534971)
+L 6 (#05e4d0)
+D 8 (#0c25d1)
+L 2 (#43bd52)
+U 8 (#074c31)
+L 7 (#385f82)
+U 5 (#459451)
+L 4 (#760cd2)
+U 3 (#1af713)
+L 8 (#4f3122)
+U 6 (#2e1413)');
+
+query II
+WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as line
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+
+    split1(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'U' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'D' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'L' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'R' THEN  1
+                 ELSE 0
+            END,
+            regexp_split_to_array(line, ' ')[2]::INT
+        FROM lines
+    ),
+
+    -- Part 1 is prefix sum followed by area calculations.
+    -- We'll brute force the prefix sum part, and use the
+    -- "trapezoid formula", summing + and - contributions
+    -- as the path moves around.
+    path1(r1 INT, c1 INT, r2 INT, c2 INT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path1.r2,
+            path1.c2,
+            path1.r2 + split1.dr * split1.steps,
+            path1.c2 + split1.dc * split1.steps,
+            path1.rounds + 1
+        FROM path1, split1
+        WHERE path1.rounds = split1.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part1(part1 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path1)) / 2
+          + (SELECT SUM(steps) FROM split1) / 2
+          + 1
+    ),
+
+    -- Part 2 changes how we parse each line to give long paths.
+    split2(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '3' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '1' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '2' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '0' THEN  1
+                 ELSE 0
+            END,
+            256 * 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 0)
+                + 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 1)
+                      + get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 2)
+        FROM lines
+    ),
+
+    path2(r1 BIGINT, c1 BIGINT, r2 BIGINT, c2 BIGINT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path2.r2,
+            path2.c2,
+            path2.r2 + split2.dr * split2.steps,
+            path2.c2 + split2.dc * split2.steps,
+            path2.rounds + 1
+        FROM path2, split2
+        WHERE path2.rounds = split2.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part2(part2 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path2)) / 2
+          + (SELECT SUM(steps) FROM split2) / 2
+          + 1
+    )
+
+SELECT * FROM part1, part2;
+----
+48400  72811019847283
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as line
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+
+    split1(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'U' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'D' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'L' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'R' THEN  1
+                 ELSE 0
+            END,
+            regexp_split_to_array(line, ' ')[2]::INT
+        FROM lines
+    ),
+
+    -- Part 1 is prefix sum followed by area calculations.
+    -- We'll brute force the prefix sum part, and use the
+    -- "trapezoid formula", summing + and - contributions
+    -- as the path moves around.
+    path1(r1 INT, c1 INT, r2 INT, c2 INT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path1.r2,
+            path1.c2,
+            path1.r2 + split1.dr * split1.steps,
+            path1.c2 + split1.dc * split1.steps,
+            path1.rounds + 1
+        FROM path1, split1
+        WHERE path1.rounds = split1.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part1(part1 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path1)) / 2
+          + (SELECT SUM(steps) FROM split1) / 2
+          + 1
+    ),
+
+    -- Part 2 changes how we parse each line to give long paths.
+    split2(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '3' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '1' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '2' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '0' THEN  1
+                 ELSE 0
+            END,
+            256 * 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 0)
+                + 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 1)
+                      + get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 2)
+        FROM lines
+    ),
+
+    path2(r1 BIGINT, c1 BIGINT, r2 BIGINT, c2 BIGINT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path2.r2,
+            path2.c2,
+            path2.r2 + split2.dr * split2.steps,
+            path2.c2 + split2.dc * split2.steps,
+            path2.rounds + 1
+        FROM path2, split2
+        WHERE path2.rounds = split2.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part2(part2 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path2)) / 2
+          + (SELECT SUM(steps) FROM split2) / 2
+          + 1
+    )
+
+SELECT * FROM part1, part2;
+----
+Explained Query:
+  Return
+    Return
+      Project (#4, #5)
+        Map ((((abs(#0) / 2) + (#1 / 2)) + 1), numeric_to_bigint((((abs(#2) / 2) + bigint_to_numeric((#3 / 2))) + 1)))
+          CrossJoin type=delta
+            ArrangeBy keys=[[]]
+              Union
+                Get l3
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l3
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l5
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l5
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l8
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l8
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l10
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l10
+                    Constant
+                      - ()
+    With
+      cte l10 =
+        Union
+          Get l9
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l9
+              Constant
+                - ()
+      cte l9 =
+        Reduce aggregates=[sum(#0)]
+          Project (#3)
+            Map (decode(("0" || substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), 3, 5)), "hex"), (((65536 * get_byte(#2, 0)) + (256 * get_byte(#2, 1))) + get_byte(#2, 2)))
+              Get l0
+      cte l8 =
+        Union
+          Get l7
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l7
+              Constant
+                - ()
+      cte l7 =
+        Reduce aggregates=[sum(((#0 + #2) * (#1 - #3)))]
+          Project (#0..=#3)
+            Get l6
+  With Mutually Recursive
+    cte l6 =
+      Distinct project=[#0..=#4]
+        Union
+          Project (#0, #1, #7..=#9)
+            Map ((#0 + integer_to_bigint((#4 * #6))), (#1 + integer_to_bigint((#5 * #6))), (#2 + 1))
+              Join on=(#2 = #3) type=differential
+                ArrangeBy keys=[[#2]]
+                  Project (#2..=#4)
+                    Get l6
+                ArrangeBy keys=[[#0]]
+                  Project (#0, #4, #5, #7)
+                    Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), substr(#2, 8, 1), case when (#3 = "3") then -1 else case when ("1" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), 8, 1)) then 1 else 0 end end, case when (#3 = "2") then -1 else case when ("0" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), 8, 1)) then 1 else 0 end end, decode(("0" || substr(#2, 3, 5)), "hex"), (((65536 * get_byte(#6, 0)) + (256 * get_byte(#6, 1))) + get_byte(#6, 2)))
+                      Get l0
+          Constant
+            - (0, 0, 0, 0, 1)
+    cte l5 =
+      Union
+        Get l4
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l4
+            Constant
+              - ()
+    cte l4 =
+      Reduce aggregates=[sum(#0)]
+        Project (#2)
+          Map (text_to_integer(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 2)))
+            Get l0
+    cte l3 =
+      Union
+        Get l2
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l2
+            Constant
+              - ()
+    cte l2 =
+      Reduce aggregates=[sum(((#0 + #2) * (#1 - #3)))]
+        Project (#0..=#3)
+          Get l1
+    cte l1 =
+      Distinct project=[#0..=#4]
+        Union
+          Project (#0, #1, #7..=#9)
+            Map ((#0 + (#4 * #6)), (#1 + (#5 * #6)), (#2 + 1))
+              Join on=(#2 = #3) type=differential
+                ArrangeBy keys=[[#2]]
+                  Project (#2..=#4)
+                    Get l1
+                ArrangeBy keys=[[#0]]
+                  Project (#0, #4..=#6)
+                    Map (regexp_split_to_array[" ", case_insensitive=false](#1), array_index(#2, 1), case when (#3 = "U") then -1 else case when ("D" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 1)) then 1 else 0 end end, case when (#3 = "L") then -1 else case when ("R" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 1)) then 1 else 0 end end, text_to_integer(array_index(#2, 2)))
+                      Get l0
+          Constant
+            - (0, 0, 0, 0, 1)
+    cte l0 =
+      Project (#1, #2)
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
+          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
+            ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF
