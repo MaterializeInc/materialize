@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
-use futures::FutureExt;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::ReplicaId;
@@ -220,25 +221,26 @@ where
     /// The implementation intentionally avoids the `async`/`await` syntax to facilitate reasoning
     /// about its cancel safety.
     pub fn recv(&mut self) -> impl Future<Output = Option<StorageResponse<T>>> + '_ {
-        std::future::poll_fn(|cx| {
-            if let Some(resp) = self.ready_responses.pop_front() {
+        let receives = self.replicas.values_mut().map(|r| r.recv());
+        // `futs` is cancel safe: It only awaits `Replica::recv`, which is documented as cancel
+        // safe. Thus dropping `futs` while awaiting it is guaranteed to never drop a replica
+        // response.
+        let mut futs: FuturesUnordered<_> = receives.collect();
+
+        let ready_responses = &mut self.ready_responses;
+        std::future::poll_fn(move |cx| {
+            if let Some(resp) = ready_responses.pop_front() {
                 return Poll::Ready(Some(resp));
             }
 
-            if self.replicas.is_empty() {
-                // There are no live replicas.
-                // Remain pending to communicate that no response is ready.
-                return Poll::Pending;
+            match std::task::ready!(futs.poll_next_unpin(cx)) {
+                Some(resp) => Poll::Ready(resp),
+                None => {
+                    // There are no live replicas left.
+                    // Remain pending to communicate that no response is ready.
+                    Poll::Pending
+                }
             }
-
-            let receives = self.replicas.values_mut().map(|r| r.recv());
-            let mut fut = futures::future::select_all(receives);
-
-            // `futs` is cancel safe: It only awaits `Replica::recv`, which is documented as cancel
-            // safe. Thus dropping `futs` while awaiting it is guaranteed to never drop a replica
-            // response.
-            fut.poll_unpin(cx)
-                .map(|(response, _index, _remaining)| response)
         })
     }
 }
