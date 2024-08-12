@@ -41,7 +41,8 @@ const INFO_SCHEMA_COLS: &[&str] = &[
 ];
 
 // NOTE: The order of these fields *must* match the order of names of the [`INFO_SCHEMA_COLS`] list.
-struct InfoSchema {
+#[derive(Debug, Clone)]
+pub struct InfoSchema {
     column_name: String,
     data_type: String,
     column_type: String,
@@ -71,6 +72,106 @@ impl FromRow for InfoSchema {
     }
 }
 
+/// A representation of the raw schema info for a table from MySQL
+#[derive(Debug, Clone)]
+pub struct MySqlTableSchema {
+    pub schema_name: String,
+    pub name: String,
+    pub columns: Vec<InfoSchema>,
+    pub keys: BTreeSet<MySqlKeyDesc>,
+}
+
+impl MySqlTableSchema {
+    pub fn table_ref<'a>(&'a self) -> QualifiedTableRef<'a> {
+        QualifiedTableRef {
+            schema_name: &self.schema_name,
+            table_name: &self.name,
+        }
+    }
+
+    /// Convert the raw table schema to our MySqlTableDesc representation
+    /// using any provided text_columns and ignore_columns
+    pub fn to_desc(
+        self,
+        text_columns: Option<&BTreeSet<&str>>,
+        ignore_columns: Option<&BTreeSet<&str>>,
+    ) -> Result<MySqlTableDesc, MySqlError> {
+        // Verify there are no duplicates in text_columns and ignore_columns
+        match (&text_columns, &ignore_columns) {
+            (Some(text_cols), Some(ignore_cols)) => {
+                let intersection: Vec<_> = text_cols.intersection(ignore_cols).collect();
+                if !intersection.is_empty() {
+                    Err(MySqlError::DuplicatedColumnNames {
+                        qualified_table_name: format!("{:?}.{:?}", self.schema_name, self.name),
+                        columns: intersection.iter().map(|s| (*s).to_string()).collect(),
+                    })?;
+                }
+            }
+            _ => (),
+        };
+
+        let mut columns = Vec::with_capacity(self.columns.len());
+        let mut error_cols = vec![];
+        for info in self.columns {
+            // If this column is designated as a text column and of a supported text-column type
+            // treat it as a string and skip type parsing.
+            if let Some(text_columns) = &text_columns {
+                if text_columns.contains(&info.column_name.as_str()) {
+                    match parse_as_text_column(&info, &self.schema_name, &self.name) {
+                        Err(err) => error_cols.push(err),
+                        Ok((scalar_type, meta)) => columns.push(MySqlColumnDesc {
+                            name: info.column_name,
+                            column_type: Some(ColumnType {
+                                scalar_type,
+                                nullable: &info.is_nullable == "YES",
+                            }),
+                            meta,
+                        }),
+                    }
+                    continue;
+                }
+            }
+
+            // If this column is ignored, use None for the column type to signal that it should be.
+            if let Some(ignore_cols) = &ignore_columns {
+                if ignore_cols.contains(&info.column_name.as_str()) {
+                    columns.push(MySqlColumnDesc {
+                        name: info.column_name,
+                        column_type: None,
+                        meta: None,
+                    });
+                    continue;
+                }
+            }
+
+            // Collect the parsed data types or errors for later reporting.
+            match parse_data_type(&info, &self.schema_name, &self.name) {
+                Err(err) => error_cols.push(err),
+                Ok(scalar_type) => columns.push(MySqlColumnDesc {
+                    name: info.column_name,
+                    column_type: Some(ColumnType {
+                        scalar_type,
+                        nullable: &info.is_nullable == "YES",
+                    }),
+                    meta: None,
+                }),
+            }
+        }
+        if error_cols.len() > 0 {
+            Err(MySqlError::UnsupportedDataTypes {
+                columns: error_cols,
+            })?;
+        }
+
+        Ok(MySqlTableDesc {
+            schema_name: self.schema_name,
+            name: self.name,
+            columns,
+            keys: self.keys,
+        })
+    }
+}
+
 /// Request for table schemas from MySQL
 pub enum SchemaRequest<'a> {
     /// Request schemas for all tables in the database
@@ -92,28 +193,10 @@ pub struct QualifiedTableRef<'a> {
 pub async fn schema_info<'a, Q>(
     conn: &mut Q,
     schema_request: &SchemaRequest<'a>,
-    text_columns: &BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
-    ignore_columns: &BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
-) -> Result<Vec<MySqlTableDesc>, MySqlError>
+) -> Result<Vec<MySqlTableSchema>, MySqlError>
 where
     Q: Queryable,
 {
-    // Verify there are no duplicates in text_columns and ignore_columns
-    for (table_ref, text_cols) in text_columns.iter() {
-        if let Some(ignore_cols) = ignore_columns.get(table_ref) {
-            let intersection: Vec<_> = text_cols.intersection(ignore_cols).collect();
-            if !intersection.is_empty() {
-                Err(MySqlError::DuplicatedColumnNames {
-                    qualified_table_name: format!(
-                        "{:?}.{:?}",
-                        table_ref.schema_name, table_ref.table_name
-                    ),
-                    columns: intersection.iter().map(|s| (*s).to_string()).collect(),
-                })?;
-            }
-        }
-    }
-
     let table_rows: Vec<(String, String)> = match schema_request {
         SchemaRequest::All => {
             // Get all tables in non-system schemas.
@@ -164,17 +247,7 @@ where
     };
 
     let mut tables = vec![];
-    let mut error_cols = vec![];
     for (table_name, schema_name) in table_rows {
-        let table_text_cols = text_columns.get(&QualifiedTableRef {
-            schema_name: &schema_name,
-            table_name: &table_name,
-        });
-        let table_ignore_cols = ignore_columns.get(&QualifiedTableRef {
-            schema_name: &schema_name,
-            table_name: &table_name,
-        });
-
         // NOTE: It's important that we order by ordinal_position ASC since we rely on this as
         // the ordering in which columns are returned in a row.
         let column_q = format!(
@@ -190,53 +263,6 @@ where
         let column_rows = conn
             .exec::<InfoSchema, _, _>(column_q, (&table_name, &schema_name))
             .await?;
-
-        let mut columns = Vec::with_capacity(column_rows.len());
-        for info in column_rows {
-            // If this column is designated as a text column and of a supported text-column type
-            // treat it as a string and skip type parsing.
-            if let Some(text_columns) = table_text_cols {
-                if text_columns.contains(&info.column_name.as_str()) {
-                    match parse_as_text_column(&info, &schema_name, &table_name) {
-                        Err(err) => error_cols.push(err),
-                        Ok((scalar_type, meta)) => columns.push(MySqlColumnDesc {
-                            name: info.column_name,
-                            column_type: Some(ColumnType {
-                                scalar_type,
-                                nullable: &info.is_nullable == "YES",
-                            }),
-                            meta,
-                        }),
-                    }
-                    continue;
-                }
-            }
-
-            // If this column is ignored, use None for the column type to signal that it should be.
-            if let Some(ignore_cols) = table_ignore_cols {
-                if ignore_cols.contains(&info.column_name.as_str()) {
-                    columns.push(MySqlColumnDesc {
-                        name: info.column_name,
-                        column_type: None,
-                        meta: None,
-                    });
-                    continue;
-                }
-            }
-
-            // Collect the parsed data types or errors for later reporting.
-            match parse_data_type(&info, &schema_name, &table_name) {
-                Err(err) => error_cols.push(err),
-                Ok(scalar_type) => columns.push(MySqlColumnDesc {
-                    name: info.column_name,
-                    column_type: Some(ColumnType {
-                        scalar_type,
-                        nullable: &info.is_nullable == "YES",
-                    }),
-                    meta: None,
-                }),
-            }
-        }
 
         // Query for primary key and unique constraints that do not contain expressions / functional key parts.
         // When a constraint contains expressions, the column_name field is NULL.
@@ -278,19 +304,14 @@ where
             });
         }
 
-        tables.push(MySqlTableDesc {
+        tables.push(MySqlTableSchema {
             schema_name,
             name: table_name,
-            columns,
+            columns: column_rows,
             keys,
         });
     }
 
-    if error_cols.len() > 0 {
-        Err(MySqlError::UnsupportedDataTypes {
-            columns: error_cols,
-        })?;
-    }
     Ok(tables)
 }
 

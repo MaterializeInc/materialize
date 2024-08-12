@@ -7,15 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use maplit::btreemap;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
-
+use mz_mysql_util::{pack_mysql_row, MySqlError};
+use mz_ore::iter::IteratorExt;
+use mz_repr::Row;
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::mysql::GtidPartition;
 use timely::progress::Timestamp;
 use tracing::trace;
-
-use mz_mysql_util::{pack_mysql_row, MySqlError};
-use mz_repr::Row;
-use mz_storage_types::sources::mysql::GtidPartition;
 
 use crate::source::types::SourceMessage;
 
@@ -90,22 +90,24 @@ pub(super) async fn handle_query_event(
                         &ctx.config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                if let Some((err_table, err)) = verify_schemas(&mut *conn, &[(&table, info)])
-                    .await?
-                    .into_iter()
-                    .next()
+                for (err_output, err) in
+                    verify_schemas(&mut *conn, btreemap! { &table => info }).await?
                 {
-                    assert_eq!(err_table, &table, "Unexpected table verification error");
                     trace!(%id, "timely-{worker_id} DDL change \
-                           verification error for {table:?}: {err:?}");
+                           verification error for {table:?}[{}]: {err:?}",
+                           err_output.output_index);
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     ctx.data_output
                         .give_fueled(
                             &gtid_cap,
-                            ((info.output_index, Err(err.into())), new_gtid.clone(), 1),
+                            (
+                                (err_output.output_index, Err(err.into())),
+                                new_gtid.clone(),
+                                1,
+                            ),
                         )
                         .await;
-                    ctx.errored_tables.insert(table.clone());
+                    ctx.errored_outputs.insert(err_output.output_index);
                 }
             }
         }
@@ -122,27 +124,31 @@ pub(super) async fn handle_query_event(
             let expected = ctx
                 .table_info
                 .iter()
-                .filter(|(t, _)| !ctx.errored_tables.contains(t))
-                .collect::<Vec<_>>();
-            let schema_errors = verify_schemas(&mut *conn, &expected).await?;
+                .map(|(t, info)| {
+                    (
+                        t,
+                        info.iter()
+                            .filter(|output| !ctx.errored_outputs.contains(&output.output_index)),
+                    )
+                })
+                .collect();
+            let schema_errors = verify_schemas(&mut *conn, expected).await?;
             is_complete_event = true;
-            for (dropped_table, err) in schema_errors {
-                if ctx.table_info.contains_key(dropped_table)
-                    && !ctx.errored_tables.contains(dropped_table)
-                {
-                    trace!(%id, "timely-{worker_id} DDL change \
-                           dropped table: {dropped_table:?}: {err:?}");
-                    if let Some(info) = ctx.table_info.get(dropped_table) {
-                        let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                        ctx.data_output
-                            .give_fueled(
-                                &gtid_cap,
-                                ((info.output_index, Err(err.into())), new_gtid.clone(), 1),
-                            )
-                            .await;
-                        ctx.errored_tables.insert(dropped_table.clone());
-                    }
-                }
+            for (dropped_output, err) in schema_errors {
+                trace!(%id, "timely-{worker_id} DDL change \
+                           dropped output: {dropped_output:?}: {err:?}");
+                let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+                ctx.data_output
+                    .give_fueled(
+                        &gtid_cap,
+                        (
+                            (dropped_output.output_index, Err(err.into())),
+                            new_gtid.clone(),
+                            1,
+                        ),
+                    )
+                    .await;
+                ctx.errored_outputs.insert(dropped_output.output_index);
             }
         }
         // Detect `TRUNCATE [TABLE] <tbl>` statements
@@ -165,22 +171,24 @@ pub(super) async fn handle_query_event(
                        for {table:?}");
                 if let Some(info) = ctx.table_info.get(&table) {
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    ctx.data_output
-                        .give_fueled(
-                            &gtid_cap,
-                            (
+                    for output in info {
+                        ctx.data_output
+                            .give_fueled(
+                                &gtid_cap,
                                 (
-                                    info.output_index,
-                                    Err(DataflowError::from(DefiniteError::TableTruncated(
-                                        table.to_string(),
-                                    ))),
+                                    (
+                                        output.output_index,
+                                        Err(DataflowError::from(DefiniteError::TableTruncated(
+                                            table.to_string(),
+                                        ))),
+                                    ),
+                                    new_gtid.clone(),
+                                    1,
                                 ),
-                                new_gtid.clone(),
-                                1,
-                            ),
-                        )
-                        .await;
-                    ctx.errored_tables.insert(table);
+                            )
+                            .await;
+                        ctx.errored_outputs.insert(output.output_index);
+                    }
                 }
             }
         }
@@ -224,14 +232,16 @@ pub(super) async fn handle_rows_event(
         &*table_map_event.table_name(),
     );
 
-    if ctx.errored_tables.contains(&table) {
-        return Ok(());
-    }
-
-    let (output_index, table_desc) = match &ctx.table_info.get(&table) {
-        Some(info) => (info.output_index, &info.desc),
+    let outputs = ctx.table_info.get(&table).map(|outputs| {
+        outputs
+            .into_iter()
+            .filter(|output| !ctx.errored_outputs.contains(&output.output_index))
+            .collect::<Vec<_>>()
+    });
+    let outputs = match outputs {
+        Some(outputs) => outputs,
         None => {
-            // We don't know about this table, so skip this event
+            // We don't know about this table, or there are no un-errored outputs for it.
             return Ok(());
         }
     };
@@ -267,36 +277,39 @@ pub(super) async fn handle_rows_event(
         let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
-            let event = match pack_mysql_row(&mut final_row, row, table_desc) {
-                Ok(row) => Ok(SourceMessage {
-                    key: Row::default(),
-                    value: row,
-                    metadata: Row::default(),
-                }),
-                // Produce a DefiniteError in the stream for any rows that fail to decode
-                Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
-                    DefiniteError::ValueDecodeError(err.to_string()),
-                )),
-                Err(err) => Err(err)?,
-            };
+            for (output, row_val) in outputs.iter().repeat_clone(row) {
+                let event = match pack_mysql_row(&mut final_row, row_val, &output.desc) {
+                    Ok(row) => Ok(SourceMessage {
+                        key: Row::default(),
+                        value: row,
+                        metadata: Row::default(),
+                    }),
+                    // Produce a DefiniteError in the stream for any rows that fail to decode
+                    Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
+                        DefiniteError::ValueDecodeError(err.to_string()),
+                    )),
+                    Err(err) => Err(err)?,
+                };
 
-            let data = (output_index, event);
+                let data = (output.output_index, event);
 
-            // Rewind this update if it was already present in the snapshot
-            if let Some((_rewind_data_cap, rewind_req)) = ctx.rewinds.get(&table) {
-                if !rewind_req.snapshot_upper.less_equal(new_gtid) {
-                    rewind_count += 1;
-                    event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
+                // Rewind this update if it was already present in the snapshot
+                if let Some((_rewind_data_cap, rewind_req)) = ctx.rewinds.get(&output.output_index)
+                {
+                    if !rewind_req.snapshot_upper.less_equal(new_gtid) {
+                        rewind_count += 1;
+                        event_buffer.push((data.clone(), GtidPartition::minimum(), -diff));
+                    }
                 }
+                if diff > 0 {
+                    additions += 1;
+                } else {
+                    retractions += 1;
+                }
+                ctx.data_output
+                    .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff))
+                    .await;
             }
-            if diff > 0 {
-                additions += 1;
-            } else {
-                retractions += 1;
-            }
-            ctx.data_output
-                .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff))
-                .await;
         }
     }
 
@@ -307,8 +320,8 @@ pub(super) async fn handle_rows_event(
     // Instead, we buffer rewind events into a reusable buffer, and emit all at once here at the end.
 
     if !event_buffer.is_empty() {
-        let (rewind_data_cap, _) = ctx.rewinds.get(&table).unwrap();
         for d in event_buffer.drain(..) {
+            let (rewind_data_cap, _) = ctx.rewinds.get(&d.0 .0).unwrap();
             ctx.data_output.give_fueled(rewind_data_cap, d).await;
         }
     }
