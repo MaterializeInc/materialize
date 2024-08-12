@@ -42,7 +42,9 @@ def workflow_test_version_skips(c: Composition) -> None:
 
     # If the current version is `v0.X.0-dev`, two_minor_releases_before will be `v0.X-2.Y`.
     # where Y is the most recent patch version of the minor version.
-    last_two_minor_releases = get_minor_mz_versions_listed_in_docs()[-2:]
+    last_two_minor_releases = get_minor_mz_versions_listed_in_docs(
+        respect_released_tag=True
+    )[-2:]
     two_minor_releases_before = last_two_minor_releases[-2]
     one_minor_release_before = last_two_minor_releases[-1]
 

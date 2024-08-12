@@ -314,14 +314,14 @@ def get_published_minor_mz_versions(
     return sorted(minor_versions.values(), reverse=newest_first)
 
 
-def get_minor_mz_versions_listed_in_docs() -> list[MzVersion]:
+def get_minor_mz_versions_listed_in_docs(respect_released_tag: bool) -> list[MzVersion]:
     """
     Get the latest patch version for every minor version in ascending order.
     Use this version if it is important whether a tag was introduced before or after creating this branch.
 
     See also: #get_published_minor_mz_versions()
     """
-    return VersionsFromDocs().minor_versions()
+    return VersionsFromDocs(respect_released_tag).minor_versions()
 
 
 def get_all_mz_versions(
@@ -341,13 +341,15 @@ def get_all_mz_versions(
     ]
 
 
-def get_all_mz_versions_listed_in_docs() -> list[MzVersion]:
+def get_all_mz_versions_listed_in_docs(
+    respect_released_tag: bool,
+) -> list[MzVersion]:
     """
     Get all mz versions based on docs. Versions known to be invalid are excluded.
 
     See also: #get_all_mz_versions()
     """
-    return VersionsFromDocs().all_versions()
+    return VersionsFromDocs(respect_released_tag).all_versions()
 
 
 def get_all_published_mz_versions(
@@ -460,35 +462,34 @@ class VersionsFromDocs:
     Only versions that declare `versiond: true` in their
     frontmatter are considered.
 
-    >>> len(VersionsFromDocs().all_versions()) > 0
+    >>> len(VersionsFromDocs(respect_released_tag=True).all_versions()) > 0
     True
 
-    >>> len(VersionsFromDocs().minor_versions()) > 0
+    >>> len(VersionsFromDocs(respect_released_tag=True).minor_versions()) > 0
     True
 
-    >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
+    >>> len(VersionsFromDocs(respect_released_tag=True).patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
     4
 
-    >>> min(VersionsFromDocs().all_versions())
+    >>> min(VersionsFromDocs(respect_released_tag=True).all_versions())
     MzVersion(major=0, minor=27, patch=0, prerelease=None, build=None)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, respect_released_tag: bool) -> None:
         files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
         self.versions = []
         current_version = MzVersion.parse_cargo()
         for f in files:
             base = f.stem
             metadata = frontmatter.load(f)
+            if respect_released_tag and not metadata.get("released", False):
+                continue
 
             current_patch = metadata.get("patch", 0)
 
             for patch in range(current_patch + 1):
                 version = MzVersion.parse_mz(f"{base}.{patch}")
-                # We don't consider the "released:" field since it can be out of
-                # date, instead use any version that is less than our current
-                # version:
-                if version >= current_version:
+                if not respect_released_tag and version >= current_version:
                     continue
                 if version not in INVALID_VERSIONS:
                     self.versions.append(version)
