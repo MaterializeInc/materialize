@@ -291,7 +291,9 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      # TODO(def-): Investigate timeout in `SELECT * from remote1`
+      # queue: hetzner-aarch64-8cpu-16gb
+      queue: linux-aarch64
 
   - id: sqllogictest-fast
     label: Fast SQL logic tests %N
