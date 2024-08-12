@@ -165,10 +165,10 @@ pub enum LoadGenerator {
 pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
 
 /// Returns the view of a load-generator source given an external reference
-/// from a source-export statement, which is generated during purification
+/// from a `CREATE SUBSOURCE` statement, which is generated during purification
 /// by the `load_generator_ast_to_generator` function such that the
 /// external reference is (LOAD_GENERATOR_DATABASE_NAME, LoadGenerator::schema_name(), view_name)
-pub fn external_reference_to_output(
+pub fn subsource_reference_to_output(
     external_reference: &UnresolvedItemName,
 ) -> LoadGeneratorOutput {
     let inner = &external_reference.0;
@@ -177,6 +177,19 @@ pub fn external_reference_to_output(
         "auction" => LoadGeneratorOutput::Auction(AuctionView::from(inner[2].as_str())),
         "marketing" => LoadGeneratorOutput::Marketing(MarketingView::from(inner[2].as_str())),
         "tpch" => LoadGeneratorOutput::Tpch(TpchView::from(inner[2].as_str())),
+        _ => LoadGeneratorOutput::Default,
+    }
+}
+
+/// Returns the view of a load-generator source given an external reference
+/// from a `CREATE TABLE .. FROM SOURCE` statement, which is generated during
+/// purification such that the external reference is (LoadGenerator::schema_name(), view_name)
+pub fn table_reference_to_output(external_reference: &UnresolvedItemName) -> LoadGeneratorOutput {
+    let inner = &external_reference.0;
+    match inner[0].as_str() {
+        "auction" => LoadGeneratorOutput::Auction(AuctionView::from(inner[1].as_str())),
+        "marketing" => LoadGeneratorOutput::Marketing(MarketingView::from(inner[1].as_str())),
+        "tpch" => LoadGeneratorOutput::Tpch(TpchView::from(inner[1].as_str())),
         _ => LoadGeneratorOutput::Default,
     }
 }

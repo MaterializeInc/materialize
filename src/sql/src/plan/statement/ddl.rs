@@ -140,9 +140,9 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::{
@@ -399,6 +399,7 @@ pub fn plan_create_table(
         defaults,
         temporary,
         compaction_window,
+        data_source: TableDataSource::TableWrites,
     };
     Ok(Plan::CreateTable(CreateTablePlan {
         name,
@@ -1411,9 +1412,10 @@ pub fn plan_create_subsource(
             }),
             SourceExportStatementDetails::LoadGenerator => {
                 SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    output: mz_storage_types::sources::load_generator::external_reference_to_output(
-                        &external_reference,
-                    ),
+                    output:
+                        mz_storage_types::sources::load_generator::subsource_reference_to_output(
+                            &external_reference,
+                        ),
                 })
             }
         };
@@ -1457,28 +1459,100 @@ generate_extracted_config!(
 );
 
 pub fn plan_create_table_from_source(
-    _scx: &StatementContext,
+    scx: &StatementContext,
     stmt: CreateTableFromSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let CreateTableFromSourceStatement {
-        name: _,
-        columns: _,
-        constraints: _,
-        if_not_exists: _,
-        source: _,
-        external_reference: _,
+        name,
+        columns,
+        constraints,
+        if_not_exists,
+        source,
+        external_reference,
         with_options,
     } = &stmt;
 
     let TableFromSourceOptionExtracted {
-        text_columns: _,
-        ignore_columns: _,
-        details: _,
+        text_columns,
+        ignore_columns,
+        details,
         seen: _,
     } = with_options.clone().try_into()?;
 
-    // TODO(roshan): Implement this
-    bail_unsupported!("CREATE TABLE .. FROM SOURCE")
+    let source_item = scx.resolve_item(ast::RawItemName::Name(source.clone()))?;
+    let ingestion_id = source_item.id();
+
+    let desc = plan_source_export_desc(scx, name, columns, constraints)?;
+
+    // Decode the details option stored on the statement, which contains information
+    // created during the purification process.
+    let details = details
+        .as_ref()
+        .ok_or_else(|| sql_err!("internal error: source-export missing details"))?;
+    let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
+    let details =
+        ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+    let details =
+        SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+    let details = match details {
+        SourceExportStatementDetails::Postgres { table } => {
+            SourceExportDetails::Postgres(PostgresSourceExportDetails {
+                column_casts: crate::pure::postgres::generate_column_casts(
+                    scx,
+                    &table,
+                    &text_columns,
+                )?,
+                table,
+            })
+        }
+        SourceExportStatementDetails::MySql {
+            table,
+            initial_gtid_set,
+        } => SourceExportDetails::MySql(MySqlSourceExportDetails {
+            table,
+            initial_gtid_set,
+            text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
+            ignore_columns: ignore_columns
+                .into_iter()
+                .map(|c| c.into_string())
+                .collect(),
+        }),
+        SourceExportStatementDetails::LoadGenerator => {
+            // TODO(roshan): We shouldn't need to use the external_reference here, instead
+            // purification should store the correct output on the details protobuf like we
+            // do for Postgres and MySQL above.
+            SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                output: mz_storage_types::sources::load_generator::table_reference_to_output(
+                    external_reference,
+                ),
+            })
+        }
+    };
+    let data_source = DataSourceDesc::IngestionExport {
+        ingestion_id,
+        external_reference: external_reference.clone(),
+        details,
+    };
+
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+    let if_not_exists = *if_not_exists;
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateTableFromSource(stmt))?;
+
+    let table = Table {
+        create_sql,
+        desc,
+        defaults: vec![],
+        temporary: false,
+        compaction_window: None,
+        data_source: TableDataSource::DataSource(data_source),
+    };
+
+    Ok(Plan::CreateTable(CreateTablePlan {
+        name,
+        table,
+        if_not_exists,
+    }))
 }
 
 generate_extracted_config!(
