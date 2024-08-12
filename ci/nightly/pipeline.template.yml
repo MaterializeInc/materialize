@@ -1538,7 +1538,9 @@ steps:
     env:
       CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+      # queue: hetzner-aarch64-8cpu-16gb
+      queue: linux-aarch64-medium
     plugins:
       - ./ci/plugins/cloudtest:
           args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
