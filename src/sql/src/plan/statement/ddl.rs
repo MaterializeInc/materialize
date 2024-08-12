@@ -51,7 +51,7 @@ use mz_sql_parser::ast::{
     AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnOption, CommentObjectType, CommentStatement,
+    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
     CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
@@ -1222,6 +1222,112 @@ pub fn plan_create_source(
     }))
 }
 
+fn plan_source_export_desc(
+    scx: &StatementContext,
+    name: &UnresolvedItemName,
+    columns: &Vec<ColumnDef<Aug>>,
+    constraints: &Vec<TableConstraint<Aug>>,
+) -> Result<RelationDesc, PlanError> {
+    let names: Vec<_> = columns
+        .iter()
+        .map(|c| normalize::column_name(c.name.clone()))
+        .collect();
+
+    if let Some(dup) = names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    // Build initial relation type that handles declared data types
+    // and NOT NULL constraints.
+    let mut column_types = Vec::with_capacity(columns.len());
+    let mut keys = Vec::new();
+
+    for (i, c) in columns.into_iter().enumerate() {
+        let aug_data_type = &c.data_type;
+        let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
+        let mut nullable = true;
+        for option in &c.options {
+            match &option.option {
+                ColumnOption::NotNull => nullable = false,
+                ColumnOption::Default(_) => {
+                    bail_unsupported!("Source export with default value")
+                }
+                ColumnOption::Unique { is_primary } => {
+                    keys.push(vec![i]);
+                    if *is_primary {
+                        nullable = false;
+                    }
+                }
+                other => {
+                    bail_unsupported!(format!("Source export with column constraint: {}", other))
+                }
+            }
+        }
+        column_types.push(ty.nullable(nullable));
+    }
+
+    let mut seen_primary = false;
+    'c: for constraint in constraints {
+        match constraint {
+            TableConstraint::Unique {
+                name: _,
+                columns,
+                is_primary,
+                nulls_not_distinct,
+            } => {
+                if seen_primary && *is_primary {
+                    sql_bail!(
+                        "multiple primary keys for source export {} are not allowed",
+                        name.to_ast_string_stable()
+                    );
+                }
+                seen_primary = *is_primary || seen_primary;
+
+                let mut key = vec![];
+                for column in columns {
+                    let column = normalize::column_name(column.clone());
+                    match names.iter().position(|name| *name == column) {
+                        None => sql_bail!("unknown column in constraint: {}", column),
+                        Some(i) => {
+                            let nullable = &mut column_types[i].nullable;
+                            if *is_primary {
+                                if *nulls_not_distinct {
+                                    sql_bail!(
+                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
+                                    );
+                                }
+                                *nullable = false;
+                            } else if !(*nulls_not_distinct || !*nullable) {
+                                // Non-primary key unique constraints are only keys if all of their
+                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
+                                break 'c;
+                            }
+
+                            key.push(i);
+                        }
+                    }
+                }
+
+                if *is_primary {
+                    keys.insert(0, key);
+                } else {
+                    keys.push(key);
+                }
+            }
+            TableConstraint::ForeignKey { .. } => {
+                bail_unsupported!("Source export with a foreign key")
+            }
+            TableConstraint::Check { .. } => {
+                bail_unsupported!("Source export with a check constraint")
+            }
+        }
+    }
+
+    let typ = RelationType::new(column_types).with_keys(keys);
+    let desc = RelationDesc::new(typ, names);
+    Ok(desc)
+}
+
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
@@ -1262,103 +1368,7 @@ pub fn plan_create_subsource(
         "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
     );
 
-    let names: Vec<_> = columns
-        .iter()
-        .map(|c| normalize::column_name(c.name.clone()))
-        .collect();
-
-    if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
-    }
-
-    // Build initial relation type that handles declared data types
-    // and NOT NULL constraints.
-    let mut column_types = Vec::with_capacity(columns.len());
-    let mut keys = Vec::new();
-
-    for (i, c) in columns.into_iter().enumerate() {
-        let aug_data_type = &c.data_type;
-        let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
-        let mut nullable = true;
-        for option in &c.options {
-            match &option.option {
-                ColumnOption::NotNull => nullable = false,
-                ColumnOption::Default(_) => {
-                    bail_unsupported!("Subsources cannot have default values")
-                }
-                ColumnOption::Unique { is_primary } => {
-                    keys.push(vec![i]);
-                    if *is_primary {
-                        nullable = false;
-                    }
-                }
-                other => {
-                    bail_unsupported!(format!(
-                        "CREATE SUBSOURCE with column constraint: {}",
-                        other
-                    ))
-                }
-            }
-        }
-        column_types.push(ty.nullable(nullable));
-    }
-
-    let mut seen_primary = false;
-    'c: for constraint in constraints {
-        match constraint {
-            TableConstraint::Unique {
-                name: _,
-                columns,
-                is_primary,
-                nulls_not_distinct,
-            } => {
-                if seen_primary && *is_primary {
-                    sql_bail!(
-                        "multiple primary keys for source {} are not allowed",
-                        name.to_ast_string_stable()
-                    );
-                }
-                seen_primary = *is_primary || seen_primary;
-
-                let mut key = vec![];
-                for column in columns {
-                    let column = normalize::column_name(column.clone());
-                    match names.iter().position(|name| *name == column) {
-                        None => sql_bail!("unknown column in constraint: {}", column),
-                        Some(i) => {
-                            let nullable = &mut column_types[i].nullable;
-                            if *is_primary {
-                                if *nulls_not_distinct {
-                                    sql_bail!(
-                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
-                                    );
-                                }
-                                *nullable = false;
-                            } else if !(*nulls_not_distinct || !*nullable) {
-                                // Non-primary key unique constraints are only keys if all of their
-                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
-                                break 'c;
-                            }
-
-                            key.push(i);
-                        }
-                    }
-                }
-
-                if *is_primary {
-                    keys.insert(0, key);
-                } else {
-                    keys.push(key);
-                }
-            }
-            TableConstraint::ForeignKey { .. } => {
-                bail_unsupported!("CREATE SUBSOURCE with a foreign key")
-            }
-            TableConstraint::Check { .. } => {
-                bail_unsupported!("CREATE SUBSOURCE with a check constraint")
-            }
-        }
-    }
+    let desc = plan_source_export_desc(scx, name, columns, constraints)?;
 
     let data_source = if let Some(source_reference) = of_source {
         // This is a subsource with the "natural" dependency order, i.e. it is
@@ -1422,9 +1432,6 @@ pub fn plan_create_subsource(
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
-
-    let typ = RelationType::new(column_types).with_keys(keys);
-    let desc = RelationDesc::new(typ, names);
 
     let source = Source {
         create_sql,
