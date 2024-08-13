@@ -236,6 +236,13 @@ pub trait RustType<Proto>: Sized {
     /// Convert a `Self` into a `Proto` value.
     fn into_proto(&self) -> Proto;
 
+    /// A zero clone version of [`Self::into_proto`] that types can
+    /// optionally implement, otherwise, the default implementation
+    /// delegates to [`Self::into_proto`].
+    fn into_proto_owned(self) -> Proto {
+        self.into_proto()
+    }
+
     /// Consume and convert a `Proto` back into a `Self` value.
     ///
     /// Since `Proto` can be "bigger" than the original, this

@@ -128,6 +128,8 @@ pub(crate) enum Mode {
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
 pub(crate) enum FenceableEpoch {
+    /// The most recent epoch seen by an initializing catalog. This variant cannot be fenced.
+    Initializing(Option<Epoch>),
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -141,6 +143,7 @@ impl FenceableEpoch {
     /// Returns the current epoch if it is not fenced, otherwise returns an error.
     fn validate(&self) -> Result<Option<Epoch>, DurableCatalogError> {
         match self {
+            FenceableEpoch::Initializing(epoch) => Ok(epoch.clone()),
             FenceableEpoch::Unfenced(epoch) => Ok(epoch.clone()),
             FenceableEpoch::Fenced {
                 current_epoch,
@@ -154,6 +157,7 @@ impl FenceableEpoch {
     /// Returns the current epoch.
     fn epoch(&self) -> Option<Epoch> {
         match self {
+            FenceableEpoch::Initializing(epoch) => epoch.clone(),
             FenceableEpoch::Unfenced(epoch) => epoch.clone(),
             FenceableEpoch::Fenced {
                 current_epoch,
@@ -165,6 +169,14 @@ impl FenceableEpoch {
     /// Returns `Err` if `epoch` fences out `self`, `Ok` otherwise.
     fn maybe_fence(&mut self, epoch: Epoch) -> Result<(), DurableCatalogError> {
         match self {
+            FenceableEpoch::Initializing(Some(current_epoch)) => {
+                if epoch > *current_epoch {
+                    *self = FenceableEpoch::Initializing(Some(epoch));
+                }
+            }
+            FenceableEpoch::Initializing(None) => {
+                *self = FenceableEpoch::Initializing(Some(epoch));
+            }
             FenceableEpoch::Unfenced(Some(current_epoch)) => {
                 if epoch > *current_epoch {
                     *self = FenceableEpoch::Fenced {
@@ -185,6 +197,16 @@ impl FenceableEpoch {
         }
 
         Ok(())
+    }
+
+    /// Mark epoch as initialized if currently initializing, otherwise do nothing.
+    fn mark_initialized(&mut self) {
+        match self {
+            FenceableEpoch::Initializing(epoch) => {
+                *self = FenceableEpoch::Unfenced(*epoch);
+            }
+            FenceableEpoch::Unfenced(_) | FenceableEpoch::Fenced { .. } => {}
+        }
     }
 }
 
@@ -694,6 +716,9 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         current_epoch: &mut FenceableEpoch,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, DurableCatalogError> {
+        // TODO(jkosh44) It's a bit unfortunate that we have to clone all updates to attempt to
+        // convert them into a `StateUpdateKind` and cache a very small subset of them. It would
+        // be better if we could figure out a way not to clone everything.
         if let Ok(kind) =
             <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(update.kind.clone())
         {
@@ -715,7 +740,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                 }
                 (StateUpdateKind::Epoch(epoch), 1) => {
                     current_epoch.maybe_fence(epoch)?;
-                    return Ok(Some(update));
                 }
                 _ => {}
             }
@@ -827,20 +851,6 @@ impl UnopenedPersistCatalogState {
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
-        // Sniff out most recent epoch.
-        let epoch = snapshot
-            .iter()
-            .rev()
-            .filter(|(_, _, diff)| *diff == 1)
-            .filter_map(|(kind, _, _)| {
-                <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(kind.clone()).ok()
-            })
-            .filter_map(|kind| match kind {
-                StateUpdateKind::Epoch(epoch) => Some(epoch),
-                _ => None,
-            })
-            .next();
-        let epoch = FenceableEpoch::Unfenced(epoch);
 
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
@@ -854,13 +864,14 @@ impl UnopenedPersistCatalogState {
             snapshot: Vec::new(),
             update_applier: UnopenedCatalogStateInner::new(organization_id),
             upper,
-            epoch,
+            epoch: FenceableEpoch::Initializing(None),
             metrics,
         };
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         handle.apply_updates(updates)?;
+        handle.epoch.mark_initialized();
 
         Ok(handle)
     }
@@ -1255,6 +1266,8 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 self.storage_usage_events.push((key, update.diff));
                 Ok(None)
             }
+            // Nothing to due for epoch retractions but wait for the next insertion.
+            (StateUpdateKind::Epoch(_), -1) => Ok(None),
             (StateUpdateKind::Epoch(epoch), 1) => {
                 current_epoch.maybe_fence(epoch)?;
                 Ok(None)
@@ -1734,7 +1747,7 @@ impl UnopenedPersistCatalogState {
             .into_iter()
             .map(|((k, v), _, _)| (T::update(k, v), -1))
             .collect();
-        updates.push((T::update(key.clone(), value.clone()), 1));
+        updates.push((T::update(key, value), 1));
         // We must fence out all other catalogs since we are writing.
         let fence_updates = self.increment_epoch()?;
         updates.extend(fence_updates);

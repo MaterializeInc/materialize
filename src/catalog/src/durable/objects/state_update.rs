@@ -40,6 +40,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
 use proptest_derive::Arbitrary;
+use tracing::error;
 
 use crate::durable::debug::CollectionType;
 use crate::durable::objects::serialization::proto;
@@ -277,19 +278,19 @@ impl StateUpdateKind {
 pub struct StateUpdateKindJson(Jsonb);
 
 impl StateUpdateKindJson {
-    pub(crate) fn from_serde<S: serde::Serialize>(s: &S) -> Self {
+    pub(crate) fn from_serde<S: serde::Serialize>(s: S) -> Self {
         let serde_value = serde_json::to_value(s).expect("valid json");
         let row =
             Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
         StateUpdateKindJson(row)
     }
 
-    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
+    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(self) -> D {
         self.try_to_serde().expect("jsonb should roundtrip")
     }
 
     pub(crate) fn try_to_serde<D: serde::de::DeserializeOwned>(
-        &self,
+        self,
     ) -> Result<D, serde_json::error::Error> {
         let serde_value = self.0.as_ref().to_serde_json();
         serde_json::from_value::<D>(serde_value)
@@ -452,58 +453,66 @@ impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
 
 impl From<StateUpdateKind> for StateUpdateKindJson {
     fn from(value: StateUpdateKind) -> Self {
-        let kind = value.into_proto();
+        let kind = value.into_proto_owned();
         let kind = kind.kind.expect("kind should be set");
-        StateUpdateKindJson::from_serde(&kind)
+        StateUpdateKindJson::from_serde(kind)
     }
 }
 
+// Be very careful about changing these implementations. The default impl of `into_proto_owned`
+// calls `into_proto`, and this impl of `into_proto` calls `into_proto_owned`. It would be very
+// easy to accidentally cause infinite recursion.
 impl RustType<proto::StateUpdateKind> for StateUpdateKind {
     fn into_proto(&self) -> proto::StateUpdateKind {
+        error!("unexpected clone of catalog data");
+        self.clone().into_proto_owned()
+    }
+
+    fn into_proto_owned(self) -> proto::StateUpdateKind {
         proto::StateUpdateKind {
             kind: Some(match self {
                 StateUpdateKind::AuditLog(key, _value) => {
                     proto::state_update_kind::Kind::AuditLog(proto::state_update_kind::AuditLog {
-                        key: Some(key.clone()),
+                        key: Some(key),
                     })
                 }
                 StateUpdateKind::Cluster(key, value) => {
                     proto::state_update_kind::Kind::Cluster(proto::state_update_kind::Cluster {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::ClusterReplica(key, value) => {
                     proto::state_update_kind::Kind::ClusterReplica(
                         proto::state_update_kind::ClusterReplica {
-                            key: Some(key.clone()),
-                            value: Some(value.clone()),
+                            key: Some(key),
+                            value: Some(value),
                         },
                     )
                 }
                 StateUpdateKind::Comment(key, value) => {
                     proto::state_update_kind::Kind::Comment(proto::state_update_kind::Comment {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::Config(key, value) => {
                     proto::state_update_kind::Kind::Config(proto::state_update_kind::Config {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::Database(key, value) => {
                     proto::state_update_kind::Kind::Database(proto::state_update_kind::Database {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::DefaultPrivilege(key, value) => {
                     proto::state_update_kind::Kind::DefaultPrivileges(
                         proto::state_update_kind::DefaultPrivileges {
-                            key: Some(key.clone()),
-                            value: Some(value.clone()),
+                            key: Some(key),
+                            value: Some(value),
                         },
                     )
                 }
@@ -514,93 +523,87 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 }
                 StateUpdateKind::IdAllocator(key, value) => {
                     proto::state_update_kind::Kind::IdAlloc(proto::state_update_kind::IdAlloc {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::IntrospectionSourceIndex(key, value) => {
                     proto::state_update_kind::Kind::ClusterIntrospectionSourceIndex(
                         proto::state_update_kind::ClusterIntrospectionSourceIndex {
-                            key: Some(key.clone()),
-                            value: Some(value.clone()),
+                            key: Some(key),
+                            value: Some(value),
                         },
                     )
                 }
                 StateUpdateKind::Item(key, value) => {
                     proto::state_update_kind::Kind::Item(proto::state_update_kind::Item {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::Role(key, value) => {
                     proto::state_update_kind::Kind::Role(proto::state_update_kind::Role {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::Schema(key, value) => {
                     proto::state_update_kind::Kind::Schema(proto::state_update_kind::Schema {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::Setting(key, value) => {
                     proto::state_update_kind::Kind::Setting(proto::state_update_kind::Setting {
-                        key: Some(key.clone()),
-                        value: Some(value.clone()),
+                        key: Some(key),
+                        value: Some(value),
                     })
                 }
                 StateUpdateKind::StorageUsage(key, _value) => {
                     proto::state_update_kind::Kind::StorageUsage(
-                        proto::state_update_kind::StorageUsage {
-                            key: Some(key.clone()),
-                        },
+                        proto::state_update_kind::StorageUsage { key: Some(key) },
                     )
                 }
                 StateUpdateKind::SystemConfiguration(key, value) => {
                     proto::state_update_kind::Kind::ServerConfiguration(
                         proto::state_update_kind::ServerConfiguration {
-                            key: Some(key.clone()),
-                            value: Some(value.clone()),
+                            key: Some(key),
+                            value: Some(value),
                         },
                     )
                 }
                 StateUpdateKind::SystemObjectMapping(key, value) => {
                     proto::state_update_kind::Kind::GidMapping(
                         proto::state_update_kind::GidMapping {
-                            key: Some(key.clone()),
-                            value: Some(value.clone()),
+                            key: Some(key),
+                            value: Some(value),
                         },
                     )
                 }
                 StateUpdateKind::SystemPrivilege(key, value) => {
                     proto::state_update_kind::Kind::SystemPrivileges(
                         proto::state_update_kind::SystemPrivileges {
-                            key: Some(key.clone()),
-                            value: Some(value.clone()),
+                            key: Some(key),
+                            value: Some(value),
                         },
                     )
                 }
                 StateUpdateKind::StorageCollectionMetadata(key, value) => {
                     proto::state_update_kind::Kind::StorageCollectionMetadata(
                         proto::state_update_kind::StorageCollectionMetadata {
-                            key: Some(key.clone()),
-                            value: Some(value.clone()),
+                            key: Some(key),
+                            value: Some(value),
                         },
                     )
                 }
                 StateUpdateKind::UnfinalizedShard(key, ()) => {
                     proto::state_update_kind::Kind::UnfinalizedShard(
-                        proto::state_update_kind::UnfinalizedShard {
-                            key: Some(key.clone()),
-                        },
+                        proto::state_update_kind::UnfinalizedShard { key: Some(key) },
                     )
                 }
                 StateUpdateKind::TxnWalShard((), value) => {
                     proto::state_update_kind::Kind::TxnWalShard(
-                        proto::state_update_kind::TxnWalShard {
-                            value: Some(value.clone()),
-                        },
+                        proto::state_update_kind::TxnWalShard { value: Some(value) },
                     )
                 }
             }),
