@@ -202,58 +202,6 @@ impl StateUpdate {
     }
 }
 
-/// Version of [`StateUpdateKind`] that is stored directly in persist.
-type PersistStateUpdate = (
-    (Result<SourceData, String>, Result<(), String>),
-    Timestamp,
-    i64,
-);
-
-/// Decodes a [`StateUpdate<StateUpdateKindJson>`] from the `(key, value, ts,
-/// diff)` tuple/update we store in persist.
-impl From<PersistStateUpdate> for StateUpdate<StateUpdateKindJson> {
-    fn from(kvtd: PersistStateUpdate) -> Self {
-        let ((key, val), ts, diff) = kvtd;
-        let (key, ()) = (
-            key.expect("persist decoding error"),
-            val.expect("persist decoding error"),
-        );
-        StateUpdate {
-            kind: StateUpdateKindJson::from(key),
-            ts,
-            diff,
-        }
-    }
-}
-
-impl TryFrom<StateUpdate<StateUpdateKindJson>> for StateUpdate<StateUpdateKind> {
-    type Error = String;
-
-    fn try_from(update: StateUpdate<StateUpdateKindJson>) -> Result<Self, Self::Error> {
-        Ok(StateUpdate {
-            kind: TryInto::try_into(update.kind)?,
-            ts: update.ts,
-            diff: update.diff,
-        })
-    }
-}
-
-impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
-    type Error = DurableCatalogError;
-
-    fn try_from(
-        StateUpdate { kind, ts, diff }: &StateUpdate<StateUpdateKind>,
-    ) -> Result<Self, Self::Error> {
-        let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
-        let update = kind.map(|kind| memory::objects::StateUpdate {
-            kind,
-            ts: ts.clone(),
-            diff: diff.clone().try_into().expect("invalid diff"),
-        });
-        Ok(update)
-    }
-}
-
 /// The contents of a single state update.
 ///
 /// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
@@ -321,6 +269,192 @@ impl StateUpdateKind {
             StateUpdateKind::UnfinalizedShard(_, _) => Some(CollectionType::UnfinalizedShard),
             StateUpdateKind::TxnWalShard(_, _) => Some(CollectionType::TxnWalShard),
         }
+    }
+}
+
+/// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct StateUpdateKindJson(Jsonb);
+
+impl StateUpdateKindJson {
+    pub(crate) fn from_serde<S: serde::Serialize>(s: &S) -> Self {
+        let serde_value = serde_json::to_value(s).expect("valid json");
+        let row =
+            Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
+        StateUpdateKindJson(row)
+    }
+
+    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
+        self.try_to_serde().expect("jsonb should roundtrip")
+    }
+
+    pub(crate) fn try_to_serde<D: serde::de::DeserializeOwned>(
+        &self,
+    ) -> Result<D, serde_json::error::Error> {
+        let serde_value = self.0.as_ref().to_serde_json();
+        serde_json::from_value::<D>(serde_value)
+    }
+}
+
+/// Version of [`StateUpdateKind`] that is stored directly in persist.
+type PersistStateUpdate = (
+    (Result<SourceData, String>, Result<(), String>),
+    Timestamp,
+    i64,
+);
+
+impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
+    type Error = DurableCatalogError;
+
+    fn try_from(
+        StateUpdate { kind, ts, diff }: &StateUpdate<StateUpdateKind>,
+    ) -> Result<Self, Self::Error> {
+        let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
+        let update = kind.map(|kind| memory::objects::StateUpdate {
+            kind,
+            ts: ts.clone(),
+            diff: diff.clone().try_into().expect("invalid diff"),
+        });
+        Ok(update)
+    }
+}
+
+impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
+    type Error = DurableCatalogError;
+
+    fn try_from(kind: &StateUpdateKind) -> Result<Self, Self::Error> {
+        fn into_durable<PK, PV, T>(key: &PK, value: &PV) -> Result<T, DurableCatalogError>
+        where
+            PK: ProtoType<T::Key> + Clone,
+            PV: ProtoType<T::Value> + Clone,
+            T: DurableType,
+        {
+            let key = key.clone().into_rust()?;
+            let value = value.clone().into_rust()?;
+            Ok(T::from_key_value(key, value))
+        }
+
+        Ok(match kind {
+            StateUpdateKind::AuditLog(key, value) => {
+                let audit_log = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::AuditLog(audit_log))
+            }
+            StateUpdateKind::Cluster(key, value) => {
+                let cluster = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Cluster(cluster))
+            }
+            StateUpdateKind::ClusterReplica(key, value) => {
+                let cluster_replica = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClusterReplica(
+                    cluster_replica,
+                ))
+            }
+            StateUpdateKind::Comment(key, value) => {
+                let comment = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Comment(comment))
+            }
+            StateUpdateKind::Database(key, value) => {
+                let database = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Database(database))
+            }
+            StateUpdateKind::DefaultPrivilege(key, value) => {
+                let default_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::DefaultPrivilege(
+                    default_privilege,
+                ))
+            }
+            StateUpdateKind::Item(key, value) => {
+                let item = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Item(item))
+            }
+            StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                let introspection_source_index = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::IntrospectionSourceIndex(
+                    introspection_source_index,
+                ))
+            }
+            StateUpdateKind::Role(key, value) => {
+                let role = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Role(role))
+            }
+            StateUpdateKind::Schema(key, value) => {
+                let schema = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::Schema(schema))
+            }
+            StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                let storage_collection_metadata = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
+                    storage_collection_metadata,
+                ))
+            }
+            StateUpdateKind::StorageUsage(key, value) => {
+                let storage_usage = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::StorageUsage(
+                    storage_usage,
+                ))
+            }
+            StateUpdateKind::SystemConfiguration(key, value) => {
+                let system_configuration = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemConfiguration(
+                    system_configuration,
+                ))
+            }
+            StateUpdateKind::SystemObjectMapping(key, value) => {
+                let system_object_mapping = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemObjectMapping(
+                    system_object_mapping,
+                ))
+            }
+            StateUpdateKind::SystemPrivilege(key, value) => {
+                let system_privilege = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SystemPrivilege(
+                    system_privilege,
+                ))
+            }
+            StateUpdateKind::UnfinalizedShard(key, value) => {
+                let unfinalized_shard = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::UnfinalizedShard(
+                    unfinalized_shard,
+                ))
+            }
+            // Not exposed to higher layers.
+            StateUpdateKind::Config(_, _)
+            | StateUpdateKind::Epoch(_)
+            | StateUpdateKind::IdAllocator(_, _)
+            | StateUpdateKind::Setting(_, _)
+            | StateUpdateKind::TxnWalShard(_, _) => None,
+        })
+    }
+}
+
+impl TryFrom<StateUpdate<StateUpdateKindJson>> for StateUpdate<StateUpdateKind> {
+    type Error = String;
+
+    fn try_from(update: StateUpdate<StateUpdateKindJson>) -> Result<Self, Self::Error> {
+        Ok(StateUpdate {
+            kind: TryInto::try_into(update.kind)?,
+            ts: update.ts,
+            diff: update.diff,
+        })
+    }
+}
+
+impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
+    type Error = String;
+
+    fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
+        let kind: proto::state_update_kind::Kind =
+            value.try_to_serde().map_err(|err| err.to_string())?;
+        let kind = proto::StateUpdateKind { kind: Some(kind) };
+        StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
+    }
+}
+
+impl From<StateUpdateKind> for StateUpdateKindJson {
+    fn from(value: StateUpdateKind) -> Self {
+        let kind = value.into_proto();
+        let kind = kind.kind.expect("kind should be set");
+        StateUpdateKindJson::from_serde(&kind)
     }
 }
 
@@ -710,26 +844,20 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
     }
 }
 
-/// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdateKindJson(Jsonb);
-
-impl From<StateUpdateKind> for StateUpdateKindJson {
-    fn from(value: StateUpdateKind) -> Self {
-        let kind = value.into_proto();
-        let kind = kind.kind.expect("kind should be set");
-        StateUpdateKindJson::from_serde(&kind)
-    }
-}
-
-impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
-    type Error = String;
-
-    fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
-        let kind: proto::state_update_kind::Kind =
-            value.try_to_serde().map_err(|err| err.to_string())?;
-        let kind = proto::StateUpdateKind { kind: Some(kind) };
-        StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
+/// Decodes a [`StateUpdate<StateUpdateKindJson>`] from the `(key, value, ts,
+/// diff)` tuple/update we store in persist.
+impl From<PersistStateUpdate> for StateUpdate<StateUpdateKindJson> {
+    fn from(kvtd: PersistStateUpdate) -> Self {
+        let ((key, val), ts, diff) = kvtd;
+        let (key, ()) = (
+            key.expect("persist decoding error"),
+            val.expect("persist decoding error"),
+        );
+        StateUpdate {
+            kind: StateUpdateKindJson::from(key),
+            ts,
+            diff,
+        }
     }
 }
 
@@ -744,134 +872,6 @@ impl From<SourceData> for StateUpdateKindJson {
     fn from(value: SourceData) -> Self {
         let row = value.0.expect("only Ok values stored in catalog shard");
         StateUpdateKindJson(Jsonb::from_row(row))
-    }
-}
-
-impl StateUpdateKindJson {
-    pub(crate) fn from_serde<S: serde::Serialize>(s: &S) -> Self {
-        let serde_value = serde_json::to_value(s).expect("valid json");
-        let row =
-            Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
-        StateUpdateKindJson(row)
-    }
-
-    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
-        self.try_to_serde().expect("jsonb should roundtrip")
-    }
-
-    pub(crate) fn try_to_serde<D: serde::de::DeserializeOwned>(
-        &self,
-    ) -> Result<D, serde_json::error::Error> {
-        let serde_value = self.0.as_ref().to_serde_json();
-        serde_json::from_value::<D>(serde_value)
-    }
-}
-
-impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
-    type Error = DurableCatalogError;
-
-    fn try_from(kind: &StateUpdateKind) -> Result<Self, Self::Error> {
-        fn into_durable<PK, PV, T>(key: &PK, value: &PV) -> Result<T, DurableCatalogError>
-        where
-            PK: ProtoType<T::Key> + Clone,
-            PV: ProtoType<T::Value> + Clone,
-            T: DurableType,
-        {
-            let key = key.clone().into_rust()?;
-            let value = value.clone().into_rust()?;
-            Ok(T::from_key_value(key, value))
-        }
-
-        Ok(match kind {
-            StateUpdateKind::AuditLog(key, value) => {
-                let audit_log = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::AuditLog(audit_log))
-            }
-            StateUpdateKind::Cluster(key, value) => {
-                let cluster = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Cluster(cluster))
-            }
-            StateUpdateKind::ClusterReplica(key, value) => {
-                let cluster_replica = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::ClusterReplica(
-                    cluster_replica,
-                ))
-            }
-            StateUpdateKind::Comment(key, value) => {
-                let comment = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Comment(comment))
-            }
-            StateUpdateKind::Database(key, value) => {
-                let database = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Database(database))
-            }
-            StateUpdateKind::DefaultPrivilege(key, value) => {
-                let default_privilege = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::DefaultPrivilege(
-                    default_privilege,
-                ))
-            }
-            StateUpdateKind::Item(key, value) => {
-                let item = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Item(item))
-            }
-            StateUpdateKind::IntrospectionSourceIndex(key, value) => {
-                let introspection_source_index = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::IntrospectionSourceIndex(
-                    introspection_source_index,
-                ))
-            }
-            StateUpdateKind::Role(key, value) => {
-                let role = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Role(role))
-            }
-            StateUpdateKind::Schema(key, value) => {
-                let schema = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::Schema(schema))
-            }
-            StateUpdateKind::StorageCollectionMetadata(key, value) => {
-                let storage_collection_metadata = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
-                    storage_collection_metadata,
-                ))
-            }
-            StateUpdateKind::StorageUsage(key, value) => {
-                let storage_usage = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::StorageUsage(
-                    storage_usage,
-                ))
-            }
-            StateUpdateKind::SystemConfiguration(key, value) => {
-                let system_configuration = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::SystemConfiguration(
-                    system_configuration,
-                ))
-            }
-            StateUpdateKind::SystemObjectMapping(key, value) => {
-                let system_object_mapping = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::SystemObjectMapping(
-                    system_object_mapping,
-                ))
-            }
-            StateUpdateKind::SystemPrivilege(key, value) => {
-                let system_privilege = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::SystemPrivilege(
-                    system_privilege,
-                ))
-            }
-            StateUpdateKind::UnfinalizedShard(key, value) => {
-                let unfinalized_shard = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::UnfinalizedShard(
-                    unfinalized_shard,
-                ))
-            }
-            // Not exposed to higher layers.
-            StateUpdateKind::Config(_, _)
-            | StateUpdateKind::Epoch(_)
-            | StateUpdateKind::IdAllocator(_, _)
-            | StateUpdateKind::Setting(_, _)
-            | StateUpdateKind::TxnWalShard(_, _) => None,
-        })
     }
 }
 
