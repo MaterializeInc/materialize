@@ -655,11 +655,16 @@ class ResolvedImage:
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
         ui.header(f"Acquiring {self.spec()}")
+        command = ["docker", "pull"]
+        # --quiet skips printing the progress bar, which does not display well in CI.
+        if ui.env_is_truthy("CI"):
+            command.append("--quiet")
+        command.append(self.spec())
         if not self.acquired:
             for retry in range(1, max_retries + 1):
                 try:
                     spawn.runv(
-                        ["docker", "pull", self.spec()],
+                        command,
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
