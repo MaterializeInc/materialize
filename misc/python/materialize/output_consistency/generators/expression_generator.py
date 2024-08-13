@@ -30,6 +30,9 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
+from materialize.output_consistency.input_data.operations.equality_operations_provider import (
+    EQUALS_OPERATION,
+)
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
 )
@@ -198,6 +201,15 @@ class ExpressionGenerator:
         expression = ExpressionWithArgs(operation, args, is_aggregate, is_expect_error)
 
         return expression, number_of_args
+
+    def generate_equals_expression(
+        self, arg1: Expression, arg2: Expression
+    ) -> ExpressionWithArgs:
+        operation = EQUALS_OPERATION
+        args = [arg1, arg2]
+        is_aggregate = self._contains_aggregate_arg(args)
+        is_expect_error = operation.is_expected_to_cause_db_error(args)
+        return ExpressionWithArgs(operation, args, is_aggregate, is_expect_error)
 
     def generate_leaf_expression(
         self,
