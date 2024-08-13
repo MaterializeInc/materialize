@@ -183,7 +183,7 @@ class OutputConsistencyTest:
             config, randomized_picker, input_data
         )
         query_generator = QueryGenerator(
-            config, randomized_picker, input_data, ignore_filter
+            config, randomized_picker, input_data, expression_generator, ignore_filter
         )
         output_comparator = self.create_result_comparator(ignore_filter)
 

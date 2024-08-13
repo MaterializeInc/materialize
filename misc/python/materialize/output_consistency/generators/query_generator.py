@@ -16,6 +16,9 @@ from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.generators.expression_generator import (
+    ExpressionGenerator,
+)
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -45,11 +48,13 @@ class QueryGenerator:
         config: ConsistencyTestConfiguration,
         randomized_picker: RandomizedPicker,
         input_data: ConsistencyTestInputData,
+        expression_generator: ExpressionGenerator,
         ignore_filter: GenericInconsistencyIgnoreFilter,
     ):
         self.config = config
         self.randomized_picker = randomized_picker
         self.vertical_storage_row_count = input_data.types_input.max_value_count
+        self.expression_generator = expression_generator
         self.ignore_filter = ignore_filter
 
         self.count_pending_expressions = 0
@@ -144,6 +149,26 @@ class QueryGenerator:
         self.reset_state()
 
         return queries
+
+    def add_random_where_condition_to_query(self, query: QueryTemplate) -> None:
+        if not self.randomized_picker.random_boolean(
+            probability.GENERATE_WHERE_EXPRESSION
+        ):
+            return
+
+        where_expression = self.expression_generator.generate_boolean_expression(
+            False, query.storage_layout
+        )
+
+        if where_expression is None:
+            return
+
+        ignore_verdict = self.ignore_filter.shall_ignore_expression(
+            where_expression, query.row_selection
+        )
+
+        if not ignore_verdict.ignore:
+            query.where_expression = where_expression
 
     def _create_multi_column_queries(
         self,
