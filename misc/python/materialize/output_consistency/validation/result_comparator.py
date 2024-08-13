@@ -72,7 +72,10 @@ class ResultComparator:
 
         if validation_outcome.query_execution_succeeded_in_all_strategies:
             self.validate_outcomes_data(query_execution, validation_outcome)
-            if query_execution.query_output_mode:
+            if query_execution.query_output_mode in {
+                QueryOutputMode.EXPLAIN,
+                QueryOutputMode.EXPLAIN_PHYSICAL,
+            }:
                 validation_outcome.success_reason = "explain plan matches"
             else:
                 validation_outcome.success_reason = "result data matches"
