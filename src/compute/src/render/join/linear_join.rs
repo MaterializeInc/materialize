@@ -22,6 +22,7 @@ use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_dyncfg::ConfigSet;
+use mz_expr::SafeMfpPlan;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
@@ -187,6 +188,7 @@ impl YieldSpec {
 }
 
 /// Different forms the streamed data might take.
+#[derive(Clone)]
 enum JoinedFlavor<G, T>
 where
     G: Scope,
@@ -207,9 +209,19 @@ where
     G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
+    /// Accepts input to render as a list of lists, where each outer list element
+    /// is a join argument, each of which is a list of terms to union together as
+    /// an input to the join. Each term comes with an optional `SafeMfpPlan` that
+    /// will be applied to the term before it is joined, and a boolean indicating
+    /// whethere the results should be negated.
+    ///
+    /// Each optional plan is applied to rows laid out in `[key, old, new]` order,
+    /// and their column references should reflect this. This means that the plan
+    /// for the first input should only reference `key` and `old` columns, and the
+    /// plans for subsequent inputs should only reference `key` and `new` columns.
     pub(crate) fn render_join(
         &mut self,
-        inputs: Vec<CollectionBundle<G, T>>,
+        inputs: Vec<Vec<(CollectionBundle<G, T>, Option<SafeMfpPlan>, bool)>>,
         linear_plan: LinearJoinPlan,
     ) -> CollectionBundle<G, T> {
         self.scope.clone().region_named("Join(Linear)", |inner| {
@@ -219,7 +231,7 @@ where
 
     fn render_join_inner(
         &mut self,
-        inputs: Vec<CollectionBundle<G, T>>,
+        inputs: Vec<Vec<(CollectionBundle<G, T>, Option<SafeMfpPlan>, bool)>>,
         linear_plan: LinearJoinPlan,
         inner: &mut Child<G, <G as ScopeParent>::Timestamp>,
     ) -> CollectionBundle<G, T> {
@@ -230,77 +242,109 @@ where
         // First, just check out the availability of an appropriate arrangement.
         // This will be `None` in the degenerate single-input join case, which ensures
         // that we do not panic if we never go around the `stage_plans` loop.
-        let arrangement = linear_plan
-            .stage_plans
-            .get(0)
-            .and_then(|stage| inputs[linear_plan.source_relation].arrangement(&stage.stream_key));
-        // We can use an arrangement if it exists and an initial closure does not.
-        let mut joined = match (arrangement, linear_plan.initial_closure) {
-            (Some(ArrangementFlavor::Local(oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::Local(oks.enter_region(inner))
-            }
-            (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::Trace(oks.enter_region(inner))
-            }
-            (_, initial_closure) => {
-                // TODO: extract closure from the first stage in the join plan, should it exist.
-                // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
-                let (joined, errs) = inputs[linear_plan.source_relation]
-                    .as_specific_collection(linear_plan.source_key.as_deref());
-                errors.push(errs.enter_region(inner));
-                let mut joined = joined.enter_region(inner);
+        let mut joined = Vec::new();
 
-                // In the current code this should always be `None`, but we have this here should
-                // we change that and want to know what we should be doing.
-                if let Some(closure) = initial_closure {
-                    // If there is no starting arrangement, then we can run filters
-                    // directly on the starting collection.
-                    // If there is only one input, we are done joining, so run filters
-                    let name = "LinearJoinInitialization";
-                    type CB<C> = ConsolidatingContainerBuilder<C>;
-                    let (j, errs) = joined.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
-                        // Reuseable allocation for unpacking.
-                        let mut datums = DatumVec::new();
-                        move |row| {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            let temp_storage = RowArena::new();
-                            let mut datums_local = datums.borrow_with(&row);
-                            // TODO(mcsherry): re-use `row` allocation.
-                            closure
-                                .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                                .map_err(DataflowError::from)
-                                .transpose()
-                        }
-                    });
-                    joined = j;
-                    errors.push(errs);
+        for (input, mfp, negate) in inputs[linear_plan.source_relation].iter() {
+            let arrangement = linear_plan
+                .stage_plans
+                .get(0)
+                .and_then(|stage| input.arrangement(&stage.stream_key));
+            // We can use an arrangement if it exists and an initial closure does not.
+            let start = match (arrangement, linear_plan.initial_closure.clone()) {
+                (Some(ArrangementFlavor::Local(oks, errs)), None) => {
+                    errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
+                    JoinedFlavor::Local(oks.enter_region(inner))
                 }
+                (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
+                    errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
+                    JoinedFlavor::Trace(oks.enter_region(inner))
+                }
+                (_, initial_closure) => {
+                    // TODO: extract closure from the first stage in the join plan, should it exist.
+                    // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
+                    let (joined, errs) =
+                        input.as_specific_collection(linear_plan.source_key.as_deref());
+                    errors.push(errs.enter_region(inner));
+                    let mut joined = joined.enter_region(inner);
 
-                JoinedFlavor::Collection(joined)
-            }
-        };
+                    // In the current code this should always be `None`, but we have this here should
+                    // we change that and want to know what we should be doing.
+                    if let Some(closure) = initial_closure {
+                        // If there is no starting arrangement, then we can run filters
+                        // directly on the starting collection.
+                        // If there is only one input, we are done joining, so run filters
+                        let name = "LinearJoinInitialization";
+                        type CB<C> = ConsolidatingContainerBuilder<C>;
+                        let (j, errs) =
+                            joined.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
+                                // Reuseable allocation for unpacking.
+                                let mut datums = DatumVec::new();
+                                move |row| {
+                                    let binding = SharedRow::get();
+                                    let mut row_builder = binding.borrow_mut();
+                                    let temp_storage = RowArena::new();
+                                    let mut datums_local = datums.borrow_with(&row);
+                                    // TODO(mcsherry): re-use `row` allocation.
+                                    closure
+                                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                        .map_err(DataflowError::from)
+                                        .transpose()
+                                }
+                            });
+                        joined = j;
+                        errors.push(errs);
+                    }
+
+                    JoinedFlavor::Collection(joined)
+                }
+            };
+
+            joined.push((start, mfp.clone(), *negate));
+        }
 
         // progress through stages, updating partial results and errors.
         for stage_plan in linear_plan.stage_plans.into_iter() {
             // Different variants of `joined` implement this differently,
             // and the logic is centralized there.
-            let stream = self.differential_join(
-                joined,
-                inputs[stage_plan.lookup_relation].enter_region(inner),
-                stage_plan,
-                &mut errors,
-            );
+            let mut streams = Vec::new();
+            for (prev, prev_mfp, prev_neg) in joined {
+                for (next, next_mfp, next_neg) in inputs[stage_plan.lookup_relation].iter() {
+                    let mut stream = self.differential_join(
+                        prev.clone(),
+                        prev_mfp.clone(),
+                        next.enter_region(inner),
+                        next_mfp.clone(),
+                        stage_plan.clone(),
+                        &mut errors,
+                    );
+                    if prev_neg != *next_neg {
+                        stream = stream.negate();
+                    }
+                    streams.push(stream);
+                }
+            }
             // Update joined results and capture any errors.
-            joined = JoinedFlavor::Collection(stream);
+            if streams.len() == 1 {
+                joined = vec![(
+                    JoinedFlavor::Collection(streams.pop().unwrap()),
+                    None,
+                    false,
+                )];
+            } else {
+                joined = vec![(
+                    JoinedFlavor::Collection(streams.pop().unwrap().concatenate(streams)),
+                    None,
+                    false,
+                )];
+            }
         }
 
         // We have completed the join building, but may have work remaining.
         // For example, we may have expressions not pushed down (e.g. literals)
         // and projections that could not be applied (e.g. column repetition).
-        let bundle = if let JoinedFlavor::Collection(mut joined) = joined {
+        let bundle = if let (JoinedFlavor::Collection(mut joined), None, false) =
+            joined.pop().unwrap()
+        {
             if let Some(closure) = linear_plan.final_closure {
                 let name = "LinearJoinFinalization";
                 type CB<C> = ConsolidatingContainerBuilder<C>;
@@ -340,7 +384,9 @@ where
     fn differential_join<S>(
         &self,
         mut joined: JoinedFlavor<S, T>,
+        joined_mfp: Option<SafeMfpPlan>,
         lookup_relation: CollectionBundle<S, T>,
+        lookup_mfp: Option<SafeMfpPlan>,
         LinearStagePlan {
             stream_key,
             stream_thinning,
@@ -405,7 +451,7 @@ where
                     let (oks, errs2) = match (local, oks) {
                         (A::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
+                                prev_keyed, joined_mfp, next_input, lookup_mfp, closure,
                             ),
                     };
 
@@ -417,7 +463,7 @@ where
                     let (oks, errs2) = match (local, oks) {
                         (A::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
+                                prev_keyed, joined_mfp, next_input, lookup_mfp, closure,
                             ),
                     };
 
@@ -431,7 +477,7 @@ where
                     let (oks, errs2) = match (trace, oks) {
                         (I::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
+                                prev_keyed, joined_mfp, next_input, lookup_mfp, closure,
                             ),
                     };
 
@@ -443,7 +489,7 @@ where
                     let (oks, errs2) = match (trace, oks) {
                         (I::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
+                                prev_keyed, joined_mfp, next_input, lookup_mfp, closure,
                             ),
                     };
 
@@ -464,7 +510,9 @@ where
     fn differential_join_inner<S, Tr1, Tr2>(
         &self,
         prev_keyed: Arranged<S, Tr1>,
+        prev_mfp: Option<SafeMfpPlan>,
         next_input: Arranged<S, Tr2>,
+        next_mfp: Option<SafeMfpPlan>,
         closure: JoinClosure,
     ) -> (
         Collection<S, Row, Diff>,
@@ -483,7 +531,15 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
-        if closure.could_error() {
+        let mut could_error = closure.could_error();
+        if let Some(mfp) = prev_mfp.as_ref() {
+            could_error |= mfp.could_error();
+        }
+        if let Some(mfp) = next_mfp.as_ref() {
+            could_error |= mfp.could_error();
+        }
+
+        if could_error {
             let (oks, err) = self
                 .linear_join_spec
                 .render(
@@ -502,7 +558,31 @@ where
                         let mut datums_local = datums.borrow();
                         datums_local.extend(key);
                         datums_local.extend(old);
+                        if let Some(mfp) = prev_mfp.as_ref() {
+                            let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                            match result {
+                                Ok(false) => {
+                                    return None;
+                                }
+                                Err(err) => {
+                                    return Some(Err(DataflowError::from(err)));
+                                }
+                                _ => {}
+                            }
+                        }
                         datums_local.extend(new);
+                        if let Some(mfp) = next_mfp.as_ref() {
+                            let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                            match result {
+                                Ok(false) => {
+                                    return None;
+                                }
+                                Err(err) => {
+                                    return Some(Err(DataflowError::from(err)));
+                                }
+                                _ => {}
+                            }
+                        }
 
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -537,8 +617,31 @@ where
                     let mut datums_local = datums.borrow();
                     datums_local.extend(key);
                     datums_local.extend(old);
+                    if let Some(mfp) = prev_mfp.as_ref() {
+                        let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                        match result {
+                            Ok(false) => {
+                                return None;
+                            }
+                            Err(err) => {
+                                panic!("unexpected error: {err}")
+                            }
+                            _ => {}
+                        }
+                    }
                     datums_local.extend(new);
-
+                    if let Some(mfp) = next_mfp.as_ref() {
+                        let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                        match result {
+                            Ok(false) => {
+                                return None;
+                            }
+                            Err(err) => {
+                                panic!("unexpected error: {err}")
+                            }
+                            _ => {}
+                        }
+                    }
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                         .expect("Closure claimed to never error")
