@@ -702,9 +702,11 @@ where
                         || PartialOrder::less_than(&dependency_since, write_frontier),
                     "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
-                            dependency since {:?}",
+                            dependency since {:?} \n
+                            dependency read holds: {:?}",
                     write_frontier,
-                    dependency_since
+                    dependency_since,
+                    dependency_read_holds,
                 );
             }
 
