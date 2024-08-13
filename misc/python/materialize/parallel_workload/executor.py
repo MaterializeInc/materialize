@@ -80,10 +80,10 @@ class Executor:
     def commit(self, http: Http = Http.RANDOM) -> None:
         self.insert_table = None
         try:
-            self.log("commit")
             if self.use_ws and http != Http.NO:
                 self.execute("commit")
             else:
+                self.log("commit")
                 self.cur._c.commit()
         except QueryError:
             raise
@@ -95,10 +95,10 @@ class Executor:
     def rollback(self, http: Http = Http.RANDOM) -> None:
         self.insert_table = None
         try:
-            self.log("rollback")
             if self.use_ws and http != Http.NO:
                 self.execute("rollback")
             else:
+                self.log("rollback")
                 self.cur._c.rollback()
         except QueryError:
             raise
@@ -117,7 +117,7 @@ class Executor:
         self.last_log = msg
 
         with lock:
-            print(f"[{thread_name}] {msg}", file=logging)
+            print(f"[{thread_name}][{self.mz_service}] {msg}", file=logging)
             logging.flush()
 
     def execute(

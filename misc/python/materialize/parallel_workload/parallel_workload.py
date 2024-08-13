@@ -353,12 +353,14 @@ def run(
     else:
         for worker, thread in zip(workers, threads):
             if thread.is_alive():
-                print(f"{thread.name} still running: {worker.exe.last_log}")
-        print("Threads have not stopped within 5 minutes, exiting hard")
+                print(
+                    f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log}"
+                )
         print_stats(num_queries, workers, num_threads)
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
             os._exit(0)
+        print("Threads have not stopped within 5 minutes, exiting hard")
         os._exit(1)
 
     try:
