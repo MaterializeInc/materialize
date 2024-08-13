@@ -11,8 +11,8 @@ menu:
 
 ## Conceptual framework
 
-A cluster is a pool of compute resources (CPU, memory, and,
-optionally, scratch disk space) for running your workloads.
+A cluster is a pool of compute resources (CPU, memory, and scratch disk space)
+for running your workloads.
 
 The following operations require compute resources in Materialize, and so need
 to be associated with a cluster:
