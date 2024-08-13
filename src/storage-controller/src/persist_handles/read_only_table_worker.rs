@@ -61,12 +61,12 @@ pub(crate) async fn read_only_mode_table_worker<
             (handle, new_upper)
         };
 
-        fut
+        fut.boxed()
     };
 
     let mut txns_upper_future = {
         let txns_upper_future = gen_upper_future(txns_handle);
-        txns_upper_future.boxed()
+        txns_upper_future
     };
 
     let shutdown_reason = loop {
@@ -76,7 +76,7 @@ pub(crate) async fn read_only_mode_table_worker<
                 advance_uppers(&mut write_handles, upper).await;
 
                 let fut = gen_upper_future(handle);
-                txns_upper_future = fut.boxed();
+                txns_upper_future = fut;
             }
             cmd = rx.recv() => {
                 let Some(cmd) = cmd else {
