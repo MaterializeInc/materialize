@@ -230,6 +230,9 @@ class QueryGenerator:
                 all_expressions,
                 contains_aggregations,
             )
+            data_source, additional_data_sources = self.minimize_sources(
+                data_source, additional_data_sources, all_expressions
+            )
 
             query = QueryTemplate(
                 expect_error,
@@ -282,6 +285,9 @@ class QueryGenerator:
             all_expressions = [expression]
             self._assign_random_sources(
                 [data_source] + additional_data_sources, all_expressions
+            )
+            data_source, additional_data_sources = self.minimize_sources(
+                data_source, additional_data_sources, all_expressions
             )
 
             queries.append(
@@ -355,6 +361,36 @@ class QueryGenerator:
             return DataSource(table_index=None), []
 
         return self._random_source_tables(storage_layout, contains_aggregations)
+
+    def minimize_sources(
+        self,
+        data_source: DataSource,
+        additional_data_sources: list[AdditionalDataSource],
+        all_expressions: list[Expression],
+    ) -> tuple[DataSource, list[AdditionalDataSource]]:
+        all_used_data_sources = set()
+
+        for expression in all_expressions:
+            all_used_data_sources.update(expression.collect_data_sources())
+
+        additional_data_sources = [
+            source
+            for source in additional_data_sources
+            if source in all_used_data_sources
+        ]
+
+        if data_source not in all_used_data_sources:
+            assert len(additional_data_sources) > 0, "No data sources used"
+
+            return (
+                DataSource(
+                    additional_data_sources[0].table_index,
+                    additional_data_sources[0].custom_db_object_name,
+                ),
+                additional_data_sources[1:],
+            )
+
+        return data_source, additional_data_sources
 
     def _random_source_tables(
         self, storage_layout: ValueStorageLayout, contains_aggregations: bool
