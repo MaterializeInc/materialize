@@ -84,4 +84,20 @@ if [ -z "${MZ_NO_TELEMETRY:-}" ]; then
     export MZ_SEGMENT_CLIENT_SIDE=${MZ_SEGMENT_API_KEY:-true}
 fi
 
-exec environmentd "$@"
+if [ -n "${MZ_RESTART_ON_FAILURE:-}" ]; then
+    for ((i = 0; i < ${MZ_RESTART_LIMIT:-9999999999}; i++)); do
+        # Run `environmentd` inside of an `if` to avoid tripping `set -e`
+        # behavior.
+        if environmentd "$@"; then
+            code=$?
+        else
+            code=$?
+        fi
+        echo "environmentd exited (code: $code); restarting in 5s..." >&2
+        sleep 5
+    done
+    echo "environmentd exited; giving up after $i tries" >&2
+    exit "$code"
+else
+    exec environmentd "$@"
+fi

@@ -197,7 +197,23 @@ class Materialized(Service):
             config["mzbuild"] = "materialized"
 
         if restart:
-            config["restart"] = restart
+            # Old images don't have the new entrypoint.sh with
+            # MZ_RESTART_ON_FAILURE yet, fall back to having docker handle the
+            # restart logic
+            if image_version and image_version < MzVersion.parse_mz("v0.113.0-dev"):
+                config["restart"] = restart
+            else:
+                policy, _, max_tries = restart.partition(":")
+                if policy in ("on-failure", "unless-stopped"):
+                    # environmentd never exits successfully, so we can treat
+                    # `on-failure` and `unless-stopped` equivalently.
+                    environment += ["MZ_RESTART_ON_FAILURE=1"]
+                    if max_tries:
+                        environment += [f"MZ_RESTART_LIMIT={max_tries}"]
+                elif policy == "no":
+                    pass
+                else:
+                    raise RuntimeError(f"unknown restart policy: {policy}")
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
