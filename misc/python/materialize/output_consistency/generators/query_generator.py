@@ -410,8 +410,13 @@ class QueryGenerator:
                     main_source,
                     additional_source,
                 )
-                self._validate_join_constraint(join_constraint)
-                additional_source.join_constraint = join_constraint
+
+                if not self.ignore_filter.shall_ignore_expression(
+                    join_constraint, ALL_ROWS_SELECTION
+                ):
+                    self._validate_join_constraint(join_constraint)
+                    additional_source.join_constraint = join_constraint
+
                 additional_sources.append(additional_source)
 
         return main_source, additional_sources
