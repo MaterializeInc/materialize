@@ -68,12 +68,16 @@ class ExpressionWithArgs(Expression):
     def has_args(self) -> bool:
         return self.count_args() > 0
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
         sql: str = self.pattern
 
         for arg in self.args:
             sql = sql.replace(
-                EXPRESSION_PLACEHOLDER, arg.to_sql(sql_adjuster, False), 1
+                EXPRESSION_PLACEHOLDER,
+                arg.to_sql(sql_adjuster, include_alias, False),
+                1,
             )
 
         if len(self.args) != self.pattern.count(EXPRESSION_PLACEHOLDER):

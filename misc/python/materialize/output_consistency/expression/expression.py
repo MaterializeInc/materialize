@@ -46,7 +46,9 @@ class Expression:
         self.is_aggregate = is_aggregate
         self.is_expect_error = is_expect_error
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
         raise NotImplementedError
 
     def hash(self) -> int:
@@ -176,13 +178,16 @@ class LeafExpression(Expression):
     def try_resolve_exact_data_type(self) -> DataType | None:
         return self.data_type
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
-        return self.to_sql_as_column(sql_adjuster)
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
+        return self.to_sql_as_column(sql_adjuster, include_alias)
 
     def to_sql_as_column(
-        self,
-        sql_adjuster: SqlDialectAdjuster,
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool
     ) -> str:
+        if include_alias:
+            return f"{self.get_data_source().alias()}.{self.column_name}"
         return self.column_name
 
     def collect_leaves(self) -> list[LeafExpression]:

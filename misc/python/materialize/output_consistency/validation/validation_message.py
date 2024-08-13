@@ -113,7 +113,7 @@ class ValidationError(ValidationMessage):
 
         if concerned_expression is not None:
             self.concerned_expression_str = concerned_expression.to_sql(
-                SqlDialectAdjuster(), True
+                SqlDialectAdjuster(), query_execution.query_template.uses_join(), True
             )
             self.concerned_expression_hash = concerned_expression.hash()
         else:

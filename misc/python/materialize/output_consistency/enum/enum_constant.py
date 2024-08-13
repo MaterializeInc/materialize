@@ -73,7 +73,9 @@ class EnumConstant(Expression):
     def __str__(self) -> str:
         return f"EnumConstant (value={self.value})"
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
         sql_value = self.data_type.value_to_sql(self.value, sql_adjuster)
         if self.add_quotes:
             return f"'{sql_value}'"

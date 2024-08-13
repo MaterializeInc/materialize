@@ -135,6 +135,9 @@ class QueryTemplate:
 
         return self._post_format_sql(sql, output_format)
 
+    def uses_join(self) -> bool:
+        return len(self.additional_data_sources) > 0
+
     def _get_space_separator(self, output_format: QueryOutputFormat) -> str:
         return "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "
 
@@ -147,7 +150,9 @@ class QueryTemplate:
         expressions_as_sql = []
         for index, expression in enumerate(self.select_expressions):
             if query_column_selection.is_included(index):
-                expressions_as_sql.append(expression.to_sql(sql_adjuster, True))
+                expressions_as_sql.append(
+                    expression.to_sql(sql_adjuster, self.uses_join(), True)
+                )
 
         return f",{space_separator}".join(expressions_as_sql)
 
@@ -163,7 +168,8 @@ class QueryTemplate:
             self.storage_layout,
             override_db_object_name=override_db_object_name,
         )
-        return f"FROM{space_separator}{db_object_name}"
+        alias = f" {self.data_source.alias()}" if self.uses_join() else ""
+        return f"FROM{space_separator}{db_object_name}{alias}"
 
     def _create_join_clauses(
         self,
@@ -204,7 +210,7 @@ class QueryTemplate:
 
         return (
             f"{join_operator_sql} {db_object_name_to_join} {additional_data_source_to_join.alias()}"
-            f"{space_separator}ON {additional_data_source_to_join.join_constraint.to_sql(sql_adjuster, True)}"
+            f"{space_separator}ON {additional_data_source_to_join.join_constraint.to_sql(sql_adjuster, True, True)}"
         )
 
     def _create_where_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
@@ -215,7 +221,9 @@ class QueryTemplate:
             where_conditions.append(row_filter_clause)
 
         if self.where_expression:
-            where_conditions.append(self.where_expression.to_sql(sql_adjuster, True))
+            where_conditions.append(
+                self.where_expression.to_sql(sql_adjuster, self.uses_join(), True)
+            )
 
         if len(where_conditions) == 0:
             return ""
@@ -238,13 +246,13 @@ class QueryTemplate:
             row_index_string = ", ".join(
                 str(index) for index in self.row_selection.keys
             )
-        return f"{ROW_INDEX_COL_NAME} IN ({row_index_string})"
+        return f"{self._row_index_col_name(self.data_source)} IN ({row_index_string})"
 
     def _create_order_by_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
         if self.custom_order_expressions is not None:
             order_by_specs_str = ", ".join(
                 [
-                    f"{expr.to_sql(sql_adjuster, True)} ASC"
+                    f"{expr.to_sql(sql_adjuster, self.uses_join(), True)} ASC"
                     for expr in self.custom_order_expressions
                 ]
             )
@@ -254,7 +262,11 @@ class QueryTemplate:
             self.storage_layout == ValueStorageLayout.VERTICAL
             and not self.contains_aggregations
         ):
-            return f"ORDER BY {ROW_INDEX_COL_NAME} ASC"
+            order_by_columns = []
+            for data_source in self.get_all_data_sources():
+                order_by_columns.append(f"{self._row_index_col_name(data_source)} ASC")
+            order_by_columns_str = ", ".join(order_by_columns)
+            return f"ORDER BY {order_by_columns_str}"
 
         return ""
 
@@ -269,6 +281,12 @@ class QueryTemplate:
             return f"LIMIT {self.limit}"
 
         return ""
+
+    def _row_index_col_name(self, data_source: DataSource) -> str:
+        if self.uses_join():
+            return f"{data_source.alias()}.{ROW_INDEX_COL_NAME}"
+
+        return ROW_INDEX_COL_NAME
 
     def _post_format_sql(self, sql: str, output_format: QueryOutputFormat) -> str:
         # apply this replacement twice
