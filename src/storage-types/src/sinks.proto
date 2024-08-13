@@ -17,6 +17,7 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 
 import "pgcopy/src/copy.proto";
+import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
@@ -126,6 +127,7 @@ message ProtoKafkaSinkConnectionV2 {
     ProtoKafkaIdStyle progress_group_id = 19;
     ProtoKafkaIdStyle transactional_id = 20;
     mz_storage_types.connections.ProtoKafkaTopicOptions topic_options = 23;
+    mz_proto.ProtoDuration topic_metadata_refresh_interval = 25;
 }
 
 message ProtoKafkaIdStyle {

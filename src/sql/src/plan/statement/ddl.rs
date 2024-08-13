@@ -2841,6 +2841,7 @@ fn kafka_sink_builder(
         transactional_id_prefix,
         legacy_ids,
         topic_config,
+        topic_metadata_refresh_interval,
         topic_partition_count,
         topic_replication_factor,
         seen: _,
@@ -2863,6 +2864,12 @@ fn kafka_sink_builder(
     };
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
+
+    if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
+        // This is a librdkafka-enforced restriction that, if violated,
+        // would result in a runtime error for the source.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    }
 
     let assert_positive = |val: Option<i32>, name: &str| {
         if let Some(val) = val {
@@ -3030,6 +3037,7 @@ fn kafka_sink_builder(
             replication_factor: topic_replication_factor,
             topic_config: topic_config.unwrap_or_default(),
         },
+        topic_metadata_refresh_interval,
     }))
 }
 

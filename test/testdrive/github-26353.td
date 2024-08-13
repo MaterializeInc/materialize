@@ -103,7 +103,7 @@ false
 # This is the row that will be published with the v1 schema
 > DROP TABLE data CASCADE;
 > CREATE TABLE data (key text, value text);
-> INSERT INTO data VALUES('v1', NULL);
+> INSERT INTO data VALUES ('v1', NULL);
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET default_sink_partition_strategy = 'v1';
@@ -113,7 +113,10 @@ ALTER SYSTEM SET default_sink_partition_strategy = 'v1';
 > CREATE SINK v11
   IN CLUSTER ${arg.single-replica-cluster}
   FROM data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v1-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-v1-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '2s'
+  )
   KEY (key) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -123,7 +126,10 @@ ALTER SYSTEM SET default_sink_partition_strategy = 'v1';
 > CREATE SINK v12
   IN CLUSTER ${arg.single-replica-cluster}
   FROM data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v1-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-v1-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '2s'
+  )
   KEY (key) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -131,3 +137,22 @@ ALTER SYSTEM SET default_sink_partition_strategy = 'v1';
 $ kafka-verify-data format=avro sink=materialize.public.v11
 {"key": {"string": "v1"}} {"key": {"string": "v1"}, "value": null} partition=75
 {"key": {"string": "v1"}} {"key": {"string": "v1"}, "value": null} partition=75
+
+# Test that Kafka sinks discover new partitions in a timely fashion and start
+# routing data to the new partitions.
+
+$ kafka-add-partitions topic=v1 total-partitions=200
+
+# Wait out twice the topic metadata refresh duration to virtually guarantee that
+# the Kafka sinks have received the updated partition information.
+
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+> INSERT INTO data VALUES ('v1')
+
+# Even though the key is the same as before, the data is sent to a new
+# partition.
+
+$ kafka-verify-data format=avro sink=materialize.public.v11
+{"key": {"string": "v1"}} {"key": {"string": "v1"}, "value": null} partition=175
+{"key": {"string": "v1"}} {"key": {"string": "v1"}, "value": null} partition=175

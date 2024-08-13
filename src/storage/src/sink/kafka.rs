@@ -74,6 +74,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,12 +88,13 @@ use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
+    DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
-use mz_ore::task;
+use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::vec::VecExt;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
@@ -109,7 +111,6 @@ use mz_timely_util::builder_async::{
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Header, OwnedHeaders, ToBytes};
-use rdkafka::metadata::Metadata;
 use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
@@ -120,7 +121,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::watch;
-use tracing::{error, info};
+use tokio::time::{self, MissedTickBehavior};
+use tracing::{error, info, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
@@ -215,7 +217,9 @@ struct TransactionalProducer {
     /// The strategy to partition the data with.
     partition_strategy: SinkPartitionStrategy,
     /// The number of partitions in the target topic.
-    partition_count: u64,
+    partition_count: Arc<AtomicU64>,
+    /// A task to periodically refresh the partition count.
+    _partition_count_task: AbortOnDropHandle<()>,
     /// The underlying Kafka producer.
     producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
     /// A handle to the metrics associated with this sink.
@@ -296,15 +300,39 @@ impl TransactionalProducer {
             .create_with_context(storage_configuration, ctx, &options, InTask::Yes)
             .await?;
 
+        // The partition count is fixed up after we ensure the topic exists.
+        let partition_count = Arc::new(AtomicU64::new(0));
+        let update_partition_count = {
+            let partition_count = Arc::clone(&partition_count);
+            let metrics = Arc::clone(&metrics);
+            Arc::new(move |pc| {
+                partition_count.store(pc, std::sync::atomic::Ordering::SeqCst);
+                metrics.partition_count.set(pc);
+            })
+        };
+
+        // Start a task that will keep the partition count up to date in the
+        // background.
+        let partition_count_task = task::spawn(
+            || format!("kafka_sink_producer_fetch_metadata_loop:{sink_id}"),
+            fetch_partition_count_loop(
+                producer.clone(),
+                sink_id,
+                connection.topic.clone(),
+                connection.topic_metadata_refresh_interval,
+                Arc::clone(&update_partition_count),
+            ),
+        );
+
         let task_name = format!("kafka_sink_producer:{sink_id}");
         let progress_key = ProgressKey::new(sink_id);
 
-        let mut producer = Self {
+        let producer = Self {
             task_name,
             data_topic: connection.topic.clone(),
             partition_strategy,
-            // partition count is fixed up later when we query the broker for metadata
-            partition_count: 0,
+            partition_count,
+            _partition_count_task: partition_count_task.abort_on_drop(),
             progress_topic: connection
                 .progress_topic(&storage_configuration.connection_context)
                 .into_owned(),
@@ -355,19 +383,13 @@ impl TransactionalProducer {
             }
         };
 
-        // At this point the topic must exist and so we can query for its metadata.
-        let meta = producer.fetch_metadata().await?;
-        match meta.topics().iter().find(|t| t.name() == &connection.topic) {
-            Some(topic) => {
-                producer.partition_count = u64::cast_from(topic.partitions().len());
-                metrics.partition_count.set(producer.partition_count);
-            }
-            None => {
-                return Err(
-                    anyhow!("sink progress data exists, but sink data topic is missing").into(),
-                );
-            }
-        }
+        // At this point the topic must exist and so we can query for its
+        // partition count. Even though we have a background task to fetch the
+        // partition count, we do this synchronously to ensure we don't attempt
+        // to produce any messages with our initial partition count of 0.
+        let partition_count =
+            fetch_partition_count(&producer.producer, sink_id, &connection.topic).await?;
+        update_partition_count(partition_count);
 
         Ok((producer, resume_upper))
     }
@@ -386,11 +408,6 @@ impl TransactionalProducer {
             .await
             .unwrap()
             .check_ssh_status(self.producer.context())
-    }
-
-    async fn fetch_metadata(&self) -> Result<Metadata, ContextCreationError> {
-        self.spawn_blocking(|p| p.client().fetch_metadata(None, Duration::from_secs(10)))
-            .await
     }
 
     async fn begin_transaction(&mut self) -> Result<(), ContextCreationError> {
@@ -433,7 +450,10 @@ impl TransactionalProducer {
         let partition = match self.partition_strategy {
             SinkPartitionStrategy::V0 => None,
             SinkPartitionStrategy::V1 => {
-                Some(i32::try_from(message.hash % self.partition_count).unwrap())
+                let pc = self
+                    .partition_count
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                Some(i32::try_from(message.hash % pc).unwrap())
             }
         };
 
@@ -1150,6 +1170,64 @@ fn parse_progress_record(payload: &[u8]) -> Result<ProgressRecord, anyhow::Error
             },
         },
     })
+}
+
+/// Fetches the partition count for the identified topic.
+async fn fetch_partition_count(
+    producer: &BaseProducer<TunnelingClientContext<MzClientContext>>,
+    sink_id: GlobalId,
+    topic_name: &str,
+) -> Result<u64, anyhow::Error> {
+    let meta = task::spawn_blocking(|| format!("kafka_sink_fetch_partition_count:{sink_id}"), {
+        let producer = producer.clone();
+        move || {
+            producer
+                .client()
+                .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
+        }
+    })
+    .await
+    .expect("spawning blocking task cannot fail")
+    .check_ssh_status(producer.context())?;
+
+    match meta.topics().iter().find(|t| t.name() == topic_name) {
+        Some(topic) => {
+            let partition_count = u64::cast_from(topic.partitions().len());
+            if partition_count == 0 {
+                bail!("topic {topic_name} has an impossible partition count of zero");
+            }
+            Ok(partition_count)
+        }
+        None => bail!("topic {topic_name} does not exist"),
+    }
+}
+
+/// Fetches the partition count for the identified topic at the specified
+/// interval.
+///
+/// When an updated partition count is discovered, invokes
+/// `update_partition_count` with the new partition count.
+async fn fetch_partition_count_loop<F>(
+    producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
+    sink_id: GlobalId,
+    topic_name: String,
+    interval: Duration,
+    update_partition_count: Arc<F>,
+) where
+    F: Fn(u64),
+{
+    let mut interval = time::interval(interval);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        match fetch_partition_count(&producer, sink_id, &topic_name).await {
+            Ok(pc) => update_partition_count(pc),
+            Err(e) => {
+                warn!(%sink_id, "failed updating partition count: {e}");
+                continue;
+            }
+        };
+    }
 }
 
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
