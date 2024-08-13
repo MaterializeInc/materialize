@@ -995,6 +995,8 @@ pub enum ContextCreationError {
     #[error(transparent)]
     KafkaError(#[from] KafkaError),
     #[error(transparent)]
+    Dns(#[from] mz_ore::netio::DnsResolutionError),
+    #[error(transparent)]
     Other(#[from] anyhow::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -1042,6 +1044,9 @@ where
                 ContextCreationError::Io(e) => {
                     ContextCreationError::Other(anyhow!(anyhow!(e).context(msg)))
                 }
+                ContextCreationError::Dns(e) => {
+                    ContextCreationError::Other(anyhow!(e).context(msg))
+                }
             }
         })
     }
@@ -1069,6 +1074,8 @@ pub enum CsrConnectError {
     NativeTls(#[from] native_tls::Error),
     #[error(transparent)]
     Openssl(#[from] openssl::error::ErrorStack),
+    #[error(transparent)]
+    Dns(#[from] mz_ore::netio::DnsResolutionError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

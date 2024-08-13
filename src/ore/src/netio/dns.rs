@@ -21,12 +21,26 @@ use tokio::net::lookup_host;
 
 const DUMMY_PORT: u16 = 11111;
 
+/// An error returned by `resolve_address`.
+#[derive(thiserror::Error, Debug)]
+pub enum DnsResolutionError {
+    /// private ip
+    #[error("Address resolved to a private IP. The provided host is not routable on the public internet")]
+    PrivateAddress,
+    /// no addresses
+    #[error("Address did not resolve to any IPs")]
+    NoAddressesFound,
+    /// io error
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
 /// Resolves a host address and ensures it is a global address when `enforce_global` is set.
 /// This parameter is useful when connecting to user-defined unverified addresses.
 pub async fn resolve_address(
     mut host: &str,
     enforce_global: bool,
-) -> Result<BTreeSet<IpAddr>, io::Error> {
+) -> Result<BTreeSet<IpAddr>, DnsResolutionError> {
     // `net::lookup_host` requires a port to be specified, but we don't care about the port.
     let mut port = DUMMY_PORT;
     // If a port is already specified, use it and remove it from the host.
@@ -42,20 +56,14 @@ pub async fn resolve_address(
     while let Some(addr) = addrs.next() {
         let ip = addr.ip();
         if enforce_global && !is_global(ip) {
-            Err(io::Error::new(
-                io::ErrorKind::AddrNotAvailable,
-                "address is not global",
-            ))?
+            Err(DnsResolutionError::PrivateAddress)?
         } else {
             ips.insert(ip);
         }
     }
 
     if ips.len() == 0 {
-        Err(io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            "no addresses found",
-        ))?
+        Err(DnsResolutionError::NoAddressesFound)?
     }
     Ok(ips)
 }
