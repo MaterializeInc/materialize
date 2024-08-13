@@ -187,10 +187,15 @@ class Identifiers(Check):
         pg_catalog
         {dq_print(self.ident["schema"])}
 
-        > SHOW SINKS FROM {dq(self.ident["schema"])};
+        >[version>=11300] SHOW SINKS FROM {dq(self.ident["schema"])};
         {dq_print(self.ident["sink0"])} kafka identifiers
         {dq_print(self.ident["sink1"])} kafka identifiers
         {dq_print(self.ident["sink2"])} kafka identifiers
+
+        >[version<11300] SHOW SINKS FROM {dq(self.ident["schema"])};
+        {dq_print(self.ident["sink0"])} kafka 4 identifiers
+        {dq_print(self.ident["sink1"])} kafka 4 identifiers
+        {dq_print(self.ident["sink2"])} kafka 4 identifiers
 
         > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])};
         3

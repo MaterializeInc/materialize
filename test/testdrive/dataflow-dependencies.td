@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Test reporting of dataflow dependencies through
 # `mz_internal.mz_compute_dependencies` and
 # `mz_internal.mz_materialization_dependencies`.
@@ -68,7 +70,9 @@ mv1_primary_idx mv1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 > CREATE CONNECTION csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}')
-> CREATE SINK snk FROM mv1
+> CREATE SINK snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM mv1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
