@@ -1120,8 +1120,8 @@ enum ProcessStatus {
 impl From<ProcessStatus> for ServiceStatus {
     fn from(status: ProcessStatus) -> ServiceStatus {
         match status {
-            ProcessStatus::NotReady => ServiceStatus::NotReady(None),
-            ProcessStatus::Ready { .. } => ServiceStatus::Ready,
+            ProcessStatus::NotReady => ServiceStatus::Offline(None),
+            ProcessStatus::Ready { .. } => ServiceStatus::Online,
         }
     }
 }

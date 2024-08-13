@@ -42,7 +42,7 @@ use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
     scheduling_config::*, DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector,
-    NamespacedOrchestrator, NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
+    NamespacedOrchestrator, OfflineReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::retry::Retry;
@@ -1229,9 +1229,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .unwrap_or((false, None));
 
             let status = if pod_ready {
-                ServiceStatus::Ready
+                ServiceStatus::Online
             } else {
-                ServiceStatus::NotReady(oomed.then_some(NotReadyReason::OomKilled))
+                ServiceStatus::Offline(oomed.then_some(OfflineReason::OomKilled))
             };
             let time = if let Some(time) = last_probe_time {
                 time.0

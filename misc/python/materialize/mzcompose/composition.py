@@ -14,6 +14,7 @@ documentation][user-docs].
 
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
+
 import argparse
 import copy
 import importlib
@@ -937,11 +938,11 @@ class Composition:
             JOIN mz_cluster_replicas
             ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
             JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
-            WHERE status NOT IN ('ready', 'not-ready')
+            WHERE status NOT IN ('online', 'offline')
             """
         )
         for cluster_name, replica_name, status, reason in results:
-            return f"Cluster replica {cluster_name}.{replica_name} is expected to be ready/not-ready, but is {status}, reason: {reason}"
+            return f"Cluster replica {cluster_name}.{replica_name} is expected to be online/offline, but is {status}, reason: {reason}"
 
         return None
 

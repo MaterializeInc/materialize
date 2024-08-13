@@ -97,14 +97,14 @@ pub struct ServiceEvent {
 
 /// Why the service is not ready, if known
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
-pub enum NotReadyReason {
+pub enum OfflineReason {
     OomKilled,
 }
 
-impl fmt::Display for NotReadyReason {
+impl fmt::Display for OfflineReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NotReadyReason::OomKilled => f.write_str("oom-killed"),
+            OfflineReason::OomKilled => f.write_str("oom-killed"),
         }
     }
 }
@@ -113,19 +113,19 @@ impl fmt::Display for NotReadyReason {
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum ServiceStatus {
     /// Service is ready to accept requests.
-    Ready,
+    Online,
     /// Service is not ready to accept requests.
     /// The inner element is `None` if the reason
     /// is unknown
-    NotReady(Option<NotReadyReason>),
+    Offline(Option<OfflineReason>),
 }
 
 impl ServiceStatus {
     /// Returns the service status as a kebab-case string.
     pub fn as_kebab_case_str(&self) -> &'static str {
         match self {
-            ServiceStatus::Ready => "ready",
-            ServiceStatus::NotReady(_) => "not-ready",
+            ServiceStatus::Online => "online",
+            ServiceStatus::Offline(_) => "offline",
         }
     }
 }
