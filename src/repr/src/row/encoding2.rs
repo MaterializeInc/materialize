@@ -1647,6 +1647,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 #[cfg(test)]
 mod tests {
     use arrow::array::ArrayData;
+    use arrow::row::SortField;
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
@@ -1767,6 +1768,15 @@ mod tests {
         let codec = schema2_to_codec::<Row>(desc, &col).unwrap();
         let (col2, _) = codec_to_schema2::<Row>(desc, &codec).unwrap();
         assert_eq!(col2.as_ref(), &col);
+
+        // Validate that we only generate supported array types
+        let converter =
+            arrow::row::RowConverter::new(vec![SortField::new(col.data_type().clone())])
+                .expect("sortable");
+        let rows = converter
+            .convert_columns(&[Arc::new(col.clone())])
+            .expect("convertible");
+        assert_eq!(rows.iter().count(), col.len());
     }
 
     #[mz_ore::test]
