@@ -15,6 +15,13 @@ ALTER SYSTEM SET persist_inline_writes_single_max_bytes = 0
 ----
 COMPLETE 0
 
+# As we iterate on the structured encoding, part sizes may vary.
+# Temporarily disable it here for now
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_batch_columnar_format = 'row'
+----
+COMPLETE 0
+
 # EXPLAIN FILTER PUSHDOWN statements are blocked by a feature flag
 statement ok
 CREATE TABLE numbers (
