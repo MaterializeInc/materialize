@@ -920,10 +920,7 @@ impl KeyValPlan {
             .map(group_key.iter().cloned())
             .project(input_arity..(input_arity + group_key.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity.clone() {
-            key_mfp.permute(
-                input_permutation.into_iter().enumerate().collect(),
-                new_arity,
-            );
+            key_mfp.permute_fn(|c| input_permutation[c], new_arity);
         }
 
         // Form an operator for evaluating value expressions.
@@ -931,10 +928,7 @@ impl KeyValPlan {
             .map(aggregates.iter().map(|a| a.expr.clone()))
             .project(input_arity..(input_arity + aggregates.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity {
-            val_mfp.permute(
-                input_permutation.into_iter().enumerate().collect(),
-                new_arity,
-            );
+            val_mfp.permute_fn(|c| input_permutation[c], new_arity);
         }
 
         key_mfp.optimize();

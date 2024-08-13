@@ -292,10 +292,7 @@ fn permute_oneshot_mfp_around_index(
     let input_arity = mfp.input_arity;
     let mut safe_mfp = mfp_to_safe_plan(mfp)?;
     let (permute, thinning) = mz_expr::permutation_for_arrangement(key, input_arity);
-    safe_mfp.permute(
-        permute.into_iter().enumerate().collect(),
-        key.len() + thinning.len(),
-    );
+    safe_mfp.permute_fn(|c| permute[c], key.len() + thinning.len());
     Ok(safe_mfp)
 }
 
@@ -585,8 +582,8 @@ impl crate::coord::Coordinator {
 
                 // Create an identity MFP operator.
                 let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
-                map_filter_project.permute(
-                    index_permutation.into_iter().enumerate().collect(),
+                map_filter_project.permute_fn(
+                    |c| index_permutation[c],
                     index_key.len() + index_thinned_arity,
                 );
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
