@@ -21,6 +21,14 @@ maintaining up-to-date results while also providing strong [consistency
 guarantees](/get-started/isolation-level/). The credit usage for a cluster is
 measured at a one second granularity.
 
+You must provision at least one cluster to power your workloads. You can then
+use the cluster to create the object ([indexes](/concepts/indexes/) and
+[materialized views](/concepts/views/#materialized-views)) that provide
+always-fresh results. In Materialize, both indexes and materialized views are
+incrementally maintained when Materialize ingests new data. That is, Materialize
+performs work on writes such that no work is performed when reading from these
+objects.
+
 The cluster size for a workload will depend on the workload's compute and
 storage requirements. To help users select the correct cluster size for their
 workload, Materialize uses cluster size names that are based on the compute
@@ -40,14 +48,6 @@ You can resize a cluster to respond to changes in your workload:
   materialized views), resizing does **not** incur downtime.
 
 {{</ note >}}
-
-You must provision at least one cluster to power your workloads. You can then
-use the cluster to create the object ([indexes](/concepts/indexes/) and
-[materialized views](/concepts/views/#materialized-views)) that will provide you
-with always-fresh results. In Materialize, both indexes and materialized views
-are incrementally maintained when Materialize ingests new data. That is,
-Materialize performs work on writes such that no work is performed when reading
-from these objects.
 
 Clusters are always "on", and you can adjust the [replication
 factor](https://materialize.com/docs/sql/create-cluster/#replication-factor) for
