@@ -147,7 +147,18 @@
   {%- endcall %}
 {% endmacro %}
 
+{% macro set_cluster(cluster) %}
+  set cluster = {{ cluster }};
+{% endmacro %}
+
 {% macro materialize__truncate_relation(relation) -%}
+  -- Materialize does not support the TRUNCATE command, so we work around that
+  -- by using an unqualified DELETE. DELETE requires a scan of the relation, so
+  -- it needs a valid cluster to run against. This is expected to fail if no
+  -- cluster is specified for the target in profiles.yml _and_ the default
+  -- cluster for the user is invalid (or intentionally set to
+  -- mz_catalog_server, which cannot query user data).
+  {% do run_query(set_cluster(target.cluster)) -%}
   {% call statement('truncate_relation') -%}
     delete from {{ relation }}
   {%- endcall %}
@@ -247,8 +258,8 @@
     join mz_schemas s on o.schema_id = s.id and s.name = '{{ schema_relation.schema }}'
     join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
     where o.type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
-      --Exclude subsources and progress subsources, which aren't relevant in this
-      --context and can bork the adapter (see #20483)
+      -- Exclude subsources and progress subsources, which aren't relevant in this
+      -- context and can bork the adapter (see #20483)
       and coalesce(so.type, '') not in ('subsource', 'progress')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}
