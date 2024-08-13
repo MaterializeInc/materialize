@@ -115,6 +115,19 @@ class Materialized(Service):
                 )
             ]
 
+        if restart:
+            policy, _, max_tries = restart.partition(":")
+            if policy in ("on-failure", "unless-stopped"):
+                # environmentd never exits successfully, so we can treat
+                # `on-failure` and `unless-stopped` equivalently.
+                environment += ["MZ_RESTART_ON_FAILURE=1"]
+                if max_tries:
+                    environment += [f"MZ_RESTART_LIMIT={max_tries}"]
+            elif policy == "no":
+                pass
+            else:
+                raise RuntimeError(f"unknown restart policy: {policy}")
+
         command = []
 
         if unsafe_mode:
@@ -195,9 +208,6 @@ class Materialized(Service):
             config["image"] = image
         else:
             config["mzbuild"] = "materialized"
-
-        if restart:
-            config["restart"] = restart
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
