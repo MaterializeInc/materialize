@@ -122,6 +122,8 @@ def get_default_system_parameters(
         "storage_source_decode_fuel": "100000",
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
+        "upsert_rocksdb_auto_spill_to_disk": "true",
+        "upsert_rocksdb_auto_spill_threshold_bytes": "1048576",  # 1 MB
         "wait_catalog_consolidation_on_startup": "true",
         # End of list (ordered by name)
     }
