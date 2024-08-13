@@ -17,6 +17,9 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
+from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
+    BooleanReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
     DynamicReturnTypeSpec,
 )
@@ -32,6 +35,13 @@ from materialize.output_consistency.operation.operation import (
 GENERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TAG_CASTING = "casting"
+
+IS_NULL_OPERATION = DbOperation(
+    "$ IS NULL",
+    [AnyOperationParam()],
+    BooleanReturnTypeSpec(),
+)
+GENERIC_OPERATION_TYPES.append(IS_NULL_OPERATION)
 
 GENERIC_OPERATION_TYPES.append(
     DbFunction(
