@@ -574,10 +574,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         all_hydrated
     }
 
-    /// Returns `true` iff all collections have their write frontier (aka.
-    /// upper) within `allowed_lag` of the "live" frontier reported in
-    /// `live_frontiers`. The "live" frontiers are frontiers as reported by a
-    /// currently running `environmentd` deployment, during a 0dt upgrade.
+    /// Returns `true` iff all (non-transient) collections have their write
+    /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
+    /// reported in `live_frontiers`. The "live" frontiers are frontiers as
+    /// reported by a currently running `environmentd` deployment, during a 0dt
+    /// upgrade.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
@@ -593,6 +594,12 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let mut all_caught_up = true;
 
         for (id, collection) in self.collections_iter() {
+            if id.is_transient() {
+                // These have no relation to dataflows running on previous
+                // deployments.
+                continue;
+            }
+
             let write_frontier = collection.write_frontier();
 
             // WIP: Assumes that the String representation remains stable. Is

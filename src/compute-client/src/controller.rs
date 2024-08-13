@@ -362,10 +362,11 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         result
     }
 
-    /// Returns `true` iff all collections have their write frontier (aka.
-    /// upper) within `allowed_lag` of the "live" frontier reported in
-    /// `live_frontiers`. The "live" frontiers are frontiers as reported by a
-    /// currently running `environmentd` deployment, during a 0dt upgrade.
+    /// Returns `true` iff all (non-transient) collections have their write
+    /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
+    /// reported in `live_frontiers`. The "live" frontiers are frontiers as
+    /// reported by a currently running `environmentd` deployment, during a 0dt
+    /// upgrade.
     ///
     /// For this check, zero-replica clusters are always considered caught up.
     /// Their collections would never normally be considered caught up but it's
