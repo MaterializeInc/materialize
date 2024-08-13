@@ -40,17 +40,18 @@ measured at a one second granularity for each cluster replica.
 
 To help users select the correct cluster size for their workload, Materialize
 uses cluster size names that are based on the compute credit, specifically,
-"centicredits" or `cc` (1/100th of a compute credit). For example, cluster size
-of `25cc` is equivalent to 0.25 compute credits/hour and cluster size of
-`200cc` is equivalent to 2 compute credits/hour. Larger clusters can process data faster and handle larger data volumes.
+"centicredits" or `cc` (1/100th of a compute credit). For example, the `25cc`
+ cluster size is equivalent to 0.25 compute credits/hour, the `200cc` cluster
+ size is equivalent to 2 compute credits/hour. Larger clusters can process data
+ faster and handle larger data volumes.
 
 {{< tip >}}
 You can resize a cluster at any time, even while the cluster is running, to respond to changes in your workload.
 {{</ tip >}}
 
-Clusters are always "on". However, you can adjust the number of replicas that
-are associated with a cluster. See [Compute cost
-factors](#compute-cost-factors) for more information on compute costs for replicas.
+Clusters are always "on". However, you can adjust the [replication factor](https://materialize.com/docs/sql/create-cluster/#replication-factor)
+for fault tolerance. See [Compute cost factors](#compute-cost-factors) for more
+information on the cost of adding redundant replicas to a cluster.
 
 ### Compute cost factors
 
