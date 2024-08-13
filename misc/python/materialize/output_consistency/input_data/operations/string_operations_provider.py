@@ -52,6 +52,7 @@ from materialize.output_consistency.operation.operation import (
 STRING_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TAG_REGEX = "regex"
+TAG_STRING_LIKE_OP = "strlike"
 
 STRING_OPERATION_TYPES.append(
     DbOperation(
@@ -105,6 +106,7 @@ STRING_LIKE_OPERATION = DbOperation(
     "$ LIKE $",
     [StringOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
+    tags={TAG_STRING_LIKE_OP},
     comment="case-sensitive SQL LIKE matching (equal to: $ ~~ $)",
 )
 STRING_OPERATION_TYPES.append(STRING_LIKE_OPERATION)
@@ -114,6 +116,7 @@ STRING_OPERATION_TYPES.append(
         "$ ILIKE $",
         [StringOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_STRING_LIKE_OP},
         comment="case-insensitive SQL LIKE matching (equal to: $ ~~* $)",
     )
 )
@@ -122,6 +125,7 @@ STRING_NOT_LIKE_OPERATION = DbOperation(
     "$ NOT LIKE $",
     [StringOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
+    tags={TAG_STRING_LIKE_OP},
     comment="negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)",
 )
 STRING_OPERATION_TYPES.append(STRING_NOT_LIKE_OPERATION)
@@ -131,6 +135,7 @@ STRING_OPERATION_TYPES.append(
         "$ NOT ILIKE $",
         [StringOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_STRING_LIKE_OP},
         comment="negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)",
     )
 )

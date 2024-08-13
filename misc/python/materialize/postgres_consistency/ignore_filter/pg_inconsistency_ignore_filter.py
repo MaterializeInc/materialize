@@ -68,6 +68,7 @@ from materialize.output_consistency.input_data.operations.record_operations_prov
 )
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
+    TAG_STRING_LIKE_OP,
 )
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
@@ -337,11 +338,8 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 partial(
                     matches_x_and_y,
                     x=partial(
-                        matches_op_by_any_pattern,
-                        patterns={
-                            "$ ILIKE $",
-                            "$ NOT ILIKE $",
-                        },
+                        is_operation_tagged,
+                        tag=TAG_STRING_LIKE_OP,
                     ),
                     y=partial(
                         argument_has_any_characteristic,
@@ -352,7 +350,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            return YesIgnore("#28806: regexp_split_to_table with ILIKE on NULL")
+            return YesIgnore("#28806: regexp_split_to_table with LIKE/ILIKE on NULL")
 
         if expression.matches(
             partial(
