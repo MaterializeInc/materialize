@@ -228,7 +228,7 @@ ALTER SYSTEM SET storage_enforce_external_addresses = true
     USER root,
     PASSWORD SECRET mysqlpass
   )
-contains:address is not global
+contains:Address resolved to a private IP
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_enforce_external_addresses = false
