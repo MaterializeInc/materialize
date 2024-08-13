@@ -180,6 +180,7 @@ impl ComputeMetrics {
         compatible: bool,
         uncompacted: bool,
         subscribe_free: bool,
+        dependencies_retained: bool,
     ) {
         let worker = worker_id.to_string();
 
@@ -194,6 +195,10 @@ impl ComputeMetrics {
         } else if !subscribe_free {
             self.reconciliation_replaced_dataflows_count_total
                 .with_label_values(&[&worker, "subscribe"])
+                .inc();
+        } else if !dependencies_retained {
+            self.reconciliation_replaced_dataflows_count_total
+                .with_label_values(&[&worker, "dependency"])
                 .inc();
         } else {
             self.reconciliation_reused_dataflows_count_total
