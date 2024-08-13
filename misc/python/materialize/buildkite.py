@@ -16,6 +16,8 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, TypeVar
 
+import yaml
+
 from materialize import git, spawn, ui
 
 T = TypeVar("T")
@@ -209,23 +211,23 @@ def notify_qa_team_about_failure(failure: str) -> None:
     if not is_in_buildkite():
         return
 
-    # TODO(def-) Reenable after figuring out how to make it write only once
-    # step_label = get_var(BuildkiteEnvVar.BUILDKITE_STEP_LABEL)
-    # message = f"{step_label}: {failure}"
-    # print(message)
-    # pipeline = {
-    #     "notify": [
-    #         {
-    #             "slack": {
-    #                 "channels": ["#team-testing-bots"],
-    #                 "message": message,
-    #             }
-    #         }
-    #     ]
-    # }
-    # spawn.runv(
-    #     ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
-    # )
+    step_label = get_var(BuildkiteEnvVar.BUILDKITE_STEP_LABEL)
+    message = f"{step_label}: {failure}"
+    print(message)
+    pipeline = {
+        "notify": [
+            {
+                "slack": {
+                    "channels": ["#team-testing-bots"],
+                    "message": message,
+                },
+                "if": 'build.state == "passed" || build.state == "failed" || build.state == "canceled"',
+            }
+        ]
+    }
+    spawn.runv(
+        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
+    )
 
 
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
