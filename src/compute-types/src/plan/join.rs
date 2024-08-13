@@ -260,7 +260,7 @@ impl JoinClosure {
             }
         }
 
-        before.permute(permutation, thinned_arity_with_key);
+        before.permute_fn(|c| permutation[&c], thinned_arity_with_key);
 
         // `before` should not be modified after this point.
         before.optimize();
@@ -385,7 +385,7 @@ impl JoinBuildState {
             }
         }
         let column_map_len = column_map.len();
-        mfp.permute(column_map, column_map_len);
+        mfp.permute_fn(|c| column_map[&c], column_map_len);
         mfp.optimize();
 
         JoinClosure {
