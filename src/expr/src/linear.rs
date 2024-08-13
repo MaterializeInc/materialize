@@ -542,7 +542,7 @@ impl MapFilterProject {
                     .map(|(new, old)| (old, new))
                     .collect::<BTreeMap<_, _>>();
                 for mfp in mfps.iter_mut() {
-                    mfp.permute(remap.clone(), common_demand.len());
+                    mfp.permute_fn(|c| remap[&c], common_demand.len());
                 }
                 result_mfp = result_mfp.project(common_demand);
 
@@ -817,21 +817,28 @@ impl MapFilterProject {
     /// The supplied `shuffle` might not list columns that are not "demanded" by the
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
-    pub fn permute(&mut self, mut shuffle: BTreeMap<usize, usize>, new_input_arity: usize) {
+    pub fn permute_fn<F>(&mut self, remap: F, new_input_arity: usize)
+    where
+        F: Fn(usize) -> usize,
+    {
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
-        for index in 0..map.len() {
-            // Intermediate columns are just shifted.
-            shuffle.insert(self.input_arity + index, new_input_arity + index);
-        }
+        let map_len = map.len();
+        let action = |col: &mut usize| {
+            if self.input_arity <= *col && *col < self.input_arity + map_len {
+                *col = new_input_arity + (*col - self.input_arity);
+            } else {
+                *col = remap(*col);
+            }
+        };
         for expr in map.iter_mut() {
-            expr.permute_map(&shuffle);
+            expr.visit_columns(action);
         }
         for pred in filter.iter_mut() {
-            pred.permute_map(&shuffle);
+            pred.visit_columns(action);
         }
         for proj in project.iter_mut() {
-            assert!(shuffle[proj] < new_input_arity + map.len());
-            *proj = shuffle[proj];
+            action(proj);
+            assert!(*proj < new_input_arity + map.len());
         }
         *self = Self::new(new_input_arity)
             .map(map)
@@ -1501,7 +1508,6 @@ pub mod util {
 }
 
 pub mod plan {
-    use std::collections::BTreeMap;
     use std::iter;
 
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -1536,8 +1542,14 @@ pub mod plan {
     }
 
     impl SafeMfpPlan {
-        pub fn permute(&mut self, map: BTreeMap<usize, usize>, new_arity: usize) {
-            self.mfp.permute(map, new_arity);
+        /// Remaps references to input columns according to `remap`.
+        ///
+        /// Leaves other column references, e.g. to newly mapped columns, unchanged.
+        pub fn permute_fn<F>(&mut self, remap: F, new_arity: usize)
+        where
+            F: Fn(usize) -> usize,
+        {
+            self.mfp.permute_fn(remap, new_arity);
         }
         /// Evaluates the linear operator on a supplied list of datums.
         ///

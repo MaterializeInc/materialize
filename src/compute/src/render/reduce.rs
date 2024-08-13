@@ -105,8 +105,8 @@ where
                         demand_map.insert(*column, demand_map.len());
                     }
                     let demand_map_len = demand_map.len();
-                    key_plan.permute(demand_map.clone(), demand_map_len);
-                    val_plan.permute(demand_map, demand_map_len);
+                    key_plan.permute_fn(|c| demand_map[&c], demand_map_len);
+                    val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
                     let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
                     move |row_datums, time, diff| {
                         let binding = SharedRow::get();

@@ -1700,11 +1700,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 // Init ix_names with unknown column names. Unknown columns are
                 // represented as an empty String and rendered as `#c` by the
                 // Display::fmt implementation for HumanizedExpr<'a, usize, M>.
-                let ix_arity = p.values().cloned().max().map(|m| m + 1).unwrap_or(0);
+                let ix_arity = p.iter().map(|x| *x + 1).max().unwrap_or(0);
                 let mut ix_names = vec![String::new(); ix_arity];
 
                 // Apply the permutation by swapping on_names with ix_names.
-                for (on_pos, ix_pos) in p.into_iter() {
+                for (on_pos, ix_pos) in p.into_iter().enumerate() {
                     let on_name = on_names.get_mut(on_pos).expect("on_name");
                     let ix_name = ix_names.get_mut(ix_pos).expect("ix_name");
                     std::mem::swap(on_name, ix_name);
