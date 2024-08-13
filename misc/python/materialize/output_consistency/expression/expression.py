@@ -22,6 +22,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.selection.selection import (
     ALL_ROWS_SELECTION,
     DataRowSelection,
@@ -191,3 +192,6 @@ class LeafExpression(Expression):
         self, row_selection: DataRowSelection
     ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
+
+    def get_data_source(self) -> DataSource:
+        raise NotImplementedError

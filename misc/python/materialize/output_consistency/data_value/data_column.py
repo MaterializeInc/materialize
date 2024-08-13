@@ -133,5 +133,9 @@ class DataColumn(LeafExpression):
             if table_index is None or table_index in value.vertical_table_indices
         ]
 
+    def get_data_source(self) -> DataSource:
+        assert self.data_source is not None, "Data source not assigned"
+        return self.data_source
+
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', type={self.data_type})"

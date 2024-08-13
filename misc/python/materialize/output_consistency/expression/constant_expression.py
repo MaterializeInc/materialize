@@ -21,6 +21,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.selection.selection import (
     DataRowSelection,
 )
@@ -62,6 +63,9 @@ class ConstantExpression(LeafExpression):
 
     def collect_vertical_table_indices(self) -> set[int]:
         return set()
+
+    def get_data_source(self) -> DataSource:
+        return DataSource(table_index=None)
 
     def __str__(self) -> str:
         return f"ConstantExpression (value={self.value}, type={self.data_type})"
