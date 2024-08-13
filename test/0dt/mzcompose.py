@@ -481,6 +481,14 @@ def workflow_basic(c: Composition) -> None:
         AAA
         > SELECT * FROM webhook_source
         AAA
+
+        $ set-max-tries max-tries=1
+        $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+        > BEGIN
+        > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+        > FETCH ALL c WITH (timeout='5s');
+        <TIMESTAMP> 1 1
+        > COMMIT
         """
         )
     )
@@ -562,6 +570,17 @@ def workflow_basic(c: Composition) -> None:
 
             > SELECT * FROM webhook_source
             AAA
+
+            $ set-max-tries max-tries=1
+            $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+            > BEGIN
+            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            contains: cannot write in read-only mode
+            > ROLLBACK
+            # Actual subscribes without a declare still work though
+            > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
+            <TIMESTAMP> 1 1 a
+            <TIMESTAMP> 1 2 a
             """
             )
         )
@@ -627,6 +646,16 @@ def workflow_basic(c: Composition) -> None:
         > SELECT * FROM webhook_source
         AAA
         CCC
+
+        $ set-max-tries max-tries=1
+        $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+        > BEGIN
+        > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+        > FETCH ALL c WITH (timeout='5s');
+        <TIMESTAMP> 1 1
+        <TIMESTAMP> 1 3
+        <TIMESTAMP> 1 5
+        > COMMIT
         """
         )
     )
@@ -680,6 +709,17 @@ def workflow_basic(c: Composition) -> None:
             > SELECT * FROM webhook_source
             AAA
             CCC
+
+            $ set-max-tries max-tries=1
+            $ set-regex match=\\d{13,20} replacement=<TIMESTAMP>
+            > BEGIN
+            ! DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            contains: cannot write in read-only mode
+            > ROLLBACK
+            # Actual subscribes without a declare still work though
+            > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
+            <TIMESTAMP> 1 1 a
+            <TIMESTAMP> 1 2 a
             """
             )
         )
@@ -792,6 +832,17 @@ def workflow_basic(c: Composition) -> None:
             AAA
             CCC
             EEE
+
+            $ set-max-tries max-tries=1
+            $ set-regex match=\\d{{13,20}} replacement=<TIMESTAMP>
+            > BEGIN
+            > DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t);
+            > FETCH ALL c WITH (timeout='5s');
+            <TIMESTAMP> 1 1
+            <TIMESTAMP> 1 3
+            <TIMESTAMP> 1 5
+            <TIMESTAMP> 1 7
+            > COMMIT
             """
             )
         )
