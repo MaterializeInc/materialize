@@ -87,6 +87,13 @@ class Expression:
     def collect_leaves(self) -> list[LeafExpression]:
         raise NotImplementedError
 
+    def collect_data_sources(self) -> list[DataSource]:
+        data_sources = []
+        for leaf in self.collect_leaves():
+            data_sources.append(leaf.get_data_source())
+
+        return data_sources
+
     def collect_vertical_table_indices(self) -> set[int]:
         raise NotImplementedError
 
