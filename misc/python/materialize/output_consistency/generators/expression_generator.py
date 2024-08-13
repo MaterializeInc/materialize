@@ -199,6 +199,27 @@ class ExpressionGenerator:
 
         return expression, number_of_args
 
+    def generate_leaf_expression(
+        self,
+        storage_layout: ValueStorageLayout,
+        types_with_values: list[DataTypeWithValues],
+    ) -> LeafExpression:
+        assert len(types_with_values) > 0, "No suitable types with values"
+
+        type_with_values = self.randomized_picker.random_type_with_values(
+            types_with_values
+        )
+
+        if storage_layout == ValueStorageLayout.VERTICAL:
+            return type_with_values.create_vertical_storage_column()
+        elif storage_layout == ValueStorageLayout.HORIZONTAL:
+            if len(type_with_values.raw_values) == 0:
+                raise NoSuitableExpressionFound("No value in type")
+
+            return self.randomized_picker.random_value(type_with_values.raw_values)
+        else:
+            raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
+
     def _select_storage_layout(
         self, operation: DbOperationOrFunction
     ) -> ValueStorageLayout:
@@ -326,19 +347,7 @@ class ExpressionGenerator:
         if len(suitable_types_with_values) == 0:
             raise NoSuitableExpressionFound("No suitable type")
 
-        type_with_values = self.randomized_picker.random_type_with_values(
-            suitable_types_with_values
-        )
-
-        if storage_layout == ValueStorageLayout.VERTICAL:
-            return type_with_values.create_vertical_storage_column()
-        elif storage_layout == ValueStorageLayout.HORIZONTAL:
-            if len(type_with_values.raw_values) == 0:
-                raise NoSuitableExpressionFound("No value in type")
-
-            return self.randomized_picker.random_value(type_with_values.raw_values)
-        else:
-            raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
+        return self.generate_leaf_expression(storage_layout, suitable_types_with_values)
 
     def _generate_complex_arg_for_param(
         self,
