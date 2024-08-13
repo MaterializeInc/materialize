@@ -52,7 +52,7 @@ use crate::durable::initialize::{
 use crate::durable::metrics::Metrics;
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::{
-    IntoStateUpdateKindRaw, StateUpdate, StateUpdateKind, StateUpdateKindRaw,
+    IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
 use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsageKey};
@@ -188,7 +188,7 @@ impl FenceableEpoch {
     }
 }
 
-pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
+pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
     /// Process and apply `update`.
     ///
     /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
@@ -297,14 +297,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     ///
     /// Returns the next upper used to commit the transaction.
     #[mz_ore::instrument]
-    pub(crate) async fn compare_and_append<S: IntoStateUpdateKindRaw>(
+    pub(crate) async fn compare_and_append<S: IntoStateUpdateKindJson>(
         &mut self,
         updates: Vec<(S, Diff)>,
     ) -> Result<Timestamp, CatalogError> {
         assert_eq!(self.mode, Mode::Writable);
 
         let updates = updates.into_iter().map(|(kind, diff)| {
-            let kind: StateUpdateKindRaw = kind.into();
+            let kind: StateUpdateKindJson = kind.into();
             ((Into::<SourceData>::into(kind), ()), self.upper, diff)
         });
         let next_upper = self.upper.step_forward();
@@ -370,7 +370,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         read_handle.expire().await;
         snapshot
             .into_iter()
-            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+            .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
             .map(|state_update| state_update.try_into().expect("kind decoding error"))
             .collect()
     }
@@ -428,7 +428,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                         debug!("syncing updates {batch_updates:?}");
                         let batch_updates = batch_updates
                             .into_iter()
-                            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+                            .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
                             .map(|update| {
                                 let kind = T::try_from(update.kind).expect("kind decoding error");
                                 (kind, update.ts, update.diff)
@@ -687,15 +687,15 @@ impl UnopenedCatalogStateInner {
     }
 }
 
-impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
+impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
     fn apply_update(
         &mut self,
-        update: StateUpdate<StateUpdateKindRaw>,
+        update: StateUpdate<StateUpdateKindJson>,
         current_epoch: &mut FenceableEpoch,
         _metrics: &Arc<Metrics>,
-    ) -> Result<Option<StateUpdate<StateUpdateKindRaw>>, DurableCatalogError> {
+    ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, DurableCatalogError> {
         if let Ok(kind) =
-            <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(update.kind.clone())
+            <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(update.kind.clone())
         {
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
@@ -733,7 +733,7 @@ impl ApplyUpdate<StateUpdateKindRaw> for UnopenedCatalogStateInner {
 /// Production users should call [`Self::expire`] before dropping an [`UnopenedPersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 pub(crate) type UnopenedPersistCatalogState =
-    PersistHandle<StateUpdateKindRaw, UnopenedCatalogStateInner>;
+    PersistHandle<StateUpdateKindJson, UnopenedCatalogStateInner>;
 
 impl UnopenedPersistCatalogState {
     /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with
@@ -833,7 +833,7 @@ impl UnopenedPersistCatalogState {
             .rev()
             .filter(|(_, _, diff)| *diff == 1)
             .filter_map(|(kind, _, _)| {
-                <StateUpdateKindRaw as TryIntoStateUpdateKind>::try_into(kind.clone()).ok()
+                <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(kind.clone()).ok()
             })
             .filter_map(|kind| match kind {
                 StateUpdateKind::Epoch(epoch) => Some(epoch),
@@ -1586,7 +1586,7 @@ async fn snapshot_binary(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindRaw>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
     metrics.snapshots_taken.inc();
     let counter = metrics.snapshot_latency_seconds.clone();
     snapshot_binary_inner(read_handle, as_of)
@@ -1603,7 +1603,7 @@ async fn snapshot_binary(
 async fn snapshot_binary_inner(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindRaw>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
         .await
@@ -1614,7 +1614,7 @@ async fn snapshot_binary_inner(
     );
     snapshot
         .into_iter()
-        .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+        .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
 }
 

@@ -39,7 +39,7 @@ use std::time::Duration;
 use crate::durable::objects::serialization::proto::{
     cluster_schedule, ClusterScheduleRefreshOptions, Empty,
 };
-use crate::durable::objects::state_update::StateUpdateKindRaw;
+use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
@@ -58,16 +58,16 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/objects.rs"));
 }
 
-impl From<proto::StateUpdateKind> for StateUpdateKindRaw {
+impl From<proto::StateUpdateKind> for StateUpdateKindJson {
     fn from(value: proto::StateUpdateKind) -> Self {
-        StateUpdateKindRaw::from_serde(&value)
+        StateUpdateKindJson::from_serde(&value)
     }
 }
 
-impl TryFrom<StateUpdateKindRaw> for proto::StateUpdateKind {
+impl TryFrom<StateUpdateKindJson> for proto::StateUpdateKind {
     type Error = String;
 
-    fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
+    fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
         value.try_to_serde::<Self>().map_err(|err| err.to_string())
     }
 }
