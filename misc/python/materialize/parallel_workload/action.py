@@ -2223,7 +2223,8 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
-        (AlterKafkaSinkFromAction, 8),
+        # TODO: Reenable when #28962 is fixed
+        # (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

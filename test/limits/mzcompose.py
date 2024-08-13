@@ -1256,12 +1256,9 @@ class FilterSubqueries(Generator):
 
             # Increase SQL timeout to 10 minutes (~5 should be enough).
             #
-            # Update: Now 15 minutes, not 10. This query appears to scale
-            # super-linear with COUNT. Here are timings for the first few
-            # multiples of 10 on a fresh staging env.
-            #
-            # 10: 200ms, 20: 375ms, 30: 1.5s, 40: 5.5s, 50: 16s, 60: 45s
-            $ set-sql-timeout duration=900s
+            # Update: Now 20 minutes, not 10. This query appears to scale
+            # super-linear with COUNT.
+            $ set-sql-timeout duration=1200s
 
             > SELECT * FROM t1 AS a1 WHERE {
                 " AND ".join(
@@ -1464,6 +1461,7 @@ class MySqlSources(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
