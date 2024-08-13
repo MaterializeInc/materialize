@@ -16,7 +16,7 @@ use std::io::Write;
 use mz_persist_types::Codec;
 use mz_storage_types::sources::SourceData;
 
-use crate::durable::objects::state_update::StateUpdateKindRaw;
+use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
 static PROTO_DIRECTORY: Lazy<String> =
@@ -66,7 +66,7 @@ fn test_proto_serialization_stability() {
             .lines()
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
             .map(|b| SourceData::decode(&b, &relation_desc).expect("valid proto"))
-            .map(StateUpdateKindRaw::from)
+            .map(StateUpdateKindJson::from)
             .map(|raw| {
                 AllVersionsStateUpdateKind::try_from_raw(&snapshot_file, raw)
                     .expect("valid version and raw")

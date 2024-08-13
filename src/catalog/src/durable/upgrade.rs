@@ -60,7 +60,7 @@ use proptest_derive::Arbitrary;
 use crate::durable::initialize::USER_VERSION_KEY;
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::{
-    IntoStateUpdateKindRaw, StateUpdate, StateUpdateKind, StateUpdateKindRaw,
+    IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
 };
 use crate::durable::persist::{Mode, Timestamp, UnopenedPersistCatalogState};
 use crate::durable::{CatalogError, DurableCatalogError};
@@ -75,21 +75,21 @@ macro_rules! objects {
                 pub(crate) mod [<objects_ $x>] {
                     include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
 
-                    use crate::durable::objects::state_update::StateUpdateKindRaw;
+                    use crate::durable::objects::state_update::StateUpdateKindJson;
 
-                    impl From<StateUpdateKind> for StateUpdateKindRaw {
+                    impl From<StateUpdateKind> for StateUpdateKindJson {
                         fn from(value: StateUpdateKind) -> Self {
                             let kind = value.kind.expect("kind should be set");
                             // TODO: This requires that the json->proto->json roundtrips
                             // exactly, see #23908.
-                            StateUpdateKindRaw::from_serde(&kind)
+                            StateUpdateKindJson::from_serde(&kind)
                         }
                     }
 
-                    impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
+                    impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
                         type Error = String;
 
-                        fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
+                        fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
                             let kind: state_update_kind::Kind = value.to_serde();
                             Ok(StateUpdateKind { kind: Some(kind) })
                         }
@@ -148,7 +148,7 @@ macro_rules! objects {
                 }
 
                 #[cfg(test)]
-                fn try_from_raw(version: &str, raw: StateUpdateKindRaw) -> Result<Self, String> {
+                fn try_from_raw(version: &str, raw: StateUpdateKindJson) -> Result<Self, String> {
                     match version {
                         $(
                             concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.try_into()?)),
@@ -158,7 +158,7 @@ macro_rules! objects {
                 }
 
                 #[cfg(test)]
-                fn raw(self) -> StateUpdateKindRaw {
+                fn raw(self) -> StateUpdateKindJson {
                     match self {
                         $(
                             Self::[<$x:upper>](kind) => kind.into(),
@@ -199,7 +199,7 @@ mod v60_to_v61;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum MigrationAction<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> {
+enum MigrationAction<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> {
     /// Deletes the provided key.
     #[allow(unused)]
     Delete(V1),
@@ -211,10 +211,10 @@ enum MigrationAction<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> {
     Update(V1, V2),
 }
 
-impl<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> MigrationAction<V1, V2> {
+impl<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> MigrationAction<V1, V2> {
     /// Converts `self` into a `Vec<StateUpdate<StateUpdateKindBinary>>` that can be appended
     /// to persist.
-    fn into_updates(self) -> Vec<(StateUpdateKindRaw, Diff)> {
+    fn into_updates(self) -> Vec<(StateUpdateKindJson, Diff)> {
         match self {
             MigrationAction::Delete(kind) => {
                 vec![(kind.into(), -1)]
@@ -308,7 +308,7 @@ async fn run_upgrade(
 /// `current_version`.
 ///
 /// Returns the new version and upper.
-async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw>(
+async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson>(
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
     mode: Mode,
     current_version: u64,
@@ -360,7 +360,7 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
 }
 
 /// Generates a [`proto::StateUpdateKind`] to update the user version.
-fn version_update_kind(version: u64) -> StateUpdateKindRaw {
+fn version_update_kind(version: u64) -> StateUpdateKindJson {
     // We can use the current version because Configs can never be migrated and are always wire
     // compatible.
     StateUpdateKind::Config(

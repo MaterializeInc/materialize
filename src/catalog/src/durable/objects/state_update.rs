@@ -7,6 +7,32 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! This module contains various representations of a single catalog update and the logic necessary
+//! for converting between representations.
+//!
+//! The general lifecycle of a single update when read from persist is as follows:
+//!
+//!   1. The update is stored in persist as a [`PersistStateUpdate`].
+//!   2. After being read from persist the update is immediately converted into a
+//!      [`StateUpdate<StateUpdateKindJson>`], which models the update as a JSON.
+//!   3. The [`StateUpdateKindJson`] is converted into a protobuf message,
+//!      [`proto::StateUpdateKind`].
+//!   4. The update is then converted into a [`StateUpdate<StateUpdateKind>`], which is a strongly
+//!      typed Rust object.
+//!   5. Finally, the update is converted into an [`Option<memory::objects::StateUpdate>`], and
+//!      `Some` variants are given to the in-memory catalog. The in-memory catalog is only
+//!      interested in a subset of catalog updates which is why the [`Option`] is necessary.
+//!
+//! TLDR: [`PersistStateUpdate`] -> [`StateUpdate<StateUpdateKindJson>`] ->
+//!       [`proto::StateUpdateKind`] -> [`StateUpdate<StateUpdateKind>`] ->
+//!       [`Option<memory::objects::StateUpdate>`]
+//!
+//! The process of writing a catalog update to persist is the exact opposite.
+//!
+//! When running catalog protobuf upgrades/migrations we may need to take a detour and convert the
+//! [`StateUpdateKindJson`] to some `proto::object_v{x}::StateUpdateKind` before applying specific
+//! upgrades to get us to a valid [`proto::StateUpdateKind`].
+
 use std::fmt::Debug;
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -23,41 +49,41 @@ use crate::durable::transaction::TransactionBatch;
 use crate::durable::{DurableCatalogError, Epoch};
 use crate::memory;
 
-/// Trait for objects that can be converted to/from a [`StateUpdateKindRaw`].
-pub trait IntoStateUpdateKindRaw:
-    Into<StateUpdateKindRaw> + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
+/// Trait for objects that can be converted to/from a [`StateUpdateKindJson`].
+pub trait IntoStateUpdateKindJson:
+    Into<StateUpdateKindJson> + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
 {
     type Error: Debug;
 
-    fn try_from(raw: StateUpdateKindRaw) -> Result<Self, Self::Error>;
+    fn try_from(raw: StateUpdateKindJson) -> Result<Self, Self::Error>;
 }
 impl<
-        T: Into<StateUpdateKindRaw>
-            + TryFrom<StateUpdateKindRaw>
+        T: Into<StateUpdateKindJson>
+            + TryFrom<StateUpdateKindJson>
             + PartialEq
             + Eq
             + PartialOrd
             + Ord
             + Debug
             + Clone,
-    > IntoStateUpdateKindRaw for T
+    > IntoStateUpdateKindJson for T
 where
     T::Error: Debug,
 {
     type Error = T::Error;
 
-    fn try_from(raw: StateUpdateKindRaw) -> Result<Self, Self::Error> {
-        <T as TryFrom<StateUpdateKindRaw>>::try_from(raw)
+    fn try_from(raw: StateUpdateKindJson) -> Result<Self, Self::Error> {
+        <T as TryFrom<StateUpdateKindJson>>::try_from(raw)
     }
 }
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKind`].
-pub(crate) trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
+pub(crate) trait TryIntoStateUpdateKind: IntoStateUpdateKindJson {
     type Error: Debug;
 
     fn try_into(self) -> Result<StateUpdateKind, <Self as TryIntoStateUpdateKind>::Error>;
 }
-impl<T: IntoStateUpdateKindRaw + TryInto<StateUpdateKind>> TryIntoStateUpdateKind for T
+impl<T: IntoStateUpdateKindJson + TryInto<StateUpdateKind>> TryIntoStateUpdateKind for T
 where
     <T as TryInto<StateUpdateKind>>::Error: Debug,
 {
@@ -70,7 +96,7 @@ where
 
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
+pub struct StateUpdate<T: IntoStateUpdateKindJson = StateUpdateKind> {
     /// They kind and contents of the state update.
     pub kind: T,
     /// The timestamp at which the update occurred.
@@ -176,39 +202,34 @@ impl StateUpdate {
     }
 }
 
-/// Decodes a [`StateUpdate<StateUpdateKindRaw>`] from the `(key, value, ts,
+/// Version of [`StateUpdateKind`] that is stored directly in persist.
+type PersistStateUpdate = (
+    (Result<SourceData, String>, Result<(), String>),
+    Timestamp,
+    i64,
+);
+
+/// Decodes a [`StateUpdate<StateUpdateKindJson>`] from the `(key, value, ts,
 /// diff)` tuple/update we store in persist.
-impl
-    From<(
-        (Result<SourceData, String>, Result<(), String>),
-        Timestamp,
-        i64,
-    )> for StateUpdate<StateUpdateKindRaw>
-{
-    fn from(
-        kvtd: (
-            (Result<SourceData, String>, Result<(), String>),
-            Timestamp,
-            i64,
-        ),
-    ) -> Self {
+impl From<PersistStateUpdate> for StateUpdate<StateUpdateKindJson> {
+    fn from(kvtd: PersistStateUpdate) -> Self {
         let ((key, val), ts, diff) = kvtd;
         let (key, ()) = (
             key.expect("persist decoding error"),
             val.expect("persist decoding error"),
         );
         StateUpdate {
-            kind: StateUpdateKindRaw::from(key),
+            kind: StateUpdateKindJson::from(key),
             ts,
             diff,
         }
     }
 }
 
-impl TryFrom<StateUpdate<StateUpdateKindRaw>> for StateUpdate<StateUpdateKind> {
+impl TryFrom<StateUpdate<StateUpdateKindJson>> for StateUpdate<StateUpdateKind> {
     type Error = String;
 
-    fn try_from(update: StateUpdate<StateUpdateKindRaw>) -> Result<Self, Self::Error> {
+    fn try_from(update: StateUpdate<StateUpdateKindJson>) -> Result<Self, Self::Error> {
         Ok(StateUpdate {
             kind: TryInto::try_into(update.kind)?,
             ts: update.ts,
@@ -691,20 +712,20 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdateKindRaw(Jsonb);
+pub struct StateUpdateKindJson(Jsonb);
 
-impl From<StateUpdateKind> for StateUpdateKindRaw {
+impl From<StateUpdateKind> for StateUpdateKindJson {
     fn from(value: StateUpdateKind) -> Self {
         let kind = value.into_proto();
         let kind = kind.kind.expect("kind should be set");
-        StateUpdateKindRaw::from_serde(&kind)
+        StateUpdateKindJson::from_serde(&kind)
     }
 }
 
-impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
+impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
     type Error = String;
 
-    fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
+    fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
         let kind: proto::state_update_kind::Kind =
             value.try_to_serde().map_err(|err| err.to_string())?;
         let kind = proto::StateUpdateKind { kind: Some(kind) };
@@ -712,26 +733,26 @@ impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
     }
 }
 
-impl From<StateUpdateKindRaw> for SourceData {
-    fn from(value: StateUpdateKindRaw) -> SourceData {
+impl From<StateUpdateKindJson> for SourceData {
+    fn from(value: StateUpdateKindJson) -> SourceData {
         let row = value.0.into_row();
         SourceData(Ok(row))
     }
 }
 
-impl From<SourceData> for StateUpdateKindRaw {
+impl From<SourceData> for StateUpdateKindJson {
     fn from(value: SourceData) -> Self {
         let row = value.0.expect("only Ok values stored in catalog shard");
-        StateUpdateKindRaw(Jsonb::from_row(row))
+        StateUpdateKindJson(Jsonb::from_row(row))
     }
 }
 
-impl StateUpdateKindRaw {
+impl StateUpdateKindJson {
     pub(crate) fn from_serde<S: serde::Serialize>(s: &S) -> Self {
         let serde_value = serde_json::to_value(s).expect("valid json");
         let row =
             Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
-        StateUpdateKindRaw(row)
+        StateUpdateKindJson(row)
     }
 
     pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
@@ -861,7 +882,7 @@ mod tests {
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
 
-    use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindRaw};
+    use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
 
     proptest! {
         #[mz_ore::test]
@@ -869,7 +890,7 @@ mod tests {
         fn proptest_state_update_kind_roundtrip(kind: StateUpdateKind) {
             // Verify that we can map encode into the "raw" json format. This
             // validates things like contained integers fitting in f64.
-            let raw = StateUpdateKindRaw::from(kind.clone());
+            let raw = StateUpdateKindJson::from(kind.clone());
             let desc = RelationDesc::empty().with_column("a", ScalarType::Jsonb.nullable(false));
 
             // Verify that the raw roundtrips through the SourceData Codec impl.
@@ -878,7 +899,7 @@ mod tests {
             source_data.encode(&mut encoded);
             let decoded = SourceData::decode(&encoded, &desc).expect("should be valid SourceData");
             prop_assert_eq!(&source_data, &decoded);
-            let decoded = StateUpdateKindRaw::from(decoded);
+            let decoded = StateUpdateKindJson::from(decoded);
             prop_assert_eq!(&raw, &decoded);
 
             // Verify that the enum roundtrips.
