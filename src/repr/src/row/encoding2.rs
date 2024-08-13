@@ -80,7 +80,7 @@ struct DatumEncoder {
 }
 
 impl DatumEncoder {
-    fn push<'e, 'd>(&'e mut self, datum: Datum<'d>) -> Result<(), anyhow::Error> {
+    fn push(&mut self, datum: Datum) {
         assert!(
             !datum.is_null() || self.nullable,
             "tried pushing Null into non-nullable column"
@@ -90,8 +90,6 @@ impl DatumEncoder {
         if datum.is_null() {
             self.none_stats += 1;
         }
-
-        Ok(())
     }
 
     fn push_invalid(&mut self) {
@@ -194,7 +192,7 @@ enum DatumColumnEncoder {
     },
     Record {
         /// Columns in the record.
-        fields: Vec<Box<DatumColumnEncoder>>,
+        fields: Vec<DatumEncoder>,
         /// Null entries, if any.
         nulls: Option<BooleanBufferBuilder>,
         /// Number of values we've pushed into this builder thus far.
@@ -783,13 +781,10 @@ impl DatumColumnEncoder {
                     .enumerate()
                     .map(|(tag, encoder)| {
                         // TODO(parkmycar): Record these stats.
+                        let nullable = encoder.nullable;
                         let (array, _field_stats) = encoder.finish();
-                        let field = Field::new(
-                            tag.to_string(),
-                            array.data_type().clone(),
-                            array.is_nullable(),
-                        );
-
+                        let field =
+                            Field::new(tag.to_string(), array.data_type().clone(), nullable);
                         (field, array)
                     })
                     .unzip();
@@ -1268,7 +1263,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
     fn append(&mut self, val: &Row) {
         let mut num_datums = 0;
         for (datum, encoder) in val.iter().zip(self.encoders.iter_mut()) {
-            encoder.push(datum).expect("failed to push datum");
+            encoder.push(datum);
             num_datums += 1;
         }
         assert_eq!(
@@ -1631,7 +1626,13 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Record { fields, .. } => {
             let encoders = fields
                 .iter()
-                .map(|(_name, ty)| scalar_type_to_encoder(&ty.scalar_type).map(Box::new))
+                .map(|(_name, ty)| {
+                    scalar_type_to_encoder(&ty.scalar_type).map(|e| DatumEncoder {
+                        nullable: ty.nullable,
+                        encoder: e,
+                        none_stats: 0,
+                    })
+                })
                 .collect::<Result<_, _>>()?;
 
             DatumColumnEncoder::Record {
@@ -1927,8 +1928,8 @@ mod tests {
             "a",
             ScalarType::Record {
                 fields: vec![
-                    (ColumnName::from("foo"), ScalarType::Int64.nullable(true)),
-                    (ColumnName::from("bar"), ScalarType::String.nullable(false)),
+                    (ColumnName::from("foo"), ScalarType::Int64.nullable(false)),
+                    (ColumnName::from("bar"), ScalarType::String.nullable(true)),
                     (
                         ColumnName::from("baz"),
                         ScalarType::List {
