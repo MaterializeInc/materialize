@@ -221,9 +221,7 @@ class QueryGenerator:
             if len(expression_chunk) == 0:
                 continue
 
-            data_source, additional_data_sources = self._select_sources(
-                storage_layout, contains_aggregations
-            )
+            data_source, additional_data_sources = self._select_sources(storage_layout)
             all_expressions = expression_chunk
             self._assign_random_sources(
                 [data_source] + additional_data_sources,
@@ -279,9 +277,7 @@ class QueryGenerator:
 
             contains_aggregation = expression.is_aggregate
 
-            data_source, additional_data_sources = self._select_sources(
-                storage_layout, contains_aggregation
-            )
+            data_source, additional_data_sources = self._select_sources(storage_layout)
             all_expressions = [expression]
             self._assign_random_sources(
                 [data_source] + additional_data_sources, all_expressions
@@ -355,12 +351,13 @@ class QueryGenerator:
                     leaf_expression.assign_data_source(random_source, force=force)
 
     def _select_sources(
-        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+        self,
+        storage_layout: ValueStorageLayout,
     ) -> tuple[DataSource, list[AdditionalDataSource]]:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             return DataSource(table_index=None), []
 
-        return self._random_source_tables(storage_layout, contains_aggregations)
+        return self._random_source_tables(storage_layout)
 
     def minimize_sources(
         self,
@@ -393,7 +390,7 @@ class QueryGenerator:
         return data_source, additional_data_sources
 
     def _random_source_tables(
-        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+        self, storage_layout: ValueStorageLayout
     ) -> tuple[DataSource, list[AdditionalDataSource]]:
         main_source = DataSource(table_index=0)
 
@@ -412,7 +409,6 @@ class QueryGenerator:
                     storage_layout,
                     main_source,
                     additional_source,
-                    contains_aggregations,
                 )
                 self._validate_join_constraint(join_constraint)
                 additional_source.join_constraint = join_constraint
@@ -492,7 +488,6 @@ class QueryGenerator:
         storage_layout: ValueStorageLayout,
         data_source: DataSource,
         joined_source: DataSource,
-        query_contains_aggregations: bool,
     ) -> Expression:
         assert (
             storage_layout == ValueStorageLayout.VERTICAL
@@ -558,7 +553,8 @@ class QueryGenerator:
             return is_not_null_expression
         elif join_target == JoinTarget.BOOLEAN_EXPRESSION:
             expression = self.expression_generator.generate_boolean_expression(
-                use_aggregation=query_contains_aggregations,
+                # aggregations in where conditions are not allowed
+                use_aggregation=False,
                 storage_layout=storage_layout,
             )
             if expression is None:
