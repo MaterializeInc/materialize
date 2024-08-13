@@ -537,8 +537,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         );
     }
 
-    /// Returns `true` iff all collections are hydrated on at least one
-    /// (possibly different) replica.
+    /// Returns `true` iff all (non-transient) collections are hydrated on at
+    /// least one (possibly different) replica.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
@@ -550,6 +550,12 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let mut all_hydrated = true;
 
         for (id, _collection) in self.collections_iter() {
+            if id.is_transient() {
+                // These have no relation to dataflows running on previous
+                // deployments.
+                continue;
+            }
+
             let mut collection_hydrated = false;
             for replica_state in self.replicas.values() {
                 let collection_state = replica_state
