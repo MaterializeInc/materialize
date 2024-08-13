@@ -908,9 +908,10 @@ where
                 self.render_flat_map(input, func, exprs, mfp, input_key)
             }
             Join { inputs, plan } => {
-                let inputs = inputs.into_iter().map(expect_input).collect();
+                let inputs = inputs.into_iter().map(expect_input).collect::<Vec<_>>();
                 match plan {
                     mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
+                        let inputs = inputs.into_iter().map(|i| vec![(i, None, false)]).collect();
                         self.render_join(inputs, linear_plan)
                     }
                     mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
