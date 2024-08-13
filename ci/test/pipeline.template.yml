@@ -422,7 +422,6 @@ steps:
               composition: pg-cdc
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64-small
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
