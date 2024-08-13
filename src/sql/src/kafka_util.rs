@@ -16,7 +16,7 @@ use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
+    Expr, KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
     KafkaSourceConfigOptionName,
 };
 use mz_storage_types::sinks::KafkaSinkCompressionType;
@@ -51,6 +51,7 @@ generate_extracted_config!(
         KafkaSinkCompressionType,
         Default(KafkaSinkCompressionType::Lz4)
     ),
+    (PartitionBy, Expr<Aug>),
     (ProgressGroupIdPrefix, String),
     (TransactionalIdPrefix, String),
     (LegacyIds, bool),

@@ -411,7 +411,11 @@ fn parse_expected_messages(
                 Format::Bytes => {
                     unimplemented!("bytes format not yet supported in tests")
                 }
-                Format::Text => DecodedValue::Text(key.to_string()),
+                Format::Text => DecodedValue::Text(
+                    key.as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| key.to_string()),
+                ),
             })
         } else {
             None
@@ -419,6 +423,7 @@ fn parse_expected_messages(
 
         let value = match deserializer.next().transpose().context("parsing json")? {
             None => None,
+            Some(value) if value.as_str() == Some("<null>") => None,
             Some(value) => match format.value {
                 Format::Avro => Some(DecodedValue::Avro(DebugValue(avro::from_json(
                     &value,

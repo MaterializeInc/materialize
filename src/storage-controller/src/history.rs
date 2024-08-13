@@ -331,6 +331,7 @@ mod tests {
                     },
                     Vec::<String>::new(),
                 ),
+                partition_by: Default::default(),
                 topic: Default::default(),
                 topic_options: Default::default(),
                 compression_type: KafkaSinkCompressionType::None,

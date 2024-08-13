@@ -16,8 +16,8 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::{
-    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Ident,
-    KafkaBroker, RefreshOptionValue, ReplicaDefinition,
+    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
+    Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition,
 };
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use serde::{Deserialize, Serialize};
@@ -148,6 +148,29 @@ impl TryFromValue<WithOptionValue<Aug>> for Ident {
 impl ImpliedValue for Ident {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an identifier")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Expr<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::Expr(e) => e,
+            _ => sql_bail!("must provide an expr"),
+        })
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Expr(self))
+    }
+
+    fn name() -> String {
+        "expression".to_string()
+    }
+}
+
+impl ImpliedValue for Expr<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an expression")
     }
 }
 
@@ -631,6 +654,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::UnresolvedItemName(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
+            | WithOptionValue::Expr(_)
             | WithOptionValue::ClusterReplicas(_)
             | WithOptionValue::ConnectionKafkaBroker(_)
             | WithOptionValue::ConnectionAwsPrivatelink(_)
@@ -650,6 +674,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::Ident(_) => "identifiers",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
+                    WithOptionValue::Expr(_) => "exprs",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
                     WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",

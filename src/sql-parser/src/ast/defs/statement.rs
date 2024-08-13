@@ -3814,6 +3814,7 @@ pub enum WithOptionValue<T: AstInfo> {
     Sequence(Vec<WithOptionValue<T>>),
     Map(BTreeMap<String, WithOptionValue<T>>),
     // Special cases.
+    Expr(Expr<T>),
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
     ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
@@ -3833,7 +3834,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::Sequence(_)
                 | WithOptionValue::Map(_)
                 | WithOptionValue::RetainHistoryFor(_)
-                | WithOptionValue::Refresh(_) => {
+                | WithOptionValue::Refresh(_)
+                | WithOptionValue::Expr(_) => {
                     // These are redact-aware.
                 }
                 WithOptionValue::Secret(_) | WithOptionValue::ConnectionKafkaBroker(_) => {
@@ -3872,6 +3874,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 }
                 f.write_str("]");
             }
+            WithOptionValue::Expr(e) => f.write_node(e),
             WithOptionValue::Value(value) => f.write_node(value),
             WithOptionValue::DataType(typ) => f.write_node(typ),
             WithOptionValue::Secret(name) => {
