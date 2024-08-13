@@ -261,10 +261,13 @@ async fn advance_uppers<T>(
         // for each migrated builtin table, of which there usually aren't many.
         let expected_upper = write_handle.fetch_recent_upper().await.to_owned();
 
-        all_updates.insert(
-            *id,
-            (Span::none(), Vec::new(), expected_upper, upper.clone()),
-        );
+        // Avoid advancing the upper until the coordinator has a chance to back-fill the shard.
+        if expected_upper.elements() != &[T::minimum()] {
+            all_updates.insert(
+                *id,
+                (Span::none(), Vec::new(), expected_upper, upper.clone()),
+            );
+        }
     }
 
     let result = append_work(write_handles, all_updates).await;

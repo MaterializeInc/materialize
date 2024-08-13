@@ -1349,6 +1349,11 @@ where
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
+        let is_in_txns = |id, metadata: &CollectionMetadata| {
+            metadata.txns_shard.is_some()
+                && !(self.read_only && migrated_storage_collections.contains(&id))
+        };
+
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.
@@ -1411,13 +1416,6 @@ where
                 // tables), then we need to pass along the shard id for the txns
                 // shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites)
-                        if self.read_only && migrated_storage_collections.contains(&id) =>
-                    {
-                        // In read-only mode we cannot register migrated storage collections in the
-                        // txn-shard, so they must be excluded.
-                        None
-                    }
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         Some(*self.txns_read.txns_id())
                     }
@@ -1661,13 +1659,11 @@ where
                 DataSource::Other(DataSourceOther::TableWrites) => {
                     // See comment on self.initial_txn_upper on why we're doing
                     // this.
-                    if PartialOrder::less_than(
-                        &collection_state.write_frontier,
-                        &self.initial_txn_upper,
-                    )
-                        // Shards not registered with a txn_shard should not have their uppers
-                        // advanced with the txn shard.
-                        && collection_state.collection_metadata.txns_shard.is_some()
+                    if is_in_txns(id, &metadata)
+                        && PartialOrder::less_than(
+                            &collection_state.write_frontier,
+                            &self.initial_txn_upper,
+                        )
                     {
                         // We could try and be cute and use the join of the txn
                         // upper and the table upper. But that has more
@@ -1688,12 +1684,7 @@ where
                 }
             }
 
-            self.register_handles(
-                id,
-                metadata.txns_shard.is_some(),
-                since_handle,
-                write_handle,
-            );
+            self.register_handles(id, is_in_txns(id, &metadata), since_handle, write_handle);
 
             // If this collection has a dependency, install a read hold on it.
             self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
