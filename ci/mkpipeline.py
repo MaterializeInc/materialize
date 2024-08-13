@@ -83,6 +83,11 @@ so it is executed.""",
         type=Sanitizer,
         choices=Sanitizer,
     )
+    parser.add_argument(
+        "--priority",
+        type=int,
+        default=os.getenv("CI_PRIORITY", 0),
+    )
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
 
@@ -209,7 +214,7 @@ so it is executed.""",
             if step.get("coverage") == "only":
                 step["skip"] = True
 
-    prioritize_pipeline(pipeline)
+    prioritize_pipeline(pipeline, args.priority)
 
     permit_rerunning_successful_steps(pipeline)
 
@@ -267,13 +272,13 @@ class PipelineStep:
         return inputs
 
 
-def prioritize_pipeline(pipeline: Any) -> None:
+def prioritize_pipeline(pipeline: Any, priority: int) -> None:
     """Prioritize builds against main or release branches"""
 
     tag = os.environ["BUILDKITE_TAG"]
     branch = os.getenv("BUILDKITE_BRANCH")
     # use the base priority of the entire pipeline
-    priority = pipeline.get("priority", 0)
+    priority += pipeline.get("priority", 0)
 
     # Release results are time sensitive
     if tag.startswith("v"):
