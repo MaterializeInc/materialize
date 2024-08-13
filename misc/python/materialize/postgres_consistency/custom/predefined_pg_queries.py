@@ -43,6 +43,7 @@ from materialize.output_consistency.input_data.types.date_time_types_provider im
 from materialize.output_consistency.input_data.types.string_type_provider import (
     TEXT_DATA_TYPE,
 )
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import DataRowSelection
 
@@ -65,7 +66,7 @@ def create_pg_timezone_abbrevs_query() -> QueryTemplate:
         storage_layout=ValueStorageLayout.VERTICAL,
         contains_aggregations=False,
         row_selection=DataRowSelection(),
-        custom_db_object_name="pg_catalog.pg_timezone_abbrevs",
+        data_source=DataSource(custom_db_object_name="pg_catalog.pg_timezone_abbrevs"),
         custom_order_expressions=[abbrev_col_expr],
     )
 
@@ -179,7 +180,7 @@ def create_pg_timezone_names_query() -> QueryTemplate:
         storage_layout=ValueStorageLayout.VERTICAL,
         contains_aggregations=False,
         row_selection=DataRowSelection(),
-        custom_db_object_name="pg_catalog.pg_timezone_names",
+        data_source=DataSource(custom_db_object_name="pg_catalog.pg_timezone_names"),
         custom_order_expressions=[
             order_by_sanitized_name_expr,
             pg_timezone_abbrev_col_expr,
