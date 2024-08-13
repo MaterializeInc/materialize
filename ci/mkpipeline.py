@@ -272,29 +272,29 @@ def prioritize_pipeline(pipeline: Any) -> None:
 
     tag = os.environ["BUILDKITE_TAG"]
     branch = os.getenv("BUILDKITE_BRANCH")
-    priority = None
+    # use the base priority of the entire pipeline
+    priority = pipeline.get("priority", 0)
 
     # Release results are time sensitive
     if tag.startswith("v"):
-        priority = 10
+        priority += 10
 
     # main branch is less time sensitive than results on PRs
     if branch == "main":
-        priority = -10
+        priority -= 10
 
     def visit(config: Any) -> None:
         config["priority"] = config.get("priority", 0) + priority
 
-    if priority is not None:
-        for config in pipeline["steps"]:
-            if "trigger" in config or "wait" in config:
-                # Trigger and Wait steps do not allow priorities.
-                continue
-            if "group" in config:
-                for inner_config in config.get("steps", []):
-                    visit(inner_config)
-                continue
-            visit(config)
+    for config in pipeline["steps"]:
+        if "trigger" in config or "wait" in config:
+            # Trigger and Wait steps do not allow priorities.
+            continue
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                visit(inner_config)
+            continue
+        visit(config)
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
