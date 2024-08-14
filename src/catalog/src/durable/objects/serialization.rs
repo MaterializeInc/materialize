@@ -60,7 +60,7 @@ pub mod proto {
 
 impl From<proto::StateUpdateKind> for StateUpdateKindJson {
     fn from(value: proto::StateUpdateKind) -> Self {
-        StateUpdateKindJson::from_serde(&value)
+        StateUpdateKindJson::from_serde(value)
     }
 }
 

@@ -694,6 +694,9 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         current_epoch: &mut FenceableEpoch,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, DurableCatalogError> {
+        // TODO(jkosh44) It's a bit unfortunate that we have to clone all updates to attempt to
+        // convert them into a `StateUpdateKind` and cache a very small subset of them. It would
+        // be better if we could figure out a way not to clone everything.
         if let Ok(kind) =
             <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(update.kind.clone())
         {
@@ -715,7 +718,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                 }
                 (StateUpdateKind::Epoch(epoch), 1) => {
                     current_epoch.maybe_fence(epoch)?;
-                    return Ok(Some(update));
                 }
                 _ => {}
             }
@@ -827,20 +829,6 @@ impl UnopenedPersistCatalogState {
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
-        // Sniff out most recent epoch.
-        let epoch = snapshot
-            .iter()
-            .rev()
-            .filter(|(_, _, diff)| *diff == 1)
-            .filter_map(|(kind, _, _)| {
-                <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(kind.clone()).ok()
-            })
-            .filter_map(|kind| match kind {
-                StateUpdateKind::Epoch(epoch) => Some(epoch),
-                _ => None,
-            })
-            .next();
-        let epoch = FenceableEpoch::Unfenced(epoch);
 
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
@@ -854,9 +842,15 @@ impl UnopenedPersistCatalogState {
             snapshot: Vec::new(),
             update_applier: UnopenedCatalogStateInner::new(organization_id),
             upper,
-            epoch,
+            epoch: FenceableEpoch::Unfenced(None),
             metrics,
         };
+        // If the snapshot is not consolidated, and we see multiple epoch values while applying the
+        // updates, then we might accidently fence ourselves out.
+        soft_assert_no_log!(
+            snapshot.iter().all(|(_, _, diff)| *diff == 1),
+            "snapshot should be consolidated: {snapshot:?}"
+        );
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
@@ -1255,6 +1249,8 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 self.storage_usage_events.push((key, update.diff));
                 Ok(None)
             }
+            // Nothing to due for epoch retractions but wait for the next insertion.
+            (StateUpdateKind::Epoch(_), -1) => Ok(None),
             (StateUpdateKind::Epoch(epoch), 1) => {
                 current_epoch.maybe_fence(epoch)?;
                 Ok(None)
@@ -1734,7 +1730,7 @@ impl UnopenedPersistCatalogState {
             .into_iter()
             .map(|((k, v), _, _)| (T::update(k, v), -1))
             .collect();
-        updates.push((T::update(key.clone(), value.clone()), 1));
+        updates.push((T::update(key, value), 1));
         // We must fence out all other catalogs since we are writing.
         let fence_updates = self.increment_epoch()?;
         updates.extend(fence_updates);
