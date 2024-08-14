@@ -15,6 +15,8 @@ from materialize.mzcompose.services.fivetran_destination import FivetranDestinat
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -25,6 +27,8 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
+    Postgres(),
+    MySql(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Materialized(external_minio=True),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
@@ -85,7 +89,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     (args, passthrough_args) = parser.parse_known_args()
 
-    dependencies = ["fivetran-destination", "minio", "materialized"]
+    dependencies = [
+        "fivetran-destination",
+        "minio",
+        "materialized",
+        "postgres",
+        "mysql",
+    ]
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
