@@ -91,9 +91,10 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_holds::ReadHold;
+use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{info, warn};
@@ -103,9 +104,11 @@ use tracing::{info, warn};
 /// Assigns the selected as-of to the provided dataflow descriptions and returns a set of
 /// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
 /// with the compute controller.
-pub fn run<T: Timestamp + Lattice>(
+pub fn run<T: TimestampManipulation>(
     dataflows: &mut [DataflowDescription<Plan<T>, (), T>],
+    read_policies: &BTreeMap<GlobalId, ReadPolicy<T>>,
     storage_collections: &dyn StorageCollections<Timestamp = T>,
+    current_time: T,
 ) -> BTreeMap<GlobalId, ReadHold<T>> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
@@ -122,7 +125,7 @@ pub fn run<T: Timestamp + Lattice>(
         }
     }
 
-    let ctx = Context::new(dataflows, storage_collections);
+    let ctx = Context::new(dataflows, storage_collections, read_policies, current_time);
 
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
@@ -134,7 +137,17 @@ pub fn run<T: Timestamp + Lattice>(
     // resulting dataflows would never hydrate. Instead we'll apply a number of soft constraints to
     // end up in a better place.
 
-    // TODO: soft constraints
+    // Constrain collection as-ofs to times that are currently available in the inputs. This
+    // ensures that dataflows can immediately start hydrating. It also ensures that dataflows don't
+    // get an empty as-of, except when they exclusively depend on constant collections.
+    ctx.apply_warmup_constraints();
+
+    // Constrain as-ofs of indexes according to their read policies.
+    ctx.apply_index_read_policy_constraints();
+
+    // Constrain as-ofs of indexes to the current time. This ensures that indexes are immediately
+    // readable.
+    ctx.apply_index_current_time_constraints();
 
     // Apply the derived as-of bounds to the dataflows.
     for dataflow in dataflows {
@@ -291,26 +304,32 @@ impl<T: Timestamp> Constraint<'_, T> {
 }
 
 /// State tracked for a compute collection during as-of selection.
-struct Collection<T> {
+struct Collection<'a, T> {
     storage_inputs: Vec<GlobalId>,
     compute_inputs: Vec<GlobalId>,
+    read_policy: Option<&'a ReadPolicy<T>>,
     /// The currently known as-of bounds.
     ///
     /// Shared between collections exported by the same dataflow.
     bounds: Rc<RefCell<AsOfBounds<T>>>,
+    /// Whether this collection is an index.
+    is_index: bool,
 }
 
 /// The as-of selection context.
 struct Context<'a, T> {
-    collections: BTreeMap<GlobalId, Collection<T>>,
+    collections: BTreeMap<GlobalId, Collection<'a, T>>,
     storage_collections: &'a dyn StorageCollections<Timestamp = T>,
+    current_time: T,
 }
 
-impl<'a, T: Timestamp + Lattice> Context<'a, T> {
+impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// Initializes an as-of selection context for the given `dataflows`.
     fn new(
         dataflows: &[DataflowDescription<Plan<T>, (), T>],
         storage_collections: &'a dyn StorageCollections<Timestamp = T>,
+        read_policies: &'a BTreeMap<GlobalId, ReadPolicy<T>>,
+        current_time: T,
     ) -> Self {
         // Construct initial collection state for each dataflow export. Dataflows might have their
         // as-ofs already fixed, which we need to take into account when constructing `AsOfBounds`.
@@ -329,7 +348,9 @@ impl<'a, T: Timestamp + Lattice> Context<'a, T> {
                 let collection = Collection {
                     storage_inputs: storage_inputs.clone(),
                     compute_inputs: compute_inputs.clone(),
+                    read_policy: read_policies.get(&id),
                     bounds: Rc::clone(&bounds),
+                    is_index: dataflow.index_exports.contains_key(&id),
                 };
                 collections.insert(id, collection);
             }
@@ -338,6 +359,7 @@ impl<'a, T: Timestamp + Lattice> Context<'a, T> {
         Self {
             collections,
             storage_collections,
+            current_time,
         }
     }
 
@@ -444,6 +466,131 @@ impl<'a, T: Timestamp + Lattice> Context<'a, T> {
         self.propagate_bounds_upstream(BoundType::Upper);
     }
 
+    /// Apply as-of constraints to ensure collections can hydrate immediately.
+    ///
+    /// A collection's as-of _should_ be < the write frontier of each of its (transitive) storage
+    /// inputs.
+    ///
+    /// Failing to apply this constraint is not an error. The affected dataflow will not be able to
+    /// hydrate immediately, but it will be able to hydrate once its inputs have sufficiently
+    /// advanced.
+    fn apply_warmup_constraints(&self) {
+        // Apply direct constraints from storage inputs.
+        for (id, collection) in &self.collections {
+            for input_id in &collection.storage_inputs {
+                let frontiers = self
+                    .storage_collections
+                    .collection_frontiers(*input_id)
+                    .expect("storage collection exists");
+                let upper = step_back_frontier(&frontiers.write_frontier);
+                let constraint = Constraint {
+                    type_: ConstraintType::Soft,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: &format!("storage input {input_id} warmup frontier"),
+                };
+                self.apply_constraint(*id, constraint);
+            }
+        }
+
+        // Propagate constraints downstream. This transparently restores any violations of
+        // `AsOfBounds` invariant (2) that might be introduced by the propagation.
+        self.propagate_bounds_downstream(BoundType::Upper);
+    }
+
+    /// Apply as-of constraints to ensure indexes contain historical data as requested by their
+    /// associated read policies.
+    ///
+    /// An index's as-of _should_ be <= the frontier determined by its read policy applied to its
+    /// write frontier.
+    ///
+    /// Failing to apply this constraint is not an error. The affected index will not contain
+    /// historical times for its entire compaction window initially, but will do so once sufficient
+    /// time has passed.
+    fn apply_index_read_policy_constraints(&self) {
+        // For the write frontier of an index, we'll use the least write frontier of its
+        // (transitive) storage inputs. This is an upper bound for the write frontier the index
+        // could have had before the restart. For indexes without storage inputs we use the current
+        // time.
+
+        // Collect write frontiers from storage inputs.
+        let mut write_frontiers = BTreeMap::new();
+        for (id, collection) in &self.collections {
+            let storage_frontiers = self
+                .storage_collections
+                .collections_frontiers(collection.storage_inputs.clone())
+                .expect("storage collections exist");
+
+            let mut write_frontier = Antichain::new();
+            for frontiers in storage_frontiers {
+                write_frontier.extend(frontiers.write_frontier);
+            }
+
+            write_frontiers.insert(*id, write_frontier);
+        }
+
+        // Propagate write frontiers through compute inputs.
+        fixpoint(|changed| {
+            for (id, collection) in &self.collections {
+                let write_frontier = write_frontiers.get_mut(id).expect("inserted above");
+                for input_id in &collection.compute_inputs {
+                    let input_collection = self.expect_collection(*input_id);
+                    let bounds = input_collection.bounds.borrow();
+                    *changed |= write_frontier.extend(bounds.upper.iter().cloned());
+                }
+            }
+        });
+
+        // Apply the read policy constraint to indexes.
+        for (id, collection) in &self.collections {
+            if let (true, Some(read_policy)) = (collection.is_index, &collection.read_policy) {
+                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
+                if write_frontier.is_empty() {
+                    write_frontier = Antichain::from_elem(self.current_time.clone());
+                }
+                let upper = read_policy.frontier(write_frontier.borrow());
+                let constraint = Constraint {
+                    type_: ConstraintType::Soft,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: &format!(
+                        "read policy applied to write frontier {:?}",
+                        write_frontier.elements()
+                    ),
+                };
+                self.apply_constraint(*id, constraint);
+            }
+        }
+
+        // Restore `AsOfBounds` invariant (2).
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    /// Apply as-of constraints to ensure indexes are immediately readable.
+    ///
+    /// An index's as-of _should_ be <= the current time.
+    ///
+    /// Failing to apply this constraint is not an error. The affected index will not be readable
+    /// immediately, but will be readable once sufficient time has passed.
+    fn apply_index_current_time_constraints(&self) {
+        // Apply the current time constraint to indexes.
+        let upper = Antichain::from_elem(self.current_time.clone());
+        for (id, collection) in &self.collections {
+            if collection.is_index {
+                let constraint = Constraint {
+                    type_: ConstraintType::Soft,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: "index current time",
+                };
+                self.apply_constraint(*id, constraint);
+            }
+        }
+
+        // Restore `AsOfBounds` invariant (2).
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
     /// Propagate as-of bounds through the dependency graph, in downstream direction.
     fn propagate_bounds_downstream(&self, bound_type: BoundType) {
         // We don't want to rely on a correspondence between `GlobalId` order and dependency order,
@@ -527,4 +674,15 @@ fn fixpoint(mut step: impl FnMut(&mut bool)) {
             break;
         }
     }
+}
+
+/// Step back the given frontier.
+///
+/// This method is saturating: If the frontier contains `T::minimum()` times, these are kept
+/// unchanged.
+fn step_back_frontier<T: TimestampManipulation>(frontier: &Antichain<T>) -> Antichain<T> {
+    frontier
+        .iter()
+        .map(|t| t.step_back().unwrap_or(T::minimum()))
+        .collect()
 }
