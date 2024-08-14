@@ -19,7 +19,6 @@ fallible-iterator = "0.2.0"
 futures = "0.3.25"
 itertools = "0.10.5"
 junit-report = "0.8.3"
-once_cell = "1.16.0"
 md-5 = "0.10.5"
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
