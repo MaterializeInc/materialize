@@ -43,7 +43,6 @@ class BuildkiteEnvVar(Enum):
     BUILDKITE_PARALLEL_JOB = auto()
     BUILDKITE_PARALLEL_JOB_COUNT = auto()
     BUILDKITE_STEP_KEY = auto()
-    BUILDKITE_STEP_LABEL = auto()
     # will be the same for sharded and retried build steps
     BUILDKITE_STEP_ID = auto()
     # assumed to be unique
@@ -211,8 +210,8 @@ def notify_qa_team_about_failure(failure: str) -> None:
     if not is_in_buildkite():
         return
 
-    step_label = get_var(BuildkiteEnvVar.BUILDKITE_STEP_LABEL)
-    message = f"{step_label}: {failure}"
+    label = get_var(BuildkiteEnvVar.BUILDKITE_LABEL)
+    message = f"{label}: {failure}"
     print(message)
     pipeline = {
         "notify": [
