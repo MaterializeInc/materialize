@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{
-    Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
+    Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
     BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, Float32Array, Float32Builder,
     Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder, Int64Array,
     Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StructArray,
@@ -768,7 +768,7 @@ impl DatumColumnEncoder {
                     entries.data_type().clone(),
                     entries.is_nullable(),
                 );
-                let array = MapArray::new(Arc::new(field), offsets, entries, nulls, true);
+                let array = ListArray::new(Arc::new(field), offsets, Arc::new(entries), nulls);
                 (Arc::new(array), ColumnStatKinds::None)
             }
             DatumColumnEncoder::Record {
@@ -1507,6 +1507,19 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
+        (DataType::List(_), ScalarType::Map { value_type, .. }) => {
+            let array: &ListArray = downcast_array(array)?;
+            let entries: &StructArray = downcast_array(array.values())?;
+            let [keys, values]: &[ArrayRef; 2] = entries.columns().try_into()?;
+            let keys: &StringArray = downcast_array(keys)?;
+            let vals: DatumColumnDecoder = array_to_decoder(values, value_type)?;
+            DatumColumnDecoder::Map {
+                offsets: array.offsets().clone(),
+                keys: keys.clone(),
+                vals: Box::new(vals),
+                nulls: array.nulls().cloned(),
+            }
+        }
         (DataType::Boolean, ScalarType::Record { fields, .. }) if fields.is_empty() => {
             let empty_record_array = downcast_array::<BooleanArray>(array)?;
             DatumColumnDecoder::RecordEmpty(empty_record_array.clone())
@@ -1648,6 +1661,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 #[cfg(test)]
 mod tests {
     use arrow::array::ArrayData;
+    use arrow::row::SortField;
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
@@ -1768,6 +1782,15 @@ mod tests {
         let codec = schema2_to_codec::<Row>(desc, &col).unwrap();
         let (col2, _) = codec_to_schema2::<Row>(desc, &codec).unwrap();
         assert_eq!(col2.as_ref(), &col);
+
+        // Validate that we only generate supported array types
+        let converter =
+            arrow::row::RowConverter::new(vec![SortField::new(col.data_type().clone())])
+                .expect("sortable");
+        let rows = converter
+            .convert_columns(&[Arc::new(col.clone())])
+            .expect("convertible");
+        assert_eq!(rows.iter().count(), col.len());
     }
 
     #[mz_ore::test]
