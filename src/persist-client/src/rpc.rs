@@ -1099,13 +1099,13 @@ impl Drop for PubSubConnection {
 #[cfg(test)]
 mod pubsub_state {
     use std::str::FromStr;
+    use std::sync::LazyLock;
     use std::sync::Arc;
 
     use bytes::Bytes;
     use mz_ore::collections::HashSet;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
-    use std::sync::LazyLock;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::Receiver;
     use tonic::Status;

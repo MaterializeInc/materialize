@@ -12,6 +12,7 @@
 //! Catalog abstraction layer.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -33,7 +34,6 @@ use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::sources::{SourceDesc, SourceExportDetails};
-use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};

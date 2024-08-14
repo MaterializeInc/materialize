@@ -26,6 +26,7 @@
 //!       if wrong, record the error
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -78,7 +79,6 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser;
 use mz_storage_types::connections::ConnectionContext;
-use std::sync::LazyLock;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;

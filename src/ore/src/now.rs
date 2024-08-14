@@ -16,13 +16,13 @@
 //! Now utilities.
 
 use std::fmt;
+use std::sync::LazyLock;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
-use std::sync::LazyLock;
 
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;

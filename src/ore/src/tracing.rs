@@ -26,6 +26,7 @@
 //!    across thread or task boundaries within a process.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::io;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,7 +39,6 @@ use derivative::Derivative;
 use http::HeaderMap;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
-use std::sync::LazyLock;
 use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::trace::TracerProvider;

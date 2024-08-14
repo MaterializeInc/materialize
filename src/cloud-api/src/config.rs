@@ -16,9 +16,9 @@
 //! such as creating and managing users, or listing passwords.
 //!
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
-use std::sync::LazyLock;
 use url::Url;
 
 use crate::client::Client;

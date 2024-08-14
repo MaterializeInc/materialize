@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::VecDeque;
+use std::sync::LazyLock;
 use std::fmt::Display;
 use std::iter;
 use std::ops::RangeInclusive;
@@ -21,7 +22,6 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
 use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
 use mz_storage_types::sources::MzOffset;
-use std::sync::LazyLock;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;

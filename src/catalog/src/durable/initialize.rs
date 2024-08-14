@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::iter;
 use std::time::Duration;
 
@@ -33,7 +34,6 @@ use mz_sql::names::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use std::sync::LazyLock;
 
 use crate::builtin::BUILTIN_ROLES;
 use crate::durable::upgrade::CATALOG_VERSION;

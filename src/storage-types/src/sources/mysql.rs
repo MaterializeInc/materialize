@@ -10,6 +10,7 @@
 //! Types related to mysql sources
 
 use std::fmt;
+use std::sync::LazyLock;
 use std::io;
 use std::num::NonZeroU64;
 
@@ -17,7 +18,6 @@ use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
-use std::sync::LazyLock;
 use proptest::prelude::any;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;

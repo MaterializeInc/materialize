@@ -13,6 +13,7 @@
 //! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/
 
 use std::error::Error;
+use std::sync::LazyLock;
 use std::fmt;
 
 use anyhow::bail;
@@ -21,7 +22,6 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 

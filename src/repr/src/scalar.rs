@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::fmt::{self, Debug, Write};
 use std::hash::Hash;
 use std::iter;
@@ -20,7 +21,6 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use std::sync::LazyLock;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::Union;

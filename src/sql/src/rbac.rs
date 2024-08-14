@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 use std::iter;
 
 use itertools::Itertools;
@@ -19,7 +20,6 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
-use std::sync::LazyLock;
 use tracing::debug;
 
 use crate::catalog::{

@@ -10,6 +10,7 @@
 //! Debug utility for Catalog storage.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
@@ -51,7 +52,6 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
-use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 use url::Url;

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
@@ -26,7 +27,6 @@ use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
-use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

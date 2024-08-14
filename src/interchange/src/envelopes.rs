@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::iter;
 
 use differential_dataflow::lattice::Lattice;
@@ -19,7 +20,6 @@ use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
-use std::sync::LazyLock;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};

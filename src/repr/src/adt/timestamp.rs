@@ -19,6 +19,7 @@
 //! Methods for checked timestamp operations.
 
 use std::error::Error;
+use std::sync::LazyLock;
 use std::fmt::{self, Display};
 use std::ops::Sub;
 
@@ -31,7 +32,6 @@ use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use std::sync::LazyLock;
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;

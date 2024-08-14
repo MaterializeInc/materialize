@@ -17,12 +17,12 @@
 //! The proto conversions for this types are in the `client` module, for now.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-use std::sync::LazyLock;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.statistics.rs"));
 

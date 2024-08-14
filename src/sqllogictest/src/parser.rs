@@ -10,10 +10,10 @@
 //! A parser for sqllogictest.
 
 use std::borrow::ToOwned;
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, bail};
 use mz_repr::ColumnName;
-use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};

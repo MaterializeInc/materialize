@@ -10,6 +10,7 @@
 //! Types related kafka sources
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::fmt;
 use std::time::Duration;
 
@@ -22,7 +23,6 @@ use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
-use std::sync::LazyLock;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use rdkafka::admin::AdminClient;

@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use mz_pgrepr::oid;
+use std::sync::LazyLock;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
-use std::sync::LazyLock;
 
 use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
 

@@ -11,6 +11,7 @@
 //! other cast-related functions.
 
 use std::cell::RefCell;
+use std::sync::LazyLock;
 use std::collections::BTreeMap;
 
 use dynfmt::{Format, SimpleCurlyFormat};
@@ -19,7 +20,6 @@ use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{func, VariadicFunc};
 use mz_ore::assert_none;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
-use std::sync::LazyLock;
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;

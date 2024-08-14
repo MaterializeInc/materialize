@@ -10,6 +10,7 @@
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,7 +34,6 @@ use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
 use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
-use std::sync::LazyLock;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 

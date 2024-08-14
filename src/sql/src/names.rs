@@ -10,6 +10,7 @@
 //! Structured name types for SQL objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 use std::fmt;
 use std::str::FromStr;
 
@@ -23,7 +24,6 @@ use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ident;
-use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;

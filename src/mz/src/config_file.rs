@@ -16,13 +16,13 @@
 //! Configuration file management.
 
 use std::fs::OpenOptions;
+use std::sync::LazyLock;
 use std::io::Read;
 use std::path::PathBuf;
 use std::{collections::BTreeMap, str::FromStr};
 
 use maplit::btreemap;
 use mz_ore::str::StrExt;
-use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::{value, Document};

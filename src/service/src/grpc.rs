@@ -10,6 +10,7 @@
 //! gRPC transport for the [client](crate::client) module.
 
 use async_stream::stream;
+use std::sync::LazyLock;
 use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
@@ -19,7 +20,6 @@ use mz_ore::metric;
 use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
 use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
 use mz_proto::{ProtoType, RustType};
-use std::sync::LazyLock;
 use prometheus::core::AtomicU64;
 use semver::Version;
 use std::fmt::{self, Debug};

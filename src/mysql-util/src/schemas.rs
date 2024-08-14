@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 use itertools::Itertools;
-use std::sync::LazyLock;
 use regex::Regex;
 
 use mysql_async::prelude::{FromRow, Queryable};

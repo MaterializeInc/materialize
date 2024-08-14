@@ -21,8 +21,8 @@
 //! not guaranteed to work for other services.
 
 use std::time::Duration;
-
 use std::sync::LazyLock;
+
 use reqwest::Url;
 
 use crate::client::{Authentication, Client};

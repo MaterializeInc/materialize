@@ -24,6 +24,7 @@
 //! should be considered a bug.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -42,7 +43,6 @@ use mz_ore::str::StrExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
-use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;

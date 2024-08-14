@@ -25,12 +25,12 @@
 //!     - https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
 //!     - https://github.com/apache/avro/tree/master/lang/c/tests/schema_tests
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::str::FromStr;
 
 use chrono::DateTime;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
-use std::sync::LazyLock;
 
 static UNPARSEABLE_SCHEMAS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![

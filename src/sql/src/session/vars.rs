@@ -64,6 +64,7 @@
 //! before planning it.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -82,7 +83,6 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
 use mz_repr::user::ExternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use std::sync::LazyLock;
 use serde::Serialize;
 use uncased::UncasedStr;
 

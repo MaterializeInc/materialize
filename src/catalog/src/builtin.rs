@@ -25,6 +25,7 @@
 pub mod notice;
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
@@ -55,7 +56,6 @@ use mz_storage_client::healthcheck::{
     MZ_SQL_TEXT_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
-use std::sync::LazyLock;
 use rand::Rng;
 use serde::Serialize;
 

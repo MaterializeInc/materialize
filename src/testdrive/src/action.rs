@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
@@ -35,7 +36,6 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use std::sync::LazyLock;
 use rand::Rng;
 use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;

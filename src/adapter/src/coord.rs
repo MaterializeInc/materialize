@@ -67,6 +67,7 @@
 //!
 
 use anyhow::Context;
+use std::sync::LazyLock;
 use chrono::{DateTime, Utc};
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
@@ -152,7 +153,6 @@ use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
-use std::sync::LazyLock;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -37,7 +38,6 @@ use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use std::sync::LazyLock;
 use tower::Service;
 use tracing::{error, info};
 

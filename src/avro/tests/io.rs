@@ -24,6 +24,7 @@
 //! Port of https://github.com/apache/avro/blob/master/lang/py/test/test_io.py
 
 use std::io::Cursor;
+use std::sync::LazyLock;
 use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDate};
@@ -32,7 +33,6 @@ use mz_avro::schema::resolve_schemas;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::{from_avro_datum, to_avro_datum, Schema, ValidationError};
 use mz_ore::assert_err;
-use std::sync::LazyLock;
 
 static SCHEMAS_TO_VALIDATE: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
     vec![

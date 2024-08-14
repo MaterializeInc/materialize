@@ -10,13 +10,13 @@
 //! A time interval abstract data type.
 
 use std::fmt::{self, Write};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
-use std::sync::LazyLock;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 

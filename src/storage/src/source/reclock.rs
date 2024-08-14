@@ -624,6 +624,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::sync::LazyLock;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -643,7 +644,6 @@ mod tests {
     use mz_storage_types::sources::kafka::{self, RangeBound};
     use mz_storage_types::sources::{MzOffset, SourceData};
     use mz_timely_util::order::Partitioned;
-    use std::sync::LazyLock;
     use timely::progress::Timestamp as _;
 
     use super::*;

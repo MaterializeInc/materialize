@@ -70,6 +70,7 @@
 //! [2]: https://www.postgresql.org/message-id/CAFPTHDZS9O9WG02EfayBd6oONzK%2BqfUxS6AbVLJ7W%2BKECza2gg%40mail.gmail.com
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
@@ -96,7 +97,6 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
-use std::sync::LazyLock;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };

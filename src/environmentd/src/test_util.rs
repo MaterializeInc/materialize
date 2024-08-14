@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::error::Error;
 use std::future::IntoFuture;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
@@ -44,7 +45,6 @@ use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use mz_tracing::CloneableEnvFilter;
-use std::sync::LazyLock;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;

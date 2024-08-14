@@ -10,11 +10,11 @@
 //! Transformations of SQL IR, before decorrelation.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::mem;
 
 use mz_expr::VariadicFunc;
 use mz_repr::{ColumnType, RelationType, ScalarType};
-use std::sync::LazyLock;
 
 use crate::plan::expr::{AbstractExpr, AggregateFunc, HirRelationExpr, HirScalarExpr};
 

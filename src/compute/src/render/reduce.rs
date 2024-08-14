@@ -12,6 +12,7 @@
 //! Consult [ReducePlan] documentation for details.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
@@ -35,7 +36,6 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion, TimelyStack};
 use timely::container::{CapacityContainerBuilder, PushInto};

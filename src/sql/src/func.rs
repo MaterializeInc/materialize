@@ -11,6 +11,7 @@
 //! built-in functions (for most built-in functions, at least).
 
 use std::cell::RefCell;
+use std::sync::LazyLock;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -21,7 +22,6 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
-use std::sync::LazyLock;
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};

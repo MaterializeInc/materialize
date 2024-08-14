@@ -10,6 +10,7 @@
 //! Apache Arrow encodings and utils for persist data
 
 use std::ptr::NonNull;
+use std::sync::LazyLock;
 use std::sync::Arc;
 
 use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
@@ -17,7 +18,6 @@ use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::iter::IteratorExt;
-use std::sync::LazyLock;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::metrics::ColumnarMetrics;

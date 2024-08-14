@@ -13,6 +13,7 @@
 //! on port 6876.
 
 use std::ffi::CStr;
+use std::sync::LazyLock;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -62,7 +63,6 @@ use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
-use std::sync::LazyLock;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
 use tracing::{error, info, info_span, Instrument};

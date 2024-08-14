@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::fmt;
 
 use anyhow::Ok;
@@ -20,7 +21,6 @@ use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
-use std::sync::LazyLock;
 use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};

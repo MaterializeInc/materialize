@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,7 +33,6 @@ use mz_storage_types::parameters::{
     DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
 };
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use std::sync::LazyLock;
 use uncased::UncasedStr;
 
 use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};

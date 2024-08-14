@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::sync::LazyLock;
 use std::fmt;
 
 use byteorder::{NetworkEndian, ReadBytesExt};
@@ -15,7 +16,6 @@ use bytes::{BufMut, BytesMut};
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
-use std::sync::LazyLock;
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 /// A wrapper for the `repr` crate's `Decimal` type that can be serialized to

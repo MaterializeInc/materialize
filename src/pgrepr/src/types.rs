@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::sync::LazyLock;
 use std::fmt;
 use std::mem::size_of;
 
@@ -22,7 +23,6 @@ use mz_repr::adt::timestamp::{
 use mz_repr::adt::varchar::{InvalidVarCharMaxLengthError, VarCharMaxLength};
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::ScalarType;
-use std::sync::LazyLock;
 
 use crate::oid;
 

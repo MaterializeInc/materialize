@@ -10,13 +10,13 @@
 //! Types related to load generator sources
 
 use std::time::Duration;
+use std::sync::LazyLock;
 
 use mz_ore::now::NowFn;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::UnresolvedItemName;
-use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;

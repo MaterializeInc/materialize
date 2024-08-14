@@ -10,6 +10,7 @@
 //! In-memory metadata storage for the coordinator.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::net::Ipv4Addr;
@@ -78,7 +79,6 @@ use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
 use mz_storage_types::connections::ConnectionContext;
-use std::sync::LazyLock;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;

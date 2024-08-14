@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
+use std::sync::LazyLock;
 use std::net::Ipv4Addr;
 
 use hyper::{service, Response, StatusCode};
@@ -17,7 +18,6 @@ use mz_ccsr::{
     Client, CompatibilityLevel, DeleteError, GetByIdError, GetBySubjectError,
     GetSubjectConfigError, PublishError, SchemaReference, SchemaType,
 };
-use std::sync::LazyLock;
 use tokio::net::TcpListener;
 
 pub static SCHEMA_REGISTRY_URL: LazyLock<reqwest::Url> =

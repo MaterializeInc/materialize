@@ -24,6 +24,7 @@
 //! Logic for parsing and interacting with schemas in Avro format.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,7 +35,6 @@ use std::str::FromStr;
 use digest::Digest;
 use itertools::Itertools;
 use mz_ore::assert_none;
-use std::sync::LazyLock;
 use regex::Regex;
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Serialize, Serializer};

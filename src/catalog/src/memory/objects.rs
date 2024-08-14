@@ -12,6 +12,7 @@
 //! easier consumed by higher layers.
 
 use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
 
@@ -55,7 +56,6 @@ use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDetails,
     Timeline,
 };
-use std::sync::LazyLock;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;

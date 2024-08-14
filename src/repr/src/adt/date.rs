@@ -10,13 +10,13 @@
 //! A time Date abstract data type.
 
 use std::convert::TryFrom;
+use std::sync::LazyLock;
 use std::fmt;
 use std::ops::Sub;
 
 use anyhow::anyhow;
 use chrono::NaiveDate;
 use mz_proto::{RustType, TryFromProtoError};
-use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

@@ -8,13 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::ToOwned;
+use std::sync::LazyLock;
 use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
 use std::fmt::Write;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context};
-use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::error::PosError;

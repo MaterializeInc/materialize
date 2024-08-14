@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
-use std::sync::LazyLock;
 use serde::Serialize;
 
 pub const SYSTEM_USER_NAME: &str = "mz_system";
