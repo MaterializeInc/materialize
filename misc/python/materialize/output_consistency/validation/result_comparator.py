@@ -407,13 +407,19 @@ class ResultComparator:
             new_source_name = f"<db_object-{data_source.table_index or 1}>"
             explain_plan1 = explain_plan1.replace(
                 data_source.get_db_object_name(
-                    outcome1.strategy, query_execution.query_template.storage_layout
+                    outcome1.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        table_index=data_source.table_index,
+                    ),
                 ),
                 new_source_name,
             )
             explain_plan2 = explain_plan2.replace(
                 data_source.get_db_object_name(
-                    outcome2.strategy, query_execution.query_template.storage_layout
+                    outcome2.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        table_index=data_source.table_index,
+                    ),
                 ),
                 new_source_name,
             )

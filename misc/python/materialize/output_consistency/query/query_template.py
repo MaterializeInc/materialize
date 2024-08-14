@@ -164,8 +164,9 @@ class QueryTemplate:
         space_separator: str,
     ) -> str:
         db_object_name = self.data_source.get_db_object_name(
-            strategy,
-            self.storage_layout,
+            strategy.get_db_object_name(
+                self.storage_layout, table_index=self.data_source.table_index
+            ),
             override_db_object_name=override_db_object_name,
         )
         alias = f" {self.data_source.alias()}" if self.uses_join() else ""
@@ -201,8 +202,10 @@ class QueryTemplate:
         space_separator: str,
     ) -> str:
         db_object_name_to_join = additional_data_source_to_join.get_db_object_name(
-            strategy,
-            self.storage_layout,
+            strategy.get_db_object_name(
+                self.storage_layout,
+                table_index=additional_data_source_to_join.table_index,
+            ),
             override_db_object_name=override_db_object_name,
         )
 
