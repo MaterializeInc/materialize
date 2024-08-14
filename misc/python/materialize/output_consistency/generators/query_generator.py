@@ -190,6 +190,9 @@ class QueryGenerator:
 
         if not ignore_verdict.ignore:
             query.where_expression = where_expression
+            self._assign_random_sources(
+                query.get_all_data_sources(), [query.where_expression]
+            )
 
     def _create_multi_column_queries(
         self,
@@ -218,15 +221,27 @@ class QueryGenerator:
             if len(expression_chunk) == 0:
                 continue
 
+            data_source, additional_data_sources = self._select_sources(
+                storage_layout, contains_aggregations
+            )
+            all_expressions = expression_chunk
+            self._assign_random_sources(
+                [data_source] + additional_data_sources,
+                all_expressions,
+                contains_aggregations,
+            )
+
             query = QueryTemplate(
                 expect_error,
                 expression_chunk,
                 None,
                 storage_layout,
+                data_source,
                 contains_aggregations,
                 row_selection,
                 offset=self._generate_offset(storage_layout, contains_aggregations),
                 limit=self._generate_limit(storage_layout, contains_aggregations),
+                additional_data_sources=additional_data_sources,
             )
 
             queries.append(query)
@@ -261,16 +276,26 @@ class QueryGenerator:
 
             contains_aggregation = expression.is_aggregate
 
+            data_source, additional_data_sources = self._select_sources(
+                storage_layout, contains_aggregation
+            )
+            all_expressions = [expression]
+            self._assign_random_sources(
+                [data_source] + additional_data_sources, all_expressions
+            )
+
             queries.append(
                 QueryTemplate(
                     expression.is_expect_error,
                     [expression],
                     None,
                     storage_layout,
+                    data_source,
                     contains_aggregation,
                     row_selection,
                     offset=self._generate_offset(storage_layout, contains_aggregation),
                     limit=self._generate_limit(storage_layout, contains_aggregation),
+                    additional_data_sources=additional_data_sources,
                 )
             )
 
