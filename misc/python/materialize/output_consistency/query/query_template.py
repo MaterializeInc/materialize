@@ -239,7 +239,7 @@ class QueryTemplate:
         return f"WHERE {all_conditions_sql}"
 
     def _create_row_filter_clause(self) -> str | None:
-        """Create s SQL clause to only include rows of certain indices"""
+        """Create a SQL clause to only include rows of certain indices"""
         if self.row_selection.keys is None:
             return None
 

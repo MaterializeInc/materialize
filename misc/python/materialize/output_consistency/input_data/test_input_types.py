@@ -56,6 +56,17 @@ class ConsistencyTestTypesInput:
             for type_with_values in self.all_data_types_with_values
         )
 
+    def get_max_value_count_of_all_types_and_table_indices(
+        self, vertical_join_tables: int
+    ) -> int:
+        max_value = 0
+        for i in range(0, vertical_join_tables):
+            max_value = max(
+                max_value, self.get_max_value_count_of_all_types(table_index=i)
+            )
+
+        return max_value
+
     def assign_columns_to_tables(
         self, vertical_tables: int, randomized_picker: RandomizedPicker
     ) -> None:

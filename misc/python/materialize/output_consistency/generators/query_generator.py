@@ -74,7 +74,11 @@ class QueryGenerator:
         self.config = config
         self.randomized_picker = randomized_picker
         self.input_data = input_data
-        self.vertical_storage_row_count = input_data.types_input.max_value_count
+        self.vertical_storage_row_count = (
+            input_data.types_input.get_max_value_count_of_all_types_and_table_indices(
+                config.vertical_join_tables
+            )
+        )
         self.expression_generator = expression_generator
         self.ignore_filter = ignore_filter
 
@@ -310,11 +314,11 @@ class QueryGenerator:
             return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
             if self.randomized_picker.random_boolean(
-                probability.RESTRICT_VERTICAL_LAYOUT_TO_2_OR_3_ROWS
+                probability.RESTRICT_VERTICAL_LAYOUT_TO_FEW_ROWS
             ):
-                # With some probability, try to pick two or three rows
+                # With some probability, try to pick a few rows
                 max_number_of_rows_to_select = self.randomized_picker.random_number(
-                    2, 3
+                    2, 4
                 )
             else:
                 # With some probability, pick an arbitrary number of rows
@@ -322,6 +326,7 @@ class QueryGenerator:
                     0, self.vertical_storage_row_count
                 )
 
+            # when using joins, the number of rows may be lower or higher
             row_indices = self.randomized_picker.random_row_indices(
                 self.vertical_storage_row_count, max_number_of_rows_to_select
             )
