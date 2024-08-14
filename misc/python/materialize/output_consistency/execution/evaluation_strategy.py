@@ -155,7 +155,7 @@ class EvaluationStrategy:
                         column_specs.append(f"{data_value.column_name}{type_info}")
             elif storage_layout == ValueStorageLayout.VERTICAL:
                 column_name = (
-                    type_with_values.create_vertical_storage_column().column_name
+                    type_with_values.create_unassigned_vertical_storage_column().column_name
                 )
                 if table_column_selection.is_included(column_name):
                     column_specs.append(f"{column_name}{type_info}")
@@ -228,7 +228,7 @@ class EvaluationStrategy:
             row_values = [str(row_index)]
 
             for type_with_values in data_type_with_values:
-                data_column = type_with_values.create_vertical_storage_column()
+                data_column = type_with_values.create_unassigned_vertical_storage_column()
                 column_name = data_column.column_name
 
                 if not table_column_selection.is_included(column_name):

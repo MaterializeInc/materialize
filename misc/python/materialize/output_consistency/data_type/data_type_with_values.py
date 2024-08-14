@@ -13,6 +13,7 @@ from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.query.data_source import DataSource
 
 
 class DataTypeWithValues:
@@ -60,5 +61,12 @@ class DataTypeWithValues:
         for raw_value in self.raw_values:
             raw_value.own_characteristics.add(characteristic)
 
-    def create_vertical_storage_column(self) -> DataColumn:
+    def create_unassigned_vertical_storage_column(self) -> DataColumn:
         return DataColumn(self.data_type, self.raw_values)
+
+    def create_assigned_vertical_storage_column(
+        self, data_source: DataSource
+    ) -> DataColumn:
+        column = self.create_unassigned_vertical_storage_column()
+        column.assign_data_source(data_source=data_source, force=False)
+        return column

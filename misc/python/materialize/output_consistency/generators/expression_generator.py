@@ -245,7 +245,7 @@ class ExpressionGenerator:
         )
 
         if storage_layout == ValueStorageLayout.VERTICAL:
-            return type_with_values.create_vertical_storage_column()
+            return type_with_values.create_unassigned_vertical_storage_column()
         elif storage_layout == ValueStorageLayout.HORIZONTAL:
             if len(type_with_values.raw_values) == 0:
                 raise NoSuitableExpressionFound("No value in type")
