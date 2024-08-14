@@ -12,6 +12,9 @@ from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
@@ -207,3 +210,9 @@ class LeafExpression(Expression):
 
     def get_data_source(self) -> DataSource:
         raise NotImplementedError
+
+    def get_source_column_identifier(self) -> SourceColumnIdentifier:
+        return SourceColumnIdentifier(
+            data_source_alias=self.get_data_source().alias(),
+            column_name=self.column_name,
+        )
