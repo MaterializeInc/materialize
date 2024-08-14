@@ -354,7 +354,7 @@ def run(
         for worker, thread in zip(workers, threads):
             if thread.is_alive():
                 print(
-                    f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log}"
+                    f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
                 )
         print_stats(num_queries, workers, num_threads)
         if num_threads >= 50:
