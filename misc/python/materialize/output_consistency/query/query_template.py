@@ -379,8 +379,16 @@ class QueryTemplate:
             characteristics = expression.recursively_collect_involved_characteristics(
                 self.row_selection
             )
-            all_involved_characteristics = all_involved_characteristics.union(
-                characteristics
+            all_involved_characteristics.update(characteristics)
+
+        for further_expression in self.get_all_expressions(
+            include_select_expressions=False, include_join_constraints=True
+        ):
+            characteristics = (
+                further_expression.recursively_collect_involved_characteristics(
+                    self.row_selection
+                )
             )
+            all_involved_characteristics.update(characteristics)
 
         return all_involved_characteristics
