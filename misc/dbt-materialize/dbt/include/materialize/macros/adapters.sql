@@ -212,6 +212,16 @@
   {% endif %}
 {% endmacro %}
 
+{% macro materialize__apply_grants(relation, grant_config, should_revoke) -%}
+  {{ exceptions.raise_compiler_error(
+        """
+        dbt-materialize does not implement the grants configuration.
+
+        If this feature is important to you, please reach out!
+        """
+    )}}
+{% endmacro %}
+
 {% macro materialize__get_refresh_interval_sql(relation, refresh_interval_dict) -%}
   {%- set refresh_interval = adapter.parse_refresh_interval(refresh_interval_dict) -%}
     {% if refresh_interval.at -%}
