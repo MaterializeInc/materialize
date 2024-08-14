@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 
 use mysql_async::prelude::{FromRow, Queryable};
@@ -474,8 +474,8 @@ fn parse_as_text_column(
     }
 }
 
-static ENUM_VAL_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"'((?:[^']|'')*)'").expect("valid regex"));
+static ENUM_VAL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"'((?:[^']|'')*)'").expect("valid regex"));
 
 /// Parse the enum values from a column_type value on an enum column, which is a string like
 /// "enum('apple','banana','cher,ry','ora''nge')"

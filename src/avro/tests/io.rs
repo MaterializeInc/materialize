@@ -32,9 +32,9 @@ use mz_avro::schema::resolve_schemas;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::{from_avro_datum, to_avro_datum, Schema, ValidationError};
 use mz_ore::assert_err;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
-static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
+static SCHEMAS_TO_VALIDATE: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
     vec![
         (r#""null""#, Value::Null),
         (r#""boolean""#, Value::Boolean(true)),
@@ -89,7 +89,7 @@ static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
     ]
 });
 
-static BINARY_ENCODINGS: Lazy<Vec<(i64, Vec<u8>)>> = Lazy::new(|| {
+static BINARY_ENCODINGS: LazyLock<Vec<(i64, Vec<u8>)>> = LazyLock::new(|| {
     vec![
         (0, vec![0x00]),
         (-1, vec![0x01]),
@@ -103,7 +103,7 @@ static BINARY_ENCODINGS: Lazy<Vec<(i64, Vec<u8>)>> = Lazy::new(|| {
     ]
 });
 
-static DEFAULT_VALUE_EXAMPLES: Lazy<Vec<(&'static str, &'static str, Value)>> = Lazy::new(|| {
+static DEFAULT_VALUE_EXAMPLES: LazyLock<Vec<(&'static str, &'static str, Value)>> = LazyLock::new(|| {
     vec![
         (r#""null""#, "null", Value::Null),
         (r#""boolean""#, "true", Value::Boolean(true)),
@@ -140,7 +140,7 @@ static DEFAULT_VALUE_EXAMPLES: Lazy<Vec<(&'static str, &'static str, Value)>> = 
     ]
 });
 
-static LONG_RECORD_SCHEMA: Lazy<Schema> = Lazy::new(|| {
+static LONG_RECORD_SCHEMA: LazyLock<Schema> = LazyLock::new(|| {
     Schema::from_str(
         r#"
     {
@@ -161,7 +161,7 @@ static LONG_RECORD_SCHEMA: Lazy<Schema> = Lazy::new(|| {
     .unwrap()
 });
 
-static LONG_RECORD_DATUM: Lazy<Value> = Lazy::new(|| {
+static LONG_RECORD_DATUM: LazyLock<Value> = LazyLock::new(|| {
     Value::Record(vec![
         ("A".to_string(), Value::Int(1)),
         ("B".to_string(), Value::Int(2)),

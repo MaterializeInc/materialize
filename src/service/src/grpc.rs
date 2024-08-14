@@ -19,7 +19,7 @@ use mz_ore::metric;
 use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
 use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
 use mz_proto::{ProtoType, RustType};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use prometheus::core::AtomicU64;
 use semver::Version;
 use std::fmt::{self, Debug};
@@ -453,8 +453,8 @@ struct PerGrpcServerMetrics {
     last_command_received: DeleteOnDropGauge<'static, AtomicU64, Vec<&'static str>>,
 }
 
-static VERSION_METADATA_KEY: Lazy<AsciiMetadataKey> =
-    Lazy::new(|| AsciiMetadataKey::from_static("x-mz-version"));
+static VERSION_METADATA_KEY: LazyLock<AsciiMetadataKey> =
+    LazyLock::new(|| AsciiMetadataKey::from_static("x-mz-version"));
 
 /// A gRPC interceptor that attaches a version as metadata to each request.
 #[derive(Debug, Clone)]

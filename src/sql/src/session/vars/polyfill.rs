@@ -40,7 +40,7 @@ macro_rules! lazy_value {
 
         impl crate::session::vars::polyfill::LazyValueFn<$t> for LazyFn {
             fn generate_value() -> &'static $t {
-                static MY_VALUE_LAZY: ::once_cell::sync::Lazy<$t> = Lazy::new($f);
+                static MY_VALUE_LAZY: ::std::sync::LazyLock<$t> = LazyLock::new($f);
                 &*MY_VALUE_LAZY
             }
         }

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use fancy_regex::Regex;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
@@ -126,7 +126,7 @@ pub async fn validate_source_privileges(
 /// Group 9 is the user being granted
 /// We use the `fancy_regex` crate to allow backreferences which are necessary to find the ending
 /// quote of each identifier since there are different quoting types across mysql versions.
-static GRANT_REGEX: Lazy<Regex> = Lazy::new(|| {
+static GRANT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"GRANT (.+) ON (\*|(['`"])(.*)\3).(\*|(['`"])(.*)\6) TO (['`"])(.*)\8@.*"#)
         .expect("valid")
 });

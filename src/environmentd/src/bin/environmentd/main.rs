@@ -62,7 +62,7 @@ use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
 use tracing::{error, info, info_span, Instrument};
@@ -71,8 +71,8 @@ use url::Url;
 
 mod sys;
 
-static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
-static LONG_VERSION: Lazy<String> = Lazy::new(|| {
+static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
+static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
     iter::once(BUILD_INFO.human_version())
         .chain(build_info())
         .join("\n")

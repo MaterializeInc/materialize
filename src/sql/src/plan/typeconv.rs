@@ -19,7 +19,7 @@ use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{func, VariadicFunc};
 use mz_ore::assert_none;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
@@ -170,28 +170,28 @@ CASE
     )
 END)";
 
-static STRING_TO_REGCLASS_EXPLICIT: Lazy<String> = Lazy::new(|| {
+static STRING_TO_REGCLASS_EXPLICIT: LazyLock<String> = LazyLock::new(|| {
     SimpleCurlyFormat
         .format(STRING_REG_CAST_TEMPLATE, ["regclass", "relation", "false"])
         .unwrap()
         .to_string()
 });
 
-static STRING_TO_REGCLASS_COERCED: Lazy<String> = Lazy::new(|| {
+static STRING_TO_REGCLASS_COERCED: LazyLock<String> = LazyLock::new(|| {
     SimpleCurlyFormat
         .format(STRING_REG_CAST_TEMPLATE, ["regclass", "relation", "true"])
         .unwrap()
         .to_string()
 });
 
-static STRING_TO_REGPROC: Lazy<String> = Lazy::new(|| {
+static STRING_TO_REGPROC: LazyLock<String> = LazyLock::new(|| {
     SimpleCurlyFormat
         .format(STRING_REG_CAST_TEMPLATE, ["regproc", "function", "true"])
         .unwrap()
         .to_string()
 });
 
-static STRING_TO_REGTYPE: Lazy<String> = Lazy::new(|| {
+static STRING_TO_REGTYPE: LazyLock<String> = LazyLock::new(|| {
     SimpleCurlyFormat
         .format(STRING_REG_CAST_TEMPLATE, ["regtype", "type", "true"])
         .unwrap()
@@ -221,21 +221,21 @@ FROM
       AS o
 )";
 
-static REGCLASS_TO_STRING: Lazy<String> = Lazy::new(|| {
+static REGCLASS_TO_STRING: LazyLock<String> = LazyLock::new(|| {
     SimpleCurlyFormat
         .format(REG_STRING_CAST_TEMPLATE, ["regclass"])
         .unwrap()
         .to_string()
 });
 
-static REGPROC_TO_STRING: Lazy<String> = Lazy::new(|| {
+static REGPROC_TO_STRING: LazyLock<String> = LazyLock::new(|| {
     SimpleCurlyFormat
         .format(REG_STRING_CAST_TEMPLATE, ["regproc"])
         .unwrap()
         .to_string()
 });
 
-static REGTYPE_TO_STRING: Lazy<String> = Lazy::new(|| {
+static REGTYPE_TO_STRING: LazyLock<String> = LazyLock::new(|| {
     SimpleCurlyFormat
         .format(REG_STRING_CAST_TEMPLATE, ["regtype"])
         .unwrap()
@@ -292,7 +292,7 @@ macro_rules! casts(
     }};
 );
 
-static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = Lazy::new(|| {
+static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = LazyLock::new(|| {
     use ScalarBaseType::*;
     use UnaryFunc::*;
 

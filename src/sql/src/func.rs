@@ -21,7 +21,7 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
@@ -1762,7 +1762,7 @@ macro_rules! privilege_fn {
 }
 
 /// Correlates a built-in function name to its implementations.
-pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     let mut builtins = builtins! {
@@ -3465,7 +3465,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
     builtins
 });
 
-pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     builtins! {
         "_pg_expandarray" => Table {
@@ -3483,7 +3483,7 @@ pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Laz
     }
 });
 
-pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -3895,7 +3895,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
     }
 });
 
-pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -4282,7 +4282,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
     }
 });
 
-pub static MZ_UNSAFE_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -4401,7 +4401,7 @@ fn array_to_string(
 }
 
 /// Correlates an operator with all of its implementations.
-pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
     use ScalarBaseType::*;

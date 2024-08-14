@@ -36,7 +36,7 @@ use mz_ore::instrument;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;
@@ -819,8 +819,8 @@ impl FromStr for ReplicaServiceName {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        static SERVICE_NAME_RE: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)(?:-gen-(\d+))?$").unwrap());
+        static SERVICE_NAME_RE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)(?:-gen-(\d+))?$").unwrap());
 
         let caps = SERVICE_NAME_RE
             .captures(s)

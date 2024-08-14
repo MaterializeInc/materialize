@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
@@ -93,21 +93,21 @@ impl std::str::FromStr for Interval {
     }
 }
 
-static MONTH_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
+static MONTH_OVERFLOW_ERROR: LazyLock<String> = LazyLock::new(|| {
     format!(
         "Overflows maximum months; cannot exceed {}/{} microseconds",
         i32::MAX,
         i32::MIN,
     )
 });
-static DAY_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
+static DAY_OVERFLOW_ERROR: LazyLock<String> = LazyLock::new(|| {
     format!(
         "Overflows maximum days; cannot exceed {}/{} microseconds",
         i32::MAX,
         i32::MIN,
     )
 });
-pub static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
+pub static USECS_PER_DAY: LazyLock<i64> = LazyLock::new(|| {
     Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64).unwrap()
 });
 

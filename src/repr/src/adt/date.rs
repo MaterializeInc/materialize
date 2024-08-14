@@ -16,7 +16,7 @@ use std::ops::Sub;
 use anyhow::anyhow;
 use chrono::NaiveDate;
 use mz_proto::{RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -55,7 +55,7 @@ impl std::str::FromStr for Date {
     }
 }
 
-static PG_EPOCH: Lazy<NaiveDate> = Lazy::new(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+static PG_EPOCH: LazyLock<NaiveDate> = LazyLock::new(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
 
 impl Date {
     pub const UNIX_EPOCH_TO_PG_EPOCH: i32 = 10957; // Number of days from 1970-01-01 to 2000-01-01.

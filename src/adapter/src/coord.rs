@@ -150,9 +150,9 @@ use mz_timestamp_oracle::postgres_oracle::{
 };
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
-use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
+use std::sync::LazyLock;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
@@ -3716,7 +3716,7 @@ pub fn serve(
         // Initializing the builtins can be an expensive process and consume a lot of memory. We
         // forcibly initialize it early while the stack is relatively empty to avoid stack
         // overflows later.
-        let _builtins = Lazy::force(&BUILTINS_STATIC);
+        let _builtins = LazyLock::force(&BUILTINS_STATIC);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();

@@ -14,7 +14,7 @@ use std::mem;
 
 use mz_expr::VariadicFunc;
 use mz_repr::{ColumnType, RelationType, ScalarType};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::plan::expr::{AbstractExpr, AggregateFunc, HirRelationExpr, HirScalarExpr};
 
@@ -270,7 +270,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
 ///
 /// These transformations are expected to run after parameters are bound, so
 /// there is no need to provide any parameter type information.
-static NO_PARAMS: Lazy<BTreeMap<usize, ScalarType>> = Lazy::new(BTreeMap::new);
+static NO_PARAMS: LazyLock<BTreeMap<usize, ScalarType>> = LazyLock::new(BTreeMap::new);
 
 fn column_type(
     outers: &[RelationType],

@@ -42,7 +42,7 @@ use mz_ore::str::StrExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
@@ -266,10 +266,10 @@ where
     // zero, then we know underflow occurred.
 
     // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, 0., .0, et al.
-    static ZERO_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"(?i-u)^[-+]?(0+(\.0*)?|\.0+)(e|$)"#).unwrap());
+    static ZERO_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?i-u)^[-+]?(0+(\.0*)?|\.0+)(e|$)"#).unwrap());
     // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
-    static INF_RE: Lazy<Regex> = Lazy::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
+    static INF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
 
     let buf = s.trim().as_bytes();
     let f: Fl =

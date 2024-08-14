@@ -22,14 +22,14 @@
 
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use reqwest::Url;
 
 use crate::client::{Authentication, Client};
 
 /// The default endpoint the client will use to issue the requests. Currently
 /// points to Materialize admin endpoint.
-pub static DEFAULT_ENDPOINT: Lazy<Url> = Lazy::new(|| {
+pub static DEFAULT_ENDPOINT: LazyLock<Url> = LazyLock::new(|| {
     "https://admin.cloud.materialize.com"
         .parse()
         .expect("url known to be valid")

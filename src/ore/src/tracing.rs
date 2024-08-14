@@ -38,7 +38,7 @@ use derivative::Derivative;
 use http::HeaderMap;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::trace::TracerProvider;
@@ -273,7 +273,7 @@ impl std::fmt::Debug for TracingGuard {
 /// with long lived Spans.
 pub const LOGGING_DEFAULTS_STR: [&str; 1] = ["kube_client::client::builder=off"];
 /// Same as [`LOGGING_DEFAULTS_STR`], but structured as [`Directive`]s.
-pub static LOGGING_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+pub static LOGGING_DEFAULTS: LazyLock<Vec<Directive>> = LazyLock::new(|| {
     LOGGING_DEFAULTS_STR
         .into_iter()
         .map(|directive| Directive::from_str(directive).expect("valid directive"))
@@ -286,7 +286,7 @@ pub static LOGGING_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
 /// with long lived Spans.
 pub const OPENTELEMETRY_DEFAULTS_STR: [&str; 2] = ["h2=off", "hyper=off"];
 /// Same as [`OPENTELEMETRY_DEFAULTS_STR`], but structured as [`Directive`]s.
-pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+pub static OPENTELEMETRY_DEFAULTS: LazyLock<Vec<Directive>> = LazyLock::new(|| {
     OPENTELEMETRY_DEFAULTS_STR
         .into_iter()
         .map(|directive| Directive::from_str(directive).expect("valid directive"))
@@ -298,7 +298,7 @@ pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
 pub const SENTRY_DEFAULTS_STR: [&str; 2] =
     ["kube_client::client::builder=off", "mysql_async::conn=off"];
 /// Same as [`SENTRY_DEFAULTS_STR`], but structured as [`Directive`]s.
-pub static SENTRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+pub static SENTRY_DEFAULTS: LazyLock<Vec<Directive>> = LazyLock::new(|| {
     SENTRY_DEFAULTS_STR
         .into_iter()
         .map(|directive| Directive::from_str(directive).expect("valid directive"))

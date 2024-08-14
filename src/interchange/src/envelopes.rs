@@ -19,7 +19,7 @@ use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -139,7 +139,7 @@ where
 pub(crate) const TRANSACTION_TYPE_ID: GlobalId = GlobalId::Transient(1);
 pub(crate) const DBZ_ROW_TYPE_ID: GlobalId = GlobalId::Transient(2);
 
-pub static ENVELOPE_CUSTOM_NAMES: Lazy<BTreeMap<GlobalId, String>> = Lazy::new(|| {
+pub static ENVELOPE_CUSTOM_NAMES: LazyLock<BTreeMap<GlobalId, String>> = LazyLock::new(|| {
     btreemap! {
         TRANSACTION_TYPE_ID => "transaction".into(),
         DBZ_ROW_TYPE_ID => "row".into(),

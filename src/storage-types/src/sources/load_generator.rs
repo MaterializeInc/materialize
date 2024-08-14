@@ -16,7 +16,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::UnresolvedItemName;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -49,8 +49,8 @@ pub struct LoadGeneratorSourceConnection {
     pub up_to: u64,
 }
 
-pub static LOAD_GEN_PROGRESS_DESC: Lazy<RelationDesc> =
-    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+pub static LOAD_GEN_PROGRESS_DESC: LazyLock<RelationDesc> =
+    LazyLock::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
 
 impl SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {

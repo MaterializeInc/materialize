@@ -1105,7 +1105,7 @@ mod pubsub_state {
     use mz_ore::collections::HashSet;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::Receiver;
     use tonic::Status;
@@ -1115,10 +1115,10 @@ mod pubsub_state {
     use crate::rpc::{PubSubSenderInternal, PubSubState};
     use crate::ShardId;
 
-    const SHARD_ID_0: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
-    const SHARD_ID_1: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
+    const SHARD_ID_0: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
+    const SHARD_ID_1: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
 
     const VERSIONED_DATA_0: VersionedData = VersionedData {
         seqno: SeqNo(0),
@@ -1327,7 +1327,7 @@ mod grpc {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_proto::RustType;
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tokio_stream::StreamExt;
@@ -1342,10 +1342,10 @@ mod grpc {
     };
     use crate::ShardId;
 
-    static SHARD_ID_0: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
-    static SHARD_ID_1: Lazy<ShardId> =
-        Lazy::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
+    static SHARD_ID_0: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
+    static SHARD_ID_1: LazyLock<ShardId> =
+        LazyLock::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
     const VERSIONED_DATA_0: VersionedData = VersionedData {
         seqno: SeqNo(0),
         data: Bytes::from_static(&[0, 1, 2, 3]),

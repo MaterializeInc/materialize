@@ -15,7 +15,7 @@ use bytes::{BufMut, BytesMut};
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 /// A wrapper for the `repr` crate's `Decimal` type that can be serialized to
@@ -38,9 +38,9 @@ impl From<AdtNumeric> for Numeric {
 /// `ToSql` and `FromSql` use base 10,000 units.
 const TO_FROM_SQL_BASE_POW: u32 = 4;
 
-static TO_SQL_BASER: Lazy<AdtNumeric> =
-    Lazy::new(|| AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW)));
-static FROM_SQL_SCALER: Lazy<AdtNumeric> = Lazy::new(|| AdtNumeric::from(TO_FROM_SQL_BASE_POW));
+static TO_SQL_BASER: LazyLock<AdtNumeric> =
+    LazyLock::new(|| AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW)));
+static FROM_SQL_SCALER: LazyLock<AdtNumeric> = LazyLock::new(|| AdtNumeric::from(TO_FROM_SQL_BASE_POW));
 
 /// The maximum number of units necessary to represent a valid [`AdtNumeric`] value.
 const UNITS_LEN: usize = 11;

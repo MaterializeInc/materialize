@@ -22,7 +22,7 @@ use std::time::SystemTime;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;
@@ -97,12 +97,12 @@ fn now_zero() -> EpochMillis {
 }
 
 /// A [`NowFn`] that returns the actual system time.
-pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
+pub static SYSTEM_TIME: LazyLock<NowFn> = LazyLock::new(|| NowFn::from(system_time));
 
 /// A [`NowFn`] that always returns zero.
 ///
 /// For use in tests.
-pub static NOW_ZERO: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_zero));
+pub static NOW_ZERO: LazyLock<NowFn> = LazyLock::new(|| NowFn::from(now_zero));
 
 #[cfg(feature = "chrono")]
 #[cfg(test)]

@@ -21,7 +21,7 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
 use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
 use mz_storage_types::sources::MzOffset;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -353,13 +353,13 @@ fn pad_nine<S: Display>(prefix: &str, s: S) -> String {
     format!("{}#{s:09}", prefix)
 }
 
-pub static START_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1992, 1, 1).unwrap()).unwrap());
-pub static CURRENT_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1995, 6, 17).unwrap()).unwrap());
-pub static END_DATE: Lazy<Date> =
-    Lazy::new(|| Date::try_from(NaiveDate::from_ymd_opt(1998, 12, 31).unwrap()).unwrap());
-pub static ORDER_END_DAYS: Lazy<i32> = Lazy::new(|| *END_DATE - *START_DATE - 151);
+pub static START_DATE: LazyLock<Date> =
+    LazyLock::new(|| Date::try_from(NaiveDate::from_ymd_opt(1992, 1, 1).unwrap()).unwrap());
+pub static CURRENT_DATE: LazyLock<Date> =
+    LazyLock::new(|| Date::try_from(NaiveDate::from_ymd_opt(1995, 6, 17).unwrap()).unwrap());
+pub static END_DATE: LazyLock<Date> =
+    LazyLock::new(|| Date::try_from(NaiveDate::from_ymd_opt(1998, 12, 31).unwrap()).unwrap());
+pub static ORDER_END_DAYS: LazyLock<i32> = LazyLock::new(|| *END_DATE - *START_DATE - 151);
 
 fn text_string<'a, R: Rng + ?Sized>(
     rng: &mut R,

@@ -22,7 +22,7 @@ use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use rdkafka::admin::AdminClient;
@@ -85,7 +85,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
     }
 }
 
-pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static KAFKA_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column(
             "partition",

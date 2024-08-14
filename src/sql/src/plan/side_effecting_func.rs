@@ -38,7 +38,7 @@ use mz_ore::result::ResultExt;
 use mz_repr::RelationType;
 use mz_repr::{ColumnType, Datum, RelationDesc, RowArena, ScalarType};
 use mz_sql_parser::ast::{CteBlock, Expr, Function, FunctionArgs, Select, SelectItem, SetExpr};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::ast::{Query, SelectStatement};
 use crate::func::Func;
@@ -266,7 +266,7 @@ pub struct SideEffectingFuncImpl {
 
 /// A map of the side-effecting functions in the `pg_catalog` schema, keyed by
 /// OID.
-pub static PG_CATALOG_SEF_BUILTINS: Lazy<BTreeMap<u32, SideEffectingFuncImpl>> = Lazy::new(|| {
+pub static PG_CATALOG_SEF_BUILTINS: LazyLock<BTreeMap<u32, SideEffectingFuncImpl>> = LazyLock::new(|| {
     [PG_CANCEL_BACKEND]
         .into_iter()
         .map(|f| (f.oid, f))

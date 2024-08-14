@@ -33,7 +33,7 @@ use mz_sql::names::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::builtin::BUILTIN_ROLES;
 use crate::durable::upgrade::CATALOG_VERSION;
@@ -91,7 +91,7 @@ pub const MZ_INTROSPECTION_SCHEMA_ID: u64 = 8;
 
 const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
-static SYSTEM_SCHEMA_PRIVILEGES: Lazy<Vec<MzAclItem>> = Lazy::new(|| {
+static SYSTEM_SCHEMA_PRIVILEGES: LazyLock<Vec<MzAclItem>> = LazyLock::new(|| {
     vec![
         rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
         MzAclItem {
@@ -103,7 +103,7 @@ static SYSTEM_SCHEMA_PRIVILEGES: Lazy<Vec<MzAclItem>> = Lazy::new(|| {
     ]
 });
 
-static MZ_CATALOG_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+static MZ_CATALOG_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_CATALOG_SCHEMA_ID),
     oid: SCHEMA_MZ_CATALOG_OID,
     database_id: None,
@@ -111,7 +111,7 @@ static MZ_CATALOG_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
-static PG_CATALOG_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+static PG_CATALOG_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(PG_CATALOG_SCHEMA_ID),
     oid: SCHEMA_PG_CATALOG_OID,
     database_id: None,
@@ -119,7 +119,7 @@ static PG_CATALOG_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
-static MZ_INTERNAL_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+static MZ_INTERNAL_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_INTERNAL_SCHEMA_ID),
     oid: SCHEMA_MZ_INTERNAL_OID,
     database_id: None,
@@ -127,7 +127,7 @@ static MZ_INTERNAL_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
-static INFORMATION_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+static INFORMATION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(INFORMATION_SCHEMA_ID),
     oid: SCHEMA_INFORMATION_SCHEMA_OID,
     database_id: None,
@@ -135,7 +135,7 @@ static INFORMATION_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
-static MZ_UNSAFE_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+static MZ_UNSAFE_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_UNSAFE_SCHEMA_ID),
     oid: SCHEMA_MZ_UNSAFE_OID,
     database_id: None,
@@ -143,7 +143,7 @@ static MZ_UNSAFE_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
-static MZ_CATALOG_UNSTABLE_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+static MZ_CATALOG_UNSTABLE_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_CATALOG_UNSTABLE_SCHEMA_ID),
     oid: SCHEMA_MZ_CATALOG_UNSTABLE_OID,
     database_id: None,
@@ -151,7 +151,7 @@ static MZ_CATALOG_UNSTABLE_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
-static MZ_INTROSPECTION_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
+static MZ_INTROSPECTION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     id: SchemaId::System(MZ_INTROSPECTION_SCHEMA_ID),
     oid: SCHEMA_MZ_INTROSPECTION_OID,
     database_id: None,
@@ -159,7 +159,7 @@ static MZ_INTROSPECTION_SCHEMA: Lazy<Schema> = Lazy::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
-static SYSTEM_SCHEMAS: Lazy<BTreeMap<&str, &Schema>> = Lazy::new(|| {
+static SYSTEM_SCHEMAS: LazyLock<BTreeMap<&str, &Schema>> = LazyLock::new(|| {
     [
         &*MZ_CATALOG_SCHEMA,
         &*PG_CATALOG_SCHEMA,
