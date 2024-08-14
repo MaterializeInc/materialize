@@ -637,11 +637,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                         argument_has_any_characteristic,
                         arg_index=1,
                         characteristics={ExpressionCharacteristics.NULL},
+                        row_selection=query_template.row_selection,
                     ),
                     y=partial(
                         argument_has_any_characteristic,
                         arg_index=2,
                         characteristics={ExpressionCharacteristics.NULL},
+                        row_selection=query_template.row_selection,
                     ),
                 ),
             ),

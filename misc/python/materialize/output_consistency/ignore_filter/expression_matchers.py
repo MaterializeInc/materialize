@@ -43,6 +43,10 @@ from materialize.output_consistency.operation.operation import (
     match_function_by_name,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.selection import (
+    ALL_ROWS_SELECTION,
+    DataRowSelection,
+)
 
 
 def matches_x_or_y(
@@ -185,6 +189,7 @@ def argument_has_any_characteristic(
     expression: Expression,
     arg_index: int,
     characteristics: set[ExpressionCharacteristics],
+    row_selection: DataRowSelection = ALL_ROWS_SELECTION,
 ) -> bool:
     if isinstance(expression, ExpressionWithArgs):
         assert arg_index < len(
@@ -195,7 +200,9 @@ def argument_has_any_characteristic(
             return False
 
         argument = expression.args[arg_index]
-        return argument.has_any_characteristic(characteristics)
+        return argument.has_any_characteristic(
+            characteristics, row_selection=row_selection
+        )
 
     return False
 
