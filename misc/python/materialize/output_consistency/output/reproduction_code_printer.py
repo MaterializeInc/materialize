@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -188,22 +191,22 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self,
         query_template: QueryTemplate,
         query_column_selection: QueryColumnByIndexSelection,
-    ) -> set[str]:
-        column_names = set()
+    ) -> set[SourceColumnIdentifier]:
+        column_tuples = set()
 
         for index, expression in enumerate(query_template.select_expressions):
             if not query_column_selection.is_included(index):
                 continue
 
-            leave_expressions = expression.collect_leaves()
-            for leaf_expression in leave_expressions:
-                column_names.add(leaf_expression.column_name)
+            leaf_expressions = expression.collect_leaves()
+            for leaf_expression in leaf_expressions:
+                column_tuples.add(leaf_expression.get_source_column_identifier())
 
         for further_expression in query_template.get_all_expressions(
             include_select_expressions=False, include_join_constraints=True
         ):
             leaf_expressions = further_expression.collect_leaves()
             for leaf_expression in leaf_expressions:
-                column_names.add(leaf_expression.column_name)
+                column_tuples.add(leaf_expression.get_source_column_identifier())
 
-        return column_names
+        return column_tuples

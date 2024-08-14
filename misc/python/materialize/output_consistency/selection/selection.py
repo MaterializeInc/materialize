@@ -9,6 +9,11 @@
 
 from typing import Generic, TypeVar
 
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
+from materialize.output_consistency.query.data_source import DataSource
+
 T = TypeVar("T")
 
 
@@ -51,12 +56,23 @@ class QueryColumnByIndexSelection(SelectionByKey[int]):
         super().__init__(column_indices)
 
 
-class TableColumnByNameSelection(SelectionByKey[str]):
-    def __init__(self, column_names: set[str] | None = None):
+class TableColumnByNameSelection(SelectionByKey[SourceColumnIdentifier]):
+    def __init__(self, column_identifiers: set[SourceColumnIdentifier] | None = None):
         """
-        :param column_names: name of selected columns; all columns if not specified
+        :param column_identifiers: identifiers of selected columns; all columns if not specified
         """
-        super().__init__(column_names)
+        super().__init__(column_identifiers)
+
+    def requires_data_source(self, data_source: DataSource) -> bool:
+        if self.includes_all():
+            return True
+
+        assert self.keys is not None
+        for column_identifier in self.keys:
+            if data_source.alias() == column_identifier.data_source_alias:
+                return True
+
+        return False
 
 
 ALL_ROWS_SELECTION = DataRowSelection()

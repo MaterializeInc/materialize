@@ -22,6 +22,7 @@ from materialize.output_consistency.execution.value_storage_layout import (
 from materialize.output_consistency.input_data.test_input_types import (
     ConsistencyTestTypesInput,
 )
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.selection.selection import (
     ALL_ROWS_SELECTION,
     ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
@@ -133,6 +134,7 @@ class EvaluationStrategy:
         self,
         types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
+        table_index: int | None,
         include_type: bool,
         table_column_selection: TableColumnByNameSelection,
     ) -> list[str]:
@@ -151,14 +153,18 @@ class EvaluationStrategy:
 
             if storage_layout == ValueStorageLayout.HORIZONTAL:
                 for data_value in type_with_values.raw_values:
-                    if table_column_selection.is_included(data_value.column_name):
+                    if table_column_selection.is_included(
+                        data_value.get_source_column_identifier()
+                    ):
                         column_specs.append(f"{data_value.column_name}{type_info}")
             elif storage_layout == ValueStorageLayout.VERTICAL:
-                column_name = (
-                    type_with_values.create_unassigned_vertical_storage_column().column_name
+                column = type_with_values.create_assigned_vertical_storage_column(
+                    DataSource(table_index)
                 )
-                if table_column_selection.is_included(column_name):
-                    column_specs.append(f"{column_name}{type_info}")
+                if table_column_selection.is_included(
+                    column.get_source_column_identifier()
+                ):
+                    column_specs.append(f"{column.column_name}{type_info}")
             else:
                 raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
@@ -207,7 +213,9 @@ class EvaluationStrategy:
 
         for type_with_values in data_type_with_values:
             for data_value in type_with_values.raw_values:
-                if table_column_selection.is_included(data_value.column_name):
+                if table_column_selection.is_included(
+                    data_value.get_source_column_identifier()
+                ):
                     row_values.append(data_value.to_sql_as_value(self.sql_adjuster))
 
         return f"{', '.join(row_values)}"
@@ -228,10 +236,13 @@ class EvaluationStrategy:
             row_values = [str(row_index)]
 
             for type_with_values in data_type_with_values:
-                data_column = type_with_values.create_unassigned_vertical_storage_column()
-                column_name = data_column.column_name
+                data_column = type_with_values.create_assigned_vertical_storage_column(
+                    DataSource(table_index)
+                )
 
-                if not table_column_selection.is_included(column_name):
+                if not table_column_selection.is_included(
+                    data_column.get_source_column_identifier()
+                ):
                     continue
 
                 data_value = data_column.get_value_at_row(row_index, table_index)
@@ -282,7 +293,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         statements = []
 
         column_specs = self._create_column_specs(
-            types_input, storage_layout, True, table_column_selection
+            types_input, storage_layout, table_index, True, table_column_selection
         )
         statements.append(f"DROP TABLE IF EXISTS {db_object_name};")
         statements.append(f"CREATE TABLE {db_object_name} ({', '.join(column_specs)});")
@@ -326,7 +337,7 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         )
 
         column_specs = self._create_column_specs(
-            types_input, storage_layout, False, table_column_selection
+            types_input, storage_layout, table_index, False, table_column_selection
         )
 
         value_rows = self._create_value_rows(
