@@ -143,6 +143,12 @@
       drop source if exists {{ relation }} cascade
     {% elif relation.type == 'index' %}
       drop index if exists {{ relation }}
+    -- Tables are not supported as a materialization type in dbt-materialize,
+    -- but seeds are materialized as tables. This is needed to enable full
+    -- refreshes for seeds.
+    -- See: https://github.com/dbt-labs/dbt-adapters/blob/main/dbt/include/global_project/macros/materializations/seeds/helpers.sql
+    {% elif relation.type == 'table' %}
+      drop table if exists {{ relation }}
     {% endif %}
   {%- endcall %}
 {% endmacro %}
