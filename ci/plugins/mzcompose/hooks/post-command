@@ -26,7 +26,12 @@ if [ -f services.log ]; then
     # Don't capture log lines we received already
     time=$(date +%s -r services.log)
 fi
-run logs --no-color --since "$time" >> services.log
+run logs --no-color --timestamps --since "$time" >> services.log
+# Sort services.log and remove the timestamps we added to prevent having duplicate timestamps in output. For reference:
+# https://github.com/moby/moby/issues/33673
+# https://github.com/moby/moby/issues/31706
+sort -k 1 < services.log | sed -E "s/ \| [0-9]{4}-[01][0-9]-[0-3][0-9]T[0-2][0-9]\:[0-5][0-9]:[0-6][0-9]\.[0-9]{9}Z / \| /" > services-sorted.log
+mv services-sorted.log services.log
 # shellcheck disable=SC2024
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 netstat -ant > netstat-ant.log

@@ -1039,7 +1039,13 @@ class Composition:
         time = os.path.getmtime(path) if os.path.isfile(path) else 0
         with open(path, "a") as f:
             self.invoke(
-                "logs", "--no-color", "--since", str(time), *services, capture=f
+                "logs",
+                "--no-color",
+                "--timestamps",
+                "--since",
+                str(time),
+                *services,
+                capture=f,
             )
 
     def down(
