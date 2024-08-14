@@ -661,6 +661,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if "argument of IN must not return a set" in pg_error_msg:
             return YesIgnore("Not supported by Postgres")
 
+        if query_template.matches_any_expression(
+            partial(
+                matches_op_by_pattern,
+                pattern="$ IS NULL",
+            ),
+            True,
+        ):
+            return YesIgnore("Evaluation shortcut for IS NULL")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
