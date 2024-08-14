@@ -144,6 +144,9 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 # we assume that the custom object already exists
                 continue
 
+            if not table_column_selection.requires_data_source(data_source):
+                continue
+
             setup_code_lines.extend(
                 evaluation_strategy.generate_source_for_storage_layout(
                     self.input_data.types_input,
