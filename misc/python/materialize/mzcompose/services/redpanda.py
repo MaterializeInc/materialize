@@ -13,12 +13,14 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
+REDPANDA_VERSION = "v24.2.2"
+
 
 class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v24.1.9",
+        version: str = REDPANDA_VERSION,
         auto_create_topics: bool = False,
         image: str | None = None,
         aliases: list[str] | None = None,
