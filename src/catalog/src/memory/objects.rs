@@ -536,7 +536,7 @@ pub struct Table {
     pub create_sql: Option<String>,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr<Aug>>,
+    pub defaults: Option<Vec<Expr<Aug>>>,
     #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
@@ -2389,7 +2389,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn table_details(&self) -> Option<&[Expr<Aug>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
-            Some(defaults)
+            defaults.as_ref().map(|defaults| defaults.as_slice())
         } else {
             None
         }

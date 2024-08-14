@@ -95,7 +95,7 @@ async fn datadriven() {
                                                 test_case.input.trim_end()
                                             )),
                                             desc: RelationDesc::empty(),
-                                            defaults: vec![],
+                                            defaults: Some(vec![]),
                                             conn_id: None,
                                             resolved_ids: ResolvedIds(BTreeSet::new()),
                                             custom_logical_compaction_window: None,

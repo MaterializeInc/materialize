@@ -1323,7 +1323,7 @@ pub enum TableDataSource {
 pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
-    pub defaults: Vec<Expr<Aug>>,
+    pub defaults: Option<Vec<Expr<Aug>>>,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
     pub data_source: TableDataSource,

@@ -396,7 +396,7 @@ pub fn plan_create_table(
     let table = Table {
         create_sql,
         desc,
-        defaults,
+        defaults: Some(defaults),
         temporary,
         compaction_window,
         data_source: TableDataSource::TableWrites,
@@ -1481,7 +1481,7 @@ pub fn plan_create_table_from_source(
         seen: _,
     } = with_options.clone().try_into()?;
 
-    let source_item = scx.resolve_item(ast::RawItemName::Name(source.clone()))?;
+    let source_item = scx.get_item_by_resolved_name(source)?;
     let ingestion_id = source_item.id();
 
     let desc = plan_source_export_desc(scx, name, columns, constraints)?;
@@ -1544,7 +1544,7 @@ pub fn plan_create_table_from_source(
     let table = Table {
         create_sql,
         desc,
-        defaults: vec![],
+        defaults: None,
         temporary: false,
         compaction_window: None,
         data_source: TableDataSource::DataSource(data_source),

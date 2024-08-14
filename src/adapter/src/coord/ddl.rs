@@ -831,9 +831,10 @@ impl Coordinator {
     }
 
     fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_tables(tables, ts)
+            .drop_tables(storage_metadata, tables, ts)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 

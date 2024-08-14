@@ -1341,35 +1341,53 @@ where
 
     // Dropping a table takes roughly the following flow:
     //
+    // First determine if this is a TableWrites table or a source-fed table (an IngestionExport):
+    //
+    // If this is a TableWrites table:
     //   1. We remove the table from the persist table write worker.
     //   2. The table removal is awaited in an async task.
     //   3. A message is sent to the storage controller that the table has been removed from the
     //      table write worker.
     //   4. The controller drains all table drop messages during `process`.
     //   5. `process` calls `drop_sources` with the dropped tables.
+    //
+    // If this is an IngestionExport table:
+    //   1. We validate the ids and then call drop_sources_unvalidated to proceed dropping.
     fn drop_tables(
         &mut self,
+        storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
         ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert!(
-            identifiers.iter().all(|id| self.collections[id].is_table()),
-            "identifiers contain non-tables: {:?}",
-            identifiers
-                .iter()
-                .filter(|id| !self.collections[id].is_table())
-                .collect::<Vec<_>>()
-        );
-        let drop_notif = self
-            .persist_table_worker
-            .drop_handles(identifiers.clone(), ts);
-        let tx = self.pending_table_handle_drops_tx.clone();
-        mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
-            drop_notif.await;
-            for identifier in identifiers {
-                let _ = tx.send(identifier);
-            }
-        });
+        // Collect tables by their data_source
+        let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
+            .into_iter()
+            .partition(|id| match self.collections[id].data_source {
+                DataSource::Other(DataSourceOther::TableWrites) => true,
+                DataSource::IngestionExport { .. } => false,
+                _ => panic!("identifier is not a table: {}", id),
+            });
+
+        // Drop table write tables
+        if table_write_ids.len() > 0 {
+            let drop_notif = self
+                .persist_table_worker
+                .drop_handles(table_write_ids.clone(), ts);
+            let tx = self.pending_table_handle_drops_tx.clone();
+            mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
+                drop_notif.await;
+                for identifier in table_write_ids {
+                    let _ = tx.send(identifier);
+                }
+            });
+        }
+
+        // Drop source-fed tables
+        if data_source_ids.len() > 0 {
+            self.validate_collection_ids(data_source_ids.iter().cloned())?;
+            self.drop_sources_unvalidated(storage_metadata, data_source_ids)?;
+        }
+
         Ok(())
     }
 
@@ -3760,16 +3778,6 @@ struct CollectionState<T: TimelyTimestamp> {
     pub collection_metadata: CollectionMetadata,
 
     pub extra_state: CollectionStateExtra<T>,
-}
-
-impl<T: TimelyTimestamp> CollectionState<T> {
-    /// Returns true if `self` is a table, false otherwise.
-    pub fn is_table(&self) -> bool {
-        matches!(
-            self.data_source,
-            DataSource::Other(DataSourceOther::TableWrites)
-        )
-    }
 }
 
 /// Additional state that the controller maintains for select collection types.

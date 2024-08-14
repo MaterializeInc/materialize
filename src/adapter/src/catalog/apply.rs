@@ -589,7 +589,7 @@ impl CatalogState {
                     CatalogItem::Table(Table {
                         create_sql: None,
                         desc: table.desc.clone(),
-                        defaults: vec![Expr::null(); table.desc.arity()],
+                        defaults: Some(vec![Expr::null(); table.desc.arity()]),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(

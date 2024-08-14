@@ -620,7 +620,7 @@ impl CatalogState {
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
             let defaults = match entry.item() {
-                CatalogItem::Table(table) => Some(&table.defaults),
+                CatalogItem::Table(table) => table.defaults.as_ref(),
                 _ => None,
             };
             for (i, (column_name, column_type)) in desc.iter().enumerate() {

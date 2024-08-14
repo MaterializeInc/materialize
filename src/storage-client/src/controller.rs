@@ -510,6 +510,7 @@ pub trait StorageController: Debug {
     /// Drops the read capability for the tables and allows their resources to be reclaimed.
     fn drop_tables(
         &mut self,
+        storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
         ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
