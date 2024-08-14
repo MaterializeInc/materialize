@@ -54,7 +54,6 @@ class QueryTemplate:
         offset: int | None = None,
         limit: int | None = None,
         additional_data_sources: list[AdditionalDataSource] = [],
-        custom_db_object_name: str | None = None,
         custom_order_expressions: list[Expression] | None = None,
     ) -> None:
         assert storage_layout != ValueStorageLayout.ANY
@@ -68,7 +67,6 @@ class QueryTemplate:
         self.row_selection = row_selection
         self.offset = offset
         self.limit = limit
-        self.custom_db_object_name = custom_db_object_name
         self.custom_order_expressions = custom_order_expressions
         self.disable_error_message_validation = not self.__can_compare_error_messages()
 
@@ -107,13 +105,16 @@ class QueryTemplate:
         query_output_mode: QueryOutputMode,
         override_db_object_name: str | None = None,
     ) -> str:
-        db_object_name = self.get_db_object_name(
-            strategy, override_db_object_name=override_db_object_name
-        )
         space_separator = self._get_space_separator(output_format)
 
         column_sql = self._create_column_sql(
             query_column_selection, space_separator, strategy.sql_adjuster
+        )
+        from_clause = self._create_from_clause(
+            strategy, override_db_object_name, strategy.sql_adjuster, space_separator
+        )
+        join_clauses = self._create_join_clauses(
+            strategy, override_db_object_name, strategy.sql_adjuster, space_separator
         )
         where_clause = self._create_where_clause(strategy.sql_adjuster)
         order_by_clause = self._create_order_by_clause(strategy.sql_adjuster)
@@ -124,7 +125,8 @@ class QueryTemplate:
 
         sql = f"""
 {explain_mode} SELECT{space_separator}{column_sql}
-FROM{space_separator}{db_object_name}
+{from_clause}
+{join_clauses}
 {where_clause}
 {order_by_clause}
 {limit_clause}
@@ -132,19 +134,6 @@ FROM{space_separator}{db_object_name}
 """.strip()
 
         return self._post_format_sql(sql, output_format)
-
-    def get_db_object_name(
-        self,
-        strategy: EvaluationStrategy,
-        table_index: int | None = None,
-        override_db_object_name: str | None = None,
-    ) -> str:
-        table_index_suffix = f"_{table_index}" if table_index is not None else ""
-        return (
-            override_db_object_name
-            or f"{self.custom_db_object_name}{table_index_suffix}"
-            or strategy.get_db_object_name(self.storage_layout, table_index=table_index)
-        )
 
     def _get_space_separator(self, output_format: QueryOutputFormat) -> str:
         return "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "
@@ -161,6 +150,62 @@ FROM{space_separator}{db_object_name}
                 expressions_as_sql.append(expression.to_sql(sql_adjuster, True))
 
         return f",{space_separator}".join(expressions_as_sql)
+
+    def _create_from_clause(
+        self,
+        strategy: EvaluationStrategy,
+        override_db_object_name: str | None,
+        sql_adjuster: SqlDialectAdjuster,
+        space_separator: str,
+    ) -> str:
+        db_object_name = self.data_source.get_db_object_name(
+            strategy,
+            self.storage_layout,
+            override_db_object_name=override_db_object_name,
+        )
+        return f"FROM{space_separator}{db_object_name}"
+
+    def _create_join_clauses(
+        self,
+        strategy: EvaluationStrategy,
+        override_db_object_name: str | None,
+        sql_adjuster: SqlDialectAdjuster,
+        space_separator: str,
+    ) -> str:
+        if len(self.additional_data_sources) == 0:
+            # no JOIN necessary
+            return ""
+
+        join_clauses = ""
+
+        for additional_data_source in self.additional_data_sources:
+            join_clauses = (
+                f"{join_clauses}"
+                f"\n{self._create_join_clause(strategy, additional_data_source, override_db_object_name, sql_adjuster, space_separator)}"
+            )
+
+        return join_clauses
+
+    def _create_join_clause(
+        self,
+        strategy: EvaluationStrategy,
+        additional_data_source_to_join: AdditionalDataSource,
+        override_db_object_name: str | None,
+        sql_adjuster: SqlDialectAdjuster,
+        space_separator: str,
+    ) -> str:
+        db_object_name_to_join = additional_data_source_to_join.get_db_object_name(
+            strategy,
+            self.storage_layout,
+            override_db_object_name=override_db_object_name,
+        )
+
+        join_operator_sql = additional_data_source_to_join.join_operator.to_sql()
+
+        return (
+            f"{join_operator_sql} {db_object_name_to_join} {additional_data_source_to_join.alias()}"
+            f"{space_separator}ON {additional_data_source_to_join.join_constraint.to_sql(sql_adjuster, True)}"
+        )
 
     def _create_where_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
         where_conditions = []
