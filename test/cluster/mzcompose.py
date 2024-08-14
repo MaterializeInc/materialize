@@ -1877,6 +1877,94 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     assert replaced == 0
 
 
+def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
+    """
+    Test that compute reconciliation replaces changed dataflows, as well as
+    dataflows transitively depending on them.
+
+    Regression test for #28961.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("materialized")
+    c.up("clusterd1")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Helper function to get reconciliation metrics for clusterd.
+    def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
+        metrics = c.exec(process, "curl", "localhost:6878/metrics", capture=True).stdout
+
+        reused = 0
+        replaced = 0
+        for metric in metrics.splitlines():
+            if metric.startswith(
+                "mz_compute_reconciliation_reused_dataflows_count_total"
+            ):
+                reused += int(metric.split()[1])
+            elif metric.startswith(
+                "mz_compute_reconciliation_replaced_dataflows_count_total"
+            ):
+                replaced += int(metric.split()[1])
+
+        return reused, replaced
+
+    # Set up a cluster and a number of dataflows that can be reconciled.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        SET cluster = cluster1;
+
+        CREATE TABLE t (a int);
+        CREATE INDEX idx ON t (a);
+
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+
+        CREATE VIEW v1 AS SELECT a + 1 AS b FROM t;
+        CREATE INDEX idx1 ON v1 (b);
+        CREATE VIEW v2 AS SELECT b + 1 AS c FROM v1;
+        CREATE INDEX idx2 ON v2 (c);
+        CREATE VIEW v3 AS SELECT c + 1 AS d FROM v2;
+        CREATE INDEX idx3 ON v3 (d);
+
+        SELECT * FROM v3;
+        """
+    )
+
+    # Drop the index on the base table. This will change the plan of `mv1` the
+    # next time it is replanned, which should cause reconciliation to replace
+    # it, as well as the other dataflows that depend on `mv1`.
+    c.sql("DROP INDEX idx")
+
+    # Restart environmentd to trigger a replanning and reconciliation.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Perform queries to ensure reconciliation has finished.
+    c.sql(
+        """
+        SET cluster = cluster1;
+        SELECT * FROM v3;
+        """
+    )
+
+    reused, replaced = fetch_reconciliation_metrics("clusterd1")
+
+    assert reused == 0
+    assert replaced == 4
+
+
 def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     """
     Test that no errors are logged during or after compute

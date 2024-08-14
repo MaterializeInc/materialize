@@ -299,10 +299,17 @@ impl<P, S, T> DataflowDescription<P, S, T> {
 
     /// Identifiers of imported objects (indexes and sources).
     pub fn import_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
-        self.index_imports
-            .keys()
-            .chain(self.source_imports.keys())
-            .copied()
+        self.imported_index_ids().chain(self.imported_source_ids())
+    }
+
+    /// Identifiers of imported indexes.
+    pub fn imported_index_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.index_imports.keys().copied()
+    }
+
+    /// Identifiers of imported sources.
+    pub fn imported_source_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.source_imports.keys().copied()
     }
 
     /// Identifiers of exported objects (indexes and sinks).
