@@ -50,6 +50,7 @@ class Executor:
     reconnect_next: bool
     rollback_next: bool
     last_log: str
+    last_status: str
     action_run_since_last_commit_rollback: bool
     autocommit: bool
 
@@ -69,6 +70,7 @@ class Executor:
         self.reconnect_next = True
         self.rollback_next = True
         self.last_log = ""
+        self.last_status = ""
         self.action_run_since_last_commit_rollback = False
         self.use_ws = self.rng.choice([True, False]) if self.ws else False
         self.autocommit = cur._c.autocommit
@@ -115,6 +117,7 @@ class Executor:
 
         thread_name = threading.current_thread().getName()
         self.last_log = msg
+        self.last_status = "logged"
 
         with lock:
             print(f"[{thread_name}][{self.mz_service}] {msg}", file=logging)
@@ -138,85 +141,89 @@ class Executor:
         use_ws = self.use_ws and http != Http.NO
         http_str = " [HTTP]" if is_http else " [WS]" if use_ws and self.ws else ""
         self.log(f"{query}{extra_info_str}{http_str}")
-        if not is_http:
-            if use_ws and self.ws:
-                try:
-                    self.ws.send(json.dumps({"queries": [{"query": query}]}))
-                except Exception as e:
-                    raise QueryError(str(e), query)
-            else:
-                try:
-                    self.cur.execute(query)
-                except Exception as e:
-                    raise QueryError(str(e), query)
-
-            self.action_run_since_last_commit_rollback = True
-
-            if use_ws and self.ws:
-                error = None
-                while True:
+        self.last_status = "running"
+        try:
+            if not is_http:
+                if use_ws and self.ws:
                     try:
-                        result = json.loads(self.ws.recv())
-                    except (
-                        websocket._exceptions.WebSocketConnectionClosedException
-                    ) as e:
+                        self.ws.send(json.dumps({"queries": [{"query": query}]}))
+                    except Exception as e:
+                        raise QueryError(str(e), query)
+                else:
+                    try:
+                        self.cur.execute(query)
+                    except Exception as e:
                         raise QueryError(str(e), query)
 
-                    result_type = result["type"]
+                self.action_run_since_last_commit_rollback = True
 
-                    if result_type in (
-                        "CommandStarting",
-                        "CommandComplete",
-                        "Notice",
-                        "Rows",
-                        "Row",
-                        "ParameterStatus",
-                    ):
-                        continue
-                    elif result_type == "Error":
-                        error = QueryError(
-                            f"""WS {result["payload"]["code"]}: {result["payload"]["message"]}
-{result["payload"].get("details", "")}""",
+                if use_ws and self.ws:
+                    error = None
+                    while True:
+                        try:
+                            result = json.loads(self.ws.recv())
+                        except (
+                            websocket._exceptions.WebSocketConnectionClosedException
+                        ) as e:
+                            raise QueryError(str(e), query)
+
+                        result_type = result["type"]
+
+                        if result_type in (
+                            "CommandStarting",
+                            "CommandComplete",
+                            "Notice",
+                            "Rows",
+                            "Row",
+                            "ParameterStatus",
+                        ):
+                            continue
+                        elif result_type == "Error":
+                            error = QueryError(
+                                f"""WS {result["payload"]["code"]}: {result["payload"]["message"]}
+    {result["payload"].get("details", "")}""",
+                                query,
+                            )
+                        elif result_type == "ReadyForQuery":
+                            if error:
+                                raise error
+                            break
+                        else:
+                            raise RuntimeError(
+                                f"Unexpected result type: {result_type} in: {result}"
+                            )
+
+                if fetch and not use_ws:
+                    self.cur.fetchall()
+
+                return
+
+            try:
+                result = requests.post(
+                    f"http://{self.db.host}:{self.db.ports['http' if self.mz_service == 'materialized' else 'http2']}/api/sql",
+                    data=json.dumps({"query": query}),
+                    headers={"content-type": "application/json"},
+                    timeout=self.rng.uniform(0, 10),
+                )
+                if result.status_code != 200:
+                    raise QueryError(
+                        f"{result.status_code}: {result.text}", f"HTTP query: {query}"
+                    )
+                for result in result.json()["results"]:
+                    if "error" in result:
+                        raise QueryError(
+                            f"HTTP {result['error']['code']}: {result['error']['message']}\n{result['error'].get('detail', '')}",
                             query,
                         )
-                    elif result_type == "ReadyForQuery":
-                        if error:
-                            raise error
-                        break
-                    else:
-                        raise RuntimeError(
-                            f"Unexpected result type: {result_type} in: {result}"
-                        )
-
-            if fetch and not use_ws:
-                self.cur.fetchall()
-
-            return
-
-        try:
-            result = requests.post(
-                f"http://{self.db.host}:{self.db.ports['http' if self.mz_service == 'materialized' else 'http2']}/api/sql",
-                data=json.dumps({"query": query}),
-                headers={"content-type": "application/json"},
-                timeout=self.rng.uniform(0, 10),
-            )
-            if result.status_code != 200:
-                raise QueryError(
-                    f"{result.status_code}: {result.text}", f"HTTP query: {query}"
-                )
-            for result in result.json()["results"]:
-                if "error" in result:
-                    raise QueryError(
-                        f"HTTP {result['error']['code']}: {result['error']['message']}\n{result['error'].get('detail', '')}",
-                        query,
-                    )
-        except requests.exceptions.ReadTimeout as e:
-            raise QueryError(f"HTTP read timeout: {e}", query)
-        except requests.exceptions.ConnectionError:
-            # Expected when Mz is killed
-            if self.db.scenario not in (
-                Scenario.Kill,
-                Scenario.BackupRestore,
-                Scenario.ZeroDowntimeDeploy,
-            ):
-                raise
+            except requests.exceptions.ReadTimeout as e:
+                raise QueryError(f"HTTP read timeout: {e}", query)
+            except requests.exceptions.ConnectionError:
+                # Expected when Mz is killed
+                if self.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.BackupRestore,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
+                    raise
+        finally:
+            self.last_status = "finished"

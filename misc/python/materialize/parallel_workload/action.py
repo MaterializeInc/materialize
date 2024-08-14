@@ -1427,6 +1427,7 @@ class ReconnectAction(Action):
 
     def run(self, exe: Executor) -> bool:
         exe.mz_service = "materialized"
+        exe.log("reconnecting")
         host = exe.db.host
         port = exe.db.ports[exe.mz_service]
         with exe.db.lock:
