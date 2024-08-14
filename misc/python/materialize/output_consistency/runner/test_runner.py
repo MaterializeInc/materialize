@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -29,7 +28,6 @@ from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
 from materialize.output_consistency.output.output_printer import OutputPrinter
-from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.runner.time_guard import TimeGuard
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.status.test_summary import (
@@ -123,8 +121,8 @@ class ConsistencyTestRunner:
                 expression_count, time_guard
             )
 
-            expression, number_of_args = self.expression_generator.generate_expression(
-                operation
+            expression, number_of_args = (
+                self.expression_generator.generate_expression_for_operation(operation)
             )
             test_summary.accept_expression_generation_statistics(
                 operation, expression, number_of_args
@@ -170,7 +168,7 @@ class ConsistencyTestRunner:
 
         for query in queries:
             if ENABLE_ADDING_WHERE_CONDITIONS:
-                self._add_random_where_condition(query)
+                self.query_generator.add_random_where_condition_to_query(query)
             success = self.execution_manager.execute_query(query, test_summary)
 
             if not success and self.config.fail_fast:
@@ -185,26 +183,6 @@ class ConsistencyTestRunner:
                 return False
 
         return False
-
-    def _add_random_where_condition(self, query: QueryTemplate) -> None:
-        if not self.randomized_picker.random_boolean(
-            probability.GENERATE_WHERE_EXPRESSION
-        ):
-            return
-
-        where_expression = self.expression_generator.generate_boolean_expression(
-            False, query.storage_layout
-        )
-
-        if where_expression is None:
-            return
-
-        ignore_verdict = self.ignore_filter.shall_ignore_expression(
-            where_expression, query.row_selection
-        )
-
-        if not ignore_verdict.ignore:
-            query.where_expression = where_expression
 
     def _shall_abort(self, iteration_count: int, time_guard: TimeGuard) -> bool:
         if (

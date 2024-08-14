@@ -527,7 +527,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 
     /// Extract commands until `InitializationComplete`, and make the worker reflect those commands.
-    /// If the worker can not be made to reflect the commands, exit the process.
     ///
     /// This method is meant to be a function of the commands received thus far (as recorded in the
     /// compute state command history) and the new commands from `command_rx`. It should not be a
@@ -583,7 +582,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
             // Having reduced our installed command history retaining no peeks (above), we should be able
             // to use track down installed dataflows we can use as surrogates for requested dataflows (which
-            // have retained all of their peeks, creating a more demainding `as_of` requirement).
+            // have retained all of their peeks, creating a more demanding `as_of` requirement).
             // NB: installed dataflows may still be allowed to further compact, and we should double check
             // this before being too confident. It should be rare without peeks, but could happen with e.g.
             // multiple outputs of a dataflow.
@@ -636,13 +635,20 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                         dataflow.as_of.as_ref().unwrap(),
                                     )
                                 });
-                            // We cannot reconcile subscriptions at the moment, because the response buffer is shared,
-                            // and to a first approximation must be completely reformed.
-                            let subscribe_free = dataflow
-                                .sink_exports
-                                .iter()
-                                .all(|(_id, sink)| !sink.connection.is_subscribe());
-                            if compatible && uncompacted && subscribe_free {
+
+                            // We cannot reconcile subscriptions at the moment, because the
+                            // response buffer is shared, and to a first approximation must be
+                            // completely reformed.
+                            let subscribe_free = dataflow.subscribe_ids().next().is_none();
+
+                            // If we have replaced any dependency of this dataflow, we need to
+                            // replace this dataflow, to make it use the replacement.
+                            let dependencies_retained = dataflow
+                                .imported_index_ids()
+                                .all(|id| retain_ids.contains(&id));
+
+                            if compatible && uncompacted && subscribe_free && dependencies_retained
+                            {
                                 // Match found; remove the match from the deletion queue,
                                 // and compact its outputs to the dataflow's `as_of`.
                                 old_dataflows.remove(&export_ids);
@@ -656,6 +662,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                     ?compatible,
                                     ?uncompacted,
                                     ?subscribe_free,
+                                    ?dependencies_retained,
                                     old_as_of = ?old_dataflow.as_of,
                                     new_as_of = ?as_of,
                                     "dataflow reconciliation failed",
@@ -669,6 +676,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                 compatible,
                                 uncompacted,
                                 subscribe_free,
+                                dependencies_retained,
                             );
                         } else {
                             todo_commands.push(ComputeCommand::CreateDataflow(dataflow.clone()));

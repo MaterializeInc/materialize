@@ -62,12 +62,6 @@ class QueryTemplate:
         self.custom_order_expressions = custom_order_expressions
         self.disable_error_message_validation = not self.__can_compare_error_messages()
 
-    def add_select_expression(self, expression: Expression) -> None:
-        self.select_expressions.append(expression)
-
-    def add_multiple_select_expressions(self, expressions: list[Expression]) -> None:
-        self.select_expressions.extend(expressions)
-
     def to_sql(
         self,
         strategy: EvaluationStrategy,

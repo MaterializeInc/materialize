@@ -1746,6 +1746,7 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
+        info!("startup: coordinator init: bootstrap: preamble beginning");
 
         // Initialize cluster replica statuses.
         // Gross iterator is to avoid partial borrow issues.
@@ -1810,8 +1811,6 @@ impl Coordinator {
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
 
-        let create_compute_replicas_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: create compute replicas beginning");
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
         for instance in self.catalog.clusters() {
@@ -1833,29 +1832,32 @@ impl Coordinator {
                 )?;
             }
         }
+
         info!(
-            "startup: coordinator init: bootstrap: create compute replicas complete in {:?}",
-            create_compute_replicas_start.elapsed()
+            "startup: coordinator init: bootstrap: preamble complete in {:?}",
+            bootstrap_start.elapsed()
         );
 
         let init_storage_collections_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: initialize storage collections beginning");
+        info!("startup: coordinator init: bootstrap: storage collections init beginning");
         self.bootstrap_storage_collections(&migrated_storage_collections_0dt)
             .await;
         info!(
-            "startup: coordinator init: bootstrap: initialize storage collections complete in {:?}",
+            "startup: coordinator init: bootstrap: storage collections init complete in {:?}",
             init_storage_collections_start.elapsed()
         );
 
-        let entries: Vec<_> = self.catalog().entries().cloned().collect();
-
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
+        let entries: Vec<_> = self.catalog().entries().cloned().collect();
         self.bootstrap_dataflow_plans(&entries)?;
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
             optimize_dataflows_start.elapsed()
         );
+
+        let postamble_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: postamble beginning");
 
         // Discover storage constrains on compute dataflows. Needed for as-of selection below.
         // These steps rely on the dataflow plans created by `bootstrap_dataflow_plans`.
@@ -1864,11 +1866,6 @@ impl Coordinator {
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
-
-        let install_catalog_start = Instant::now();
-        info!(
-            "startup: coordinator init: bootstrap: install existing objects in catalog beginning"
-        );
 
         let mut privatelink_connections = BTreeMap::new();
 
@@ -2107,13 +2104,6 @@ impl Coordinator {
             }
         }
 
-        info!(
-            "startup: coordinator init: bootstrap: install existing objects in catalog complete in {:?}",
-            install_catalog_start.elapsed()
-        );
-
-        let init_vpc_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: initialize VPC endpoints beginning");
         if let Some(cloud_resource_controller) = &self.cloud_resource_controller {
             // Clean up any extraneous VpcEndpoints that shouldn't exist.
             let existing_vpc_endpoints = cloud_resource_controller.list_vpc_endpoints().await?;
@@ -2131,23 +2121,13 @@ impl Coordinator {
                     .await?;
             }
         }
-        info!(
-            "startup: coordinator init: bootstrap: initialize VPC endpoints complete in {:?}",
-            init_vpc_start.elapsed()
-        );
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
         //
         // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
-        let init_read_policy_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: initialize read policies beginning");
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
-        info!(
-            "startup: coordinator init: bootstrap: initialize read policies complete in {:?}",
-            init_read_policy_start.elapsed()
-        );
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(
@@ -2294,6 +2274,11 @@ impl Coordinator {
                 }
             }
         };
+
+        info!(
+            "startup: coordinator init: bootstrap: postamble complete in {:?}",
+            postamble_start.elapsed()
+        );
 
         // Run all of our final steps concurrently.
         let final_steps_start = Instant::now();
@@ -3640,17 +3625,12 @@ pub fn serve(
     async move {
         let coord_start = Instant::now();
         info!("startup: coordinator init: beginning");
+        info!("startup: coordinator init: preamble beginning");
 
         // Initializing the builtins can be an expensive process and consume a lot of memory. We
         // forcibly initialize it early while the stack is relatively empty to avoid stack
         // overflows later.
-        let builtin_init_start = Instant::now();
-        info!("startup: coordinator init: builtin init beginning");
         let _builtins = Lazy::force(&BUILTINS_STATIC);
-        info!(
-            "startup: coordinator init: builtin init complete in {:?}",
-            builtin_init_start.elapsed()
-        );
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
@@ -3678,6 +3658,10 @@ pub fn serve(
         let aws_privatelink_availability_zones = aws_privatelink_availability_zones
             .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
+        info!(
+            "startup: coordinator init: preamble complete in {:?}",
+            coord_start.elapsed()
+        );
         let oracle_init_start = Instant::now();
         info!("startup: coordinator init: timestamp oracle init beginning");
 
@@ -3728,7 +3712,7 @@ pub fn serve(
         );
 
         let catalog_open_start = Instant::now();
-        info!("startup: coordinator init: opening catalog beginning");
+        info!("startup: coordinator init: catalog open beginning");
         let builtin_item_migration_config = if enable_0dt_deployment {
             let persist_client = controller_config
                 .persist_clients
@@ -3782,14 +3766,18 @@ pub fn serve(
             boot_ts,
         )
         .await?;
-        info!(
-            "startup: coordinator init: opening catalog complete in {:?}",
-            catalog_open_start.elapsed()
-        );
 
         if !read_only_controllers {
             epoch_millis_oracle.apply_write(boot_ts).await;
         }
+
+        info!(
+            "startup: coordinator init: catalog open complete in {:?}",
+            catalog_open_start.elapsed()
+        );
+
+        let coord_thread_start = Instant::now();
+        info!("startup: coordinator init: coordinator thread start beginning");
 
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
@@ -3841,8 +3829,6 @@ pub fn serve(
             pg_timestamp_oracle_params.apply(config);
         }
 
-        let coord_thread_start = Instant::now();
-        info!("startup: coordinator init: start coordinator thread beginning");
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
@@ -3954,7 +3940,7 @@ pub fn serve(
         {
             Ok(()) => {
                 info!(
-                    "startup: coordinator init: start coordinator thread complete in {:?}",
+                    "startup: coordinator init: coordinator thread start complete in {:?}",
                     coord_thread_start.elapsed()
                 );
                 info!(

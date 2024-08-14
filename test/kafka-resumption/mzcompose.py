@@ -89,11 +89,6 @@ def workflow_sink_networking(c: Composition, parser: WorkflowArgumentParser) -> 
 
 def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parse_args(parser)
-    if args.redpanda:
-        print(
-            "Test disabled with Redpanda, TODO: Enable when incidents-and-escalations#33 is fixed"
-        )
-        return
 
     # Sleeping for 5s before the transaction commits virtually guarantees that
     # there will be an open transaction when the Kafka/Redpanda service is

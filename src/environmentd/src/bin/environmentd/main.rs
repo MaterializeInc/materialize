@@ -661,6 +661,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let span = tracing::info_span!("environmentd::run").entered();
 
     info!("startup: envd init: beginning");
+    info!("startup: envd init: preamble beginning");
 
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
@@ -691,8 +692,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
 
     // Configure controller.
-    let controller_config_start = Instant::now();
-    info!("startup: envd init: configure controller beginning");
     let entered = info_span!("environmentd::configure_controller").entered();
     let (orchestrator, secrets_controller, cloud_resource_controller): (
         Arc<dyn Orchestrator>,
@@ -832,10 +831,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         }
     };
     drop(entered);
-    info!(
-        "startup: envd init: configure controller complete in {:?}",
-        controller_config_start.elapsed()
-    );
     let cloud_resource_reader = cloud_resource_controller.as_ref().map(|c| c.reader());
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
@@ -933,9 +928,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
 
+    info!(
+        "startup: envd init: preamble complete in {:?}",
+        envd_start.elapsed()
+    );
+
+    let serve_start = Instant::now();
+    info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listen_start = Instant::now();
-        info!("startup: envd init: listening beginning");
         let listeners = Listeners::bind(ListenersConfig {
             sql_listen_addr: args.sql_listen_addr,
             http_listen_addr: args.http_listen_addr,
@@ -945,17 +945,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             internal_http_listen_addr: args.internal_http_listen_addr,
         })
         .await?;
-        info!(
-            "startup: envd init: listening complete in {:?}",
-            listen_start.elapsed()
-        );
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
         };
-        info!("startup: envd init: serving beginning");
-        let serve_start = Instant::now();
-        let server = listeners
+        listeners
             .serve(mz_environmentd::Config {
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
@@ -1018,13 +1012,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Testing options.
                 now,
             })
-            .await;
-        info!(
-            "startup: envd init: serving complete in {:?}",
-            serve_start.elapsed()
-        );
-        server
+            .await
     })?;
+    info!(
+        "startup: envd init: serving complete in {:?}",
+        serve_start.elapsed()
+    );
 
     let start_duration = envd_start.elapsed();
     metrics

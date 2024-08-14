@@ -56,7 +56,7 @@ def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> Non
 
 
 def maybe_upload_debuginfo(
-    repo: mzbuild.Repository, built_images: set[ResolvedImage]
+    repo: mzbuild.Repository, built_images: set[ResolvedImage], max_tries: int = 3
 ) -> None:
     """Uploads debuginfo to `DEBUGINFO_S3_BUCKET` and Polar Signals if any
     DEBUGINFO_BINS were built."""
@@ -123,18 +123,20 @@ def maybe_upload_debuginfo(
         # that won't ever be profiled by Polar Signals.
         if is_tag_build:
             ui.section(f"Uploading debuginfo for {bin} to Polar Signals...")
-            spawn.runv(
-                [
-                    "parca-debuginfo",
-                    "upload",
-                    "--store-address=grpc.polarsignals.com:443",
-                    "--no-extract",
-                    dbg_path,
-                ],
-                cwd=repo.rd.root,
-                env=dict(
-                    os.environ, PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token
-                ),
+            spawn.run_with_retries(
+                lambda: spawn.runv(
+                    [
+                        "parca-debuginfo",
+                        "upload",
+                        "--store-address=grpc.polarsignals.com:443",
+                        "--no-extract",
+                        dbg_path,
+                    ],
+                    cwd=repo.rd.root,
+                    env=dict(
+                        os.environ, PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token
+                    ),
+                )
             )
 
             print(f"Constructing source tarball for {bin}...")
@@ -169,19 +171,22 @@ def maybe_upload_debuginfo(
                         raise subprocess.CalledProcessError(p.returncode, p.args)
 
                 print(f"Uploading source tarball for {bin} to Polar Signals...")
-                spawn.runv(
-                    [
-                        "parca-debuginfo",
-                        "upload",
-                        "--store-address=grpc.polarsignals.com:443",
-                        "--type=sources",
-                        f"--build-id={build_id}",
-                        tarball.name,
-                    ],
-                    cwd=repo.rd.root,
-                    env=dict(
-                        os.environ, PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token
-                    ),
+                spawn.run_with_retries(
+                    lambda: spawn.runv(
+                        [
+                            "parca-debuginfo",
+                            "upload",
+                            "--store-address=grpc.polarsignals.com:443",
+                            "--type=sources",
+                            f"--build-id={build_id}",
+                            tarball.name,
+                        ],
+                        cwd=repo.rd.root,
+                        env=dict(
+                            os.environ,
+                            PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token,
+                        ),
+                    )
                 )
 
 

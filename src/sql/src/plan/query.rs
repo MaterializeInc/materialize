@@ -3632,24 +3632,7 @@ fn plan_using_constraint(
 
     both_scope = both_scope.project(&project_key);
 
-    // TODO: This should be just
-    // let on = HirScalarExpr::variadic_and(join_exprs);
-    // However, if I remove the literal true, then some plans change in weird ways
-    // (e.g., column_knowledge.slt:117 and 558)
-    // Note that before moving to variadic and, this code was
-    //         .fold(HirScalarExpr::literal_true(), |expr1, expr2| {
-    //             HirScalarExpr::CallBinary {
-    //                 func: BinaryFunc::And,
-    //                 expr1: Box::new(expr1),
-    //                 expr2: Box::new(expr2),
-    //             }
-    //         });
-    let on = HirScalarExpr::variadic_and(
-        vec![HirScalarExpr::literal_true()]
-            .into_iter()
-            .chain(join_exprs)
-            .collect(),
-    );
+    let on = HirScalarExpr::variadic_and(join_exprs);
 
     let both = left
         .join(right, on, kind)

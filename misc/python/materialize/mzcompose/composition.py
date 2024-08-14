@@ -1039,7 +1039,13 @@ class Composition:
         time = os.path.getmtime(path) if os.path.isfile(path) else 0
         with open(path, "a") as f:
             self.invoke(
-                "logs", "--no-color", "--since", str(time), *services, capture=f
+                "logs",
+                "--no-color",
+                "--timestamps",
+                "--since",
+                str(time),
+                *services,
+                capture=f,
             )
 
     def down(
@@ -1380,7 +1386,7 @@ class Composition:
         mz_service: str = "materialized",
         timeout: int | None = None,
     ) -> None:
-        timeout = timeout or 420
+        timeout = timeout or 900
         print(
             f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
             end="",

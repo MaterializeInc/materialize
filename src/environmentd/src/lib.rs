@@ -275,6 +275,7 @@ impl Listeners {
     pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
         let serve_start = Instant::now();
         info!("startup: envd serve: beginning");
+        info!("startup: envd serve: preamble beginning");
 
         let Listeners {
             sql: (sql_listener, sql_conns),
@@ -323,6 +324,11 @@ impl Listeners {
             });
             mz_server_core::serve(internal_http_conns, internal_http_server, None)
         });
+
+        info!(
+            "startup: envd serve: preamble complete in {:?}",
+            serve_start.elapsed()
+        );
 
         let catalog_init_start = Instant::now();
         info!("startup: envd serve: catalog init beginning");
@@ -540,6 +546,9 @@ impl Listeners {
             catalog_open_start.elapsed()
         );
 
+        let coord_init_start = Instant::now();
+        info!("startup: envd serve: coordinator init beginning");
+
         if !config
             .cluster_replica_sizes
             .0
@@ -611,6 +620,14 @@ impl Listeners {
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
+
+        info!(
+            "startup: envd serve: coordinator init complete in {:?}",
+            coord_init_start.elapsed()
+        );
+
+        let serve_postamble_start = Instant::now();
+        info!("startup: envd serve: postamble beginning");
 
         // Install an adapter client in the internal HTTP server.
         internal_http_adapter_client_tx
@@ -724,6 +741,10 @@ impl Listeners {
             );
         }
 
+        info!(
+            "startup: envd serve: postamble complete in {:?}",
+            serve_postamble_start.elapsed()
+        );
         info!(
             "startup: envd serve: complete in {:?}",
             serve_start.elapsed()

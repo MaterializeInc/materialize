@@ -296,15 +296,6 @@ pub trait StorageCollections: Debug {
         &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
-
-    /// Applies `updates` and sends any appropriate compaction command.
-    ///
-    /// This is a legacy interface that should _not_ be used! It is only used by
-    /// the compute controller.
-    fn update_read_capabilities(
-        &self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    );
 }
 
 /// Frontiers of the collection identified by `id`.
@@ -1937,19 +1928,6 @@ where
         trace!(?desired_holds, ?acquired_holds, "acquire_read_holds");
 
         Ok(acquired_holds)
-    }
-
-    fn update_read_capabilities(
-        &self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
-    ) {
-        let mut collections = self.collections.lock().expect("lock poisoned");
-
-        StorageCollectionsImpl::update_read_capabilities_inner(
-            &self.cmd_tx,
-            &mut collections,
-            updates,
-        );
     }
 }
 

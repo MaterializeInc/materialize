@@ -47,6 +47,10 @@ fi
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 rm -f services.log
+ci_collapsed_heading ":docker: Pruning less recently used docker images to save disk space"
+for r in $(docker images --format "{{.Repository}}" | sort -u); do
+  docker rmi "$(docker images -q --filter reference="$r" | tail -n+3)" || true
+done
 
 ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
 mzcompose --mz-quiet build

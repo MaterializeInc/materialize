@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from __future__ import annotations
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -20,35 +21,30 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.selection import (
+    DataRowSelection,
+)
 
 
-class DataValue(LeafExpression):
-    """A simple value (in contrast to an `ExpressionWithArgs`) for HORIZONTAL storage"""
+class ConstantExpression(LeafExpression):
 
     def __init__(
         self,
         value: str,
         data_type: DataType,
-        value_identifier: str,
-        characteristics: set[ExpressionCharacteristics],
-        is_null_value: bool,
-        is_pg_compatible: bool = True,
+        characteristics: set[ExpressionCharacteristics] = set(),
+        is_aggregate: bool = False,
     ):
-        column_name = (
-            f"{data_type.internal_identifier.lower()}_{value_identifier.lower()}"
-        )
+        column_name = "<none>"
         super().__init__(
             column_name,
             data_type,
             characteristics,
-            ValueStorageLayout.HORIZONTAL,
-            False,
+            ValueStorageLayout.ANY,
+            is_aggregate,
             False,
         )
         self.value = value
-        self.is_null_value = is_null_value
-        self.is_pg_compatible = is_pg_compatible
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         return self.data_type.resolve_return_type_spec(self.own_characteristics)
@@ -64,5 +60,8 @@ class DataValue(LeafExpression):
     ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        return set()
+
     def __str__(self) -> str:
-        return f"DataValue (column='{self.column_name}', value={self.value}, type={self.data_type})"
+        return f"ConstantExpression (value={self.value}, type={self.data_type})"

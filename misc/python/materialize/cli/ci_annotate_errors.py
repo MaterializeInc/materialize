@@ -93,6 +93,8 @@ ERROR_RE = re.compile(
     | possibly\ invalid\ operation\ specification
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
+    # parallel-workload
+    | worker_.*\ still\ running: [\s\S]* Threads\ have\ not\ stopped\ within\ 5\ minutes,\ exiting\ hard
     )
     .* $
     """,

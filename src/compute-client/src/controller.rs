@@ -50,11 +50,13 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
@@ -143,7 +145,7 @@ impl ComputeReplicaLogging {
 }
 
 /// A controller for the compute layer.
-pub struct ComputeController<T> {
+pub struct ComputeController<T: Timestamp> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
@@ -407,14 +409,10 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 
     /// Returns the write frontier for each collection installed on each replica.
     pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
-        let mut result = BTreeMap::new();
-        let collections = self.instances.values().flat_map(|i| i.collections_iter());
-        for (&collection_id, collection) in collections {
-            for (&replica_id, frontier) in &collection.replica_write_frontiers {
-                result.insert((collection_id, replica_id), frontier.clone());
-            }
-        }
-        result
+        self.instances
+            .values()
+            .flat_map(|i| i.replica_write_frontiers())
+            .collect()
     }
 
     /// Returns the state of the [`ComputeController`] formatted as JSON.
@@ -816,6 +814,18 @@ where
         Ok(())
     }
 
+    /// Acquires a [`ReadHold`] for the identified compute collection.
+    pub fn acquire_read_hold(
+        &self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<ReadHold<T>, CollectionUpdateError> {
+        let hold = self
+            .instance(instance_id)?
+            .acquire_read_hold(collection_id)?;
+        Ok(hold)
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn record_introspection_updates(
         &mut self,
@@ -899,7 +909,7 @@ where
 
 /// A read-only handle to a compute instance.
 #[derive(Clone, Copy)]
-pub struct ComputeInstanceRef<'a, T> {
+pub struct ComputeInstanceRef<'a, T: Timestamp> {
     instance_id: ComputeInstanceId,
     instance: &'a Instance<T>,
 }
@@ -926,7 +936,7 @@ impl<T: ComputeControllerTimestamp> ComputeInstanceRef<'_, T> {
 /// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
 /// compute dataflow.
 #[derive(Debug)]
-pub struct CollectionState<T> {
+pub struct CollectionState<T: Timestamp> {
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
@@ -943,46 +953,55 @@ pub struct CollectionState<T> {
 
     /// Accumulation of read capabilities for the collection.
     ///
-    /// This accumulation will always contain `implied_capability` and `warmup_capability`, but may
-    /// also contain capabilities held by others who have read dependencies on this collection.
+    /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
+    /// collection, including `implied_read_hold` and `warmup_read_hold`.
+    ///
+    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`]. Nobody else
+    /// should modify read capabilities directly. Instead, collection users should manage read
+    /// holds through [`ReadHold`] objects acquired through [`Instance::acquire_read_hold`].
+    ///
+    /// TODO(teskje): Restructure the code to enforce the above in the type system.
     read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.
-    implied_capability: Antichain<T>,
-    /// A capability held to enable dataflow warmup.
+    /// A read hold maintaining the implicit capability of the collection.
+    ///
+    /// This capability is kept to ensure that the collection remains readable according to its
+    /// `read_policy`. It also ensures that read holds on the collection's dependencies are kept at
+    /// some time not greater than the collection's `write_frontier`, guaranteeing that the
+    /// collection's next outputs can always be computed without skipping times.
+    implied_read_hold: ReadHold<T>,
+    /// A read hold held to enable dataflow warmup.
     ///
     /// Dataflow warmup is an optimization that allows dataflows to immediately start hydrating
     /// even when their next output time (as implied by the `write_frontier`) is in the future.
     /// By installing a read capability derived from the write frontiers of the collection's
     /// inputs, we ensure that the as-of of new dataflows installed for the collection is at a time
     /// that is immediately available, so hydration can begin immediately too.
-    warmup_capability: Antichain<T>,
-    /// The policy to use to downgrade `self.implied_capability`.
+    warmup_read_hold: ReadHold<T>,
+    /// The policy to use to downgrade `self.implied_read_hold`.
     ///
     /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
-    /// collections, the `implied_capability` is only required for maintaining read holds on the
+    /// collections, the `implied_read_hold` is only required for maintaining read holds on the
     /// inputs, so we can immediately downgrade it to the `write_frontier`.
     read_policy: Option<ReadPolicy<T>>,
 
-    /// Storage identifiers on which this collection depends.
-    storage_dependencies: Vec<GlobalId>,
-    /// Compute identifiers on which this collection depends.
-    compute_dependencies: Vec<GlobalId>,
+    /// Storage identifiers on which this collection depends, and read holds this collection
+    /// requires on them.
+    storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
+    /// Compute identifiers on which this collection depends, and read holds this collection
+    /// requires on them.
+    compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
 
     /// The write frontier of this collection.
     write_frontier: Antichain<T>,
-    /// The write frontiers reported by individual replicas.
-    replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
-    /// The input frontiers reported by individual replicas.
-    replica_input_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 
     /// Introspection state associated with this collection.
     collection_introspection: CollectionIntrospection<T>,
 }
 
-impl<T> CollectionState<T> {
+impl<T: Timestamp> CollectionState<T> {
     /// Reports the current read capability.
     pub fn read_capability(&self) -> &Antichain<T> {
-        &self.implied_capability
+        self.implied_read_hold.since()
     }
 
     /// Reports the current read frontier.
@@ -995,11 +1014,18 @@ impl<T> CollectionState<T> {
         self.write_frontier.borrow()
     }
 
+    fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.storage_dependencies.keys().copied()
+    }
+
+    fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.compute_dependencies.keys().copied()
+    }
+
     /// Reports the IDs of the dependencies of this collection.
     fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        let compute = self.compute_dependencies.iter().copied();
-        let storage = self.storage_dependencies.iter().copied();
-        compute.chain(storage)
+        self.compute_dependency_ids()
+            .chain(self.storage_dependency_ids())
     }
 }
 
@@ -1008,8 +1034,9 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     pub(crate) fn new(
         collection_id: GlobalId,
         as_of: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
-        compute_dependencies: Vec<GlobalId>,
+        storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
+        compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
+        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
@@ -1020,26 +1047,34 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         let upper = as_of;
 
         // Initialize all read capabilities to the `since`.
-        let implied_capability = since.clone();
-        let warmup_capability = since.clone();
+        let implied_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx.clone());
+        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx);
 
         let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(implied_capability.iter().map(|time| (time.clone(), 1)));
-        read_capabilities.update_iter(warmup_capability.iter().map(|time| (time.clone(), 1)));
+        read_capabilities.update_iter(
+            implied_read_hold
+                .since()
+                .iter()
+                .map(|time| (time.clone(), 1)),
+        );
+        read_capabilities.update_iter(
+            warmup_read_hold
+                .since()
+                .iter()
+                .map(|time| (time.clone(), 1)),
+        );
 
         Self {
             log_collection: false,
             dropped: false,
             scheduled: false,
             read_capabilities,
-            implied_capability,
-            warmup_capability,
+            implied_read_hold,
+            warmup_read_hold,
             read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
             write_frontier: upper.clone(),
-            replica_write_frontiers: BTreeMap::new(),
-            replica_input_frontiers: BTreeMap::new(),
             collection_introspection: CollectionIntrospection::new(
                 collection_id,
                 introspection_tx,
@@ -1053,14 +1088,16 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state for a log collection.
     pub(crate) fn new_log_collection(
         id: GlobalId,
+        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(timely::progress::Timestamp::minimum());
         let mut state = Self::new(
             id,
             since,
-            Vec::new(),
-            Vec::new(),
+            Default::default(),
+            Default::default(),
+            read_holds_tx,
             introspection_tx,
             None,
             None,
