@@ -152,6 +152,8 @@ use crate::render::context::{
 };
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
+use mz_expr::SafeMfpPlan;
+
 pub mod context;
 mod errors;
 mod flat_map;
@@ -781,10 +783,11 @@ where
 
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
+        let all_nodes = nodes.clone();
 
         for id in topological_order {
             let node = nodes.remove(&id).unwrap();
-            let mut bundle = self.render_plan_node(node, &collections);
+            let mut bundle = self.render_plan_node(node, &collections, &all_nodes);
 
             self.log_operator_hydration(&mut bundle, id);
 
@@ -806,6 +809,7 @@ where
         &mut self,
         node: FlatPlanNode,
         collections: &BTreeMap<LirId, CollectionBundle<G>>,
+        nodes: &BTreeMap<LirId, FlatPlanNode>,
     ) -> CollectionBundle<G> {
         use FlatPlanNode::*;
 
@@ -927,15 +931,31 @@ where
                 self.render_flat_map(input, func, exprs, mfp, input_key)
             }
             Join { inputs, plan } => {
-                let inputs = inputs.into_iter().map(expect_input).collect::<Vec<_>>();
                 match plan {
                     mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
-                        let inputs = inputs.into_iter().map(|i| vec![(i, None, false)]).collect();
-                        self.render_join(inputs, linear_plan)
+                        let mut join_inputs = Vec::with_capacity(inputs.len());
+                        for input in inputs.iter() {
+                            // This is a moment where we can do some pattern detection, and convert arrangements around
+                            // unions into joins of unions. We have to sniff around the query plan to recognize this,
+                            // and we'll also have to figure out how to prevent the arrangement in the first place.
+                            // We would much rather have this expressed explicitly, rather than have to discover it.
+                            let maybe_union_inputs =
+                                self.attempt_join_of_unions(*input, nodes, collections);
+
+                            if let Some(inputs) = maybe_union_inputs {
+                                join_inputs.push(inputs);
+                            } else {
+                                join_inputs.push(vec![(expect_input(*input), None, false)]);
+                            }
+                        }
+
+                        self.render_join(join_inputs, linear_plan)
                     }
-                    mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
-                        self.render_delta_join(inputs, delta_plan)
-                    }
+                    mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => self
+                        .render_delta_join(
+                            inputs.into_iter().map(expect_input).collect(),
+                            delta_plan,
+                        ),
                 }
             }
             Reduce {
@@ -1087,6 +1107,135 @@ where
                 }
             }
         })
+    }
+
+    /// An absolutely abominable function that attempts to recognize a pattern where we have
+    /// an arrangement atop a union of things that can be recast as MFPs and an optional Negate
+    /// atop arrangements by the appropriate keys.
+    ///
+    /// This should *NOT* be how we do this, but it exists to demonstrate what happens when we do.
+    fn attempt_join_of_unions(
+        &self,
+        input: LirId,
+        nodes: &BTreeMap<LirId, FlatPlanNode>,
+        collections: &BTreeMap<LirId, CollectionBundle<G>>,
+    ) -> Option<Vec<(CollectionBundle<G>, Option<SafeMfpPlan>, bool)>> {
+        let expect_input = |id| {
+            collections
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| panic!("missing input collection: {id}"))
+        };
+
+        let mut maybe_union_inputs = None;
+        if let FlatPlanNode::ArrangeBy {
+            input,
+            forms,
+            input_key,
+            input_mfp,
+        } = &nodes[&input]
+        {
+            // For the pattern to check out, we'll need to find each of `forms` in the input,
+            // under a union. And we'll also need `input_key` and `input_mfp` to be no-ops,
+            // because I have no clue what they do.
+            if input_key.is_none() && input_mfp.is_identity() {
+                if let FlatPlanNode::Union { inputs, .. } = &nodes[input] {
+                    // We now want to check each of `inputs` to see if it looks like an MFP
+                    // and an optional Negate around something that is an arrangement that
+                    // supports all of `forms`, with the possible exception of the raw form.
+                    let mut union_inputs = Vec::with_capacity(inputs.len());
+                    for mut input in inputs.iter().cloned() {
+                        let mut negate = false;
+                        let mut mfp = None;
+                        if let FlatPlanNode::Negate { input: inner } = &nodes[&input] {
+                            negate = !negate;
+                            input = *inner;
+                        }
+                        if let FlatPlanNode::Mfp {
+                            input: inner,
+                            mfp: mfp_inner,
+                            ..
+                        } = &nodes[&input]
+                        {
+                            mfp = Some(mfp_inner.clone());
+                            input = *inner;
+                        }
+                        match &nodes[&input] {
+                            FlatPlanNode::ArrangeBy {
+                                forms: inner_forms, ..
+                            } => {
+                                if forms
+                                    .arranged
+                                    .iter()
+                                    .all(|f| inner_forms.arranged.contains(f))
+                                {
+                                    let input = expect_input(input);
+                                    union_inputs.push((input, mfp, negate));
+                                }
+                            }
+                            FlatPlanNode::Threshold { threshold_plan, .. } => {
+                                use mz_compute_types::plan::threshold::ThresholdPlan;
+                                let ThresholdPlan::Basic(plan) = threshold_plan;
+                                let inner_forms = &plan.ensure_arrangement;
+                                if forms.arranged.iter().all(|f| inner_forms.0 == f.0) {
+                                    let input = expect_input(input);
+                                    union_inputs.push((input, mfp, negate));
+                                }
+                            }
+                            FlatPlanNode::Get { id, keys, plan, .. } => {
+                                use mz_compute_types::plan::GetPlan;
+                                match plan {
+                                    GetPlan::PassArrangements => {
+                                        if forms.arranged.iter().all(|f| keys.arranged.contains(f))
+                                        {
+                                            let input = expect_input(input);
+                                            union_inputs.push((input, mfp, negate));
+                                        }
+                                    }
+                                    GetPlan::Arrangement(key, seek, mfp) => {
+                                        // This is a pattern where we plan to reduce the arrangement to a collection.
+                                        // We are hoping to prevent this though, and to use the arrangement instead.
+                                        if seek.is_none()
+                                            && forms.arranged.len() == 1
+                                            && &forms.arranged[0].0 == key
+                                        {
+                                            let input = self.lookup_id(*id).unwrap();
+                                            union_inputs.push((input, Some(mfp.clone()), negate));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let union_inputs = union_inputs
+                        .into_iter()
+                        .filter_map(|(input, mfp, negate)| {
+                            // attempt to convert mfp to a safe mfp.
+                            let mfp = mfp.map(|x| {
+                                mz_expr::MfpPlan::create_from(x)
+                                    .ok()
+                                    .and_then(|x| x.into_nontemporal().ok())
+                            });
+                            let mfp = match mfp {
+                                None => Some(None),
+                                Some(None) => None,
+                                Some(Some(mfp)) => Some(Some(mfp)),
+                            };
+
+                            mfp.map(|mfp| (input, mfp, negate))
+                        })
+                        .collect::<Vec<_>>();
+
+                    if union_inputs.len() == inputs.len() {
+                        maybe_union_inputs = Some(union_inputs);
+                    }
+                }
+            }
+        }
+        maybe_union_inputs
     }
 }
 
