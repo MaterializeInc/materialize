@@ -14,9 +14,11 @@
 -- limitations under the License.
 
 {% macro generate_deploy_cluster_name(custom_cluster_name) -%}
-    {{ custom_cluster_name }}_dbt_deploy
+        {{ custom_cluster_name }}_dbt_deploy
 {%- endmacro %}
 
 {% macro generate_cluster_name(custom_cluster_name) -%}
-    {{ custom_cluster_name }}
+    {% if custom_cluster_name -%}
+        {{ custom_cluster_name }}
+    {%- endif %}
 {%- endmacro %}

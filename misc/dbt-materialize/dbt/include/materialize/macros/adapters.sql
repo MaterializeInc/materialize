@@ -161,10 +161,12 @@
   -- Materialize does not support the TRUNCATE command, so we work around that
   -- by using an unqualified DELETE. DELETE requires a scan of the relation, so
   -- it needs a valid cluster to run against. This is expected to fail if no
-  -- cluster is specified for the target in profiles.yml _and_ the default
+  -- cluster is specified for the target in `profiles.yml` _and_ the default
   -- cluster for the user is invalid (or intentionally set to
   -- mz_catalog_server, which cannot query user data).
-  {% do run_query(set_cluster(target.cluster)) -%}
+  {% if target.cluster -%}
+    {% do run_query(set_cluster(generate_cluster_name(target.cluster))) -%}
+  {%- endif %}
   {% call statement('truncate_relation') -%}
     delete from {{ relation }}
   {%- endcall %}

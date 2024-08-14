@@ -26,18 +26,14 @@
   {%- set exists_as_source = (old_relation is not none and old_relation.is_source) -%}
   {%- set exists_as_sink = (old_relation is not none and old_relation.is_sink) -%}
 
-  {%- set grant_config = config.get('grants') -%}
   {%- set agate_table = load_agate_table() -%}
-  -- grab current tables grants config for comparison later on
 
   {%- do store_result('agate_table', response='OK', agate_table=agate_table) -%}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
 
-  -- `BEGIN` happens here:
   {{ run_hooks(pre_hooks, inside_transaction=True) }}
 
-  -- build model
   {% set create_table_sql = "" %}
   {% if exists_as_view or exists_as_materialized_view or exists_as_source or exists_as_sink %}
     {{ exceptions.raise_compiler_error("Cannot seed to '{}', it is a '{}'".format(old_relation.render(),old_relation.type)) }}
@@ -57,9 +53,6 @@
 
   {% set target_relation = this.incorporate(type='table') %}
 
-  {% set should_revoke = should_revoke(old_relation, full_refresh_mode) %}
-  {% do apply_grants(target_relation, grant_config, should_revoke=should_revoke) %}
-
   {% do persist_docs(target_relation, model) %}
 
   {% if full_refresh_mode or not exists_as_table %}
@@ -68,7 +61,6 @@
 
   {{ run_hooks(post_hooks, inside_transaction=True) }}
 
-  -- `COMMIT` happens here
   {{ adapter.commit() }}
 
   {{ run_hooks(post_hooks, inside_transaction=False) }}
@@ -76,4 +68,3 @@
   {{ return({'relations': [target_relation]}) }}
 
 {% endmaterialization %}
-
