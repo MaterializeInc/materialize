@@ -39,7 +39,7 @@ VIEW v;
 ----
 Project (#0, #1, #3)
   Filter (#1 = 100)
-    LeftOuterJoin (true AND (integer_to_bigint(#0) = #2))
+    LeftOuterJoin (integer_to_bigint(#0) = #2)
       Get materialize.public.accounts
       Get materialize.public.account_details
 
