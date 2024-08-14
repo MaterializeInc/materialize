@@ -12,12 +12,12 @@
 //! Catalog abstraction layer.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};

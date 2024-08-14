@@ -10,9 +10,9 @@
 //! Types related to mysql sources
 
 use std::fmt;
-use std::sync::LazyLock;
 use std::io;
 use std::num::NonZeroU64;
+use std::sync::LazyLock;
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};

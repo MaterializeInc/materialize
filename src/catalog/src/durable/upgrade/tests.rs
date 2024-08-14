@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{RelationDesc, ScalarType};
-use std::sync::LazyLock;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
+use std::sync::LazyLock;
 
 use mz_persist_types::Codec;
+use mz_repr::{RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;

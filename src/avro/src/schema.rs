@@ -24,13 +24,13 @@
 //! Logic for parsing and interacting with schemas in Avro format.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use digest::Digest;
 use itertools::Itertools;

@@ -19,9 +19,9 @@
 //! Methods for checked timestamp operations.
 
 use std::error::Error;
-use std::sync::LazyLock;
 use std::fmt::{self, Display};
 use std::ops::Sub;
+use std::sync::LazyLock;
 
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,

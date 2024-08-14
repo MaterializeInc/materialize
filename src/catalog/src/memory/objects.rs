@@ -12,9 +12,9 @@
 //! easier consumed by higher layers.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
+use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;

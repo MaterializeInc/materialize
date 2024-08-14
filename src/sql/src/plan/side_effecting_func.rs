@@ -266,12 +266,13 @@ pub struct SideEffectingFuncImpl {
 
 /// A map of the side-effecting functions in the `pg_catalog` schema, keyed by
 /// OID.
-pub static PG_CATALOG_SEF_BUILTINS: LazyLock<BTreeMap<u32, SideEffectingFuncImpl>> = LazyLock::new(|| {
-    [PG_CANCEL_BACKEND]
-        .into_iter()
-        .map(|f| (f.oid, f))
-        .collect()
-});
+pub static PG_CATALOG_SEF_BUILTINS: LazyLock<BTreeMap<u32, SideEffectingFuncImpl>> =
+    LazyLock::new(|| {
+        [PG_CANCEL_BACKEND]
+            .into_iter()
+            .map(|f| (f.oid, f))
+            .collect()
+    });
 
 // Implementations of each side-effecting function follow.
 //

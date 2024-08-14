@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::LazyLock;
 use std::iter;
+use std::sync::LazyLock;
 
 use itertools::Itertools;
 use maplit::btreeset;

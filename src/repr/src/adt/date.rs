@@ -10,9 +10,9 @@
 //! A time Date abstract data type.
 
 use std::convert::TryFrom;
-use std::sync::LazyLock;
 use std::fmt;
 use std::ops::Sub;
+use std::sync::LazyLock;
 
 use anyhow::anyhow;
 use chrono::NaiveDate;
@@ -55,7 +55,8 @@ impl std::str::FromStr for Date {
     }
 }
 
-static PG_EPOCH: LazyLock<NaiveDate> = LazyLock::new(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+static PG_EPOCH: LazyLock<NaiveDate> =
+    LazyLock::new(|| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
 
 impl Date {
     pub const UNIX_EPOCH_TO_PG_EPOCH: i32 = 10957; // Number of days from 1970-01-01 to 2000-01-01.

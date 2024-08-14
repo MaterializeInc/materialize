@@ -26,13 +26,13 @@
 //!       if wrong, record the error
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fmt, ops, str, thread};
 

@@ -64,11 +64,11 @@
 //! before planning it.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::string::ToString;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

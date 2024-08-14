@@ -26,10 +26,10 @@
 //!    across thread or task boundaries within a process.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::io;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 

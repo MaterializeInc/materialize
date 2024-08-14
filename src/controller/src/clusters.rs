@@ -10,10 +10,10 @@
 //! Cluster management.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::LazyLock;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -819,8 +819,9 @@ impl FromStr for ReplicaServiceName {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        static SERVICE_NAME_RE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)(?:-gen-(\d+))?$").unwrap());
+        static SERVICE_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)(?:-gen-(\d+))?$").unwrap()
+        });
 
         let caps = SERVICE_NAME_RE
             .captures(s)

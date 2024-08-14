@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};

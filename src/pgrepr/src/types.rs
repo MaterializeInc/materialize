@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
-use std::sync::LazyLock;
 use std::fmt;
 use std::mem::size_of;
+use std::sync::LazyLock;
 
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};

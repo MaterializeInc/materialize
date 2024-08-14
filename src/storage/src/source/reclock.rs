@@ -624,8 +624,8 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::sync::LazyLock;
     use std::sync::Arc;
+    use std::sync::LazyLock;
     use std::time::Duration;
 
     use futures::Stream;

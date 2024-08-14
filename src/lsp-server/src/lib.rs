@@ -16,7 +16,8 @@ use std::sync::LazyLock;
 /// Build information about the LSP server.
 pub const BUILD_INFO: BuildInfo = build_info!();
 /// Variable holding the version of LSP server.
-pub static PKG_VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.semver_version().to_string());
+pub static PKG_VERSION: LazyLock<String> =
+    LazyLock::new(|| BUILD_INFO.semver_version().to_string());
 /// Variable holding the name of LSP server package.
 pub static PKG_NAME: LazyLock<String> = LazyLock::new(|| env!("CARGO_PKG_NAME").to_string());
 

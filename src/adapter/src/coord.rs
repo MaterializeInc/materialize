@@ -67,7 +67,6 @@
 //!
 
 use anyhow::Context;
-use std::sync::LazyLock;
 use chrono::{DateTime, Utc};
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
@@ -83,6 +82,7 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroI64;
 use std::ops::Neg;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};

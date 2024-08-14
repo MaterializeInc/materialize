@@ -10,9 +10,9 @@
 //! Structured name types for SQL objects.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::LazyLock;
 use std::fmt;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use anyhow::anyhow;
 use mz_controller_types::{ClusterId, ReplicaId};

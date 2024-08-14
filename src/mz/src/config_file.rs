@@ -16,9 +16,9 @@
 //! Configuration file management.
 
 use std::fs::OpenOptions;
-use std::sync::LazyLock;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::{collections::BTreeMap, str::FromStr};
 
 use maplit::btreemap;
@@ -44,7 +44,8 @@ static KEYCHAIN_SERVICE_NAME: &str = "Materialize";
 static OLD_KEYCHAIN_SERVICE_NAME: &str = "Materialize mz CLI";
 
 #[cfg(target_os = "macos")]
-static DEFAULT_VAULT_VALUE: LazyLock<Option<&str>> = LazyLock::new(|| Some(Vault::Keychain.as_str()));
+static DEFAULT_VAULT_VALUE: LazyLock<Option<&str>> =
+    LazyLock::new(|| Some(Vault::Keychain.as_str()));
 
 #[cfg(not(target_os = "macos"))]
 static DEFAULT_VAULT_VALUE: LazyLock<Option<&str>> = LazyLock::new(|| Some(Vault::Inline.as_str()));

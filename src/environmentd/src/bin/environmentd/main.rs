@@ -13,11 +13,11 @@
 //! on port 6876.
 
 use std::ffi::CStr;
-use std::sync::LazyLock;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 

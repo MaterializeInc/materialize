@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
-use std::sync::LazyLock;
 use std::fmt;
+use std::sync::LazyLock;
 
 use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
@@ -40,7 +40,8 @@ const TO_FROM_SQL_BASE_POW: u32 = 4;
 
 static TO_SQL_BASER: LazyLock<AdtNumeric> =
     LazyLock::new(|| AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW)));
-static FROM_SQL_SCALER: LazyLock<AdtNumeric> = LazyLock::new(|| AdtNumeric::from(TO_FROM_SQL_BASE_POW));
+static FROM_SQL_SCALER: LazyLock<AdtNumeric> =
+    LazyLock::new(|| AdtNumeric::from(TO_FROM_SQL_BASE_POW));
 
 /// The maximum number of units necessary to represent a valid [`AdtNumeric`] value.
 const UNITS_LEN: usize = 11;

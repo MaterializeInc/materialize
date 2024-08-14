@@ -10,11 +10,11 @@
 //! In-memory metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use itertools::Itertools;

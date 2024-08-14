@@ -13,8 +13,8 @@
 //! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/
 
 use std::error::Error;
-use std::sync::LazyLock;
 use std::fmt;
+use std::sync::LazyLock;
 
 use anyhow::bail;
 use dec::{Context, Decimal};

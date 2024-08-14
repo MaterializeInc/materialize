@@ -10,7 +10,6 @@
 //! gRPC transport for the [client](crate::client) module.
 
 use async_stream::stream;
-use std::sync::LazyLock;
 use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
@@ -26,6 +25,7 @@ use std::fmt::{self, Debug};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::UNIX_EPOCH;
 use tokio::net::UnixStream;
 use tokio::select;

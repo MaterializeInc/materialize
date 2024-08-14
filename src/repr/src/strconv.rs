@@ -24,11 +24,11 @@
 //! should be considered a bug.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::num::FpCategory;
+use std::sync::LazyLock;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};

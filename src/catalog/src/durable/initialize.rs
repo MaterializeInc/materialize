@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::iter;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use itertools::max;

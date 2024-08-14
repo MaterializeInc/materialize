@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::fmt::{self, Debug, Write};
 use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
@@ -2962,7 +2962,8 @@ impl ScalarType {
         // But the 'static bound makes this either hard or impossible. We might need to remove that
         // and return, say, an owned Row. This would require changing lots of dependent test
         // functions, some of which also hard code a 'static bound.
-        static BOOL: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
+        static BOOL: LazyLock<Row> =
+            LazyLock::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
         static INT16: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::Int16(0),

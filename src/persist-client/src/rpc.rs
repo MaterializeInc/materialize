@@ -1099,8 +1099,8 @@ impl Drop for PubSubConnection {
 #[cfg(test)]
 mod pubsub_state {
     use std::str::FromStr;
-    use std::sync::LazyLock;
     use std::sync::Arc;
+    use std::sync::LazyLock;
 
     use bytes::Bytes;
     use mz_ore::collections::HashSet;

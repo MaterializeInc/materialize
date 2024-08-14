@@ -10,8 +10,8 @@
 //! Apache Arrow encodings and utils for persist data
 
 use std::ptr::NonNull;
-use std::sync::LazyLock;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};

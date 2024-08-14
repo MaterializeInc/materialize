@@ -10,8 +10,8 @@
 //! Types related kafka sources
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::fmt;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use dec::OrderedDecimal;

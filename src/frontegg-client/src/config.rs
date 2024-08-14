@@ -20,8 +20,8 @@
 //! This module default endpoint is intended to run against Materialize and is
 //! not guaranteed to work for other services.
 
-use std::time::Duration;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use reqwest::Url;
 

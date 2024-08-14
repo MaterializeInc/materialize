@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::VecDeque;
-use std::sync::LazyLock;
 use std::fmt::Display;
 use std::iter;
 use std::ops::RangeInclusive;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use chrono::NaiveDate;

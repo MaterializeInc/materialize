@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::ToOwned;
-use std::sync::LazyLock;
 use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
 use std::fmt::Write;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, bail, Context};
 use regex::Regex;
@@ -179,7 +179,8 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
 
 /// Validate that the string is an allowed variable name (lowercase letters, numbers and dashes)
 pub fn validate_ident(name: &str) -> Result<(), anyhow::Error> {
-    static VALID_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new("^[a-z0-9\\-]*$").unwrap());
+    static VALID_KEY_REGEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("^[a-z0-9\\-]*$").unwrap());
     if !VALID_KEY_REGEX.is_match(name) {
         bail!(
             "invalid builtin argument name '{}': \

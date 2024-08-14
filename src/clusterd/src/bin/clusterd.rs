@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::path::PathBuf;
-use std::sync::LazyLock;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::Context;
 use axum::http::StatusCode;

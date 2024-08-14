@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 use std::fmt;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_lowertest::MzReflect;

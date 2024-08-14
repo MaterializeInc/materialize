@@ -16,9 +16,9 @@
 //! Now utilities.
 
 use std::fmt;
-use std::sync::LazyLock;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::SystemTime;
 
 #[cfg(feature = "chrono")]

@@ -10,12 +10,12 @@
 //! Debug utility for Catalog storage.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 

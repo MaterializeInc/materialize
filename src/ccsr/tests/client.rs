@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
-use std::sync::LazyLock;
 use std::net::Ipv4Addr;
+use std::sync::LazyLock;
 
 use hyper::{service, Response, StatusCode};
 use hyper_util::rt::TokioIo;

@@ -11,9 +11,9 @@
 //! built-in functions (for most built-in functions, at least).
 
 use std::cell::RefCell;
-use std::sync::LazyLock;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::LazyLock;
 
 use itertools::Itertools;
 use mz_expr::func;
@@ -3465,12 +3465,13 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
     builtins
 });
 
-pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
-    use ParamType::*;
-    builtins! {
-        "_pg_expandarray" => Table {
-            // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
-            params!(ArrayAny) => sql_impl_table_func("
+pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> =
+    LazyLock::new(|| {
+        use ParamType::*;
+        builtins! {
+            "_pg_expandarray" => Table {
+                // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
+                params!(ArrayAny) => sql_impl_table_func("
                     SELECT
                         $1[s] AS x,
                         s - pg_catalog.array_lower($1, 1) + 1 AS n
@@ -3479,9 +3480,9 @@ pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> =
                         pg_catalog.array_upper($1, 1),
                         1) as g(s)
                 ") => ReturnType::set_of(RecordAny), oid::FUNC_PG_EXPAND_ARRAY;
+            }
         }
-    }
-});
+    });
 
 pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;

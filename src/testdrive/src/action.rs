@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
 

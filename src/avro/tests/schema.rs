@@ -25,8 +25,8 @@
 //!     - https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
 //!     - https://github.com/apache/avro/tree/master/lang/c/tests/schema_tests
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use chrono::DateTime;
 use mz_avro::types::{DecimalValue, Value};
