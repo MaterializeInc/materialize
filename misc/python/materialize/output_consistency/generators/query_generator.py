@@ -6,12 +6,13 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from collections.abc import Sequence
 
 from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
+from materialize.output_consistency.data_value.data_column import DataColumn
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -28,6 +29,7 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.selection.selection import (
@@ -280,6 +282,27 @@ class QueryGenerator:
             return DataRowSelection(row_indices)
         else:
             raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
+
+    def _assign_source(
+        self, data_source: DataSource, expression: Expression, force: bool = False
+    ) -> None:
+        self._assign_random_sources([data_source], [expression], force=force)
+
+    def _assign_random_sources(
+        self,
+        all_data_sources: Sequence[DataSource],
+        expressions: list[Expression],
+        force: bool = False,
+    ) -> None:
+        assert len(all_data_sources) > 0, "No data sources provided"
+
+        for expression in expressions:
+            for leaf_expression in expression.collect_leaves():
+                if isinstance(leaf_expression, DataColumn):
+                    random_source = self.randomized_picker.random_data_source(
+                        list(all_data_sources)
+                    )
+                    leaf_expression.assign_data_source(random_source, force=force)
 
     def _remove_known_inconsistencies(
         self,
