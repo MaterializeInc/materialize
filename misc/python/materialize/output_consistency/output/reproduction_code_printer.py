@@ -199,9 +199,11 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             for leaf_expression in leave_expressions:
                 column_names.add(leaf_expression.column_name)
 
-        if query_template.where_expression is not None:
-            where_leaf_expressions = query_template.where_expression.collect_leaves()
-            for leaf_expression in where_leaf_expressions:
+        for further_expression in query_template.get_all_expressions(
+            include_select_expressions=False, include_join_constraints=True
+        ):
+            leaf_expressions = further_expression.collect_leaves()
+            for leaf_expression in leaf_expressions:
                 column_names.add(leaf_expression.column_name)
 
         return column_names
