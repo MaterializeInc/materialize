@@ -416,9 +416,11 @@ class QueryGenerator:
                     additional_source,
                 )
 
-                if not self.ignore_filter.shall_ignore_expression(
+                ignore_verdict = self.ignore_filter.shall_ignore_expression(
                     join_constraint, ALL_ROWS_SELECTION
-                ):
+                )
+
+                if not ignore_verdict.ignore:
                     self._validate_join_constraint(join_constraint)
                     additional_source.join_constraint = join_constraint
 
