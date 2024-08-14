@@ -133,6 +133,12 @@ impl<T: TimelyTimestamp> ReadHold<T> {
 
         Ok(())
     }
+
+    /// Release this read hold.
+    pub fn release(&mut self) {
+        self.try_downgrade(Antichain::new())
+            .expect("known to succeed");
+    }
 }
 
 impl<T: TimelyTimestamp> Clone for ReadHold<T> {
@@ -167,20 +173,11 @@ impl<T: TimelyTimestamp> Clone for ReadHold<T> {
 
 impl<T: TimelyTimestamp> Drop for ReadHold<T> {
     fn drop(&mut self) {
-        if !self.since.is_empty() {
-            if self.id.is_user() {
-                tracing::trace!("dropping ReadHold on {}: {:?}", self.id, self.since);
-            }
-            let mut changes = ChangeBatch::new();
-
-            changes.extend(self.since.iter().map(|t| (t.clone(), -1)));
-            self.since.clear();
-
-            if !changes.is_empty() {
-                // If the other side already hung up, that's ok.
-                let _ = self.holds_tx.send((self.id, changes));
-            }
+        if self.id.is_user() {
+            tracing::trace!("dropping ReadHold on {}: {:?}", self.id, self.since);
         }
+
+        self.release();
     }
 }
 
