@@ -53,6 +53,11 @@ class ConstantExpression(LeafExpression):
     def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
+        return self.to_sql_as_value(sql_adjuster)
+
     def to_sql_as_value(self, sql_adjuster: SqlDialectAdjuster) -> str:
         return self.data_type.value_to_sql(self.value, sql_adjuster)
 
