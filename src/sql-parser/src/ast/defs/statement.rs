@@ -1559,7 +1559,7 @@ pub struct CreateTableFromSourceStatement<T: AstInfo> {
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
-    pub source: UnresolvedItemName,
+    pub source: T::ItemName,
     pub external_reference: UnresolvedItemName,
     pub with_options: Vec<TableFromSourceOption<T>>,
 }

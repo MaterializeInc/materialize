@@ -1307,7 +1307,7 @@ async fn purify_create_table_from_source(
         name: _,
         columns,
         constraints,
-        source: unresolved_source_name,
+        source: source_name,
         if_not_exists: _,
         external_reference,
         with_options,
@@ -1324,7 +1324,7 @@ async fn purify_create_table_from_source(
     }
 
     // Get the source item
-    let item = match scx.resolve_item(RawItemName::Name(unresolved_source_name.clone())) {
+    let item = match scx.get_item_by_resolved_name(source_name) {
         Ok(item) => item,
         Err(e) => return Err(e),
     };
@@ -1336,7 +1336,8 @@ async fn purify_create_table_from_source(
             sql_bail!("cannot ALTER this type of source")
         }
     };
-    let source_name = item.name();
+    let unresolved_source_name: UnresolvedItemName = source_name.full_item_name().clone().into();
+    let qualified_source_name = item.name();
     let connection_name = desc.connection.name();
 
     let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
@@ -1424,7 +1425,7 @@ async fn purify_create_table_from_source(
             if !ignore_columns.is_empty() {
                 sql_bail!(
                     "{} is a {} source, which does not support IGNORE COLUMNS.",
-                    scx.catalog.minimal_qualification(source_name),
+                    scx.catalog.minimal_qualification(qualified_source_name),
                     connection_name
                 )
             }
@@ -1442,7 +1443,7 @@ async fn purify_create_table_from_source(
                 pg_connection,
                 &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
                 qualified_text_columns,
-                unresolved_source_name,
+                &unresolved_source_name,
             )
             .await?;
             // There should be exactly one source_export returned for this statement
@@ -1483,7 +1484,7 @@ async fn purify_create_table_from_source(
                 &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
                 qualified_text_columns,
                 qualified_ignore_columns,
-                unresolved_source_name,
+                &unresolved_source_name,
                 initial_gtid_set,
             )
             .await?;
@@ -1516,7 +1517,7 @@ async fn purify_create_table_from_source(
         // TODO(roshan): Add support for kafka sources
         _ => sql_bail!(
             "{} is a {} source, which does not support CREATE TABLE .. FROM SOURCE.",
-            scx.catalog.minimal_qualification(source_name),
+            scx.catalog.minimal_qualification(qualified_source_name),
             connection_name,
         ),
     };

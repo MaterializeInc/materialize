@@ -253,7 +253,7 @@ CREATE TABLE t (c int4, d int4) FROM SOURCE foo (REFERENCE bar)
 ----
 CREATE TABLE t (c int4, d int4) FROM SOURCE foo (REFERENCE = bar)
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("d"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, source: UnresolvedItemName([Ident("foo")]), external_reference: UnresolvedItemName([Ident("bar")]), with_options: [] })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("d"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: UnresolvedItemName([Ident("bar")]), with_options: [] })
 
 parse-statement
 CREATE TABLE t (c, d) FROM SOURCE foo (REFERENCE bar)
@@ -274,7 +274,7 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = baz)
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz)
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, source: UnresolvedItemName([Ident("foo")]), external_reference: UnresolvedItemName([Ident("baz")]), with_options: [] })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: UnresolvedItemName([Ident("baz")]), with_options: [] })
 
 parse-statement
 CREATE DATABASE IF EXISTS foo

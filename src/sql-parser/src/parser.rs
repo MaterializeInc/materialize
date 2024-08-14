@@ -4388,7 +4388,7 @@ impl<'a> Parser<'a> {
 
         self.expect_keywords(&[FROM, SOURCE])?;
 
-        let source = self.parse_item_name()?;
+        let source = self.parse_raw_name()?;
         self.expect_token(&Token::LParen)?;
         self.expect_keyword(REFERENCE)?;
         let _ = self.consume_token(&Token::Eq);
