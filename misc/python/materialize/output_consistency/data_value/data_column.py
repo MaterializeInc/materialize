@@ -19,6 +19,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -31,6 +32,13 @@ class DataColumn(LeafExpression):
             column_name, data_type, set(), ValueStorageLayout.VERTICAL, False, False
         )
         self.values = row_values_of_column
+        self.data_source: DataSource | None = None
+
+    def assign_data_source(self, data_source: DataSource, force: bool) -> None:
+        if self.data_source is not None and not force:
+            raise RuntimeError("Data source already assigned")
+
+        self.data_source = data_source
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         # do not provide characteristics on purpose, the spec of this class is not value-specific
@@ -44,7 +52,12 @@ class DataColumn(LeafExpression):
     ) -> set[ExpressionCharacteristics]:
         involved_characteristics: set[ExpressionCharacteristics] = set()
 
-        selected_values = self.get_values_at_rows(row_selection)
+        selected_values = self.get_values_at_rows(
+            row_selection,
+            table_index=(
+                self.data_source.table_index if self.data_source is not None else None
+            ),
+        )
         for value in selected_values:
             characteristics_of_value = (
                 value.recursively_collect_involved_characteristics(row_selection)
