@@ -17,6 +17,9 @@ from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_with_args import (
+    ExpressionWithArgs,
+)
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
@@ -26,10 +29,22 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.ignore_filter.internal_output_inconsistency_ignore_filter import (
     YesIgnore,
 )
+from materialize.output_consistency.input_data.constants.constant_expressions import (
+    TRUE_EXPRESSION,
+)
+from materialize.output_consistency.input_data.operations.boolean_operations_provider import (
+    NOT_OPERATION,
+)
+from materialize.output_consistency.input_data.operations.generic_operations_provider import (
+    IS_NULL_OPERATION,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.query.data_source import DataSource
+from materialize.output_consistency.query.data_source import (
+    DataSource,
+)
+from materialize.output_consistency.query.join import JoinTarget
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.selection.selection import (
@@ -55,6 +70,7 @@ class QueryGenerator:
     ):
         self.config = config
         self.randomized_picker = randomized_picker
+        self.input_data = input_data
         self.vertical_storage_row_count = input_data.types_input.max_value_count
         self.expression_generator = expression_generator
         self.ignore_filter = ignore_filter
@@ -366,6 +382,88 @@ class QueryGenerator:
             value = None
 
         return value
+
+    def _generate_join_constraint(
+        self,
+        storage_layout: ValueStorageLayout,
+        data_source: DataSource,
+        joined_source: DataSource,
+        query_contains_aggregations: bool,
+    ) -> Expression:
+        assert (
+            storage_layout == ValueStorageLayout.VERTICAL
+        ), f"Joins not supported for {storage_layout}"
+        join_target = self.randomized_picker.random_join_target()
+
+        if join_target in {
+            JoinTarget.SAME_DATA_TYPE,
+            JoinTarget.SAME_DATA_TYPE_CATEGORY,
+            JoinTarget.ANY_COLUMN,
+        }:
+            random_type_with_values_1 = self.randomized_picker.random_type_with_values(
+                self.input_data.types_input.all_data_types_with_values
+            )
+
+            if join_target == JoinTarget.SAME_DATA_TYPE:
+                random_types_with_values_2 = [random_type_with_values_1]
+            elif join_target == JoinTarget.SAME_DATA_TYPE_CATEGORY:
+                random_types_with_values_2 = [
+                    type_with_values
+                    for type_with_values in self.input_data.types_input.all_data_types_with_values
+                    if type_with_values.data_type.category
+                    == random_type_with_values_1.data_type.category
+                ]
+            elif join_target == JoinTarget.ANY_COLUMN:
+                random_types_with_values_2 = [
+                    self.randomized_picker.random_type_with_values(
+                        self.input_data.types_input.all_data_types_with_values
+                    )
+                ]
+            else:
+                raise RuntimeError(f"Unexpected join target: {join_target}")
+
+            expression1 = self.expression_generator.generate_leaf_expression(
+                storage_layout, [random_type_with_values_1]
+            )
+            expression2 = self.expression_generator.generate_leaf_expression(
+                storage_layout, random_types_with_values_2
+            )
+            self._assign_source(data_source, expression1)
+            self._assign_source(joined_source, expression2)
+            return self.expression_generator.generate_equals_expression(
+                expression1, expression2
+            )
+        elif join_target == JoinTarget.RANDOM_COLUMN_IS_NOT_NULL:
+            random_type_with_values = self.randomized_picker.random_type_with_values(
+                self.input_data.types_input.all_data_types_with_values
+            )
+            leaf_expression = self.expression_generator.generate_leaf_expression(
+                storage_layout, [random_type_with_values]
+            )
+            self._assign_source(joined_source, leaf_expression)
+            is_null_expression = ExpressionWithArgs(
+                operation=IS_NULL_OPERATION,
+                args=[leaf_expression],
+                is_aggregate=leaf_expression.is_aggregate,
+            )
+            is_not_null_expression = ExpressionWithArgs(
+                operation=NOT_OPERATION,
+                args=[is_null_expression],
+                is_aggregate=is_null_expression.is_aggregate,
+            )
+            return is_not_null_expression
+        elif join_target == JoinTarget.BOOLEAN_EXPRESSION:
+            expression = self.expression_generator.generate_boolean_expression(
+                use_aggregation=query_contains_aggregations,
+                storage_layout=storage_layout,
+            )
+            if expression is None:
+                expression = TRUE_EXPRESSION
+            else:
+                self._assign_source(joined_source, expression)
+            return expression
+        else:
+            raise RuntimeError(f"Unexpected join target: {join_target}")
 
     def _log_skipped_expression(
         self,
