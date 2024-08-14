@@ -342,19 +342,17 @@ pub(super) async fn purify_source_exports(
     ignore_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
+    allow_empty_references: bool,
 ) -> Result<PurifiedSourceExports, PlanError> {
     // Determine which table schemas to request from mysql. Note that in mysql
     // a 'schema' is the same as a 'database', and a fully qualified table
     // name is 'schema_name.table_name' (there is no db_name)
-    let table_schema_request = match external_references
-        .as_ref()
-        .ok_or(MySqlSourcePurificationError::RequiresExternalReferences)?
-    {
-        ExternalReferences::All => mz_mysql_util::SchemaRequest::All,
-        ExternalReferences::SubsetSchemas(schemas) => mz_mysql_util::SchemaRequest::Schemas(
+    let table_schema_request = match external_references.as_ref() {
+        Some(ExternalReferences::All) => mz_mysql_util::SchemaRequest::All,
+        Some(ExternalReferences::SubsetSchemas(schemas)) => mz_mysql_util::SchemaRequest::Schemas(
             schemas.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         ),
-        ExternalReferences::SubsetTables(tables) => mz_mysql_util::SchemaRequest::Tables(
+        Some(ExternalReferences::SubsetTables(tables)) => mz_mysql_util::SchemaRequest::Tables(
             tables
                 .iter()
                 .map(|t| {
@@ -369,6 +367,16 @@ pub(super) async fn purify_source_exports(
                 })
                 .collect::<Result<Vec<_>, MySqlSourcePurificationError>>()?,
         ),
+        None => {
+            if !allow_empty_references {
+                Err(MySqlSourcePurificationError::RequiresExternalReferences)?
+            }
+            return Ok(PurifiedSourceExports {
+                source_exports: BTreeMap::new(),
+                normalized_text_columns: vec![],
+                normalized_ignore_columns: vec![],
+            });
+        }
     };
 
     let text_cols_map = map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
@@ -483,8 +491,6 @@ pub(super) async fn purify_source_exports(
         );
     }
 
-    // TODO: Move this to be used only when working with subsources, since we will allow source-fed
-    // tables to reference the same external reference.
     super::validate_source_export_names(&validated_source_exports)?;
 
     validate_requested_references_privileges(&validated_source_exports, conn).await?;

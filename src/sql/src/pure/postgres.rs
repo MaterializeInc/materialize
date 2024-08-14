@@ -343,6 +343,7 @@ pub(super) async fn purify_source_exports(
     external_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
+    allow_empty_references: bool,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let publication_tables = mz_postgres_util::publication_info(client, publication).await?;
 
@@ -356,11 +357,8 @@ pub(super) async fn purify_source_exports(
         SourceReferenceResolver::new(&connection.database, &publication_tables)?;
 
     let mut validated_references = vec![];
-    match external_references
-        .as_ref()
-        .ok_or(PgSourcePurificationError::RequiresExternalReferences)?
-    {
-        ExternalReferences::All => {
+    match external_references.as_ref() {
+        Some(ExternalReferences::All) => {
             for table in &publication_tables {
                 let external_reference = UnresolvedItemName::qualified(&[
                     Ident::new(&connection.database)?,
@@ -376,7 +374,7 @@ pub(super) async fn purify_source_exports(
                 });
             }
         }
-        ExternalReferences::SubsetSchemas(schemas) => {
+        Some(ExternalReferences::SubsetSchemas(schemas)) => {
             let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(client)
                 .await?
                 .into_iter()
@@ -417,7 +415,7 @@ pub(super) async fn purify_source_exports(
                 });
             }
         }
-        ExternalReferences::SubsetTables(references) => {
+        Some(ExternalReferences::SubsetTables(references)) => {
             // The user manually selected a subset of upstream tables so we need to
             // validate that the names actually exist and are not ambiguous
             validated_references.extend(super::source_export_gen(
@@ -428,10 +426,17 @@ pub(super) async fn purify_source_exports(
                 unresolved_source_name,
             )?);
         }
+        None => {
+            if !allow_empty_references {
+                Err(PgSourcePurificationError::RequiresExternalReferences)?
+            }
+            return Ok(PurifiedSourceExports {
+                source_exports: BTreeMap::new(),
+                normalized_text_columns: vec![],
+            });
+        }
     };
 
-    // TODO: Remove this check once we allow creating a source with no exports and adding
-    // source-fed tables to that source later.
     if validated_references.is_empty() {
         sql_bail!(
             "[internal error]: Postgres reference {} did not match any tables",

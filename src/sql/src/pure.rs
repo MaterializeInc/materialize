@@ -16,7 +16,6 @@ use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::ast::AlterSourceAddSubsourceOption;
 use anyhow::anyhow;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs;
@@ -67,9 +66,9 @@ use rdkafka::admin::AdminClient;
 use uuid::Uuid;
 
 use crate::ast::{
-    AvroSchema, CreateSourceConnection, CreateSourceStatement, CreateSubsourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, ExternalReferenceExport, ExternalReferences, Format,
-    FormatSpecifier, ProtobufSchema, Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, AvroSchema, CreateSourceConnection, CreateSourceStatement,
+    CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf, ExternalReferenceExport,
+    ExternalReferences, Format, FormatSpecifier, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
@@ -80,6 +79,7 @@ use crate::names::{
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
+use crate::session::vars;
 use crate::{kafka_util, normalize};
 
 use self::error::{
@@ -618,6 +618,10 @@ async fn purify_create_source(
             &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
     };
+    let scx = StatementContext::new(None, &catalog);
+
+    let create_table_from_source_enabled =
+        scx.is_feature_flag_enabled(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE);
 
     match connection {
         CreateSourceConnection::Kafka {
@@ -631,7 +635,6 @@ async fn purify_create_source(
                 ))?;
             }
 
-            let scx = StatementContext::new(None, &catalog);
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
@@ -739,7 +742,6 @@ async fn purify_create_source(
             connection,
             options,
         } => {
-            let scx = StatementContext::new(None, &catalog);
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection().map_err(PlanError::from)? {
@@ -811,6 +813,10 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 source_name,
+                // If the user can use the `CREATE TABLE .. FROM SOURCE` statement to add tables
+                // after this source is created, then we don't necessarily need to enforce that
+                // any auto-generated are created here.
+                create_table_from_source_enabled,
             )
             .await?;
 
@@ -851,7 +857,6 @@ async fn purify_create_source(
             connection,
             options,
         } => {
-            let scx = StatementContext::new(None, &catalog);
             let connection_item = scx.get_item_by_resolved_name(connection)?;
             let connection = match connection_item.connection()? {
                 Connection::MySql(connection) => {
@@ -935,6 +940,10 @@ async fn purify_create_source(
                 ignore_columns,
                 source_name,
                 initial_gtid_set.clone(),
+                // If the user can use the `CREATE TABLE .. FROM SOURCE` statement to add tables
+                // after this source is created, then we don't necessarily need to enforce that
+                // any auto-generated are created here.
+                create_table_from_source_enabled,
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -967,8 +976,6 @@ async fn purify_create_source(
             }
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let scx = StatementContext::new(None, &catalog);
-
             let (_load_generator, available_subsources) =
                 load_generator_ast_to_generator(&scx, generator, options, include_metadata)?;
 
@@ -997,7 +1004,9 @@ async fn purify_create_source(
                     Err(LoadGeneratorSourcePurificationError::ForTables)?
                 }
                 None => {
-                    if available_subsources.is_some() {
+                    // The user must provide an external reference clause if not able to use
+                    // source-fed tables.
+                    if !create_table_from_source_enabled && available_subsources.is_some() {
                         Err(LoadGeneratorSourcePurificationError::MultiOutputRequiresForAllTables)?
                     }
                 }
@@ -1223,6 +1232,7 @@ async fn purify_alter_source(
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 &unresolved_source_name,
+                false,
             )
             .await?;
 
@@ -1268,6 +1278,7 @@ async fn purify_alter_source(
                 ignore_columns,
                 &unresolved_source_name,
                 initial_gtid_set,
+                false,
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -1444,6 +1455,7 @@ async fn purify_create_table_from_source(
                 &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
                 qualified_text_columns,
                 &unresolved_source_name,
+                false,
             )
             .await?;
             // There should be exactly one source_export returned for this statement
@@ -1486,6 +1498,7 @@ async fn purify_create_table_from_source(
                 qualified_ignore_columns,
                 &unresolved_source_name,
                 initial_gtid_set,
+                false,
             )
             .await?;
             // There should be exactly one source_export returned for this statement
