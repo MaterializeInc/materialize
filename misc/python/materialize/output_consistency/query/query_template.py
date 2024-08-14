@@ -26,6 +26,12 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.query.additional_data_source import (
+    AdditionalDataSource,
+)
+from materialize.output_consistency.query.data_source import (
+    DataSource,
+)
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.selection.selection import (
     DataRowSelection,
@@ -42,10 +48,12 @@ class QueryTemplate:
         select_expressions: list[Expression],
         where_expression: Expression | None,
         storage_layout: ValueStorageLayout,
+        data_source: DataSource,
         contains_aggregations: bool,
         row_selection: DataRowSelection,
         offset: int | None = None,
         limit: int | None = None,
+        additional_data_sources: list[AdditionalDataSource] = [],
         custom_db_object_name: str | None = None,
         custom_order_expressions: list[Expression] | None = None,
     ) -> None:
@@ -54,6 +62,8 @@ class QueryTemplate:
         self.select_expressions: list[Expression] = select_expressions
         self.where_expression = where_expression
         self.storage_layout = storage_layout
+        self.data_source = data_source
+        self.additional_data_sources = additional_data_sources
         self.contains_aggregations = contains_aggregations
         self.row_selection = row_selection
         self.offset = offset
@@ -62,15 +72,30 @@ class QueryTemplate:
         self.custom_order_expressions = custom_order_expressions
         self.disable_error_message_validation = not self.__can_compare_error_messages()
 
-    def get_all_expressions(self) -> list[Expression]:
+    def get_all_data_sources(self) -> list[DataSource]:
+        all_data_sources = [self.data_source]
+        all_data_sources.extend(self.additional_data_sources)
+        return all_data_sources
+
+    def get_all_expressions(
+        self,
+        include_select_expressions: bool = True,
+        include_join_constraints: bool = False,
+    ) -> list[Expression]:
         all_expressions = []
-        all_expressions.extend(self.select_expressions)
+
+        if include_select_expressions:
+            all_expressions.extend(self.select_expressions)
 
         if self.where_expression is not None:
             all_expressions.append(self.where_expression)
 
         if self.custom_order_expressions is not None:
             all_expressions.extend(self.custom_order_expressions)
+
+        if include_join_constraints:
+            for additional_data_source in self.additional_data_sources:
+                all_expressions.append(additional_data_source.join_constraint)
 
         return all_expressions
 
