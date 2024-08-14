@@ -8165,11 +8165,11 @@ impl<'a> Parser<'a> {
         };
 
         let format = if self.parse_keyword(AS) {
-            match self.parse_one_of_keywords(&[TEXT, JSON, DOT, SYNTAX]) {
+            match self.parse_one_of_keywords(&[TEXT, JSON, DOT, SQL]) {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
                 Some(DOT) => Some(ExplainFormat::Dot),
-                Some(SYNTAX) => Some(ExplainFormat::Syntax),
+                Some(SQL) => Some(ExplainFormat::Sql),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }

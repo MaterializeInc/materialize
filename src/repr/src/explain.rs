@@ -45,14 +45,14 @@ use mz_ore::str::{bracketed, separated, Indent};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
-use crate::explain::syntax::{syntax_string, DisplaySyntax};
+use crate::explain::sql::{sql_string, DisplaySql};
 use crate::explain::text::{text_string, DisplayText};
 use crate::optimize::OptimizerFeatureOverrides;
 use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
 pub mod json;
-pub mod syntax;
+pub mod sql;
 pub mod text;
 #[cfg(feature = "tracing_")]
 pub mod tracing;
@@ -66,7 +66,7 @@ pub enum ExplainFormat {
     Text,
     Json,
     Dot,
-    Syntax,
+    Sql,
 }
 
 impl fmt::Display for ExplainFormat {
@@ -75,7 +75,7 @@ impl fmt::Display for ExplainFormat {
             ExplainFormat::Text => f.write_str("TEXT"),
             ExplainFormat::Json => f.write_str("JSON"),
             ExplainFormat::Dot => f.write_str("DOT"),
-            ExplainFormat::Syntax => f.write_str("SYNTAX"),
+            ExplainFormat::Sql => f.write_str("SQL"),
         }
     }
 }
@@ -277,8 +277,8 @@ pub trait Explain<'a>: 'a {
     type Dot: DisplayDot;
 
     /// The explanation type produced by a successful
-    /// [`Explain::explain_syntax`] call.
-    type Syntax: DisplaySyntax;
+    /// [`Explain::explain_sql`] call.
+    type Sql: DisplaySql;
 
     /// Explain an instance of [`Self`] within the given
     /// [`Explain::Context`].
@@ -303,7 +303,7 @@ pub trait Explain<'a>: 'a {
             ExplainFormat::Text => self.explain_text(context).map(|e| text_string(&e)),
             ExplainFormat::Json => self.explain_json(context).map(|e| json_string(&e)),
             ExplainFormat::Dot => self.explain_dot(context).map(|e| dot_string(&e)),
-            ExplainFormat::Syntax => self.explain_syntax(context).map(|e| syntax_string(&e)),
+            ExplainFormat::Sql => self.explain_sql(context).map(|e| sql_string(&e)),
         }
     }
 
@@ -355,23 +355,20 @@ pub trait Explain<'a>: 'a {
         Err(ExplainError::UnsupportedFormat(ExplainFormat::Dot))
     }
 
-    /// Construct a [`Result::Ok`] of the [`Explain::Syntax`] format
+    /// Construct a [`Result::Ok`] of the [`Explain::Sql`] format
     /// from the config and the context.
     ///
     /// # Errors
     ///
-    /// If the [`ExplainFormat::Syntax`] is not supported, the implementation
+    /// If the [`ExplainFormat::Sql`] is not supported, the implementation
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
     /// implementation should silently ignore this parameter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
-    fn explain_syntax(
-        &'a mut self,
-        context: &'a Self::Context,
-    ) -> Result<Self::Syntax, ExplainError> {
-        Err(ExplainError::UnsupportedFormat(ExplainFormat::Syntax))
+    fn explain_sql(&'a mut self, context: &'a Self::Context) -> Result<Self::Sql, ExplainError> {
+        Err(ExplainError::UnsupportedFormat(ExplainFormat::Sql))
     }
 }
 
@@ -925,7 +922,7 @@ mod tests {
         type Text = TestExplanation<'a>;
         type Json = UnsupportedFormat;
         type Dot = UnsupportedFormat;
-        type Syntax = UnsupportedFormat;
+        type Sql = UnsupportedFormat;
 
         fn explain_text(
             &'a mut self,

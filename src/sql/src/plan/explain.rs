@@ -29,7 +29,7 @@ impl<'a> Explain<'a> for HirRelationExpr {
 
     type Dot = UnsupportedFormat;
 
-    type Syntax = UnsupportedFormat;
+    type Sql = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_single_plan(context)

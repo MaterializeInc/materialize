@@ -37,7 +37,7 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
 
     type Dot = UnsupportedFormat;
 
-    type Syntax = ExplainSinglePlan<'a, MirRelationExpr>;
+    type Sql = ExplainSinglePlan<'a, MirRelationExpr>;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_single_plan(context)
@@ -47,10 +47,7 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
         self.as_explain_single_plan(context)
     }
 
-    fn explain_syntax(
-        &'a mut self,
-        context: &'a Self::Context,
-    ) -> Result<Self::Syntax, ExplainError> {
+    fn explain_sql(&'a mut self, context: &'a Self::Context) -> Result<Self::Sql, ExplainError> {
         self.as_explain_single_plan(context)
     }
 }
@@ -89,7 +86,7 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
 
     type Dot = UnsupportedFormat;
 
-    type Syntax = ExplainMultiPlan<'a, MirRelationExpr>;
+    type Sql = ExplainMultiPlan<'a, MirRelationExpr>;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
@@ -99,10 +96,7 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
         self.as_explain_multi_plan(context)
     }
 
-    fn explain_syntax(
-        &'a mut self,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
+    fn explain_sql(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 }

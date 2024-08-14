@@ -24,7 +24,7 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
 
     type Dot = <DataflowDescription<Plan> as Explain<'a>>::Dot;
 
-    type Syntax = UnsupportedFormat;
+    type Sql = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.0.explain_text(context)

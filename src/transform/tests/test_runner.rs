@@ -566,7 +566,7 @@ mod explain {
 
         type Dot = UnsupportedFormat;
 
-        type Syntax = UnsupportedFormat;
+        type Sql = UnsupportedFormat;
 
         fn explain_text(
             &'a mut self,

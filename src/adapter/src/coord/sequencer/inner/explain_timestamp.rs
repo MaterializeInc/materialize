@@ -300,7 +300,7 @@ impl Coordinator {
             ExplainFormat::Dot => {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
-            ExplainFormat::Syntax => {
+            ExplainFormat::Sql => {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS SYNTAX"));
             }
         };

@@ -23,7 +23,7 @@ impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
 
     type Dot = <HirRelationExpr as Explain<'a>>::Dot;
 
-    type Syntax = mz_repr::explain::UnsupportedFormat;
+    type Sql = mz_repr::explain::UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.0.explain_text(context)
