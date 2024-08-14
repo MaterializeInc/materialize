@@ -128,8 +128,6 @@ pub(crate) enum Mode {
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
 pub(crate) enum FenceableEpoch {
-    /// The most recent epoch seen by an initializing catalog. This variant cannot be fenced.
-    Initializing(Option<Epoch>),
     /// The current epoch, if one exists, has not been fenced.
     Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
@@ -143,7 +141,6 @@ impl FenceableEpoch {
     /// Returns the current epoch if it is not fenced, otherwise returns an error.
     fn validate(&self) -> Result<Option<Epoch>, DurableCatalogError> {
         match self {
-            FenceableEpoch::Initializing(epoch) => Ok(epoch.clone()),
             FenceableEpoch::Unfenced(epoch) => Ok(epoch.clone()),
             FenceableEpoch::Fenced {
                 current_epoch,
@@ -157,7 +154,6 @@ impl FenceableEpoch {
     /// Returns the current epoch.
     fn epoch(&self) -> Option<Epoch> {
         match self {
-            FenceableEpoch::Initializing(epoch) => epoch.clone(),
             FenceableEpoch::Unfenced(epoch) => epoch.clone(),
             FenceableEpoch::Fenced {
                 current_epoch,
@@ -169,14 +165,6 @@ impl FenceableEpoch {
     /// Returns `Err` if `epoch` fences out `self`, `Ok` otherwise.
     fn maybe_fence(&mut self, epoch: Epoch) -> Result<(), DurableCatalogError> {
         match self {
-            FenceableEpoch::Initializing(Some(current_epoch)) => {
-                if epoch > *current_epoch {
-                    *self = FenceableEpoch::Initializing(Some(epoch));
-                }
-            }
-            FenceableEpoch::Initializing(None) => {
-                *self = FenceableEpoch::Initializing(Some(epoch));
-            }
             FenceableEpoch::Unfenced(Some(current_epoch)) => {
                 if epoch > *current_epoch {
                     *self = FenceableEpoch::Fenced {
@@ -197,16 +185,6 @@ impl FenceableEpoch {
         }
 
         Ok(())
-    }
-
-    /// Mark epoch as initialized if currently initializing, otherwise do nothing.
-    fn mark_initialized(&mut self) {
-        match self {
-            FenceableEpoch::Initializing(epoch) => {
-                *self = FenceableEpoch::Unfenced(*epoch);
-            }
-            FenceableEpoch::Unfenced(_) | FenceableEpoch::Fenced { .. } => {}
-        }
     }
 }
 
@@ -864,14 +842,19 @@ impl UnopenedPersistCatalogState {
             snapshot: Vec::new(),
             update_applier: UnopenedCatalogStateInner::new(organization_id),
             upper,
-            epoch: FenceableEpoch::Initializing(None),
+            epoch: FenceableEpoch::Unfenced(None),
             metrics,
         };
+        // If the snapshot is not consolidated, and we see multiple epoch values while applying the
+        // updates, then we might accidently fence ourselves out.
+        soft_assert_no_log!(
+            snapshot.iter().all(|(_, _, diff)| *diff == 1),
+            "snapshot should be consolidated: {snapshot:?}"
+        );
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         handle.apply_updates(updates)?;
-        handle.epoch.mark_initialized();
 
         Ok(handle)
     }
