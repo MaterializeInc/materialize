@@ -48,6 +48,7 @@ class Expression:
         self.storage_layout = storage_layout
         self.is_aggregate = is_aggregate
         self.is_expect_error = is_expect_error
+        self.is_shared = False
 
     def to_sql(
         self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
@@ -156,6 +157,13 @@ class Expression:
         self, predicate: Callable[[Expression], bool], check_recursively: bool
     ) -> bool:
         return self.matches(predicate, check_recursively)
+
+    def recursively_mark_as_shared(self) -> None:
+        """
+        Mark that this expression is used multiple times within a query.
+        All instances will use the same data source.
+        """
+        self.is_shared = True
 
 
 class LeafExpression(Expression):

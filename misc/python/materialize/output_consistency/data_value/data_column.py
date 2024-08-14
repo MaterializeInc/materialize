@@ -35,8 +35,12 @@ class DataColumn(LeafExpression):
         self.data_source: DataSource | None = None
 
     def assign_data_source(self, data_source: DataSource, force: bool) -> None:
-        if self.data_source is not None and not force:
-            raise RuntimeError("Data source already assigned")
+        if self.data_source is not None:
+            if self.is_shared:
+                # the source has already been set
+                return
+            if not force:
+                raise RuntimeError("Data source already assigned")
 
         self.data_source = data_source
 

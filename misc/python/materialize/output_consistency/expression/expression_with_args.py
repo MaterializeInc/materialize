@@ -186,6 +186,12 @@ class ExpressionWithArgs(Expression):
     def operation_to_pattern(self) -> str:
         return self.operation.to_pattern(self.count_args())
 
+    def recursively_mark_as_shared(self) -> None:
+        super().recursively_mark_as_shared()
+
+        for arg in self.args:
+            arg.recursively_mark_as_shared()
+
 
 def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
     mutual_storage_layout: ValueStorageLayout | None = None

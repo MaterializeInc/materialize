@@ -339,7 +339,9 @@ class ExpressionGenerator:
             return self._pick_enum_constant(param)
 
         if isinstance(param, SameOperationParam):
-            return arg_context.args[param.index_of_previous_param]
+            expression_to_use = arg_context.args[param.index_of_previous_param]
+            expression_to_use.recursively_mark_as_shared()
+            return expression_to_use
 
         create_complex_arg = (
             arg_context.requires_aggregation()
