@@ -658,6 +658,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Evaluation shortcut on NULL pattern")
 
+        if "argument of IN must not return a set" in pg_error_msg:
+            return YesIgnore("Not supported by Postgres")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
