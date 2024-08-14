@@ -41,6 +41,9 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
+from materialize.output_consistency.query.additional_data_source import (
+    AdditionalDataSource,
+)
 from materialize.output_consistency.query.data_source import (
     DataSource,
 )
@@ -319,6 +322,46 @@ class QueryGenerator:
                         list(all_data_sources)
                     )
                     leaf_expression.assign_data_source(random_source, force=force)
+
+    def _select_sources(
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+    ) -> tuple[DataSource, list[AdditionalDataSource]]:
+        if storage_layout == ValueStorageLayout.HORIZONTAL:
+            return DataSource(table_index=None), []
+
+        return self._random_source_tables(storage_layout, contains_aggregations)
+
+    def _random_source_tables(
+        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+    ) -> tuple[DataSource, list[AdditionalDataSource]]:
+        main_source = DataSource(table_index=0)
+
+        if self.randomized_picker.random_boolean(0.4):
+            return main_source, []
+
+        additional_sources = []
+        for i in range(1, self.config.vertical_join_tables):
+            if self.randomized_picker.random_boolean(0.3):
+                additional_source = AdditionalDataSource(
+                    table_index=i,
+                    join_operator=self.randomized_picker.random_join_operator(),
+                    join_constraint=TRUE_EXPRESSION,
+                )
+                join_constraint = self._generate_join_constraint(
+                    storage_layout,
+                    main_source,
+                    additional_source,
+                    contains_aggregations,
+                )
+                self._validate_join_constraint(join_constraint)
+                additional_source.join_constraint = join_constraint
+                additional_sources.append(additional_source)
+
+        return main_source, additional_sources
+
+    def _validate_join_constraint(self, join_constraint: Expression) -> None:
+        # this will fail if no data source was assigned to a leaf
+        join_constraint.collect_data_sources()
 
     def _remove_known_inconsistencies(
         self,
