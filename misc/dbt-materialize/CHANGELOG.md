@@ -1,5 +1,21 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Fix a bug in the `materialize__drop_relation` macro that prevented using the
+  [`--full-refresh` flag](https://docs.getdbt.com/reference/resource-configs/full_refresh)
+  (or the `full_refresh` configuration) with `dbt seed`.
+
+* Fix a bug that would prevent `dbt seed` from succeeding on subsequent runs
+  without a valid default cluster. It's important to note that this scenario
+  will still fail if no cluster is specified for the target in
+  `profiles.yml` _and_ the default cluster for the user is invalid
+  (or intentionally set to `mz_catalog_server`, which cannot query user data).
+
+* Produce an error message when attempting to use the [`grants` configuration](https://docs.getdbt.com/reference/resource-configs/grants),
+  which is not supported in the adapter. This configuration will be supported in
+  the future (see [#20244](https://github.com/MaterializeInc/materialize/issues/20244)).
+
 ## 1.8.4 - 2024-08-07
 
 * Include the dbt version in the `application_name` connection parameter [#28813](https://github.com/MaterializeInc/materialize/pull/28813).
