@@ -350,7 +350,7 @@ def create_branch(name: str) -> None:
     spawn.runv(["git", "checkout", "-b", name])
 
 
-def checkout(rev: str, branch: str | None = None) -> None:
+def checkout(rev: str) -> None:
     """Git checkout the rev"""
     spawn.runv(["git", "checkout", rev])
 
