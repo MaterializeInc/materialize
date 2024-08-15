@@ -215,7 +215,9 @@ steps:
         timeout_in_minutes: 30
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
-          queue: hetzner-x86-64-4cpu-8gb
+          # TODO(def-) Switch back to Hetzner when we have increased server limit
+          queue: linux-x86_64-small
+          # queue: hetzner-x86-64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
