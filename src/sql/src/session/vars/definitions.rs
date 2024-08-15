@@ -57,8 +57,8 @@ pub struct VarDefinition {
     pub name: &'static UncasedStr,
     /// Description of the variable.
     pub description: &'static str,
-    /// TODO(parkmcar): What does internal mean?
-    pub internal: bool,
+    /// Should the variable be visible to only internal users, e.g. `mz_system` and `mz_support`.
+    pub visible_internal_only: bool,
 
     /// Default compiled in value for this variable.
     pub value: VarDefaultValue,
@@ -91,17 +91,18 @@ pub struct VarDefinition {
 static_assertions::assert_impl_all!(VarDefinition: Send, Sync);
 
 impl VarDefinition {
+    /// Create a new [`VarDefinition`] in a const context with a value known at compile time.
     pub const fn new<V: Value>(
         name: &'static str,
         value: &'static V,
         description: &'static str,
-        internal: bool,
+        visible_internal_only: bool,
     ) -> Self {
         VarDefinition {
             name: UncasedStr::new(name),
             description,
             value: VarDefaultValue::Static(value),
-            internal,
+            visible_internal_only,
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
@@ -109,17 +110,18 @@ impl VarDefinition {
         }
     }
 
+    /// Create a new [`VarDefinition`] in a const context with a lazily evaluated value.
     pub const fn new_lazy<V: Value, L: LazyValueFn<V>>(
         name: &'static str,
         _value: L,
         description: &'static str,
-        internal: bool,
+        visible_internal_only: bool,
     ) -> Self {
         VarDefinition {
             name: UncasedStr::new(name),
             description,
             value: VarDefaultValue::Lazy(L::LAZY_VALUE_FN),
-            internal,
+            visible_internal_only,
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
@@ -127,17 +129,18 @@ impl VarDefinition {
         }
     }
 
+    /// Create a new [`VarDefinition`] with a lazily evaluated value.
     pub fn new_runtime<V: Value>(
         name: &'static str,
         value: V,
         description: &'static str,
-        internal: bool,
+        visible_internal_only: bool,
     ) -> Self {
         VarDefinition {
             name: UncasedStr::new(name),
             description,
             value: VarDefaultValue::Runtime(Arc::new(value)),
-            internal,
+            visible_internal_only,
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
@@ -201,7 +204,7 @@ impl Var for VarDefinition {
         user: &User,
         system_vars: Option<&super::SystemVars>,
     ) -> Result<(), VarError> {
-        if self.internal && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
+        if self.visible_internal_only && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
             Err(VarError::UnknownParameter(self.name().to_string()))
         } else if self.name().starts_with("unsafe")
             && match system_vars {
@@ -1632,8 +1635,6 @@ macro_rules! feature_flags {
         desc: $desc:literal,
         // The feature flag default value.
         default: $value:expr,
-        // Should this feature be visible only internally.
-        internal: $internal:expr,
     ) => {
         paste::paste!{
             // Note that the ServerVar is not directly exported; we expect these to be
@@ -1642,7 +1643,7 @@ macro_rules! feature_flags {
                 stringify!($name),
                 value!(bool; $value),
                 concat!("Whether ", $desc, " is allowed (Materialize)."),
-                $internal
+                true,
             );
 
             pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
@@ -1658,8 +1659,6 @@ macro_rules! feature_flags {
         desc: $desc:literal,
         // The feature flag default value.
         default: $value:expr,
-        // Should this feature be visible only internally.
-        internal: $internal:expr,
         // Should the feature be turned on during catalog rehydration when
         // parsing a catalog item.
         enable_for_item_parsing: $enable_for_item_parsing:expr,
@@ -1668,7 +1667,6 @@ macro_rules! feature_flags {
             name: $name,
             desc: $desc,
             default: $value,
-            internal: $internal,
         })+
 
         paste::paste!{
@@ -1711,7 +1709,6 @@ feature_flags!(
         name: allow_real_time_recency,
         desc: "real time recency",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     // Actual feature flags
@@ -1719,77 +1716,66 @@ feature_flags!(
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_create_sink_denylist_with_options,
         desc: "CREATE SINK with unsafe options",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_create_source_denylist_with_options,
         desc: "CREATE SOURCE with unsafe options",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_date_bin_hopping,
         desc: "the date_bin_hopping function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_envelope_debezium_in_subscribe,
         desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_envelope_materialize,
         desc: "ENVELOPE MATERIALIZE",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_explain_pushdown,
         desc: "EXPLAIN FILTER PUSHDOWN",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_index_options,
         desc: "INDEX OPTIONS",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_list_length_max,
         desc: "the list_length_max function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_list_n_layers,
         desc: "the list_n_layers function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_list_remove,
         desc: "the list_remove function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
@@ -1797,210 +1783,180 @@ feature_flags!(
         name: enable_logical_compaction_window,
         desc: "RETAIN HISTORY",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_primary_key_not_enforced,
         desc: "PRIMARY KEY NOT ENFORCED",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_multi_worker_storage_persist_sink,
         desc: "multi-worker storage persist sink",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_persist_streaming_snapshot_and_fetch,
         desc: "use the new streaming consolidate for snapshot_and_fetch",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_persist_streaming_compaction,
         desc: "use the new streaming consolidate for compaction",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_raise_statement,
         desc: "RAISE statement",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_repeat_row,
         desc: "the repeat_row function",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_table_foreign_key,
         desc: "CREATE TABLE with a foreign key",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_table_keys,
         desc: "CREATE TABLE with a primary key or unique constraint",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_unorchestrated_cluster_replicas,
         desc: "unorchestrated cluster replicas",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_unstable_dependencies,
         desc: "depending on unstable objects",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_disk_cluster_replicas,
         desc: "`WITH (DISK)` for cluster replicas",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_within_timestamp_order_by_in_subscribe,
         desc: "`WITHIN TIMESTAMP ORDER BY ..`",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_cardinality_estimates,
         desc: "join planning with cardinality estimates",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_unsafe_functions,
         desc: "executing potentially dangerous functions",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_managed_cluster_availability_zones,
         desc: "MANAGED, AVAILABILITY ZONES syntax",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: statement_logging_use_reproducible_rng,
         desc: "statement logging with reproducible RNG",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_notices_for_index_already_exists,
         desc: "emitting notices for IndexAlreadyExists (doesn't affect EXPLAIN)",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_notices_for_index_too_wide_for_literal_constraints,
         desc: "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_notices_for_index_empty_key,
         desc: "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
         default: true,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_comment,
         desc: "the COMMENT ON feature for objects",
         default: true,
-        internal: false,
         enable_for_item_parsing: true,
     },
     {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
         default: true,
-        internal: false,
         enable_for_item_parsing: true,
     },
     {
         name: enable_new_outer_join_lowering,
         desc: "new outer join lowering",
         default: true,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_time_at_time_zone,
         desc: "use of AT TIME ZONE or timezone() with time type",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_load_generator_key_value,
         desc: "Create a LOAD GENERATOR KEY VALUE",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_expressions_in_limit_syntax,
         desc: "LIMIT <expr> syntax",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2008,126 +1964,108 @@ feature_flags!(
         desc:
             "eager delta joins",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_off_thread_optimization,
         desc: "use off-thread optimization in `CREATE` statements",
         default: true,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_refresh_every_mvs,
         desc: "REFRESH EVERY and REFRESH AT materialized views",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_cluster_schedule_refresh,
         desc: "`SCHEDULE = ON REFRESH` cluster option",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_worker_core_affinity,
         desc: "set core affinity for replica worker threads",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_variadic_left_join_lowering,
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_redacted_test_option,
         desc: "Enable useless option to test value redaction",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_letrec_fixpoint_analysis,
         desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
         default: true, // This is just a failsafe switch for the deployment of #25591.
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_kafka_sink_headers,
         desc: "Enable the HEADERS option for Kafka sinks",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_envelope_upsert_inline_errors,
         desc: "The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_outer_join_null_filter,
         desc: "Add an extra null filter to the semi-join part of outer join lowering",
         default: true,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_graceful_cluster_reconfiguration,
         desc: "Enable graceful reconfiguration for alter cluster",
         default: false,
-        internal: true,
         enable_for_item_parsing: false,
     },
     {
         name: enable_aws_msk_iam_auth,
         desc: "Enable AWS MSK IAM authentication for Kafka connections",
         default: false,
-        internal: true,
         enable_for_item_parsing: true,
     },
 );
