@@ -230,32 +230,32 @@ rules_rust_dependencies()
 # Fetch and register the relevant Rust toolchains. We use a custom macro that
 # depends on `rules_rust` but cuts down on bloat from their defaults.
 
-RUST_VERSION = "1.79.0"
+RUST_VERSION = "1.80.0"
 
 load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
 rust_toolchains(
     RUST_VERSION,
     {
         "aarch64-apple-darwin": {
-            "rustc": "3bfbdd308ceb34f0c617985f9ca21f230e6f0327dba08ae37b170c8320c6b5d6",
-            "clippy": "9c52c99bda497c88e75f0f8c119f4e5e3538674ed0f01d70147bff7bcc458511",
-            "cargo": "32402355a6dbb9f687607eef716464c88c951cfc6e728405bf802f8e90343f1c",
-            "llvm-tools": "7e1cd8cb8b22693cabc42d915f57d3b1e14d0e2d258befa2a322d201021e2a26",
-            "rust-std": "48704ddce25c6974bb6453286911c175f2e2318364722550d5559de65060bc99",
+            "rustc": "d34f0f41c6a8314ceb43c237c4b206ec5d14c739c2bef973c9c5b38112462317",
+            "clippy": "e90c733409848078753a30462d945f92b442bfeff4861da4de431c8ccee4570b",
+            "cargo": "fbcfe209260d3ce7f588d5a01985fb93d940a29e359f4cf8e5fdfc4ab01992a9",
+            "llvm-tools": "c159713f530a5d60e9f09662e1829d18d3ad19c5cba42997b4b7eaeebc3845f8",
+            "rust-std": "f1cf42b99fa1a8c2066f10f1cd7f01973a47174b0007f903dcba8734aedc9214",
         },
         "aarch64-unknown-linux-gnu": {
-            "rustc": "cc574b5be028a807df0a67a0b2ce5147da6ef05561bfecedd0ef669ce79bd38c",
-            "clippy": "043048052a56ba584f5a25d8dcda95d813be56852a4d7ebcf605014b7033e1aa",
-            "cargo": "3dba223c7045d48320c2c0ae56763ac0950c0d95830f221e62d61415746ef3b1",
-            "llvm-tools": "e1abb228ed0c885b7560dbac22cf837406c9dcc7ad50727af3d2aa0a9de6702a",
-            "rust-std": "9c0d638d365c677e521b86eb1f8e91e4bc4da8d207a064ec8f69973e14f43aeb"
+            "rustc": "4d3d63adeab52cf594e01d5a9f7edcb1c5dddf0065acf0733deea595a780d9bf",
+            "clippy": "68c764dfeaa7ff10abd101d23b3b6386c097d5d47339701ad0badbb2deb48b6c",
+            "cargo": "d3db9209bc5b169075e1055b6bde68f7e8674251e5aaf765a644123783cd2f72",
+            "llvm-tools": "ab8b6d49e08203ff65278e7288e05bb9f993d41b615ce7b5937edb521494ea86",
+            "rust-std": "05a20520e7677c360433bba427fc66060cecbf3c6db168235007a8f57e8208c9",
         },
         "x86_64-unknown-linux-gnu": {
-            "rustc": "0dbd3db9fcfbb299fc5f7bbba89f2b66533d58b72393e49d2d8a6d9679f00c53",
-            "clippy": "137f49984eb0bf3c0e62a40139bea472263b7a4576af63ef1127a8016373f14b",
-            "cargo": "c217ef38127d6a240df2bde412db6b297291246f150d461b1e986dc68f07b1e4",
-            "llvm-tools": "af07b0109f266a1765d16a1c906b33aec7c9745aa675f07a63548ef44b4beb41",
-            "rust-std": "de698a263aede4938659724a2c119539b7483e42035174b61bc3102140a100df"
+            "rustc": "5e01169d11df14ab8ba08cb59dd727edb108e6a73704c166856e3c9d1ddf602c",
+            "clippy": "1de5580cc9c88be835f1ba65fb7ae48ad141e3c7b01a862f3192ec5e9c2c640d",
+            "cargo": "d4c25ff547fdb0991dc621f4c95a8d103ce52dea32bd8ee9bf7bdc8beea3cb58",
+            "llvm-tools": "04165144b5739ab789c598c7f3cf47b91a2def3f14e320c945221c878b0a6127",
+            "rust-std": "965176313044bb69b6dbe1b8709109582557ad6efc99771b2d99fbc54e5dce4c",
         },
         "x86_64-apple-darwin": {},
     }
