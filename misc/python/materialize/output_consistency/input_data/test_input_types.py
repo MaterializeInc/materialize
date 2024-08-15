@@ -88,15 +88,17 @@ class ConsistencyTestTypesInput:
         table_indices = set()
 
         for table_index in range(0, vertical_tables):
+            is_first_table = table_index == 0
+
             if is_null_value:
                 # always add the null value to all tables to have at least one value per table
                 table_indices.add(table_index)
                 continue
 
-            # put most columns into the first table (so that not all queries require a join)
+            # put most columns into the first table
             selected_probability = (
                 probability.INCLUDE_COLUMN_IN_FIRST_TABLE
-                if table_index == 0
+                if is_first_table
                 else probability.INCLUDE_COLUMN_IN_OTHER_TABLE
             )
             if randomized_picker.random_boolean(selected_probability):

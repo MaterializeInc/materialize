@@ -9,6 +9,7 @@
 
 import random
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -68,6 +69,14 @@ class RandomizedPicker:
         return random.choice(values)
 
     def random_data_source(self, sources: list[DataSource]) -> DataSource:
+        assert len(sources) > 0, "No data sources available"
+
+        if self.random_boolean(
+            probability.COLUMN_SELECTION_ADDITIONAL_CHANCE_FOR_FIRST_TABLE
+        ):
+            # give the first data source a higher chance so that not all queries need a join
+            return sources[0]
+
         return random.choice(sources)
 
     def convert_operation_relevance_to_number(
