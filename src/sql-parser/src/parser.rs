@@ -2484,21 +2484,32 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[GROUP, ID, PREFIX])?;
                 KafkaSinkConfigOptionName::ProgressGroupIdPrefix
             }
-            TOPIC => match self.parse_one_of_keywords(&[PARTITION, REPLICATION, CONFIG]) {
-                None => KafkaSinkConfigOptionName::Topic,
-                Some(PARTITION) => {
-                    self.expect_keyword(COUNT)?;
-                    KafkaSinkConfigOptionName::TopicPartitionCount
+            TOPIC => {
+                match self.parse_one_of_keywords(&[METADATA, PARTITION, REPLICATION, CONFIG]) {
+                    None => KafkaSinkConfigOptionName::Topic,
+                    Some(METADATA) => {
+                        self.expect_keywords(&[REFRESH, INTERVAL])?;
+                        KafkaSinkConfigOptionName::TopicMetadataRefreshInterval
+                    }
+                    Some(PARTITION) => {
+                        self.expect_keyword(COUNT)?;
+                        KafkaSinkConfigOptionName::TopicPartitionCount
+                    }
+                    Some(REPLICATION) => {
+                        self.expect_keyword(FACTOR)?;
+                        KafkaSinkConfigOptionName::TopicReplicationFactor
+                    }
+                    Some(CONFIG) => KafkaSinkConfigOptionName::TopicConfig,
+                    Some(other) => {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "unexpected keyword {}",
+                            other
+                        )
+                    }
                 }
-                Some(REPLICATION) => {
-                    self.expect_keyword(FACTOR)?;
-                    KafkaSinkConfigOptionName::TopicReplicationFactor
-                }
-                Some(CONFIG) => KafkaSinkConfigOptionName::TopicConfig,
-                Some(other) => {
-                    return parser_err!(self, self.peek_prev_pos(), "unexpected keyword {}", other)
-                }
-            },
+            }
             TRANSACTIONAL => {
                 self.expect_keywords(&[ID, PREFIX])?;
                 KafkaSinkConfigOptionName::TransactionalIdPrefix

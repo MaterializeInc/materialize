@@ -57,6 +57,9 @@ class Redpanda(Service):
             "redpanda.enable_idempotence=true",
             "--set",
             f"redpanda.auto_create_topics_enabled={auto_create_topics}",
+            # Only require 4KB per topic partition rather than 4MiB.
+            "--set",
+            "redpanda.topic_memory_per_partition=4096",
             "--set",
             f"--advertise-kafka-addr=kafka:{ports[0]}",
         ]

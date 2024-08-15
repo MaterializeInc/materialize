@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
 use mz_persist_types::ShardId;
@@ -446,6 +447,7 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub compression_type: KafkaSinkCompressionType,
     pub progress_group_id: KafkaIdStyle,
     pub transactional_id: KafkaIdStyle,
+    pub topic_metadata_refresh_interval: Duration,
 }
 
 impl KafkaSinkConnection {
@@ -537,6 +539,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             progress_group_id,
             transactional_id,
             topic_options,
+            topic_metadata_refresh_interval,
         } = self;
 
         let compatibility_checks = [
@@ -570,6 +573,10 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
                 "transactional_id",
             ),
             (topic_options == &other.topic_options, "topic_config"),
+            (
+                topic_metadata_refresh_interval == &other.topic_metadata_refresh_interval,
+                "topic_metadata_refresh_interval",
+            ),
         ];
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -604,6 +611,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             progress_group_id,
             transactional_id,
             topic_options,
+            topic_metadata_refresh_interval,
         } = self;
         KafkaSinkConnection {
             connection_id,
@@ -618,6 +626,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             progress_group_id,
             transactional_id,
             topic_options,
+            topic_metadata_refresh_interval,
         }
     }
 }
@@ -680,6 +689,9 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             progress_group_id: Some(self.progress_group_id.into_proto()),
             transactional_id: Some(self.transactional_id.into_proto()),
             topic_options: Some(self.topic_options.into_proto()),
+            topic_metadata_refresh_interval: Some(
+                self.topic_metadata_refresh_interval.into_proto(),
+            ),
         }
     }
 
@@ -724,6 +736,9 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 Some(topic_options) => topic_options.into_rust()?,
                 None => Default::default(),
             },
+            topic_metadata_refresh_interval: proto
+                .topic_metadata_refresh_interval
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::topic_metadata_refresh_interval")?,
         })
     }
 }

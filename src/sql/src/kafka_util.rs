@@ -56,6 +56,11 @@ generate_extracted_config!(
     (LegacyIds, bool),
     (Topic, String),
     (TopicConfig, BTreeMap<String, String>),
+    (
+        TopicMetadataRefreshInterval,
+        Duration,
+        Default(DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL)
+    ),
     (TopicPartitionCount, i32),
     (TopicReplicationFactor, i32)
 );

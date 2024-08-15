@@ -969,6 +969,7 @@ pub enum KafkaSinkConfigOptionName {
     TransactionalIdPrefix,
     LegacyIds,
     TopicConfig,
+    TopicMetadataRefreshInterval,
     TopicPartitionCount,
     TopicReplicationFactor,
 }
@@ -982,6 +983,9 @@ impl AstDisplay for KafkaSinkConfigOptionName {
             KafkaSinkConfigOptionName::TransactionalIdPrefix => "TRANSACTIONAL ID PREFIX",
             KafkaSinkConfigOptionName::LegacyIds => "LEGACY IDS",
             KafkaSinkConfigOptionName::TopicConfig => "TOPIC CONFIG",
+            KafkaSinkConfigOptionName::TopicMetadataRefreshInterval => {
+                "TOPIC METADATA REFRESH INTERVAL"
+            }
             KafkaSinkConfigOptionName::TopicPartitionCount => "TOPIC PARTITION COUNT",
             KafkaSinkConfigOptionName::TopicReplicationFactor => "TOPIC REPLICATION FACTOR",
         })
@@ -1000,6 +1004,7 @@ impl WithOptionName for KafkaSinkConfigOptionName {
             KafkaSinkConfigOptionName::CompressionType
             | KafkaSinkConfigOptionName::ProgressGroupIdPrefix
             | KafkaSinkConfigOptionName::Topic
+            | KafkaSinkConfigOptionName::TopicMetadataRefreshInterval
             | KafkaSinkConfigOptionName::TransactionalIdPrefix
             | KafkaSinkConfigOptionName::LegacyIds
             | KafkaSinkConfigOptionName::TopicConfig

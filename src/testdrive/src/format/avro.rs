@@ -261,6 +261,7 @@ pub fn from_confluent_bytes(schema: &Schema, mut bytes: &[u8]) -> Result<Value, 
 /// output happens in Y-M-D format, which can be very difficult to map back to
 /// the correct input number. Similarly, dates are represented in Avro as
 /// `i32`s, but we would like to see the Y-M-D format as well.
+#[derive(Clone)]
 pub struct DebugValue(pub Value);
 
 impl Debug for DebugValue {

@@ -336,6 +336,7 @@ mod tests {
                 compression_type: KafkaSinkCompressionType::None,
                 progress_group_id: KafkaIdStyle::Legacy,
                 transactional_id: KafkaIdStyle::Legacy,
+                topic_metadata_refresh_interval: Default::default(),
             }),
             partition_strategy: SinkPartitionStrategy::V1,
             with_snapshot: Default::default(),
