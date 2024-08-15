@@ -226,9 +226,10 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             }
 
             let resume_upper = Antichain::from_iter(
-                config.source_resume_uppers[&config.id]
-                    .iter()
-                    .map(MzOffset::decode_row),
+                config
+                    .source_resume_uppers
+                    .values()
+                    .flat_map(|f| f.iter().map(MzOffset::decode_row)),
             );
 
             let Some(resume_offset) = resume_upper.into_option() else {
