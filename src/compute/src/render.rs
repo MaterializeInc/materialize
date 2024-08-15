@@ -119,6 +119,7 @@ use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+use mz_compute_types::dyncfgs::ENABLE_JOIN_OF_UNIONS_ARRANGEMENT_REUSE;
 use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
@@ -949,12 +950,13 @@ where
                                         .input_arity,
                                 )
                             };
-                            let maybe_union_inputs = self.attempt_join_of_unions(
-                                *input,
-                                final_arity,
-                                nodes,
-                                collections,
-                            );
+                            let maybe_union_inputs = if ENABLE_JOIN_OF_UNIONS_ARRANGEMENT_REUSE
+                                .get(&self.worker_config)
+                            {
+                                self.attempt_join_of_unions(*input, final_arity, nodes, collections)
+                            } else {
+                                None
+                            };
 
                             if let Some(inputs) = maybe_union_inputs {
                                 join_inputs.push(inputs);

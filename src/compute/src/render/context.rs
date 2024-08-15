@@ -45,6 +45,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::typedefs::{ErrAgent, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine};
+use mz_dyncfg::ConfigSet;
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -87,6 +88,8 @@ where
     pub(super) hydration_logger: Option<HydrationLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
+    /// Per-worker dynamic configuration.
+    pub(super) worker_config: ConfigSet,
 }
 
 impl<S: Scope> Context<S>
@@ -128,6 +131,7 @@ where
             shutdown_token: Default::default(),
             hydration_logger,
             linear_join_spec: compute_state.linear_join_spec,
+            worker_config: compute_state.worker_config.clone(),
         }
     }
 }
@@ -209,6 +213,7 @@ where
             hydration_logger: self.hydration_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
+            worker_config: self.worker_config.clone(),
         }
     }
 }
