@@ -51,6 +51,7 @@ _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you wan
 
 ### Usage patterns
 
+{{% views-indexes/table-usage-pattern-intro %}}
 {{% views-indexes/table-usage-pattern %}}
 
 ### Indexes

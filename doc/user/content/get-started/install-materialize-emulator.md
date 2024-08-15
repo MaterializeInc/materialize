@@ -72,7 +72,9 @@ not suitable for production deployments</redb>.
    - A default user `materialize` is created.
    - A default database `materialize` is created.
 
-1. Connect to the Materialize Emulator using your preferred SQL client, using
+1. <a name="materialize-emulator-connect-client"></a>
+
+   Connect to the Materialize Emulator using your preferred SQL client, using
    the following connection field values:
 
    | Field    | Value         |

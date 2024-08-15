@@ -136,6 +136,7 @@ See also:
 
 ## Indexed views vs. materialized views
 
+{{% views-indexes/table-usage-pattern-intro %}}
 {{% views-indexes/table-usage-pattern %}}
 
 ## General information

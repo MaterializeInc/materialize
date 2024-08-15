@@ -13,27 +13,32 @@ aliases:
 ---
 
 {{% text-style %}}
-Materialize is the Cloud Operational Data Store that delivers the speed of
-streaming with the ease of a data warehouse. With Materialize, organizations can
-use SQL to transform, deliver, and act on fast-changing data. Materialize provides always-fresh results while also providing [strong
-consistency guarantees](/get-started/isolation-level/). In Materialize, to keep
-data up-to-date, both [indexes](/concepts/indexes/) and [materialized
-views](/concepts/views/#materialized-views) <red>incrementally update</red>
-results when Materialize ingests new data. These up-to-date results are then
-immediately available and computationally free for reads.
+
+Materialize provides always-fresh results while also providing [strong
+consistency guarantees](/get-started/isolation-level/). In Materialize, both
+[indexes](/concepts/indexes/ "Indexes represents query results stored in memory
+within a cluster") and [materialized views](/concepts/views/#materialized-views)
+**incrementally update** results when Materialize ingests new data; i.e., work
+is performed on writes. Because work is performed on writes, reads from these
+objects return up-to-date results while being computationally <redb>free</redb>.
 
 In this quickstart, you will:
 
-- Create and query various [views](/concepts/views/) on continually generated
-  sample auction data.
+- Create and query various [views](/concepts/views/) on sample auction data. The
+  data is continually generated at 1 second intervals to mimic a data-intensive
+  workload.
 
-- Create an [index](/concepts/indexes) to compute and store view results in
-  memory. As new auction data arrives, the index <redb>incrementally
-  updates</redb> view results instead of recalculating the results from
-  scratch, making fresh results immediately available for reads.
+- Create an [index](/concepts/indexes "Indexes represents query results stored
+  in memory within a cluster") to compute and store view results in memory. As
+  new auction data arrives, the index <redb>incrementally updates</redb> view
+  results instead of recalculating the results from scratch, making fresh
+  results immediately available for reads.
 
 - Create and query views to verify that Materialize always serves
   <redb>consistent results</redb>.
+
+The quickstart uses the default `quickstart` cluster. In Materialize, a
+[cluster](/concepts/clusters/) is an isolated pool of compute resources.
 
 ![Image of Quickstart in the Materialize Console](/images/quickstart-console.png "Quickstart in the Materialize Console")
 
@@ -54,8 +59,12 @@ Materialize.
   Console](https://console.materialize.com/) and sign in. By default, you should
   be in the SQL Shell.  If you're already signed in, you can access the SQL Shell in the left-hand menu.
 
-- If you are using the Materialize Emulator, connect to the Materialize Emulator
+- If you are using the Materialize Emulator, [connect to the Materialize
+  Emulator](/get-started/install-materialize-emulator/#materialize-emulator-connect-client)
   using your preferred SQL client.
+
+A cluster is a pool of compute resources (CPU, memory, and scratch disk space)
+for running your workloads.
 
 ## Step 1. Create a schema
 
@@ -86,8 +95,7 @@ Create a separate schema for this quickstart.
 
 [Sources](/concepts/sources/) are external systems from which Materialize reads
 in data. This tutorial uses Materialize's [sample `Auction` load
-generator](/sql/create-source/load-generator/#auction) to create the
-[sources](/concepts/sources/).
+generator](/sql/create-source/load-generator/#auction) to create the sources.
 
 1. Create the [sources](/concepts/sources "External systems from which
    Materialize reads data.") using the [`CREATE SOURCE`](/sql/create-source/)
@@ -121,15 +129,15 @@ generator](/sql/create-source/load-generator/#auction) to create the
     The output should resemble the following:
 
     ```nofmt
-    | name                   | type           | cluster    |
-    | ---------------------- | -------------- | ---------- |
-    | accounts               | subsource      | quickstart |
-    | auction_house          | load-generator | quickstart |
-    | auction_house_progress | progress       | null       |
-    | auctions               | subsource      | quickstart |
-    | bids                   | subsource      | quickstart |
-    | organizations          | subsource      | quickstart |
-    | users                  | subsource      | quickstart |
+    | name                   | type           | cluster    | comment |
+    | ---------------------- | -------------- | ---------- | ------- |
+    | accounts               | subsource      | quickstart |         |
+    | auction_house          | load-generator | quickstart |         |
+    | auction_house_progress | progress       | null       |         |
+    | auctions               | subsource      | quickstart |         |
+    | bids                   | subsource      | quickstart |         |
+    | organizations          | subsource      | quickstart |         |
+    | users                  | subsource      | quickstart |         |
     ```
 
     A [`subsource`](/sql/show-subsources) is how Materialize refers to a table
@@ -140,8 +148,8 @@ generator](/sql/create-source/load-generator/#auction) to create the
 
     - Users can read from subsources.
 
-1. Use the [`SELECT`](/sql/select) statement to query the subsources. The
-   quickstart uses the `auctions` and `bids` subsources.
+1. Use the [`SELECT`](/sql/select) statement to query the subsources/tables. The
+   quickstart uses the `auctions` and `bids` tables.
 
     * To view a sample row in `auctions`, run the following
       [`SELECT`](/sql/select) command:
@@ -265,15 +273,15 @@ get up-to-date results.
    underlying statement.
 
    In Materialize, you can create [**indexes**](/concepts/indexes/) on views to
-   keep view results incrementally updated in memory. In the next step, you will
-   create an index on `winning_bids`.
+   keep view results incrementally updated in memory within a cluster. In the
+   next step, you will create an index on `winning_bids`.
 
 ## Step 4. Create an index to provide immediately available up-to-date results.
 
 In Materialize, you can create [indexes](/concepts/indexes/) on views to provide
-always fresh view results in memory. Instead of recalculating the results from
-scratch to provide up-to-date results, indexes <redb>perform incremental
-updates</redb> as inputs change. In addition, indexes can also help [optimize
+always fresh view results in memory within a cluster. Instead of recalculating
+the results from scratch, indexes <redb>perform incremental updates</redb> as
+inputs change. In addition, indexes can also help [optimize
 operations](/transform-data/optimization/) like point lookups and joins.
 
 1. Use the [`CREATE INDEX`](/sql/create-index/) command to create the following
@@ -283,10 +291,11 @@ operations](/transform-data/optimization/) like point lookups and joins.
     CREATE INDEX wins_by_item ON winning_bids (item);
     ```
 
-   The index **computes and then, as new data is ingested, incrementally
-   updates** the results of `winning_bids` in memory. Because incremental work
-   is performed on writes, reads from indexes return up-to-date results and are
-   computationally <redb>free</redb>.
+   During the index creation, the underlying `winning_bids` query is executed,
+   and the view results are stored in memory within the cluster. As new data
+   arrives, the index **incrementally updates** the view results in memory.
+   Because incremental work is performed on writes, reads from indexes return
+   up-to-date results and are computationally <redb>free</redb>.
 
    This index can **also** help [optimize
    operations](/transform-data/optimization/) like point lookups and delta joins
@@ -307,8 +316,8 @@ operations](/transform-data/optimization/) like point lookups and joins.
     LIMIT 10;
     ```
 
-   The queries should be faster since they can use the already up-to-date
-   results computed by the index.
+   The queries should be faster since they can use the in-memory, already
+   up-to-date results computed by the index.
 
 1. To verify that an index is used, you can run explain on the queries:
 
@@ -336,24 +345,22 @@ operations](/transform-data/optimization/) like point lookups and joins.
 
 ## Step 5. Find auction flippers in real time.
 
-Auction flippers are users who buy an item in one auction and resell the same
-item at a higher price within an 8-day period. This step finds auction flippers
-in real time, based on incoming auction flipping activity data and known
-flippers data. Specifically, this step creates:
+For this quickstart, auction flipping activities are defined as when a user buys
+an item in one auction and resells the same item at a higher price within an
+8-day period. This step finds auction flippers in real time, based on
+auction flipping activity data and known flippers data. Specifically, this step
+creates:
 
 - A view to find auction flipping activities. Results are updated as new data
-  comes in from the data generator.
+  comes in (at 1 second intervals) from the data generator.
 
 - A table that maintains known auction flippers. You will manually enter new
   data to this table.
 
-- A view to immediately flag auction flippers based on data in the flipping
+- A view to immediately flag auction flippers based on both the flipping
   activities view and the known auction flippers table.
 
-1. Create a view to detect auction flipping activities. For this
-   quickstart, auction flipping activities are those activities where the
-   winning bidder of an item in one auction is the seller of the same item at a
-   higher price in another auction within an 8-day period.
+1. Create a view to detect auction flipping activities.
 
     ```mzsql
     CREATE VIEW flip_activities AS
@@ -457,26 +464,68 @@ flippers data. Specifically, this step creates:
    {{< tab "Materialize Console" >}}
    ```mzsql
    SUBSCRIBE TO (
-     SELECT *
-     FROM flippers
+      SELECT *
+      FROM flippers
    ) WITH (snapshot = false)
    ;
    ```
 
-1. In the Materialize Console quickstart page, enter an id (for example `450`)
-   into the text input field to insert a new user into the `known-flippers`
-   table.
+   1. In the Materialize Console quickstart page, enter an id (for example
+      `450`) into the text input field to insert a new user into the
+      `known-flippers` table.
 
-   The user should immediately appear in the `SUBSCRIBE` results.
+      The user should immediately appear in the `SUBSCRIBE` results.
 
-   You should also see flippers that are flagged by their multiple flipping
-   activities. Because of the randomness of the auction data being generated,
-   user activity data that match the definition of a flipper may take some time
-   even though auction data is constantly being ingested. However, once new
-   matching data comes in, you will see it immediately in the `SUBSCRIBE`
-   results.
+      You should also see flippers that are flagged by their multiple flipping
+      activities. Because of the randomness of the auction data being generated,
+      user activity data that match the definition of a flipper may take some
+      time even though auction data is constantly being ingested. However, once
+      new matching data comes in, you will see it immediately in the `SUBSCRIBE`
+      results.
 
-1. To cancel out of the `SUBSCRIBE`, click **Stop streaming**.
+   1. To cancel out of the `SUBSCRIBE`, click **Stop streaming**.
+
+   {{< /tab >}}
+   {{< tab "Other Clients" >}}
+
+   If running Materialize in a Docker container, run the following command in
+   your preferred SQL client:
+   ```mzsql
+   COPY (SUBSCRIBE TO (
+        SELECT *
+        FROM flippers
+   ) WITH (snapshot = false)) TO STDOUT;
+   ```
+
+   1. Open another SQL client and connect to your Materialize.
+
+   1. Select your schema.
+
+      ```mzsql
+      -- Replace <schema> with the name for your schema
+      SET SCHEMA <schema>;
+      ```
+
+   1. Manually insert a row into the `known_flippers` table:
+
+      ```mzsql
+      INSERT INTO known_flippers values (450);
+      ```
+
+      In the other client, the user should immediately appear in the `SUBSCRIBE`
+      results.
+
+      You should also see flippers that are flagged by their multiple flipping
+      activities. Because of the randomness of the auction data being generated,
+      user activity data that match the definition of a flipper may take some
+      time even though auction data is constantly being ingested. However, once
+      new matching data comes in, you will see it immediately in the `SUBSCRIBE`
+      results.
+
+   1. Cancel out of the `SUBSCRIBE`.
+
+   {{< /tab >}}
+   {{< /tabs >}}
 
    *Optional exercise*. You can issue the `SUBSCRIBE` statement without the
    `WITH (snapshot = false)` to display both the flippers that exist at the
@@ -544,30 +593,47 @@ data comes in, this step creates the following views for completed auctions:
 
     ```
 
-    To verify that the total credits equal the total debits, select from
-    `funds_movement`:
+   To verify that the total credits equal the total debits, select from
+   `funds_movement`:
 
-    ```mzsql
-    SELECT *
-    FROM funds_movement
-    ;
-    ```
+   ```mzsql
+   SELECT *
+   FROM funds_movement
+   ;
+   ```
 
-    To see that the sums always equal even as new data comes in, you can `SUBSCRIBE` to this query:
+   To see that the sums always equal even as new data comes in, you can
+   `SUBSCRIBE` to this query:
 
-    ```mzsql
-    SUBSCRIBE TO (
+   {{< tabs >}}
+   {{< tab "Materialize Console" >}}
+   ```mzsql
+   SUBSCRIBE TO (
       SELECT *
       FROM funds_movement
-    );
-    ```
+   );
+   ```
 
-    - As new data comes in and auctions complete, the `total_credits` and
+   - As new data comes in and auctions complete, the `total_credits` and
      `total_debits` values should change but the `total_difference` should
      remain `0`.
-
-    - To cancel out of the `SUBSCRIBE`, click **Stop streaming**.
-
+   - To cancel out of the `SUBSCRIBE`, click **Stop streaming**.
+   {{< /tab >}}
+   {{< tab "Other Clients" >}}
+   If running Materialize in a Docker container, run the following command in
+   your preferred SQL client:
+   ```mzsql
+   COPY (SUBSCRIBE TO (
+      SELECT *
+      FROM funds_movement
+   )) TO STDOUT;
+   ```
+   - As new data comes in and auctions complete, the `total_credits` and
+    `total_debits` values should change but the `total_difference` should
+    remain `0`.
+   - You can cancel out of the `SUBSCRIBE`.
+   {{< /tab >}}
+   {{< /tabs >}}
     **Optional exercise*. Alternatively, you can use a common table expression
     (CTE) to implement the view.
 
@@ -588,8 +654,10 @@ data comes in, this step creates the following views for completed auctions:
       FROM tot
     );
 
-    SUBSCRIBE TO (SELECT * FROM funds_movement_cte_view);
     ```
+
+    You can then `SUBSCRIBE` to the changes in the `funds_movement_cte_view`
+    view.
 
 
 ## Step 7. Additional exercises
@@ -624,10 +692,11 @@ data comes in, this step creates the following views for completed auctions:
       WHERE flipper_id = 450;
       ```
 
-1. In general, you may find that you rarely need to index a source. However, if
-   for some use case, you need to index a source, you can also create indexes on
-   sources, tables, and materialized views.
-
+1. In general, you may find that you rarely need to index a source.  However, if
+   for example, you frequently serve results directly from a source, you can
+   also create indexes on sources to maintain in-memory up-to-date source data
+   within the cluster.
+   
    1. For example, run the following queries on `bids` without an index:
 
       ```mzsql
@@ -675,33 +744,41 @@ To clean up the quickstart environment:
 
 ## Summary
 
-In Materialize, to keep data up-to-date, both [indexes](/concepts/indexes/) and
-[materialized views](/concepts/views/#materialized-views) <red>incrementally
+In Materialize, [indexes](/concepts/indexes/) <red>incrementally
 update</red> results when Materialize ingests new data. These up-to-date results
-are then immediately available and computationally free for reads.
+are then immediately available and computationally free for reads within the cluster.
+
+### Use of indexed views
+
+This quickstart created an index on a view to maintain in-memory up-to-date
+results in the cluster. In Materialize, both indexes on views and materialized
+views incrementally update the view results. Indexes maintain the view results
+in memory within a cluster while the materialized views persist the query
+results in durable storage and is available across clusters. 
+
+{{% views-indexes/table-usage-pattern %}}
+
+The quickstart used an index since:
+
+- The examples did not need to store the results in durable storage.
+
+- All activities were limited to the single `quickstart` cluster.
+
+- Although used, `SUBSCRIBE` operations were for illustrative purposes and were
+  not the final consumer of the views.
 
 ### Considerations
 
-Before creating an index, consider:
-
-- Its memory usage as well as its compute cost implications.
-
-- In Materialize, underlying data structures that are being maintained for an
-  index (or a materialized view) can be reused by other views/queries. As
-  such, an existing index may be sufficient to support your queries.
-
-- If you have created various views to act as the building blocks for a view
-  from which you will serve the results, creating an index only on the serving
-  view may be sufficient depending upon your query patterns and usage.
-
-- Even without indexes, Materialize can optimize computations for queries.
-  However, this underlying work is discarded after each query run.
+Before creating an index, consider its memory usage as well as its [compute cost
+implications](/administration/billing/#compute). For best practices when
+creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices)
 
 ### Additional information
 
-- [Views](/concepts/views/)
+- [Clusters](/concepts/clusters)
 - [Indexes](/concepts/indexes)
 - [Sources](/concepts/sources)
+- [Views](/concepts/views/)
 - [`CREATE VIEW`](/sql/create-view/)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)
