@@ -28,8 +28,8 @@ use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
-    BytesStats, ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, OptionStats,
-    PrimitiveStats, StructStats,
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, OptionStats, PrimitiveStats,
+    StructStats,
 };
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use prost::Message;
@@ -76,7 +76,6 @@ use fixed_binary_sizes::*;
 struct DatumEncoder {
     nullable: bool,
     encoder: DatumColumnEncoder,
-    none_stats: usize,
 }
 
 impl DatumEncoder {
@@ -86,28 +85,14 @@ impl DatumEncoder {
             "tried pushing Null into non-nullable column"
         );
         self.encoder.push(datum);
-
-        if datum.is_null() {
-            self.none_stats += 1;
-        }
     }
 
     fn push_invalid(&mut self) {
         self.encoder.push_invalid();
-        self.none_stats += 1;
     }
 
-    fn finish(self) -> (Arc<dyn Array>, ColumnarStats) {
-        let (array, stats) = self.encoder.finish();
-        let nulls = self.nullable.then_some(ColumnNullStats {
-            count: self.none_stats,
-        });
-        let stats = ColumnarStats {
-            nulls,
-            values: stats,
-        };
-
-        (array, stats)
+    fn finish(self) -> ArrayRef {
+        self.encoder.finish()
     }
 }
 
@@ -538,57 +523,47 @@ impl DatumColumnEncoder {
         }
     }
 
-    fn finish(self) -> (Arc<dyn Array>, ColumnStatKinds) {
+    fn finish(self) -> ArrayRef {
         match self {
             DatumColumnEncoder::Bool(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<bool>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::U8(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<u8>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::U16(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<u16>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::U32(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<u32>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::U64(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<u64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::I16(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i16>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::I32(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i32>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::I64(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::F32(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<f32>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::F64(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<f64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::Numeric {
                 mut approx_values,
@@ -607,79 +582,52 @@ impl DatumColumnEncoder {
                     Field::new("binary", binary_array.data_type().clone(), true),
                 ]);
                 let nulls = approx_array.logical_nulls();
-
-                let stats = NumericStatsBuilder::from_column(&binary_array)
-                    .finish()
-                    .into();
                 let array = StructArray::new(
                     fields,
                     vec![Arc::new(approx_array), Arc::new(binary_array)],
                     nulls,
                 );
-
-                (Arc::new(array), stats)
+                Arc::new(array)
             }
             DatumColumnEncoder::String(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<String>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::Bytes(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::from_column(&array);
-                (
-                    Arc::new(array),
-                    ColumnStatKinds::Bytes(BytesStats::Primitive(stats)),
-                )
+                Arc::new(array)
             }
             DatumColumnEncoder::Date(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i32>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::Time(mut builder) => {
                 let array = builder.finish();
-                let stats = NaiveTimeStatsBuilder::from_column(&array).finish().into();
-                (Arc::new(array), stats)
+                Arc::new(array)
             }
             DatumColumnEncoder::Timestamp(mut builder) => {
                 let array = builder.finish();
-                let stats = NaiveDateTimeStatsBuilder::from_column(&array)
-                    .finish()
-                    .into();
-                (Arc::new(array), stats)
+                Arc::new(array)
             }
             DatumColumnEncoder::TimestampTz(mut builder) => {
                 let array = builder.finish();
-                let stats = NaiveDateTimeStatsBuilder::from_column(&array)
-                    .finish()
-                    .into();
-                (Arc::new(array), stats)
+                Arc::new(array)
             }
             DatumColumnEncoder::MzTimestamp(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<u64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                Arc::new(array)
             }
             DatumColumnEncoder::Interval(mut builder) => {
                 let array = builder.finish();
-                let stats = IntervalStatsBuilder::from_column(&array).finish().into();
-                (Arc::new(array), stats)
+                Arc::new(array)
             }
             DatumColumnEncoder::Uuid(mut builder) => {
                 let array = builder.finish();
-                let stats = UuidStatsBuilder::from_column(&array).finish().into();
-                (Arc::new(array), stats)
+                Arc::new(array)
             }
-            DatumColumnEncoder::AclItem(mut builder) => {
-                (Arc::new(builder.finish()), ColumnStatKinds::None)
-            }
-            DatumColumnEncoder::MzAclItem(mut builder) => {
-                (Arc::new(builder.finish()), ColumnStatKinds::None)
-            }
-            DatumColumnEncoder::Range(mut builder) => {
-                (Arc::new(builder.finish()), ColumnStatKinds::None)
-            }
+            DatumColumnEncoder::AclItem(mut builder) => Arc::new(builder.finish()),
+            DatumColumnEncoder::MzAclItem(mut builder) => Arc::new(builder.finish()),
+            DatumColumnEncoder::Range(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::Jsonb {
                 offsets,
                 buf,
@@ -689,9 +637,7 @@ impl DatumColumnEncoder {
                 let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
                 let array = StringArray::new(offsets, values, nulls);
-                let stats = stats_for_json(array.iter());
-
-                (Arc::new(array), stats.values)
+                Arc::new(array)
             }
             DatumColumnEncoder::Array {
                 mut dims,
@@ -700,9 +646,7 @@ impl DatumColumnEncoder {
                 mut nulls,
             } => {
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
-
-                // TODO(parkmycar): Record these stats.
-                let (vals, _stats) = vals.finish();
+                let vals = vals.finish();
 
                 // Note: Values in an Array can always be Null, regardless of whether or not the
                 // column is nullable.
@@ -722,15 +666,14 @@ impl DatumColumnEncoder {
                 ]);
                 let array = StructArray::new(fields, vec![Arc::new(dims), Arc::new(values)], nulls);
 
-                (Arc::new(array), ColumnStatKinds::None)
+                Arc::new(array)
             }
             DatumColumnEncoder::List {
                 lengths,
                 values,
                 mut nulls,
             } => {
-                // TODO(parkmycar): Record these stats.
-                let (values, _stats) = values.finish();
+                let values = values.finish();
 
                 // Note: Values in an Array can always be Null, regardless of whether or not the
                 // column is nullable.
@@ -739,7 +682,7 @@ impl DatumColumnEncoder {
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
                 let array = ListArray::new(Arc::new(field), offsets, values, nulls);
-                (Arc::new(array), ColumnStatKinds::None)
+                Arc::new(array)
             }
             DatumColumnEncoder::Map {
                 lengths,
@@ -748,8 +691,7 @@ impl DatumColumnEncoder {
                 mut nulls,
             } => {
                 let keys = keys.finish();
-                // TODO(parkmycar): Record these stats.
-                let (vals, _val_stats) = vals.finish();
+                let vals = vals.finish();
 
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
@@ -766,7 +708,7 @@ impl DatumColumnEncoder {
                 // array can never be null.
                 let field = Field::new("map_entries", entries.data_type().clone(), false);
                 let array = ListArray::new(Arc::new(field), offsets, Arc::new(entries), nulls);
-                (Arc::new(array), ColumnStatKinds::None)
+                Arc::new(array)
             }
             DatumColumnEncoder::Record {
                 fields,
@@ -777,9 +719,8 @@ impl DatumColumnEncoder {
                     .into_iter()
                     .enumerate()
                     .map(|(tag, encoder)| {
-                        // TODO(parkmycar): Record these stats.
                         let nullable = encoder.nullable;
-                        let (array, _field_stats) = encoder.finish();
+                        let array = encoder.finish();
                         let field =
                             Field::new(tag.to_string(), array.data_type().clone(), nullable);
                         (field, array)
@@ -788,11 +729,9 @@ impl DatumColumnEncoder {
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
                 let array = StructArray::new(Fields::from(fields), arrays, nulls);
-                (Arc::new(array), ColumnStatKinds::None)
+                Arc::new(array)
             }
-            DatumColumnEncoder::RecordEmpty(mut builder) => {
-                (Arc::new(builder.finish()), ColumnStatKinds::None)
-            }
+            DatumColumnEncoder::RecordEmpty(mut builder) => Arc::new(builder.finish()),
         }
     }
 }
@@ -1303,7 +1242,6 @@ impl RowColumnarEncoder {
                 let encoder = DatumEncoder {
                     nullable: col_type.nullable,
                     encoder,
-                    none_stats: 0,
                 };
 
                 // We name the Fields in Parquet with the column index, but for
@@ -1361,7 +1299,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
             .zip_eq(encoders)
             .map(|((col_idx, _col_name), encoder)| {
                 let nullable = encoder.nullable;
-                let (array, _stats) = encoder.finish();
+                let array = encoder.finish();
                 let field = Field::new(col_idx.to_string(), array.data_type().clone(), nullable);
 
                 (array, field)
@@ -1699,7 +1637,6 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
                     scalar_type_to_encoder(&ty.scalar_type).map(|e| DatumEncoder {
                         nullable: ty.nullable,
                         encoder: e,
-                        none_stats: 0,
                     })
                 })
                 .collect::<Result<_, _>>()?;
