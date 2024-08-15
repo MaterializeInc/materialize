@@ -65,6 +65,7 @@ class DatabaseConnector:
         self,
         autocommit: bool = False,
         timeout_in_seconds: int = 60,
+        remaining_retries: int = 1,
     ) -> Connection:
         try:
             connection = pg8000.connect(
@@ -80,7 +81,16 @@ class DatabaseConnector:
             print(
                 f"Failed to connect to host '{self.config.hostname}' on port {self.config.port}"
             )
-            raise
+            if remaining_retries > 0:
+                print("Retrying in 5 seconds...")
+                time.sleep(5)
+                return self.create_connection(
+                    autocommit=autocommit,
+                    timeout_in_seconds=timeout_in_seconds,
+                    remaining_retries=remaining_retries - 1,
+                )
+            else:
+                raise
 
         connection.autocommit = autocommit
         connection.run(f"SET database = {self.config.database}")
