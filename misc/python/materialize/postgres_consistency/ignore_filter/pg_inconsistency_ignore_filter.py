@@ -350,7 +350,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            return YesIgnore("#28806: regexp_split_to_table with LIKE/ILIKE on NULL")
+            return YesIgnore(
+                "#28806: table functions: combination with string operations with NULL"
+            )
 
         if expression.matches(
             partial(
@@ -360,7 +362,32 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             True,
         ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL}):
             return YesIgnore(
-                "#28806: function with NULL applied to regexp_split_to_table"
+                "#28806: table functions: combination with string operations with NULL"
+            )
+
+        if expression.matches(
+            partial(
+                matches_fun_by_name,
+                function_name_in_lower_case="generate_subscripts",
+            ),
+            True,
+        ) and expression.matches(
+            partial(
+                matches_x_and_y,
+                x=partial(
+                    matches_fun_by_name,
+                    function_name_in_lower_case="substring",
+                ),
+                y=partial(
+                    argument_has_any_characteristic,
+                    arg_index=0,
+                    characteristics={ExpressionCharacteristics.NULL},
+                ),
+            ),
+            True,
+        ):
+            return YesIgnore(
+                "#28806: table functions: combination with string operations with NULL"
             )
 
         return NoIgnore()
