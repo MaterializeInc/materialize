@@ -249,6 +249,8 @@ class QueryTemplate:
             row_index_string = ", ".join(
                 str(index) for index in self.row_selection.keys
             )
+
+        # only apply the row index filter to the main data source
         return f"{self._row_index_col_name(self.data_source)} IN ({row_index_string})"
 
     def _create_order_by_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:

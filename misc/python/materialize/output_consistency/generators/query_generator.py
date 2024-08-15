@@ -313,8 +313,15 @@ class QueryGenerator:
             assert (
                 self.vertical_storage_row_count is not None
             ), "Row count not initialized"
+
+            # It is still unknown at this point if we need a join.
             if self.randomized_picker.random_boolean(
-                probability.RESTRICT_VERTICAL_LAYOUT_TO_FEW_ROWS
+                probability.RESTRICT_VERTICAL_LAYOUT_TO_ROWS_DISABLED
+            ):
+                return ALL_ROWS_SELECTION
+
+            if self.randomized_picker.random_boolean(
+                probability.RESTRICT_VERTICAL_LAYOUT_ONLY_TO_FEW_ROWS
             ):
                 # With some probability, try to pick a few rows
                 max_number_of_rows_to_select = self.randomized_picker.random_number(
