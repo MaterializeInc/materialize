@@ -323,6 +323,7 @@ class Composition:
             file = TemporaryFile(mode="w")
             os.set_inheritable(file.fileno(), True)
             yaml.dump(self.compose, file)
+            file.flush()
             self.files[thread_id] = file
 
         cmd = [
