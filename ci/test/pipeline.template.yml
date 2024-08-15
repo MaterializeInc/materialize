@@ -387,16 +387,15 @@ steps:
 
       - id: mysql-cdc-resumption
         label: MySQL CDC resumption tests %N
-        parallelism: 2
+        parallelism: 3
         depends_on: build-aarch64
-        timeout_in_minutes: 35
+        timeout_in_minutes: 30
         inputs: [test/mysql-cdc-resumption]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          # Runs too slow otherwise, can't parallelize further
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
         label: MySQL RTR tests
