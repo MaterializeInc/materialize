@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 from collections.abc import Callable
 
+from materialize.output_consistency.common import probability
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
@@ -93,8 +94,12 @@ class ConsistencyTestTypesInput:
                 continue
 
             # put most columns into the first table (so that not all queries require a join)
-            probability = 0.7 if table_index == 0 else 0.1
-            if randomized_picker.random_boolean(probability):
+            selected_probability = (
+                probability.INCLUDE_COLUMN_IN_FIRST_TABLE
+                if table_index == 0
+                else probability.INCLUDE_COLUMN_IN_OTHER_TABLE
+            )
+            if randomized_picker.random_boolean(selected_probability):
                 table_indices.add(table_index)
 
         if len(table_indices) == 0:
