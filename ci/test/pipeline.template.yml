@@ -215,8 +215,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          # hugo: command not found
-          queue: hetzner-x86-64-4cpu-8gb
+          queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -354,8 +353,7 @@ steps:
               composition: debezium
               run: sql-server
         agents:
-          # too slow to run emulated on aarch64, SQL Server's docker image is not yet available for aarch64 natively yet: https://github.com/microsoft/mssql-docker/issues/802
-          queue: hetzner-x86-64-4cpu-8gb
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: debezium-mysql
         label: Debezium MySQL tests
@@ -695,8 +693,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: metabase
     agents:
-      # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
-      queue: hetzner-x86-64-4cpu-8gb
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: dbt-materialize
     label: dbt-materialize tests

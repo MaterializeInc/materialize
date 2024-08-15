@@ -214,8 +214,7 @@ steps:
         depends_on: build-x86_64
         timeout_in_minutes: 30
         agents:
-          # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
-          queue: hetzner-x86-64-4cpu-8gb
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
