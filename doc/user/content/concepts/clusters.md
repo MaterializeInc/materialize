@@ -21,7 +21,7 @@ to be associated with a cluster:
 - Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
 - Maintaining [indexes](/concepts/indexes/) and [materialized
   views](/concepts/views/#materialized-views).
-- Executing [`SELECT`] and [`SUBSCRIBE`] statements.
+- Executing [`SELECT`](/sql/select/) and [`SUBSCRIBE`](/sql/subscribe/) statements.
 
 ## Sizing your clusters
 
@@ -36,17 +36,17 @@ running, to respond to changes in your workload.
 Clusters provide two important properties:
 
   * [**Resource isolation**](/sql/create-cluster#resource-isolation). Workloads
-    on one cluster cannot interfere with workloads on another cluster. You can
-    use multiple clusters to isolate your production workloads from your
-    development workloads, for example.
+    running in one cluster cannot interfere with workloads running in another
+    cluster. You can use multiple clusters to isolate your production workloads
+    from your development workloads, for example.
 
   * [**Fault tolerance**](/sql/create-cluster#replication-factor). You can
     increase the replication factor of a cluster to increase the number of
     copies (i.e., _replicas_) of the cluster that Materialize provisions.
     Clusters with multiple replicas can tolerate failures of the underlying
     hardware that cause a replica to become unreachable. As long as one replica
-    of the cluster remains available, the cluster can continue to maintain
-    dataflows and serve queries.
+    of the cluster remains available, the cluster can continue to ingest data,
+    compute results, and serve queries.
 
 ## Related pages
 
