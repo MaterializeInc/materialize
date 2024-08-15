@@ -130,8 +130,10 @@ class QueryTemplate:
 {where_clause}
 {order_by_clause}
 {limit_clause}
-{offset_clause};
+{offset_clause}
 """.strip()
+
+        sql = f"{sql};"
 
         return self._post_format_sql(sql, output_format)
 
