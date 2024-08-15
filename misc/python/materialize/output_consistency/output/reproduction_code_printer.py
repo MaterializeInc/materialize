@@ -25,6 +25,7 @@ from materialize.output_consistency.output.base_output_printer import (
     BaseOutputPrinter,
     OutputPrinterMode,
 )
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
@@ -141,13 +142,20 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         row_selection = (
             query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
         )
+        data_sources_of_non_select_expressions = (
+            self._collect_data_sources_of_non_select_expressions(query_template)
+        )
+
         setup_code_lines = []
         for data_source in query_template.get_all_data_sources():
             if data_source.custom_db_object_name is not None:
                 # we assume that the custom object already exists
                 continue
 
-            if not table_column_selection.requires_data_source(data_source):
+            if (
+                not table_column_selection.requires_data_source(data_source)
+                and data_source not in data_sources_of_non_select_expressions
+            ):
                 continue
 
             setup_code_lines.extend(
@@ -167,6 +175,17 @@ class ReproductionCodePrinter(BaseOutputPrinter):
 
         for line in setup_code_lines:
             self._print_executable(line)
+
+    def _collect_data_sources_of_non_select_expressions(
+        self, query_template: QueryTemplate
+    ) -> set[DataSource]:
+        data_sources = set()
+        for expression in query_template.get_all_expressions(
+            include_select_expressions=False, include_join_constraints=True
+        ):
+            data_sources.update(expression.collect_data_sources())
+
+        return data_sources
 
     def __print_query_of_error(
         self,
