@@ -28,6 +28,9 @@ class ValidationErrorType(Enum):
     ERROR_MISMATCH = 5
     EXPLAIN_PLAN_MISMATCH = 6
 
+    def __str__(self) -> str:
+        return self.name
+
 
 class ValidationMessage:
     """Either a `ValidationRemark`, `ValidationWarning`, or `ValidationError`"""

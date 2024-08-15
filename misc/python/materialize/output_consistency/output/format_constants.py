@@ -10,7 +10,7 @@
 SECTION_COLLAPSED_PREFIX = "--- "
 SECTION_EXPANDED_PREFIX = "+++ "
 
-OUTPUT_LINE_SEPARATOR = "------------------------------"
+OUTPUT_LINE_SEPARATOR = "---------------" * 12
 
 COMMENT_PREFIX = "-- "
 LI_PREFIX = "* "
