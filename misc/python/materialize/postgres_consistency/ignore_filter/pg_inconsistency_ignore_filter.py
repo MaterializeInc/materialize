@@ -68,7 +68,6 @@ from materialize.output_consistency.input_data.operations.record_operations_prov
 )
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
-    TAG_STRING_LIKE_OP,
 )
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
@@ -332,62 +331,12 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
-        if (
-            db_function.function_name_in_lower_case == "regexp_split_to_table"
-            and expression.matches(
-                partial(
-                    matches_x_and_y,
-                    x=partial(
-                        is_operation_tagged,
-                        tag=TAG_STRING_LIKE_OP,
-                    ),
-                    y=partial(
-                        argument_has_any_characteristic,
-                        arg_index=1,
-                        characteristics={ExpressionCharacteristics.NULL},
-                    ),
-                ),
-                True,
-            )
-        ):
-            return YesIgnore(
-                "#28806: table functions: combination with string operations with NULL"
-            )
-
         if expression.matches(
-            partial(
-                matches_fun_by_name,
-                function_name_in_lower_case="regexp_split_to_table",
-            ),
+            partial(matches_any_expression_arg, arg_matcher=is_table_function),
             True,
         ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL}):
             return YesIgnore(
-                "#28806: table functions: combination with string operations with NULL"
-            )
-
-        if expression.matches(
-            partial(
-                matches_fun_by_name,
-                function_name_in_lower_case="generate_subscripts",
-            ),
-            True,
-        ) and expression.matches(
-            partial(
-                matches_x_and_y,
-                x=partial(
-                    matches_fun_by_name,
-                    function_name_in_lower_case="substring",
-                ),
-                y=partial(
-                    argument_has_any_characteristic,
-                    arg_index=0,
-                    characteristics={ExpressionCharacteristics.NULL},
-                ),
-            ),
-            True,
-        ):
-            return YesIgnore(
-                "#28806: table functions: combination with string operations with NULL"
+                "#28806: table functions: combination with operations with NULL"
             )
 
         return NoIgnore()
