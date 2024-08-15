@@ -11,8 +11,8 @@
 
 import os
 import sys
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from materialize import MZ_ROOT, git, spawn
 from materialize.mz_version import MzVersion
