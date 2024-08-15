@@ -9,13 +9,22 @@
 
 use std::cmp::Ordering;
 use std::hint::black_box;
+use std::iter::Peekable;
+use std::ops::Range;
+use std::sync::Arc;
 
-use arrow::array::StructArray;
+use arrow::array::{
+    Array, ArrayAccessor, ArrayRef, AsArray, BooleanArray, StringArray, StructArray, UInt64Array,
+};
+use arrow::compute::{SortColumn, SortOptions};
+use arrow::datatypes::{ArrowNativeType, DataType};
+use arrow_row::SortField;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion, Throughput};
+use itertools::Itertools;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnDecoder, PartDecoder, Schema, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, PartDecoder, Schema, Schema2};
 use mz_persist_types::part::{Part, Part2, PartBuilder, PartBuilder2};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
@@ -394,6 +403,351 @@ fn bench_roundtrip(c: &mut Criterion) {
                 let _ = row.packer();
             }
             std::hint::black_box(&mut row);
+        });
+    });
+
+    let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+    for row in rows.iter() {
+        builder.push(row, &(), 1, 1);
+    }
+    let part = builder.finish();
+    let key_cols = part.key.as_struct().columns();
+
+    #[derive(Clone)]
+    enum ArrayOrd {
+        Bool(BooleanArray),
+        String(StringArray),
+        Struct(Box<[ArrayOrd]>),
+    }
+
+    impl ArrayOrd {
+        fn new(array: &dyn Array) -> Self {
+            if let Some(bool) = array.as_boolean_opt() {
+                Self::Bool(bool.clone())
+            } else if let Some(string) = array.as_string_opt() {
+                Self::String(string.clone())
+            } else if let Some(nested) = array.as_struct_opt() {
+                let columns: Vec<_> = nested.columns().iter().map(|a| ArrayOrd::new(a)).collect();
+                ArrayOrd::Struct(columns.into())
+            } else {
+                panic!("unsupported")
+            }
+        }
+
+        fn at(&self, idx: usize) -> ArrayIdx {
+            ArrayIdx { idx, array: &self }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct ArrayIdx<'a> {
+        idx: usize,
+        array: &'a ArrayOrd,
+    }
+
+    impl<'a> Ord for ArrayIdx<'a> {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            #[inline]
+            fn compare_arrays<A: ArrayAccessor>(
+                left: A,
+                left_idx: usize,
+                right: A,
+                right_idx: usize,
+            ) -> Ordering
+            where
+                A::Item: Ord,
+            {
+                match (left.is_valid(left_idx), right.is_valid(right_idx)) {
+                    (false, true) => Ordering::Less,
+                    (false, false) => Ordering::Equal,
+                    (true, false) => Ordering::Greater,
+                    (true, true) => left.value(left_idx).cmp(&right.value(right_idx)),
+                }
+            }
+            match (&self.array, &other.array) {
+                (ArrayOrd::Bool(s), ArrayOrd::Bool(o)) => compare_arrays(s, self.idx, o, other.idx),
+                (ArrayOrd::String(s), ArrayOrd::String(o)) => {
+                    compare_arrays(s, self.idx, o, other.idx)
+                }
+                (ArrayOrd::Struct(s), ArrayOrd::Struct(o)) => {
+                    // Dunno what the ordering semantics of struct arrays are, but
+                    // note that we've already recursively downcasted into ArrayOrd.
+                    let s = s.iter().map(|array| array.at(self.idx));
+                    let o = o.iter().map(|array| array.at(other.idx));
+                    s.cmp(o)
+                }
+                (_, _) => panic!("nope"),
+            }
+        }
+    }
+
+    impl<'a> PartialOrd for ArrayIdx<'a> {
+        fn partial_cmp(&self, other: &ArrayIdx) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl<'a> PartialEq for ArrayIdx<'a> {
+        fn eq(&self, other: &ArrayIdx) -> bool {
+            self.cmp(other) == std::cmp::Ordering::Equal
+        }
+    }
+    impl<'a> Eq for ArrayIdx<'a> {}
+
+    c.bench_function("sort_structured2_repr", |b| {
+        let decoder =
+            <RelationDesc as Schema2<Row>>::decoder(&schema, part.key.as_struct().clone()).unwrap();
+
+        b.iter(|| {
+            let mut unpacked = vec![];
+            for idx in 0..rows.len() {
+                let mut row = Row::default();
+                decoder.decode(idx, &mut row);
+                unpacked.push(row);
+            }
+            unpacked.sort_by(|a, b| a.iter().cmp(b.iter()));
+
+            let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&schema).unwrap();
+            for row in &rows {
+                encoder.append(row);
+            }
+            let (finished, _) = encoder.finish();
+            std::hint::black_box(finished)
+        });
+    });
+    c.bench_function("sort_structured2_lexsort", |b| {
+        let sort_cols: Vec<_> = key_cols
+            .iter()
+            .map(|c| SortColumn {
+                values: c.clone(),
+                options: None,
+            })
+            .collect();
+        b.iter(|| {
+            let sorted = arrow::compute::lexsort(&sort_cols, None).unwrap();
+            std::hint::black_box(sorted)
+        });
+    });
+    c.bench_function("sort_structured2_arrayord", |b| {
+        let ord_cols = ArrayOrd::new(&part.key);
+        b.iter(|| {
+            let mut indices: Vec<_> = (0..u64::usize_as(part.key.len())).collect();
+            indices.sort_by_key(|i| ord_cols.at(i.as_usize()));
+            let sorted =
+                arrow::compute::take(&part.key, &UInt64Array::from(indices), None).unwrap();
+            std::hint::black_box(sorted)
+        });
+    });
+
+    c.bench_function("sort_structured2_row", |b| {
+        let converter = arrow_row::RowConverter::new(
+            key_cols
+                .iter()
+                .map(|c| SortField::new(c.data_type().clone()))
+                .collect(),
+        )
+        .unwrap();
+        b.iter(|| {
+            let rows = converter.convert_columns(key_cols).unwrap();
+            let mut sort: Vec<_> = rows.iter().collect();
+            sort.sort();
+            let sorted = converter.convert_rows(sort).unwrap();
+            std::hint::black_box(sorted)
+        });
+    });
+
+    let sort_range = |range: Range<usize>| {
+        let sliced: Vec<_> = key_cols
+            .iter()
+            .map(|c| SortColumn {
+                values: c.slice(range.start, range.end - range.start),
+                options: None,
+            })
+            .collect();
+        arrow::compute::lexsort(&sliced, None).unwrap()
+    };
+    let first_cols = sort_range(0..(num_rows / 2));
+    let second_cols = sort_range((num_rows / 2)..num_rows);
+    struct MergeIter<A: Iterator, F: Fn(&A::Item, &A::Item) -> Ordering>(
+        Peekable<A>,
+        Peekable<A>,
+        F,
+    );
+
+    impl<A: Iterator, F: Fn(&A::Item, &A::Item) -> Ordering> Iterator for MergeIter<A, F>
+    where
+        A::Item: Ord,
+    {
+        type Item = A::Item;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match (self.0.peek(), self.1.peek()) {
+                (None, None) => None,
+                (Some(_), None) => self.0.next(),
+                (None, Some(_)) => self.1.next(),
+                (Some(a), Some(b)) => {
+                    if self.2(a, b).is_lt() {
+                        self.0.next()
+                    } else {
+                        self.1.next()
+                    }
+                }
+            }
+        }
+    }
+    c.bench_function("sort_structured2_merge_repr", |b| {
+        let decode = |arrays: &[ArrayRef]| {
+            let array =
+                StructArray::new(part.key.as_struct().fields().clone(), arrays.to_vec(), None);
+            let decoder = <RelationDesc as Schema2<Row>>::decoder(&schema, array).unwrap();
+            let mut unpacked = vec![];
+            for idx in 0..(num_rows / 2) {
+                let mut row = Row::default();
+                decoder.decode(idx, &mut row);
+                unpacked.push(row);
+            }
+            unpacked
+        };
+
+        b.iter(|| {
+            let left = decode(&first_cols);
+            let right = decode(&second_cols);
+
+            let merged = MergeIter(left.iter().peekable(), right.iter().peekable(), |a, b| {
+                a.iter().cmp(b.iter())
+            });
+
+            let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&schema).unwrap();
+            for row in merged {
+                encoder.append(row);
+            }
+            let (finished, _) = encoder.finish();
+            std::hint::black_box(finished)
+        });
+    });
+    c.bench_function("sort_structured2_merge_dyncmp", |b| {
+        let fields = part.key.as_struct().fields().clone();
+        let first_struct = StructArray::new(fields.clone(), first_cols.clone(), None);
+        let second_struct = StructArray::new(fields.clone(), second_cols.clone(), None);
+        let comparator =
+            arrow::array::make_comparator(&first_struct, &second_struct, SortOptions::default())
+                .expect("fine");
+        let first_indices: Vec<_> = (0..(num_rows / 2)).map(|i| (0, i)).collect();
+        let second_indices: Vec<_> = (0..(num_rows / 2)).map(|i| (1, i)).collect();
+        b.iter(|| {
+            let indices: Vec<_> = MergeIter(
+                first_indices.iter().copied().peekable(),
+                second_indices.iter().copied().peekable(),
+                |(_, a), (_, b)| comparator(*a, *b),
+            )
+            .collect();
+            let sorted =
+                ::arrow::compute::interleave(&[&first_struct, &second_struct], indices.as_slice())
+                    .expect("valid");
+            std::hint::black_box(sorted)
+        });
+    });
+    c.bench_function("sort_structured2_merge_arrayord", |b| {
+        let fields = part.key.as_struct().fields().clone();
+        let first_struct = StructArray::new(fields.clone(), first_cols.clone(), None);
+        let second_struct = StructArray::new(fields.clone(), second_cols.clone(), None);
+        let first_ord = ArrayOrd::new(&first_struct);
+        let second_ord = ArrayOrd::new(&second_struct);
+        let first_indices: Vec<_> = (0..first_struct.len())
+            .map(|i| (0usize, first_ord.at(i)))
+            .collect();
+        let second_indices: Vec<_> = (0..second_struct.len())
+            .map(|i| (1usize, second_ord.at(i)))
+            .collect();
+        b.iter(|| {
+            let indices: Vec<_> = MergeIter(
+                first_indices.iter().copied().peekable(),
+                second_indices.iter().copied().peekable(),
+                |(_, a): &(usize, ArrayIdx), (_, b)| a.cmp(b),
+            )
+            .map(|(part, idx)| (part, idx.idx))
+            .collect();
+            let sorted =
+                ::arrow::compute::interleave(&[&first_struct, &second_struct], indices.as_slice())
+                    .expect("valid");
+            std::hint::black_box(sorted)
+        });
+    });
+
+    c.bench_function("sort_structured2_merge_row", |b| {
+        let converter = arrow_row::RowConverter::new(
+            key_cols
+                .iter()
+                .map(|c| SortField::new(c.data_type().clone()))
+                .collect(),
+        )
+        .unwrap();
+
+        b.iter(|| {
+            let first_rows = converter.convert_columns(&first_cols).unwrap();
+            let second_rows = converter.convert_columns(&second_cols).unwrap();
+            let sort = MergeIter(
+                first_rows.iter().peekable(),
+                second_rows.iter().peekable(),
+                |a, b| arrow_row::Row::cmp(a, b),
+            );
+            let sorted = converter.convert_rows(sort).unwrap();
+            std::hint::black_box(sorted)
+        });
+    });
+
+    c.bench_function("sort_structured2_interleave_repr", |b| {
+        let decode = |arrays: &[ArrayRef]| {
+            let array =
+                StructArray::new(part.key.as_struct().fields().clone(), arrays.to_vec(), None);
+            let decoder = <RelationDesc as Schema2<Row>>::decoder(&schema, array).unwrap();
+            let mut unpacked = vec![];
+            for idx in 0..(num_rows / 2) {
+                let mut row = Row::default();
+                decoder.decode(idx, &mut row);
+                unpacked.push(row);
+            }
+            unpacked
+        };
+
+        b.iter(|| {
+            let left = decode(&first_cols);
+            let right = decode(&second_cols);
+
+            let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&schema).unwrap();
+            for row in left.iter().interleave(right.iter()) {
+                encoder.append(row);
+            }
+            let (finished, _) = encoder.finish();
+            std::hint::black_box(finished)
+        });
+    });
+    c.bench_function("sort_structured2_interleave_arrow", |b| {
+        let indices: Vec<_> = (0..num_rows).map(|i| (i % 2, i / 2)).collect();
+        b.iter(|| {
+            let concat: Vec<_> = first_cols
+                .iter()
+                .zip(second_cols.iter())
+                .map(|(a, b)| arrow::compute::interleave(&[a, b], &indices).unwrap())
+                .collect();
+            std::hint::black_box(concat)
+        });
+    });
+
+    c.bench_function("sort_structured2_interleave_row", |b| {
+        let converter = arrow_row::RowConverter::new(
+            key_cols
+                .iter()
+                .map(|c| SortField::new(c.data_type().clone()))
+                .collect(),
+        )
+        .unwrap();
+
+        b.iter(|| {
+            let first_rows = converter.convert_columns(&first_cols).unwrap();
+            let second_rows = converter.convert_columns(&second_cols).unwrap();
+            let sort = first_rows.iter().interleave(second_rows.iter());
+            let sorted = converter.convert_rows(sort).unwrap();
+            std::hint::black_box(sorted)
         });
     });
 }
