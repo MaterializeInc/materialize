@@ -44,8 +44,15 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    # Otherwise we are running all workflows
-    sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+    workflows_with_internal_sharding = [
+        "disruptions",
+        "bin-log-manipulations",
+        "short-bin-log-retention",
+    ]
+    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        lambda w: w,
+    )
     print(
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
@@ -83,6 +90,11 @@ def workflow_disruptions(c: Composition) -> None:
         transaction_with_rollback,
     ]
 
+    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+    print(
+        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+    )
+
     for scenario in scenarios:
         overrides = (
             [MySql(volumes=["sourcedata_512Mb:/var/lib/mysql"])]
@@ -118,6 +130,12 @@ def workflow_bin_log_manipulations(c: Composition) -> None:
             corrupt_bin_log_to_stall_source,
             corrupt_bin_log_and_add_sub_source,
         ]
+
+        scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+        print(
+            f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+        )
+
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c)
@@ -132,6 +150,12 @@ def workflow_short_bin_log_retention(c: Composition) -> None:
 
     with c.override(Materialized(sanity_restart=False), MySql(additional_args=args)):
         scenarios = [logs_expiration_while_mz_down, create_source_after_logs_expiration]
+
+        scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+        print(
+            f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+        )
+
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c, create_source=False)
