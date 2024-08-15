@@ -12,16 +12,26 @@
 import os
 import sys
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from materialize import MZ_ROOT, git, spawn
 from materialize.mz_version import MzVersion
+
+version_file_text = """---
+title: "Materialize $VERSION"
+date: $DATE
+released: false
+_build:
+  render: never
+---
+"""
 
 
 def main():
     remote = git.get_remote()
     latest_version = git.get_latest_version(version_type=MzVersion)
     release_version = latest_version.bump_minor()
-    next_version = release_version.bump_minor().replace(prerelease="dev")
+    next_version = MzVersion.parse_mz(f"{release_version.bump_minor()}-dev")
 
     if os.getenv("CI"):
         print("Installing credentials for Ci...")
@@ -53,6 +63,19 @@ def main():
 
     print(f"Bumping version on main to {next_version}...")
     spawn.runv([MZ_ROOT / "bin" / "bump-version", str(next_version)])
+
+    next_version_final = str(next_version).removesuffix(".0-dev")
+    print(f"Creating {next_version_final}.md in the docs")
+    today = datetime.today()
+    next_thursday = today + timedelta(days=((3 - today.weekday()) % 7 or 7))
+    next_version_doc_file = Path(
+        MZ_ROOT / "doc" / "user" / "content" / "releases" / f"{next_version_final}.md"
+    )
+    if not next_version_doc_file.exists():
+        text = version_file_text.replace("$VERSION", str(next_version_final)).replace(
+            "$DATE", next_thursday.strftime("%Y-%m-%d")
+        )
+        next_version_doc_file.write_text(text)
 
     print(f"Pushing to {remote}...")
     spawn.runv(["git", "push", remote, "main"])
