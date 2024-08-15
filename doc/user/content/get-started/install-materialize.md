@@ -9,7 +9,8 @@ menu:
 
 ---
 
-For testing/evaluation purposes, you can download the Materialize Docker image
+For testing/evaluation purposes, you can [download the Materialize Docker
+image](https://materialize.com/download/?utm_campaign=General&utm_source=documentation)
 and run Materilize locally in a Docker container. To more fully evaluate
 Materialize and its features, Materialize offers a [free trial
 account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
@@ -30,7 +31,7 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
 ### Run Materialize in a Docker container
 
 1. Go to the
-   [Download](https://materialize.com/download?utm_campaign=General&utm_source=documentation)
+   [Download](https://materialize.com/download/?utm_campaign=General&utm_source=documentation)
    page to download and run a Docker container.
 
    When running locally:

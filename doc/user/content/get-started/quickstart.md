@@ -33,7 +33,7 @@ free
 trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
 Alternatively, you can
-[Download](https://materialize.com/download?utm_campaign=General&utm_source=documentation)
+[Download](https://materialize.com/download/?utm_campaign=General&utm_source=documentation)
 to test locally. However, the Docker image does not provide the full experience
 of using Materialize. Where a command for the Materialize console can differ
 from other SQL clients, both versions of the command are presented.
