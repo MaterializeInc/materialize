@@ -56,7 +56,7 @@ def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> Non
 
 
 def maybe_upload_debuginfo(
-    repo: mzbuild.Repository, built_images: set[ResolvedImage]
+    repo: mzbuild.Repository, built_images: set[ResolvedImage], max_tries: int = 3
 ) -> None:
     """Uploads debuginfo to `DEBUGINFO_S3_BUCKET` and Polar Signals if any
     DEBUGINFO_BINS were built."""

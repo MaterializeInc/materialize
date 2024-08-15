@@ -150,7 +150,7 @@ T = TypeVar("T")  # Generic type variable
 def run_with_retries(fn: Callable[[], T], max_duration: int = 60) -> T:
     """Retry a function until it doesn't raise a `CalledProcessError`, uses
     exponential backoff until `max_duration` is reached."""
-    for retry in range(math.ceil(math.log2(max(max_duration, 1)))):
+    for retry in range(math.ceil(math.log2(max_duration))):
         try:
             return fn()
         except subprocess.CalledProcessError as e:
