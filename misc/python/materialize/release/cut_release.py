@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Cut a new release and push it to the Materialize repo"""
+"""Cut a new release and push the tag to the upstream Materialize repository."""
 
 import argparse
 import sys

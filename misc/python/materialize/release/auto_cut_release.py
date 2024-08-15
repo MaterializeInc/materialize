@@ -1,0 +1,74 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Start a new minor release series."""
+
+import os
+import sys
+from pathlib import Path
+
+from materialize import MZ_ROOT, git, spawn
+from materialize.mz_version import MzVersion
+
+
+def main():
+    remote = git.get_remote()
+    latest_version = git.get_latest_version(version_type=MzVersion)
+    release_version = latest_version.bump_minor()
+    next_version = release_version.bump_minor().replace(prerelease="dev")
+
+    if os.getenv("CI"):
+        print("Installing credentials for Ci...")
+        github_token = os.getenv("GITHUB_TOKEN")
+        spawn.runv(
+            [
+                "git",
+                "remote",
+                "set-url",
+                "origin",
+                f"https://materializebot:{github_token}@github.com/MaterializeInc/materialize.git",
+            ]
+        )
+
+    print("Creating temporary release branch...")
+    git.create_branch(f"release-{release_version}")
+
+    print(f"Bumping version to {release_version}...")
+    spawn.runv([MZ_ROOT / "bin" / "bump-version", str(release_version)])
+
+    print("Tagging release...")
+    git.tag_annotated(str(release_version))
+
+    print(f"Pushing release tag ({release_version}) to {remote}...")
+    spawn.runv(["git", "push", remote, str(release_version)])
+
+    print("Checking out main...")
+    git.checkout("main")
+
+    print(f"Bumping version on main to {next_version}...")
+    spawn.runv([MZ_ROOT / "bin" / "bump-version", str(next_version)])
+
+    print(f"Pushing to {remote}...")
+    spawn.runv(["git", "push", remote, "main"])
+
+    github_output = os.getenv("GITHUB_OUTPUT")
+    if github_output:
+        print("Emitting GitHub output...")
+        Path(github_output).write_text(
+            "".join(
+                [
+                    f"release_version={release_version}\n",
+                    f"next_version={next_version}\n",
+                ]
+            )
+        )
+
+
+if __name__ == "__main__":
+    sys.exit(main())
