@@ -15,7 +15,7 @@
 /bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
 /ci/test/lint-deps.toml             @danhhz @benesch
-/doc/user                           @morsapaes
+/doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/cluster
 /doc/developer/reference/storage    @MaterializeInc/cluster
 /misc/bazel                         @parkmycar
