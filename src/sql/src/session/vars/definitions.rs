@@ -1643,7 +1643,7 @@ macro_rules! feature_flags {
                 stringify!($name),
                 value!(bool; $value),
                 concat!("Whether ", $desc, " is allowed (Materialize)."),
-                true,
+                false,
             );
 
             pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
