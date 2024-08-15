@@ -559,7 +559,19 @@ where
                         datums_local.extend(key);
                         datums_local.extend(old);
                         if let Some(mfp) = prev_mfp.as_ref() {
+                            let start = datums_local.len();
                             let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                            let added = datums_local.len();
+                            // We need to apply mfp.projection, which `evaluate_inner` does not do.
+                            // We assume `mfp.projection[..mfp.input_arity]` to be `0 .. mfp.input_arity`.
+                            // Any columns added by `mfp.expressions` must be dropped.
+                            for col in mfp.projection[mfp.input_arity..].iter() {
+                                let datum = datums_local[*col].clone();
+                                datums_local.push(datum);
+                            }
+                            // Drain columns added my `mfp.expressions`.
+                            datums_local.drain(start..added);
+
                             match result {
                                 Ok(false) => {
                                     return None;
@@ -572,7 +584,19 @@ where
                         }
                         datums_local.extend(new);
                         if let Some(mfp) = next_mfp.as_ref() {
+                            let start = datums_local.len();
                             let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                            let added = datums_local.len();
+                            // We need to apply mfp.projection, which `evaluate_inner` does not do.
+                            // We assume `mfp.projection[..mfp.input_arity]` to be `0 .. mfp.input_arity`.
+                            // Any columns added by `mfp.expressions` must be dropped.
+                            for col in mfp.projection[mfp.input_arity..].iter() {
+                                let datum = datums_local[*col].clone();
+                                datums_local.push(datum);
+                            }
+                            // Drain columns added my `mfp.expressions`.
+                            datums_local.drain(start..added);
+
                             match result {
                                 Ok(false) => {
                                     return None;
@@ -618,7 +642,19 @@ where
                     datums_local.extend(key);
                     datums_local.extend(old);
                     if let Some(mfp) = prev_mfp.as_ref() {
+                        let start = datums_local.len();
                         let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                        let added = datums_local.len();
+                        // We need to apply mfp.projection, which `evaluate_inner` does not do.
+                        // We assume `mfp.projection[..mfp.input_arity]` to be `0 .. mfp.input_arity`.
+                        // Any columns added by `mfp.expressions` must be dropped.
+                        for col in mfp.projection[mfp.input_arity..].iter() {
+                            let datum = datums_local[*col].clone();
+                            datums_local.push(datum);
+                        }
+                        // Drain columns added my `mfp.expressions`.
+                        datums_local.drain(start..added);
+
                         match result {
                             Ok(false) => {
                                 return None;
@@ -631,7 +667,19 @@ where
                     }
                     datums_local.extend(new);
                     if let Some(mfp) = next_mfp.as_ref() {
+                        let start = datums_local.len();
                         let result = mfp.evaluate_inner(&mut datums_local, &temp_storage);
+                        let added = datums_local.len();
+                        // We need to apply mfp.projection, which `evaluate_inner` does not do.
+                        // We assume `mfp.projection[..mfp.input_arity]` to be `0 .. mfp.input_arity`.
+                        // Any columns added by `mfp.expressions` must be dropped.
+                        for col in mfp.projection[mfp.input_arity..].iter() {
+                            let datum = datums_local[*col].clone();
+                            datums_local.push(datum);
+                        }
+                        // Drain columns added my `mfp.expressions`.
+                        datums_local.drain(start..added);
+
                         match result {
                             Ok(false) => {
                                 return None;

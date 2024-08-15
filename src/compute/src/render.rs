@@ -915,13 +915,27 @@ where
                 match plan {
                     mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
                         let mut join_inputs = Vec::with_capacity(inputs.len());
-                        for input in inputs.iter() {
+                        for (index, input) in inputs.iter().enumerate() {
                             // This is a moment where we can do some pattern detection, and convert arrangements around
                             // unions into joins of unions. We have to sniff around the query plan to recognize this,
                             // and we'll also have to figure out how to prevent the arrangement in the first place.
                             // We would much rather have this expressed explicitly, rather than have to discover it.
-                            let maybe_union_inputs =
-                                self.attempt_join_of_unions(*input, nodes, collections);
+                            let final_arity = if index == 0 {
+                                None
+                            } else {
+                                Some(
+                                    linear_plan.stage_plans[index - 1]
+                                        .closure
+                                        .before
+                                        .input_arity,
+                                )
+                            };
+                            let maybe_union_inputs = self.attempt_join_of_unions(
+                                *input,
+                                final_arity,
+                                nodes,
+                                collections,
+                            );
 
                             if let Some(inputs) = maybe_union_inputs {
                                 join_inputs.push(inputs);
@@ -1094,10 +1108,15 @@ where
     /// an arrangement atop a union of things that can be recast as MFPs and an optional Negate
     /// atop arrangements by the appropriate keys.
     ///
+    /// The `final_arity` argument indicates the target arity expected by the join closure, for
+    /// arguments other than the first. This allows us to rework the MFPs to correctly use column
+    /// references.
+    ///
     /// This should *NOT* be how we do this, but it exists to demonstrate what happens when we do.
     fn attempt_join_of_unions(
         &self,
         input: LirId,
+        final_arity: Option<usize>,
         nodes: &BTreeMap<LirId, FlatPlanNode>,
         collections: &BTreeMap<LirId, CollectionBundle<G>>,
     ) -> Option<Vec<(CollectionBundle<G>, Option<SafeMfpPlan>, bool)>> {
@@ -1118,8 +1137,17 @@ where
         {
             // For the pattern to check out, we'll need to find each of `forms` in the input,
             // under a union. And we'll also need `input_key` and `input_mfp` to be no-ops,
-            // because I have no clue what they do.
-            if input_key.is_none() && input_mfp.is_identity() {
+            // because I have no clue what they do. Each form key should act as some prefix
+            // of the identity, lest we lose track of where these columns are.
+            if input_key.is_none()
+                && input_mfp.is_identity()
+                && forms.arranged.len() == 1
+                && forms.arranged.iter().all(|f| {
+                    f.0.iter()
+                        .enumerate()
+                        .all(|(x, y)| y == &mz_expr::MirScalarExpr::Column(x))
+                })
+            {
                 if let FlatPlanNode::Union { inputs, .. } = &nodes[input] {
                     // We now want to check each of `inputs` to see if it looks like an MFP
                     // and an optional Negate around something that is an arrangement that
@@ -1128,10 +1156,12 @@ where
                     for mut input in inputs.iter().cloned() {
                         let mut negate = false;
                         let mut mfp = None;
+                        // Receive any `Negate` atop the input.
                         if let FlatPlanNode::Negate { input: inner } = &nodes[&input] {
                             negate = !negate;
                             input = *inner;
                         }
+                        // Receive any `Mfp` atop the input.
                         if let FlatPlanNode::Mfp {
                             input: inner,
                             mfp: mfp_inner,
@@ -1141,6 +1171,7 @@ where
                             mfp = Some(mfp_inner.clone());
                             input = *inner;
                         }
+                        // Hope that what remains is an arrangement that supports all of `forms`.
                         match &nodes[&input] {
                             FlatPlanNode::ArrangeBy {
                                 forms: inner_forms, ..
@@ -1203,7 +1234,44 @@ where
                             let mfp = match mfp {
                                 None => Some(None),
                                 Some(None) => None,
-                                Some(Some(mfp)) => Some(Some(mfp)),
+                                Some(Some(mut mfp)) => {
+                                    // We need the mfp to leave the input columns exactly as they are.
+                                    if mfp.projection.len() >= mfp.input_arity
+                                        && mfp.projection[..mfp.input_arity]
+                                            .iter()
+                                            .enumerate()
+                                            .all(|(x, y)| &x == y)
+                                    {
+                                        // We need to correct the column references to skip over the values
+                                        // introduced by the left input, while not correcting the references
+                                        // to the key columns (which should be the first columns, as many as
+                                        // reflected by the key in `forms`).
+                                        if let Some(final_arity) = final_arity {
+                                            let key_arity = forms.arranged[0].0.len();
+                                            let next_arity = mfp.projection.len() - key_arity;
+                                            let prev_arity = final_arity - key_arity - next_arity;
+                                            let remap =
+                                                (0..mfp.projection.len())
+                                                    .map(|x| {
+                                                        if x < key_arity {
+                                                            x
+                                                        } else {
+                                                            x + prev_arity
+                                                        }
+                                                    })
+                                                    .enumerate()
+                                                    .collect();
+                                            // In permuting the columns, we have to indicate the new input arity,
+                                            // so that it can know how to reference newly mapped columns. This
+                                            // should be the input arity plus columns introduced by the left input.
+                                            mfp.permute(remap, mfp.input_arity + prev_arity);
+                                        }
+
+                                        Some(Some(mfp))
+                                    } else {
+                                        Some(None)
+                                    }
+                                }
                             };
 
                             mfp.map(|mfp| (input, mfp, negate))
