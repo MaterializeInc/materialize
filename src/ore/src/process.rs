@@ -42,14 +42,28 @@
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
         $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
-        $crate::process::halt();
+        $crate::process::exit_thread_safe(2);
     }}
 }
 
-/// Helper for the `halt!` macro.
+/// Prints the given message and exits the process.
+///
+/// `exit!` forwards the provided arguments to the [`tracing::info`] macro, then
+/// terminates the process with given exit code.
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
+#[cfg(feature = "tracing_")]
+#[macro_export]
+macro_rules! exit {
+    ($exit_code:literal, $($arg:expr),* $(,)?) => {{
+        $crate::__private::tracing::info!("exiting process (0): {}", format!($($arg),*));
+        $crate::process::exit_thread_safe($exit_code);
+    }};
+}
+
+/// Helper for exiting macros.
 ///
 /// This function exists to avoid that all callers of `halt!` have to explicitly depend on `libc`.
-pub fn halt() -> ! {
+pub fn exit_thread_safe(error_code: i32) -> ! {
     // Using `std::process::exit` here would be unsound as that function invokes libc's `exit`
     // function, which is not thread-safe [1]. There are two viable work arounds for this:
     //
@@ -65,5 +79,5 @@ pub fn halt() -> ! {
     // process termination is already unsound in the face of panics and hardware failure.
     //
     // [1]: https://github.com/rust-lang/rust/issues/126600
-    unsafe { libc::_exit(2) };
+    unsafe { libc::_exit(error_code) };
 }
