@@ -25,8 +25,10 @@ def main():
     tag_annotated(version)
     print("Pushing tag to Materialize repo")
     remote = get_remote()
-    print(f"Would push {version} to {remote}")
+    print(f"Pushing {version} to {remote}")
     #spawn.runv(["git", "push", remote, version])
+    with open("version.txt", "w") as f:
+        f.write(version)
 
 if __name__ == "__main__":
     sys.exit(main())

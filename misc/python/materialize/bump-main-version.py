@@ -24,8 +24,10 @@ def main():
     print(f"Bumping version on main to {version}")
     spawn.runv([MZ_ROOT / "bin" / "bump-version", version])
     remote = get_remote()
-    print(f"Would push {version} to branch bump-version in {remote}")
+    print(f"Pushing branch 'bump-version' to {remote}")
     #spawn.runv(["git", "push", remote])
+    with open("main-version.txt", "w") as f:
+        f.write(version)
     
 
 if __name__ == "__main__":
