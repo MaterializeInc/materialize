@@ -13,6 +13,7 @@ import sys
 import time
 import uuid
 from textwrap import dedent
+from urllib.parse import quote
 
 from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
@@ -50,7 +51,7 @@ from materialize.feature_benchmark.comparator import (
     Comparator,
     RelativeThresholdComparator,
 )
-from materialize.feature_benchmark.executor import Docker
+from materialize.feature_benchmark.executor import Docker, MzCloud
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F401 F403
@@ -601,6 +602,73 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 scale=args.scale,
             ),
         )
+
+
+def workflow_external(c: Composition, parser: WorkflowArgumentParser) -> None:
+    c.silent = True
+
+    parser.add_argument(
+        "--root-scenario",
+        "--scenario",
+        metavar="SCENARIO",
+        type=str,
+        default="Scenario",
+        help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
+    )
+
+    args = parser.parse_args()
+
+    MATERIALIZE_PROD_SANDBOX_HOSTNAME = os.environ["MATERIALIZE_PROD_SANDBOX_HOSTNAME"]
+    MATERIALIZE_PROD_SANDBOX_USERNAME = os.environ["MATERIALIZE_PROD_SANDBOX_USERNAME"]
+    MATERIALIZE_PROD_SANDBOX_APP_PASSWORD = os.environ[
+        "MATERIALIZE_PROD_SANDBOX_APP_PASSWORD"
+    ]
+    materialize_url = f"postgres://{quote(MATERIALIZE_PROD_SANDBOX_USERNAME)}:{quote(MATERIALIZE_PROD_SANDBOX_APP_PASSWORD)}@{quote(MATERIALIZE_PROD_SANDBOX_HOSTNAME)}:6875"
+    kafka_addr = None
+
+    specified_root_scenario = globals()[args.root_scenario]
+
+    if specified_root_scenario.__subclasses__():
+        scenarios = sorted(
+            # collect all leafs of the specified root scenario
+            [
+                s
+                for s in all_subclasses(specified_root_scenario)
+                if not s.__subclasses__()
+            ],
+            key=repr,
+        )
+    else:
+        # specified root scenario is a leaf
+        scenarios = specified_root_scenario
+
+    with c.override(
+        Testdrive(
+            materialize_url=materialize_url,
+            no_reset=True,  # Required so that admin port 6877 is not used
+            no_consistency_checks=True,  # No access to HTTP for coordinator check
+        )
+    ):
+        c.up("testdrive", persistent=True)
+
+        for scenario in scenarios:
+            executor = MzCloud(c, 0, materialize_url, kafka_addr)
+
+            benchmark = Benchmark(
+                mz_id="external",
+                mz_version="?",
+                scenario_cls=scenario,
+                scale="1",
+                executor=executor,
+                filter=NoFilter(),
+                termination_conditions=[RunAtMost(5)],
+                aggregation_class=make_aggregation_class(),
+                measure_memory=False,
+                default_size=1,
+                seed=0,
+            )
+            aggregations = benchmark.run()
+            print(aggregations)
 
 
 def _shall_retry_scenario(
