@@ -2158,7 +2158,20 @@ Trace {
         ],
     },
     settings: CollectionTrace {
-        values: [],
+        values: [
+            (
+                (
+                    SettingKey {
+                        name: "catalog_content_version",
+                    },
+                    SettingValue {
+                        value: "0.0.0",
+                    },
+                ),
+                2,
+                1,
+            ),
+        ],
     },
     storage_usage: CollectionTrace {
         values: [],

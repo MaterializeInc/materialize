@@ -167,7 +167,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     async fn get_0dt_deployment_max_wait(&mut self) -> Result<Option<Duration>, CatalogError>;
 
     /// Reports if the remote configuration was synchronized at least once.
-    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, DurableCatalogError>;
 
     /// Generate an unconsolidated [`Trace`] of catalog contents.
     async fn trace_unconsolidated(&mut self) -> Result<Trace, CatalogError>;
@@ -231,7 +231,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
     /// Listen and return all updates that are currently in the catalog.
     ///
-    /// IMPORTANT: This exlcudes updates to storage usage.
+    /// IMPORTANT: This excludes updates to storage usage.
     ///
     /// Returns an error if this instance has been fenced out.
     async fn sync_to_current_updates(
@@ -243,7 +243,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     // consider a better API.
     /// Listen and return all updates in the catalog up to `target_upper`.
     ///
-    /// IMPORTANT: This exlcudes updates to storage usage.
+    /// IMPORTANT: This excludes updates to storage usage.
     ///
     /// Returns an error if this instance has been fenced out.
     async fn sync_updates(

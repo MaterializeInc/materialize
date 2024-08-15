@@ -796,6 +796,12 @@ impl From<mz_catalog::durable::CatalogError> for AdapterError {
     }
 }
 
+impl From<mz_catalog::durable::DurableCatalogError> for AdapterError {
+    fn from(e: mz_catalog::durable::DurableCatalogError) -> Self {
+        mz_catalog::durable::CatalogError::from(e).into()
+    }
+}
+
 impl From<EvalError> for AdapterError {
     fn from(e: EvalError) -> AdapterError {
         AdapterError::Eval(e)
