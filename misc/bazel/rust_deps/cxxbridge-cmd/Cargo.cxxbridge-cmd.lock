@@ -1,5 +1,5 @@
 {
-  "checksum": "ce47a0d13282a9cb60a1a2d25fde0833f16e9d56e0db6603f5e327b5d80db264",
+  "checksum": "f07a4418dc05ac3d16b911c5258e6f5027568253486acfd470bde0c5845725e1",
   "crates": {
     "anstyle 1.0.4": {
       "name": "anstyle",
@@ -47,14 +47,14 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "cc 1.1.8": {
+    "cc 1.1.12": {
       "name": "cc",
-      "version": "1.1.8",
+      "version": "1.1.12",
       "package_url": "https://github.com/rust-lang/cc-rs",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/cc/1.1.8/download",
-          "sha256": "504bdec147f2cc13c8b57ed9401fd8a147cc66b67ad5cb241394244f2c947549"
+          "url": "https://static.crates.io/crates/cc/1.1.12/download",
+          "sha256": "68064e60dbf1f17005c2fde4d07c16d8baa506fd7ffed8ccab702d93617975c7"
         }
       },
       "targets": [
@@ -76,8 +76,17 @@
         "compile_data_glob": [
           "**"
         ],
+        "deps": {
+          "common": [
+            {
+              "id": "shlex 1.3.0",
+              "target": "shlex"
+            }
+          ],
+          "selects": {}
+        },
         "edition": "2018",
-        "version": "1.1.8"
+        "version": "1.1.12"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -592,7 +601,7 @@
         "deps": {
           "common": [
             {
-              "id": "cc 1.1.8",
+              "id": "cc 1.1.12",
               "target": "cc"
             }
           ],
@@ -731,6 +740,52 @@
         },
         "edition": "2018",
         "version": "1.0.33"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
+    "shlex 1.3.0": {
+      "name": "shlex",
+      "version": "1.3.0",
+      "package_url": "https://github.com/comex/rust-shlex",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/shlex/1.3.0/download",
+          "sha256": "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "shlex",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "shlex",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "default",
+            "std"
+          ],
+          "selects": {}
+        },
+        "edition": "2015",
+        "version": "1.3.0"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
