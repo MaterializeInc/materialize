@@ -32,7 +32,7 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
 
 1. Go to the
    [Download](https://materialize.com/download/?utm_campaign=General&utm_source=documentation)
-   page to download and run a Docker container.
+   page to download the Materialize image and run Materialize in a Docker container.
 
    When running locally:
 
