@@ -382,7 +382,11 @@ class QueryGenerator:
         ]
 
         if data_source not in all_used_data_sources:
-            assert len(additional_data_sources) > 0, "No data sources used"
+            if len(additional_data_sources) == 0:
+                # No data sources are needed by the query. This can be the case when expressions only hold enum
+                # constants as args. Still return the main data source so that all queries have one. This will allow to
+                # add a where clause. As a side effect, it will also influence the row count.
+                return data_source, []
 
             return (
                 DataSource(
