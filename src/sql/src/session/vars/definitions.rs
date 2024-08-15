@@ -129,7 +129,7 @@ impl VarDefinition {
         }
     }
 
-    /// Create a new [`VarDefinition`] with a lazily evaluated value.
+    /// Create a new [`VarDefinition`] with a value known at runtime.
     pub fn new_runtime<V: Value>(
         name: &'static str,
         value: V,
