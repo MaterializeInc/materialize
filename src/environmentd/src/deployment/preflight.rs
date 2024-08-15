@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
 use mz_ore::channel::trigger;
+use mz_ore::exit;
 use mz_ore::halt;
 use mz_persist_client::PersistClient;
 use mz_sql::catalog::EnvironmentId;
@@ -249,6 +250,6 @@ pub async fn preflight_0dt(
             clusters_hydrated_trigger: None,
         })
     } else {
-        halt!("this deployment has been fenced out");
+        exit!(0, "this deployment has been fenced out");
     }
 }
