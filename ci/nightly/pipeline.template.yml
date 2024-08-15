@@ -815,6 +815,18 @@ steps:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-0dt-restart-entire-mz-forced-migrations
+        label: "Checks 0dt restart of the entire Mz with forced migrations"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        agents:
+          # TODO(def-): Switch back to hetzner
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64

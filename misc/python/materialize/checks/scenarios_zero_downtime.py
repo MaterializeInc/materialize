@@ -70,6 +70,47 @@ class ZeroDowntimeRestartEntireMz(Scenario):
         ]
 
 
+class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
+    def actions(self) -> list[Action]:
+        system_parameter_defaults = get_default_system_parameters(zero_downtime=True)
+        return [
+            StartMz(
+                self,
+                mz_service="mz_1",
+                system_parameter_defaults=system_parameter_defaults,
+            ),
+            Initialize(self, mz_service="mz_1"),
+            start_mz_read_only(
+                self,
+                deploy_generation=1,
+                mz_service="mz_2",
+                system_parameter_defaults=system_parameter_defaults,
+                force_migrations="all",
+            ),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            *wait_ready_and_promote("mz_2"),
+            start_mz_read_only(
+                self,
+                deploy_generation=2,
+                mz_service="mz_3",
+                system_parameter_defaults=system_parameter_defaults,
+                force_migrations="all",
+            ),
+            Manipulate(self, phase=2, mz_service="mz_2"),
+            *wait_ready_and_promote("mz_3"),
+            start_mz_read_only(
+                self,
+                deploy_generation=3,
+                mz_service="mz_4",
+                system_parameter_defaults=system_parameter_defaults,
+                force_migrations="all",
+            ),
+            Validate(self, mz_service="mz_3"),
+            *wait_ready_and_promote("mz_4"),
+            Validate(self, mz_service="mz_4"),
+        ]
+
+
 class ZeroDowntimeUpgradeEntireMz(Scenario):
     """0dt upgrade of the entire Mz instance from the last released version."""
 
