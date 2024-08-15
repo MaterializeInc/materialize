@@ -29,13 +29,11 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
 
 ### Run Materialize in a Docker container
 
-1. In a terminal, issue the following command to run a Docker container from the
-   Materialize image. The command downloads the Materialize image, if one has
-   not been already downloaded.
+1. Go to the
+   [Download](https://materialize.com/download?utm_campaign=General&utm_source=documentation)
+   page to download and run a Docker container.
 
-   ```sh
-   docker run -v mzdata:/mzdata -p 6875:6875 -p 6876:6876 materialize/sh-materialized:v1.0.0
-   ```
+   When running locally:
 
    - Materialize logs are emitted to the `stderr`.
    - The SQL interface is available on port `6875`.
