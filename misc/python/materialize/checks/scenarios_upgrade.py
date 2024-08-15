@@ -67,6 +67,7 @@ def start_mz_read_only(
     tag: MzVersion | None = None,
     system_parameter_defaults: dict[str, str] | None = None,
     system_parameter_version: MzVersion | None = None,
+    force_migrations: str | None = None,
 ) -> StartMz:
     return StartMz(
         scenario,
@@ -77,6 +78,7 @@ def start_mz_read_only(
         restart="unless-stopped",
         system_parameter_defaults=system_parameter_defaults,
         system_parameter_version=system_parameter_version,
+        force_migrations=force_migrations,
     )
 
 
