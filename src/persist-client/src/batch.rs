@@ -10,6 +10,7 @@
 //! A handle to a batch of updates
 
 use arrow::array::Array;
+use differential_dataflow::Hashable;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
@@ -18,6 +19,7 @@ use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
+use uuid::Uuid;
 
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
@@ -247,6 +249,7 @@ where
                 || "batch::flush_to_blob",
                 BatchParts::write_hollow_part(
                     cfg.clone(),
+                    cfg.part_write_columnar_data(),
                     Arc::clone(&self.blob),
                     Arc::clone(&self.metrics),
                     Arc::clone(&self.shard_metrics),
@@ -337,7 +340,7 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) batch_columnar_format: BatchColumnarFormat,
-    pub(crate) batch_write_columnar_data: bool,
+    pub(crate) batch_columnar_format_percent: usize,
     pub(crate) batch_record_part_format: bool,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
@@ -360,11 +363,10 @@ pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
     "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v2' (Materialize).",
 );
 
-pub(crate) const BATCH_COLUMNAR_STATS_ONLY_OVERRIDE: Config<bool> = Config::new(
-    "persist_batch_columnar_stats_only_override",
-    false,
-    "Regardless of the value for 'persist_batch_columnar_format' only use structured \
-    data for stats collection and do no durably persist it (Materialize).",
+pub(crate) const BATCH_COLUMNAR_FORMAT_PERCENT: Config<usize> = Config::new(
+    "persist_batch_columnar_format_percent",
+    0,
+    "Percent of parts to write using 'persist_batch_columnar_format', falling back to 'row'.",
 );
 
 pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(
@@ -418,8 +420,7 @@ impl BatchBuilderConfig {
 
         let batch_columnar_format =
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
-        let batch_write_columnar_data =
-            batch_columnar_format.is_structured() && !BATCH_COLUMNAR_STATS_ONLY_OVERRIDE.get(value);
+        let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
 
         BatchBuilderConfig {
             writer_key,
@@ -429,7 +430,7 @@ impl BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             batch_columnar_format,
-            batch_write_columnar_data,
+            batch_columnar_format_percent,
             batch_record_part_format: BATCH_RECORD_PART_FORMAT.get(value),
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
@@ -441,6 +442,12 @@ impl BatchBuilderConfig {
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
         }
+    }
+
+    fn part_write_columnar_data(&self) -> bool {
+        // [0, 100)
+        let rand = || usize::cast_from(Uuid::new_v4().hashed()) % 100;
+        self.batch_columnar_format.is_structured() && self.batch_columnar_format_percent > rand()
     }
 }
 
@@ -924,9 +931,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let ts_rewrite = None;
         let schema_id = schemas.id;
 
+        // Decide this once per part and plumb it around as necessary so that we
+        // use a consistent answer for things like inline threshold.
+        let part_write_columnar_data = self.cfg.part_write_columnar_data();
+
         // If we're going to encode structured data then halve our limit since we're storing
         // it twice, once as binary encoded and once as structured.
-        let inline_threshold = if self.cfg.batch_write_columnar_data {
+        let inline_threshold = if part_write_columnar_data {
             self.cfg.inline_writes_single_max_bytes.saturating_div(2)
         } else {
             self.cfg.inline_writes_single_max_bytes
@@ -943,7 +954,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 async move {
                     // Wrap our updates just so the types match.
                     let updates = BlobTraceUpdates::Row(updates);
-                    let structured_ext = if cfg.batch_write_columnar_data {
+                    let structured_ext = if part_write_columnar_data {
                         let result = metrics.columnar.arrow().measure_part_build(|| {
                             encode_updates(&schemas, &updates, &cfg.batch_columnar_format)
                         });
@@ -992,6 +1003,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 || "batch::write_part",
                 BatchParts::write_hollow_part(
                     self.cfg.clone(),
+                    part_write_columnar_data,
                     Arc::clone(&self.blob),
                     Arc::clone(&self.metrics),
                     Arc::clone(&self.shard_metrics),
@@ -1024,6 +1036,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
     async fn write_hollow_part<K: Codec, V: Codec>(
         cfg: BatchBuilderConfig,
+        part_write_columnar_data: bool,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -1060,7 +1073,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         // override is not set.
                         if let BlobTraceUpdates::Row(record) = &updates.updates {
                             if let Some(record_ext) = extended_cols {
-                                if cfg.batch_write_columnar_data {
+                                if part_write_columnar_data {
                                     updates.updates =
                                         BlobTraceUpdates::Both(record.clone(), record_ext);
                                 }
