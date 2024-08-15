@@ -14,7 +14,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 mzcompose() {
-    stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    stdbuf --output=L --error=L bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 faketty() {
@@ -91,7 +91,7 @@ if is_truthy "${CI_HEAP_PROFILES:-}"; then
         sleep 5
         # faketty because otherwise docker will complain about not being inside
         # of a TTY when run in a background job
-        faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
+        faketty bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
     done
     ) &
 fi
