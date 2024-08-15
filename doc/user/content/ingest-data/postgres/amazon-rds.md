@@ -57,18 +57,18 @@ As a first step, you need to make sure logical replication is enabled.
     - If logical replication is already on, skip to [Create a publication and a
       Materialize user section](#2-create-a-publication-and-a-replication-user).
 
-1. [Create a custom RDS parameter group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Creating).
+1. [Create a db parameter group in RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Creating.html) using the AWS management console..
 
     - Set **Parameter group family** to your PostgreSQL version.
     - Set **Type** to **DB Parameter Group**.
+    - Set **Engine type** to PostgreSQL
 
 1. Edit the new parameter group and set the `rds.logical_replication` parameter
    to `1`.
 
-1. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
+1. [Associate the db parameter group with your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Associating.html).
 
-    Use the **Apply Immediately** option. The database must be rebooted in order
-    for the parameter group association to take effect. Keep in mind that
+    Use the **Apply Immediately** option to immediately reboot your database and apply the change.  Keep in mind that
     rebooting the RDS instance can affect database performance.
 
     Do not move on to the next step until the database **Status**
@@ -124,7 +124,7 @@ Select the option that works best for you.
     SELECT * FROM mz_egress_ips;
     ```
 
-1. In the RDS Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/working-with-security-groups.html#adding-security-group-rule)
+1. In the AWS Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/changing-security-group.html#add-remove-instance-security-groups)
    for each IP address from the previous step.
 
     In each rule:
@@ -405,7 +405,7 @@ start by selecting the relevant option.
      u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
     ```
 
-1. Update your VPC endpoint service to [accept connections from the AWS principal](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html).
+1. Update your VPC endpoint service to [accept connections from the AWS principal](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html).  Skip this step if your database is publicly accessible.
 
 1. If your AWS PrivateLink service is configured to require acceptance of
    connection requests, [manually approve the connection request from Materialize](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).

@@ -68,7 +68,7 @@ Select the option that works best for you.
     SELECT * FROM mz_egress_ips;
     ```
 
-1. [Add an inbound rule to your Aurora security group](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Overview.RDSSecurityGroups.html)
+1. [Add an inbound rule to your Aurora security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/changing-security-group.html#add-remove-instance-security-groups)
     for each IP address from the previous step.
 
     In each rule:

@@ -46,6 +46,10 @@ with sufficient privileges to manage replication.
     additional tables, Materialize will waste resources on ingesting and then
     immediately discarding the data.
 
+    Additionally, make sure you do not include any tables you did not set to 
+    REPLICA IDENTITY FULL in the next step.  You will receive an error later on if
+    any tables in the source are not set to REPLICA IDENTITY FULL.
+
 1. Create a user for Materialize, if you don't already have one:
 
     ```postgres
