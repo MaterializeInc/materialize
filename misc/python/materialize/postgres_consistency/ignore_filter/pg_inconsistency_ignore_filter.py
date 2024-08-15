@@ -648,6 +648,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Evaluation shortcut for IS NULL")
 
+        if (
+            "FULL JOIN is only supported with merge-joinable or hash-joinable join conditions"
+            in pg_error_msg
+        ):
+            return YesIgnore("Not supported by Postgres")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
