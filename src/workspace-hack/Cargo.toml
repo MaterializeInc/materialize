@@ -31,7 +31,7 @@ axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.3", default-features = false, features = ["tracing"] }
 bstr-6f8ce4dd05d13bba = { package = "bstr", version = "0.2.14" }
 bstr-dff4ba8e3ae991db = { package = "bstr", version = "1.10.0" }
-byteorder = { version = "1.4.3" }
+byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde"] }
 clap = { version = "3.2.24", features = ["derive", "env", "wrap_help"] }
@@ -157,7 +157,7 @@ axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.3", default-features = false, features = ["tracing"] }
 bstr-6f8ce4dd05d13bba = { package = "bstr", version = "0.2.14" }
 bstr-dff4ba8e3ae991db = { package = "bstr", version = "1.10.0" }
-byteorder = { version = "1.4.3" }
+byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 cc = { version = "1.0.83", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde"] }
