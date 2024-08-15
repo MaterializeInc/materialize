@@ -9,7 +9,7 @@
 
 """A pure Python metadata parser for Cargo, Rust's package manager.
 
-See the [Cargo] documentation for details. Only the features that are presently
+See the [Cargo][] documentation for details. Only the features that are presently
 necessary to support this repository are implemented.
 
 [Cargo]: https://doc.rust-lang.org/cargo/
