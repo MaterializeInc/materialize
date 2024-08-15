@@ -712,13 +712,13 @@ impl DatumColumnEncoder {
                     ListArray::new(Arc::new(field), val_offsets, Arc::new(vals), nulls.clone());
 
                 let dims = dims.finish();
-
                 assert_eq!(values.len(), dims.len());
-                assert_eq!(values.is_nullable(), dims.is_nullable());
 
+                // Note: The inner arrays are always nullable, and we let the higher-level array
+                // drive nullability for the entire column.
                 let fields = Fields::from(vec![
-                    Field::new("dims", dims.data_type().clone(), dims.is_nullable()),
-                    Field::new("vals", values.data_type().clone(), values.is_nullable()),
+                    Field::new("dims", dims.data_type().clone(), true),
+                    Field::new("vals", values.data_type().clone(), true),
                 ]);
                 let array = StructArray::new(fields, vec![Arc::new(dims), Arc::new(values)], nulls);
 
@@ -762,12 +762,9 @@ impl DatumColumnEncoder {
                 let fields = Fields::from(vec![Arc::clone(&key_field), Arc::clone(&val_field)]);
                 let entries = StructArray::new(fields, vec![Arc::new(keys), vals], None);
 
-                // DatumMap is always sorted.
-                let field = Field::new(
-                    "map_entries",
-                    entries.data_type().clone(),
-                    entries.is_nullable(),
-                );
+                // Note: DatumMap is always sorted, and Arrow enforces that the inner 'map_entries'
+                // array can never be null.
+                let field = Field::new("map_entries", entries.data_type().clone(), false);
                 let array = ListArray::new(Arc::new(field), offsets, Arc::new(entries), nulls);
                 (Arc::new(array), ColumnStatKinds::None)
             }

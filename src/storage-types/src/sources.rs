@@ -2214,6 +2214,40 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn arrow_datatype_consistent() {
+        fn test_case(desc: RelationDesc, datas: Vec<SourceData>) {
+            let half = datas.len() / 2;
+
+            let mut encoder_a = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+            for data in &datas[..half] {
+                encoder_a.append(data);
+            }
+            let (col_a, _stats) = encoder_a.finish();
+
+            let mut encoder_b = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+            for data in &datas[half..] {
+                encoder_b.append(data);
+            }
+            let (col_b, _stats) = encoder_b.finish();
+
+            // The DataType of the resulting column should not change based on what data was
+            // encoded.
+            assert_eq!(col_a.data_type(), col_b.data_type());
+        }
+
+        let num_rows = 32;
+        let strat = any::<RelationDesc>().prop_flat_map(|desc| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
+                .prop_map(move |datas| (desc.clone(), datas))
+        });
+
+        proptest!(|((desc, data) in strat)| {
+            test_case(desc, data);
+        });
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn source_proto_serialization_stability() {
         let min_protos = 10;
