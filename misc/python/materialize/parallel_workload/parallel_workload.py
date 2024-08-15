@@ -360,6 +360,11 @@ def run(
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
             os._exit(0)
+        if scenario == scenario.ZeroDowntimeDeploy:
+            # With 0dt deploys connections against the currently-fenced-out
+            # environmentd will be stuck forever, the promoted environmentd can
+            # take > 5 minutes to become responsive as well
+            os._exit(0)
         print("Threads have not stopped within 5 minutes, exiting hard")
         os._exit(1)
 
