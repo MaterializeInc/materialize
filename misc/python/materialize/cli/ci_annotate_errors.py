@@ -246,7 +246,7 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
+        return f'[{self.error_type}]() <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -255,7 +255,8 @@ class ObservedErrorWithLocation(ObservedError):
         return f"{self.error_type} in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        return f"{self.error_type} in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}"
+        ci_failures_url = "https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.quote(json.dumps(filters), safe='')}"
+        return f'<a href="{ci_failures_url}">{self.error_type}</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
