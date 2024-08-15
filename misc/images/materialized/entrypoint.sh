@@ -93,8 +93,14 @@ if [ -n "${MZ_RESTART_ON_FAILURE:-}" ]; then
         else
             code=$?
         fi
-        echo "environmentd exited (code: $code); restarting in 5s..." >&2
-        sleep 5
+
+        if [[ $code != 0 ]]; then
+            echo "environmentd exited (code: $code); restarting in 5s..." >&2
+            sleep 5
+        else
+            echo "environmentd exited gracefully; sleeping forever" >&2
+            sleep infinity
+        fi
     done
     echo "environmentd exited; giving up after $i tries" >&2
     exit "$code"
