@@ -65,6 +65,7 @@ class DatabaseConnector:
         self,
         autocommit: bool = False,
         timeout_in_seconds: int = 60,
+        remaining_retries: int = 1,
     ) -> Connection:
         try:
             connection = pg8000.connect(
@@ -80,7 +81,16 @@ class DatabaseConnector:
             print(
                 f"Failed to connect to host '{self.config.hostname}' on port {self.config.port}"
             )
-            raise
+            if remaining_retries > 0:
+                print("Retrying in 5 seconds...")
+                time.sleep(5)
+                return self.create_connection(
+                    autocommit=autocommit,
+                    timeout_in_seconds=timeout_in_seconds,
+                    remaining_retries=remaining_retries - 1,
+                )
+            else:
+                raise
 
         connection.autocommit = autocommit
         connection.run(f"SET database = {self.config.database}")
@@ -202,7 +212,11 @@ class DatabaseConnector:
             self.update_statements = []
 
     def _execute_sql(
-        self, cursor: Cursor, sql: str, print_status: bool = False
+        self,
+        cursor: Cursor,
+        sql: str,
+        print_status: bool = False,
+        remaining_retries: int = 1,
     ) -> None:
         if self._log_sql:
             printable_sql = self.to_short_printable_sql(sql)
@@ -220,6 +234,17 @@ class DatabaseConnector:
                     f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected, {duration_in_sec}s)"
                 )
         except:
+            if remaining_retries > 0:
+                print("-- Retrying in 5 seconds...")
+                time.sleep(5)
+                self._execute_sql(
+                    cursor=cursor,
+                    sql=sql,
+                    print_status=print_status,
+                    remaining_retries=remaining_retries - 1,
+                )
+                return
+
             if print_status:
                 print("-- FAILED!")
             raise
