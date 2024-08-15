@@ -204,9 +204,7 @@ class Materialized(Service):
                 config["restart"] = restart
             else:
                 policy, _, max_tries = restart.partition(":")
-                if policy in ("on-failure", "unless-stopped"):
-                    # environmentd never exits successfully, so we can treat
-                    # `on-failure` and `unless-stopped` equivalently.
+                if policy == "on-failure":
                     environment += ["MZ_RESTART_ON_FAILURE=1"]
                     if max_tries:
                         environment += [f"MZ_RESTART_LIMIT={max_tries}"]

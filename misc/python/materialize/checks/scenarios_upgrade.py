@@ -75,7 +75,7 @@ def start_mz_read_only(
         mz_service=mz_service,
         deploy_generation=deploy_generation,
         healthcheck=LEADER_STATUS_HEALTHCHECK,
-        restart="unless-stopped",
+        restart="on-failure",
         system_parameter_defaults=system_parameter_defaults,
         system_parameter_version=system_parameter_version,
         force_migrations=force_migrations,
