@@ -48,8 +48,6 @@ class DatabaseConnector:
         self.update_statements = []
         self._log_sql = log_sql
         self._read_only = False
-        # Note that transactions in mz do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...)
-        self._use_transaction = False
         self.open_connection: Connection | None = None
         self.cached_settings: TestAnalyticsSettings | None = None
 
@@ -164,6 +162,8 @@ class DatabaseConnector:
         self.update_statements.extend(sql_statements)
 
     def submit_update_statements(self) -> None:
+        # Do not use transactions because they do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...) in mz.
+
         if not self.config.enabled:
             print("Disabled: Not writing any data to the test analytics database!")
             return
@@ -171,7 +171,7 @@ class DatabaseConnector:
         if len(self.update_statements) == 0:
             return
 
-        cursor = self.create_cursor(autocommit=not self._use_transaction)
+        cursor = self.create_cursor(autocommit=True)
 
         self._disable_if_uploads_not_allowed(cursor)
 
@@ -186,25 +186,14 @@ class DatabaseConnector:
         print("--- Updates to test analytics database")
 
         try:
-            if self._use_transaction:
-                self._execute_sql(cursor, "BEGIN;")
-
             for sql in self.update_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
                 self._execute_sql(cursor, sql, print_status=True)
 
-            if self._use_transaction:
-                self._execute_sql(cursor, "COMMIT;")
             print("Upload completed.")
         except Exception as e:
             print("Upload failed.")
-            try:
-                if self._use_transaction:
-                    print("Triggering rollback.")
-                    self._execute_sql(cursor, "ROLLBACK;")
-            except:
-                pass
 
             error_msg = f"Failed to write to test analytics database! Cause: {e}"
             raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
