@@ -28,6 +28,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from functools import cache
@@ -651,18 +652,28 @@ class ResolvedImage:
         ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
-    def try_pull(self, max_duration: int) -> bool:
+    def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
         ui.header(f"Acquiring {self.spec()}")
         if not self.acquired:
-            spawn.run_with_retries(
-                lambda: spawn.runv(
-                    ["docker", "pull", self.spec()],
-                    stdout=sys.stderr.buffer,
-                ),
-                max_duration,
-            )
-            self.acquired = True
+            for retry in range(1, max_retries + 1):
+                try:
+                    spawn.runv(
+                        ["docker", "pull", self.spec()],
+                        stdout=sys.stderr.buffer,
+                    )
+                    self.acquired = True
+                except subprocess.CalledProcessError:
+                    if retry < max_retries:
+                        # There seems to be no good way to tell what error
+                        # happened based on error code
+                        # (https://github.com/docker/cli/issues/538) and we
+                        # want to print output directly to terminal.
+                        print("Retrying ...")
+                        time.sleep(1)
+                        continue
+                    else:
+                        break
         return self.acquired
 
     def is_published_if_necessary(self) -> bool:
@@ -809,19 +820,20 @@ class DependencySet:
             pre_image_prep[cls] = pre_image.prepare_batch(instances)
         return pre_image_prep
 
-    def acquire(self, max_duration: int | None = None) -> None:
+    def acquire(self, max_retries: int | None = None) -> None:
         """Download or build all of the images in the dependency set that do not
         already exist locally.
 
         Args:
-            max_duration: Max sleeping time for retries on failure.
+            max_retries: Number of retries on failure.
         """
 
         # Only retry in CI runs since we struggle with flaky docker pulls there
-        if not max_duration:
-            max_duration = 60 if ui.env_is_truthy("CI") else 0
+        if not max_retries:
+            max_retries = 3 if ui.env_is_truthy("CI") else 1
+        assert max_retries > 0
 
-        deps_to_build = [dep for dep in self if not dep.try_pull(max_duration)]
+        deps_to_build = [dep for dep in self if not dep.try_pull(max_retries)]
         prep = self._prepare_batch(deps_to_build)
         for dep in deps_to_build:
             dep.build(prep)
