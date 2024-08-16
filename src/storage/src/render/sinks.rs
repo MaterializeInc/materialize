@@ -12,6 +12,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
@@ -109,7 +110,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     // Some connections support keys - extract them.
-    let keyed = if sink_render.uses_keys() {
+    let (keyed, expect_unique) = if sink_render.uses_keys() {
         let user_key_indices = sink_render
             .get_key_indices()
             .map(|key_indices| key_indices.to_vec());
@@ -126,46 +127,66 @@ where
         //  consolidate and distribute work but don't write to the sink
         // 3. if none of the above, use the whole row as key to
         //  consolidate and distribute work but don't write to the sink
+        //
+        // In case 1 and 2 we expect only one value per-key per timestamp
+        // whereas for case 3 we might see more than 1 value per key, so
+        // we return `expect_unique` appropriately.
 
-        let keyed = if let Some(key_indices) = user_key_indices {
+        let (keyed, expect_unique) = if let Some(key_indices) = user_key_indices {
             let mut datum_vec = mz_repr::DatumVec::new();
-            collection.map(move |row| {
-                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                // Does it matter?
-                let key = {
-                    let datums = datum_vec.borrow_with(&row);
-                    Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
-                };
-                (Some(key), row)
-            })
+            (
+                collection.map(move |row| {
+                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                    // Does it matter?
+                    let key = {
+                        let datums = datum_vec.borrow_with(&row);
+                        Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
+                    };
+                    (Some(key), row)
+                }),
+                true,
+            )
         } else if let Some(relation_key_indices) = relation_key_indices {
             let mut datum_vec = mz_repr::DatumVec::new();
-            collection.map(move |row| {
-                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                // Does it matter?
-                let key = {
-                    let datums = datum_vec.borrow_with(&row);
-                    Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()))
-                };
-                (Some(key), row)
-            })
+            (
+                collection.map(move |row| {
+                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                    // Does it matter?
+                    let key = {
+                        let datums = datum_vec.borrow_with(&row);
+                        Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()))
+                    };
+                    (Some(key), row)
+                }),
+                true,
+            )
         } else {
-            collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row))
+            (
+                collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row)),
+                false,
+            )
         };
-        keyed
+        (keyed, expect_unique)
     } else {
-        collection.map(|row| (None, row))
+        (collection.map(|row| (None, row)), false)
     };
 
-    fn warn_on_dups<T>(v: &[T], sink_id: GlobalId, from_id: GlobalId) {
+    // Rate limit how often we emit this warning to avoid flooding logs.
+    let mut last_warning = Instant::now();
+
+    fn warn_on_dups<T>(v: &[T], sink_id: GlobalId, from_id: GlobalId, last_warning: &mut Instant) {
         if v.len() > 1 {
-            warn!(
-                sink_id =? sink_id,
-                from_id =? from_id,
-                "primary key error: expected at most one update per key and timestamp \
-                This can happen when the configured sink key is not a primary key of \
-                the sinked relation."
-            )
+            let now = Instant::now();
+            if now.duration_since(*last_warning) >= Duration::from_secs(10) {
+                *last_warning = now;
+                warn!(
+                    sink_id =? sink_id,
+                    from_id =? from_id,
+                    "primary key error: expected at most one update per key and timestamp \
+                    This can happen when the configured sink key is not a primary key of \
+                    the sinked relation."
+                )
+            }
         }
     }
 
@@ -196,7 +217,9 @@ where
             let row_buf = Rc::new(RefCell::new(Row::default()));
             let from_id = sink.from;
             let collection = combined.flat_map(move |(mut k, v)| {
-                warn_on_dups(&v, sink_id, from_id);
+                if expect_unique {
+                    warn_on_dups(&v, sink_id, from_id, &mut last_warning);
+                }
                 let max_idx = v.len() - 1;
                 let row_buf = Rc::clone(&row_buf);
                 v.into_iter().enumerate().map(move |(idx, dp)| {
@@ -218,7 +241,9 @@ where
 
             let from_id = sink.from;
             let collection = combined.flat_map(move |(mut k, v)| {
-                warn_on_dups(&v, sink_id, from_id);
+                if expect_unique {
+                    warn_on_dups(&v, sink_id, from_id, &mut last_warning);
+                }
                 let max_idx = v.len() - 1;
                 v.into_iter().enumerate().map(move |(idx, dp)| {
                     let k = if idx == max_idx { k.take() } else { k.clone() };
