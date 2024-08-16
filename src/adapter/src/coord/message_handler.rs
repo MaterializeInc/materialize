@@ -13,12 +13,12 @@
 use std::collections::{btree_map, BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
+use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -47,169 +47,138 @@ use crate::{catalog, AdapterNotice, TimestampContext};
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    ///
-    /// We pass in a span from the outside, rather than instrumenting this
-    /// method using `#instrument[...]` or calling `.instrument()` at the
-    /// callsite so that we can correctly instrument the boxed future here _and_
-    /// so that we can stitch up the OpenTelemetryContext when we're processing
-    /// a `Message::Command` or other commands that pass around a context.
-    pub(crate) fn handle_message<'a>(
-        &'a mut self,
-        span: tracing::Span,
-        msg: Message,
-    ) -> LocalBoxFuture<'a, ()> {
-        async move {
-            match msg {
-                Message::Command(otel_ctx, cmd) => {
-                    // TODO: We need a Span that is not none for the otel_ctx to attach the parent
-                    // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
-                    // can downgrade this to a debug_span.
-                    let span = tracing::info_span!("message_command").or_current();
-                    span.in_scope(|| otel_ctx.attach_as_parent());
-                    self.message_command(cmd).instrument(span).await
+    /// Because of that we purposefully move Futures of inner function calls onto the heap
+    /// (i.e. Box it).
+    #[instrument]
+    pub(crate) async fn handle_message(&mut self, msg: Message) -> () {
+        match msg {
+            Message::Command(otel_ctx, cmd) => {
+                // TODO: We need a Span that is not none for the otel_ctx to attach the parent
+                // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
+                // can downgrade this to a debug_span.
+                let span = tracing::info_span!("message_command").or_current();
+                span.in_scope(|| otel_ctx.attach_as_parent());
+                self.message_command(cmd).instrument(span).await
+            }
+            Message::ControllerReady => {
+                let Coordinator {
+                    controller,
+                    catalog,
+                    ..
+                } = self;
+                let storage_metadata = catalog.state().storage_metadata();
+                if let Some(m) = controller
+                    .process(storage_metadata)
+                    .await
+                    .expect("`process` never returns an error")
+                {
+                    self.message_controller(m).boxed_local().await
                 }
-                Message::ControllerReady => {
-                    let Coordinator {
-                        controller,
-                        catalog,
-                        ..
-                    } = self;
-                    let storage_metadata = catalog.state().storage_metadata();
-                    if let Some(m) = controller
-                        .process(storage_metadata)
-                        .await
-                        .expect("`process` never returns an error")
-                    {
-                        self.message_controller(m).await
-                    }
-                }
-                Message::PurifiedStatementReady(ready) => {
-                    self.message_purified_statement_ready(ready).await
-                }
-                Message::CreateConnectionValidationReady(ready) => {
-                    self.message_create_connection_validation_ready(ready).await
-                }
-                Message::AlterConnectionValidationReady(ready) => {
-                    self.message_alter_connection_validation_ready(ready).await
-                }
-                Message::WriteLockGrant(write_lock_guard) => {
-                    self.message_write_lock_grant(write_lock_guard).await;
-                }
-                Message::GroupCommitInitiate(span, permit) => {
-                    // Add an OpenTelemetry link to our current span.
-                    tracing::Span::current().add_link(span.context().span().span_context().clone());
-                    self.try_group_commit(permit).instrument(span).await
-                }
-                Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
-                    self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
-                        .await;
-                }
-                Message::AdvanceTimelines => {
-                    self.advance_timelines().await;
-                }
-                Message::ClusterEvent(event) => self.message_cluster_event(event).await,
-                Message::CancelPendingPeeks { conn_id } => {
-                    self.cancel_pending_peeks(&conn_id);
-                }
-                Message::LinearizeReads => {
-                    self.message_linearize_reads().await;
-                }
-                Message::StorageUsageSchedule => {
-                    self.schedule_storage_usage_collection().await;
-                }
-                Message::StorageUsageFetch => {
-                    self.storage_usage_fetch().await;
-                }
-                Message::StorageUsageUpdate(sizes) => {
-                    self.storage_usage_update(sizes).await;
-                }
-                Message::RetireExecute {
-                    otel_ctx,
-                    data,
-                    reason,
-                } => {
-                    otel_ctx.attach_as_parent();
-                    self.retire_execution(reason, data);
-                }
-                Message::ExecuteSingleStatementTransaction {
-                    ctx,
-                    otel_ctx,
-                    stmt,
-                    params,
-                } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_execute_single_statement_transaction(ctx, stmt, params)
-                        .await;
-                }
-                Message::PeekStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::CreateIndexStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::CreateViewStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::CreateMaterializedViewStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::SubscribeStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::IntrospectionSubscribeStageReady {
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged((), span, stage).await;
-                }
-                Message::ExplainTimestampStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::SecretStageReady {
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::ClusterStageReady{
-                    ctx,
-                    span,
-                    stage,
-                } => {
-                    self.sequence_staged(ctx, span, stage).await;
-                }
-                Message::DrainStatementLog => {
-                    self.drain_statement_log().await;
-                }
-                Message::PrivateLinkVpcEndpointEvents(events) => {
-                    if !self.controller.read_only() {
-                        self.controller
+            }
+            Message::PurifiedStatementReady(ready) => {
+                self.message_purified_statement_ready(ready)
+                    .boxed_local()
+                    .await
+            }
+            Message::CreateConnectionValidationReady(ready) => {
+                self.message_create_connection_validation_ready(ready)
+                    .boxed_local()
+                    .await
+            }
+            Message::AlterConnectionValidationReady(ready) => {
+                self.message_alter_connection_validation_ready(ready)
+                    .boxed_local()
+                    .await
+            }
+            Message::WriteLockGrant(write_lock_guard) => {
+                self.message_write_lock_grant(write_lock_guard)
+                    .boxed_local()
+                    .await;
+            }
+            Message::GroupCommitInitiate(span, permit) => {
+                // Add an OpenTelemetry link to our current span.
+                tracing::Span::current().add_link(span.context().span().span_context().clone());
+                self.try_group_commit(permit)
+                    .instrument(span)
+                    .boxed_local()
+                    .await
+            }
+            Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
+                self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
+                    .boxed_local()
+                    .await;
+            }
+            Message::AdvanceTimelines => {
+                self.advance_timelines().boxed_local().await;
+            }
+            Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
+            Message::CancelPendingPeeks { conn_id } => {
+                self.cancel_pending_peeks(&conn_id);
+            }
+            Message::LinearizeReads => {
+                self.message_linearize_reads().boxed_local().await;
+            }
+            Message::StorageUsageSchedule => {
+                self.schedule_storage_usage_collection().boxed_local().await;
+            }
+            Message::StorageUsageFetch => {
+                self.storage_usage_fetch().boxed_local().await;
+            }
+            Message::StorageUsageUpdate(sizes) => {
+                self.storage_usage_update(sizes).boxed_local().await;
+            }
+            Message::RetireExecute {
+                otel_ctx,
+                data,
+                reason,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.retire_execution(reason, data);
+            }
+            Message::ExecuteSingleStatementTransaction {
+                ctx,
+                otel_ctx,
+                stmt,
+                params,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                    .boxed_local()
+                    .await;
+            }
+            Message::PeekStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::CreateIndexStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::CreateViewStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::SubscribeStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::IntrospectionSubscribeStageReady { span, stage } => {
+                self.sequence_staged((), span, stage).boxed_local().await;
+            }
+            Message::ExplainTimestampStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::SecretStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::ClusterStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
+            Message::DrainStatementLog => {
+                self.drain_statement_log().boxed_local().await;
+            }
+            Message::PrivateLinkVpcEndpointEvents(events) => {
+                if !self.controller.read_only() {
+                    self.controller
                             .storage
                             .append_introspection_updates(
                                 mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
@@ -218,22 +187,21 @@ impl Coordinator {
                                     .map(|e| (mz_repr::Row::from(e), 1))
                                     .collect(),
                             )
-                            .await;
-                    }
-                }
-                Message::CheckSchedulingPolicies => {
-                    self.check_scheduling_policies().await;
-                }
-                Message::SchedulingDecisions(decisions) => {
-                    self.handle_scheduling_decisions(decisions).await;
-                }
-                Message::DeferredStatementReady => {
-                    self.handle_deferred_statement().await;
+                            .boxed_local().await;
                 }
             }
+            Message::CheckSchedulingPolicies => {
+                self.check_scheduling_policies().boxed_local().await;
+            }
+            Message::SchedulingDecisions(decisions) => {
+                self.handle_scheduling_decisions(decisions)
+                    .boxed_local()
+                    .await;
+            }
+            Message::DeferredStatementReady => {
+                self.handle_deferred_statement().boxed_local().await;
+            }
         }
-        .instrument(span)
-        .boxed_local()
     }
 
     #[mz_ore::instrument(level = "debug")]

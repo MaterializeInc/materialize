@@ -2970,6 +2970,7 @@ impl Coordinator {
                 .system_config()
                 .coord_slow_message_warn_threshold();
 
+            // How many messages we'd like to batch up before processing them. Must be > 0.
             const MESSAGE_BATCH: usize = 64;
             let mut messages = Vec::with_capacity(MESSAGE_BATCH);
             let mut cmd_messages = Vec::with_capacity(MESSAGE_BATCH);
@@ -2987,8 +2988,8 @@ impl Coordinator {
                     // internal commands before processing external commands.
                     biased;
 
-                    // `recv()` on `UnboundedReceiver` is cancel-safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
                     _ = internal_cmd_rx.recv_many(&mut messages, MESSAGE_BATCH) => {},
                     // `next()` on any stream is cancel-safe:
                     // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
@@ -3021,8 +3022,8 @@ impl Coordinator {
                         };
                         messages.push(Message::GroupCommitInitiate(span, Some(permit)));
                     },
-                    // `recv()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
                     count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
                         if count == 0 {
                             break;
@@ -3031,7 +3032,7 @@ impl Coordinator {
                         }
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
                         let mut pending_read_txns = vec![pending_read_txn];
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
@@ -3123,7 +3124,7 @@ impl Coordinator {
                     };
 
                     let start = Instant::now();
-                    self.handle_message(span, msg).await;
+                    self.handle_message(msg).instrument(span).await;
                     let duration = start.elapsed();
 
                     self.metrics
