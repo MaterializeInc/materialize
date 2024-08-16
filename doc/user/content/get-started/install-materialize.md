@@ -92,24 +92,6 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
    console can differ from other SQL clients, both versions of the command are
    presented.
 
-### Check logs
-
-To view logs for the embedded CockroachDB server, run the following steps in a
-terminal window.
-
-1. Find your Docker container id:
-
-   ```sh
-   docker ps
-   ```
-
-2. Run the following command, substituting `<CONTAINER-ID>` wit your container
-   id:
-
-   ```sh
-   docker exec <CONTAINER-ID> cat /mzdata/cockroach/logs/cockroach.log
-   ```
-
 ### Next steps
 
 To get started ingesting your own data from an external system like Kafka, MySQL
