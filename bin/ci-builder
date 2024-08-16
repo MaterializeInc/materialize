@@ -212,6 +212,7 @@ case "$cmd" in
             --env COMMON_ANCESTOR_OVERRIDE
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
+            --env GITHUB_OUTPUT
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
