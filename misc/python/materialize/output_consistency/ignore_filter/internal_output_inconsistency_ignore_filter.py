@@ -173,8 +173,10 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
             if (
                 query_template.where_expression is not None
                 or query_template.row_selection.has_selection()
-            ) and query_template.uses_join():
-                # Both where expression / row filter and join constraint are set. They might be evaluated in a different order.
+            ) or query_template.uses_join():
+                # Where expression, or row filter, or join constraint are set. They might be evaluated in a different
+                # order. Furthermore, constant folding may detect that the join constraint cannot be satisfied without
+                # evaluating it (which will fail).
                 return YesIgnore("#17189: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
