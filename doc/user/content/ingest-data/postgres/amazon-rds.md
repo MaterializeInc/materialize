@@ -57,19 +57,20 @@ As a first step, you need to make sure logical replication is enabled.
     - If logical replication is already on, skip to [Create a publication and a
       Materialize user section](#2-create-a-publication-and-a-replication-user).
 
-1. [Create a custom RDS parameter group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Creating).
+1. Using the AWS Management Console, [create a DB parameter group in RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Creating.html).
 
     - Set **Parameter group family** to your PostgreSQL version.
     - Set **Type** to **DB Parameter Group**.
+    - Set **Engine type** to PostgreSQL.
 
 1. Edit the new parameter group and set the `rds.logical_replication` parameter
    to `1`.
 
-1. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
+1. [Associate the DB parameter group with your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Associating.html).
 
-    Use the **Apply Immediately** option. The database must be rebooted in order
-    for the parameter group association to take effect. Keep in mind that
-    rebooting the RDS instance can affect database performance.
+    Use the **Apply Immediately** option to immediately reboot your database and
+    apply the change. Keep in mind that rebooting the RDS instance can affect
+    database performance.
 
     Do not move on to the next step until the database **Status**
     is **Available** in the RDS Console.
@@ -97,7 +98,13 @@ As a first step, you need to make sure logical replication is enabled.
 
 {{% postgres-direct/create-a-publication-aws %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your RDS instance is publicly accessible, **you can
+skip this step**. For production scenarios, we recommend configuring one of the
+network security options below.
+{{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -124,7 +131,7 @@ Select the option that works best for you.
     SELECT * FROM mz_egress_ips;
     ```
 
-1. In the RDS Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/working-with-security-groups.html#adding-security-group-rule)
+1. In the AWS Management Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/changing-security-group.html#add-remove-instance-security-groups)
    for each IP address from the previous step.
 
     In each rule:
@@ -378,7 +385,7 @@ start by selecting the relevant option.
     );
     ```
 
-    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-configure-network-security).
+    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
 
     - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
       zones in your AWS account.
@@ -487,7 +494,7 @@ start by selecting the relevant option.
     ```
 
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#b-configure-network-security).
+      address and port of the SSH bastion host you created [earlier](#b-optional-configure-network-security).
 
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you
       created for your SSH bastion host.
