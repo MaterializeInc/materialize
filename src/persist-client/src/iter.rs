@@ -10,7 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
-use arrow::array::{Array, AsArray, Int64Array, Int64Builder};
+use arrow::array::{Array, AsArray};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -24,6 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::task::JoinHandle;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
@@ -173,25 +174,33 @@ impl<T: Codec64, D: Codec64> Columnar<T, D> {
         Some(((k, v), T::decode(t), D::decode(d)))
     }
 
-    fn interleave(
-        parts: &[&Columnar<T, D>],
-        indices: &[Indices],
-        timestamps: Int64Array,
-        diffs: Int64Array,
+    fn interleave<'a>(
+        parts: &[&'a Columnar<T, D>],
+        indices: impl IntoIterator<Item = (Indices, KV<'a>, T, D)>,
     ) -> Self {
         let mut arrays: Vec<&dyn Array> = Vec::with_capacity(parts.len());
+        let (indices, timestamps, diffs) = indices
+            .into_iter()
+            .map(|(idx, _kv, t, d)| {
+                (
+                    idx,
+                    i64::from_le_bytes(T::encode(&t)),
+                    i64::from_le_bytes(D::encode(&d)),
+                )
+            })
+            .multiunzip::<(Vec<_>, Vec<_>, Vec<_>)>();
         let mut interleave = |get_array: fn(&BlobTraceUpdates) -> &dyn Array| {
             for part in parts {
                 arrays.push(get_array(&part.updates));
             }
-            let out =
-                ::arrow::compute::interleave(arrays.as_slice(), indices).expect("valid references");
+            let out = ::arrow::compute::interleave(arrays.as_slice(), &indices)
+                .expect("valid references");
             arrays.clear();
             out
         };
         let keys = interleave(|u| u.records().keys()).as_binary().clone();
         let vals = interleave(|u| u.records().vals()).as_binary().clone();
-        let records = ColumnarRecords::new(keys, vals, timestamps, diffs);
+        let records = ColumnarRecords::new(keys, vals, timestamps.into(), diffs.into());
         let keep_ext = parts.iter().all(|e| e.updates.structured().is_some());
         let updates = if keep_ext {
             let key = interleave(|u| &u.structured().unwrap().key);
@@ -834,24 +843,8 @@ where
     }
 
     fn next_chunk(&mut self, max_len: usize) -> Columnar<T, D> {
-        let mut indices = vec![];
-        let mut timestamps = Int64Builder::new();
-        let mut diffs = Int64Builder::new();
-        while let Some((idx, _, t, d)) = self.next() {
-            indices.push(idx);
-            timestamps.append_value(i64::from_le_bytes(T::encode(&t)));
-            diffs.append_value(i64::from_le_bytes(D::encode(&d)));
-            if indices.len() >= max_len {
-                break;
-            }
-        }
-
-        Columnar::interleave(
-            &self.parts,
-            indices.as_slice(),
-            Int64Builder::finish(&mut timestamps),
-            Int64Builder::finish(&mut diffs),
-        )
+        let parts = self.parts.clone();
+        Columnar::interleave(&parts, self.take(max_len))
     }
 }
 
@@ -876,13 +869,8 @@ impl<'a, T: Timestamp + Codec64, D: Codec64> Drop for ConsolidatingIter<'a, T, D
     fn drop(&mut self) {
         // Make sure to stash any incomplete state in a place where we'll pick it up on the next run.
         // See the comment on `Consolidator` for more on why this is necessary.
-        if let Some((idx, _, t, d)) = self.state.take() {
-            let part = Columnar::interleave(
-                &self.parts,
-                &[idx],
-                vec![i64::from_le_bytes(t.encode())].into(),
-                vec![i64::from_le_bytes(d.encode())].into(),
-            );
+        if let Some(update) = self.state.take() {
+            let part = Columnar::interleave(&self.parts, [update]);
             *self.drop_stash = Some(part);
         }
     }
