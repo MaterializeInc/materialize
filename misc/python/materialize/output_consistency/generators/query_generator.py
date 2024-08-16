@@ -209,33 +209,34 @@ class QueryGenerator:
 
         queries = []
         for offset_index in range(0, len(expressions), self.config.max_cols_per_query):
-            expression_chunk = expressions[
+            expressions = expressions[
                 offset_index : offset_index + self.config.max_cols_per_query
             ]
 
-            row_selection = self._select_rows(storage_layout)
-
-            expression_chunk = self._remove_known_inconsistencies(
-                test_summary, expression_chunk, row_selection
-            )
-
-            if len(expression_chunk) == 0:
-                continue
-
             data_source, additional_data_sources = self._select_sources(storage_layout)
-            all_expressions = expression_chunk
             self._assign_random_sources(
                 [data_source] + additional_data_sources,
-                all_expressions,
+                expressions,
                 contains_aggregations,
             )
+
+            row_selection = self._select_rows(storage_layout)
+
+            expressions = self._remove_known_inconsistencies(
+                test_summary, expressions, row_selection
+            )
+
+            if len(expressions) == 0:
+                continue
+
+            # remove sources that are not used by any (remaining) expression
             data_source, additional_data_sources = self.minimize_sources(
-                data_source, additional_data_sources, all_expressions
+                data_source, additional_data_sources, expressions
             )
 
             query = QueryTemplate(
                 expect_error,
-                expression_chunk,
+                expressions,
                 None,
                 storage_layout,
                 data_source,
@@ -262,6 +263,12 @@ class QueryGenerator:
             if storage_layout == ValueStorageLayout.ANY:
                 storage_layout = ValueStorageLayout.VERTICAL
 
+            data_source, additional_data_sources = self._select_sources(storage_layout)
+            all_expressions = [expression]
+            self._assign_random_sources(
+                [data_source] + additional_data_sources, all_expressions
+            )
+
             row_selection = self._select_rows(storage_layout)
 
             ignore_verdict = self.ignore_filter.shall_ignore_expression(
@@ -278,11 +285,7 @@ class QueryGenerator:
 
             contains_aggregation = expression.is_aggregate
 
-            data_source, additional_data_sources = self._select_sources(storage_layout)
-            all_expressions = [expression]
-            self._assign_random_sources(
-                [data_source] + additional_data_sources, all_expressions
-            )
+            # remove sources that are not used by the expression
             data_source, additional_data_sources = self.minimize_sources(
                 data_source, additional_data_sources, all_expressions
             )
@@ -290,7 +293,7 @@ class QueryGenerator:
             queries.append(
                 QueryTemplate(
                     expression.is_expect_error,
-                    [expression],
+                    all_expressions,
                     None,
                     storage_layout,
                     data_source,
