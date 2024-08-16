@@ -756,7 +756,7 @@ where
                     // and collection manager should only be responsible for
                     // built-in introspection collections?
                     self.collection_manager
-                        .register_append_only_collection(id, false);
+                        .register_append_only_collection(id, write, false);
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -2973,8 +2973,11 @@ where
                     .await?;
                 }
 
-                self.collection_manager
-                    .register_append_only_collection(id, force_writable);
+                self.collection_manager.register_append_only_collection(
+                    id,
+                    write_handle,
+                    force_writable,
+                );
             }
 
             // Same as our other differential collections, but for these the
@@ -3019,8 +3022,11 @@ where
                     .await?;
                 }
 
-                self.collection_manager
-                    .register_append_only_collection(id, force_writable);
+                self.collection_manager.register_append_only_collection(
+                    id,
+                    write_handle,
+                    force_writable,
+                );
             }
         }
 
