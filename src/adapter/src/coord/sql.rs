@@ -207,6 +207,7 @@ impl Coordinator {
         self.staged_cancellation.remove(conn_id);
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
             .await;
+        self.retire_cluster_reconfigurations_for_conn(conn_id).await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
