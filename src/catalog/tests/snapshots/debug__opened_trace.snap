@@ -2173,9 +2173,6 @@ Trace {
             ),
         ],
     },
-    storage_usage: CollectionTrace {
-        values: [],
-    },
     system_object_mappings: CollectionTrace {
         values: [],
     },

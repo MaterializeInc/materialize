@@ -17,8 +17,7 @@ use mz_audit_log::{
     GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
     RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
     RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1,
-    SchemaV2, SetV1, StorageUsageV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
-    VersionedEvent, VersionedStorageUsage,
+    SchemaV2, SetV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
@@ -47,8 +46,8 @@ use crate::durable::objects::{
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
     ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
     ServerConfigurationValue, SettingKey, SettingValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, StorageUsageKey, SystemPrivilegesKey, SystemPrivilegesValue,
-    TxnWalShardValue, UnfinalizedShardKey,
+    StorageCollectionMetadataValue, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -690,20 +689,6 @@ impl RustType<proto::AuditLogKey> for AuditLogKey {
     fn from_proto(proto: proto::AuditLogKey) -> Result<Self, TryFromProtoError> {
         Ok(AuditLogKey {
             event: proto.event.into_rust_if_some("AuditLogKey::event")?,
-        })
-    }
-}
-
-impl RustType<proto::StorageUsageKey> for StorageUsageKey {
-    fn into_proto(&self) -> proto::StorageUsageKey {
-        proto::StorageUsageKey {
-            usage: Some(self.metric.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: proto::StorageUsageKey) -> Result<Self, TryFromProtoError> {
-        Ok(StorageUsageKey {
-            metric: proto.usage.into_rust_if_some("StorageUsageKey::usage")?,
         })
     }
 }
@@ -2457,52 +2442,6 @@ impl RustType<proto::AuditLogEventV1> for EventV1 {
     }
 }
 
-impl RustType<proto::storage_usage_key::StorageUsageV1> for StorageUsageV1 {
-    fn into_proto(&self) -> proto::storage_usage_key::StorageUsageV1 {
-        proto::storage_usage_key::StorageUsageV1 {
-            id: self.id,
-            shard_id: self.shard_id.as_ref().map(|s| proto::StringWrapper {
-                inner: s.to_string(),
-            }),
-            size_bytes: self.size_bytes,
-            collection_timestamp: Some(proto::EpochMillis {
-                millis: self.collection_timestamp,
-            }),
-        }
-    }
-
-    fn from_proto(
-        proto: proto::storage_usage_key::StorageUsageV1,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(StorageUsageV1 {
-            id: proto.id,
-            shard_id: proto.shard_id.map(|s| s.inner),
-            size_bytes: proto.size_bytes,
-            collection_timestamp: proto
-                .collection_timestamp
-                .into_rust_if_some("StorageUsageKey::collection_timestamp")?,
-        })
-    }
-}
-
-impl RustType<proto::storage_usage_key::Usage> for VersionedStorageUsage {
-    fn into_proto(&self) -> proto::storage_usage_key::Usage {
-        match self {
-            VersionedStorageUsage::V1(usage) => {
-                proto::storage_usage_key::Usage::V1(usage.into_proto())
-            }
-        }
-    }
-
-    fn from_proto(proto: proto::storage_usage_key::Usage) -> Result<Self, TryFromProtoError> {
-        match proto {
-            proto::storage_usage_key::Usage::V1(usage) => {
-                Ok(VersionedStorageUsage::V1(usage.into_rust()?))
-            }
-        }
-    }
-}
-
 impl From<String> for proto::StringWrapper {
     fn from(value: String) -> Self {
         proto::StringWrapper { inner: value }
@@ -2515,7 +2454,7 @@ mod tests {
     use std::fs;
     use std::io::{BufRead, BufReader};
 
-    use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+    use mz_audit_log::VersionedEvent;
     use mz_proto::RustType;
     use proptest::prelude::*;
 
@@ -2604,15 +2543,6 @@ mod tests {
             let roundtrip = VersionedEvent::from_proto(proto).expect("valid proto");
 
             prop_assert_eq!(event, roundtrip);
-        }
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // slow
-        fn proptest_storage_usage_roundtrips(usage: VersionedStorageUsage) {
-            let proto = usage.into_proto();
-            let roundtrip = VersionedStorageUsage::from_proto(proto).expect("valid proto");
-
-            prop_assert_eq!(usage, roundtrip);
         }
     }
 }
