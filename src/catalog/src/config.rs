@@ -10,7 +10,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
@@ -34,8 +33,6 @@ pub struct Config<'a> {
     pub storage: Box<dyn DurableCatalogState>,
     /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
-    /// How long to retain storage usage records
-    pub storage_usage_retention_period: Option<Duration>,
     pub state: StateConfig,
 }
 

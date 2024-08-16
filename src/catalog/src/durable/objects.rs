@@ -30,7 +30,7 @@ pub(crate) mod state_update;
 
 use std::collections::BTreeMap;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
@@ -850,35 +850,6 @@ impl DurableType for AuditLog {
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
-pub struct StorageUsage {
-    pub metric: VersionedStorageUsage,
-}
-
-impl DurableType for StorageUsage {
-    type Key = StorageUsageKey;
-    type Value = ();
-
-    fn into_key_value(self) -> (Self::Key, Self::Value) {
-        (
-            StorageUsageKey {
-                metric: self.metric,
-            },
-            (),
-        )
-    }
-
-    fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
-        Self { metric: key.metric }
-    }
-
-    fn key(&self) -> Self::Key {
-        StorageUsageKey {
-            metric: self.metric.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct StorageCollectionMetadata {
     pub id: GlobalId,
     pub shard: ShardId,
@@ -1146,10 +1117,6 @@ pub struct AuditLogKey {
     pub(crate) event: VersionedEvent,
 }
 
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct StorageUsageKey {
-    pub(crate) metric: VersionedStorageUsage,
-}
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageCollectionMetadataKey {
     pub(crate) id: GlobalId,
