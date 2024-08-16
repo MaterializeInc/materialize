@@ -61,7 +61,7 @@ As a first step, you need to make sure logical replication is enabled.
 
     - Set **Parameter group family** to your PostgreSQL version.
     - Set **Type** to **DB Parameter Group**.
-    - Set **Engine type** to PostgreSQL
+    - Set **Engine type** to PostgreSQL.
 
 1. Edit the new parameter group and set the `rds.logical_replication` parameter
    to `1`.
