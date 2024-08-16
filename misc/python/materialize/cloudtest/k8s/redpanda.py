@@ -52,6 +52,9 @@ class RedpandaDeployment(K8sDeployment):
                 "redpanda.enable_idempotence=true",
                 "--set",
                 "redpanda.auto_create_topics_enabled=true",
+                # Only require 4KB per topic partition rather than 4MiB.
+                "--set",
+                "redpanda.topic_memory_per_partition=4096",
                 "--advertise-kafka-addr",
                 f"redpanda.{namespace}:9092",
             ],
