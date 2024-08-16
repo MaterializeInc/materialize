@@ -50,7 +50,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate, Update,
+    StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
@@ -262,7 +262,15 @@ where
                 }
                 DataSource::IngestionExport { .. } => (),
                 DataSource::Introspection(i) => {
-                    introspections_to_run.push((*id, i));
+                    let write_handle = self
+                        .open_data_handles(
+                            id,
+                            collection.collection_metadata.data_shard,
+                            collection.collection_metadata.relation_desc.clone(),
+                            &persist_client,
+                        )
+                        .await;
+                    introspections_to_run.push((*id, i, write_handle));
                 }
                 DataSource::Webhook => (),
                 DataSource::Other(DataSourceOther::TableWrites) => {
@@ -287,14 +295,20 @@ where
             };
         }
 
-        for (id, introspection_type) in introspections_to_run {
+        for (id, introspection_type, mut write_handle) in introspections_to_run {
+            let recent_upper = write_handle.shared_upper();
             // Introspection collections are registered with the
             // CollectionManager when they are created. We only bring ourselves
             // up to date with collection contents or do any preparatory
             // consolidation work when we actually start writing to them!
-            self.prepare_introspection_collection(id, introspection_type)
-                .await
-                .expect("cannot fail to prepare introspection collections now");
+            self.prepare_introspection_collection(
+                id,
+                introspection_type,
+                recent_upper,
+                Some(&mut write_handle),
+            )
+            .await
+            .expect("cannot fail to prepare introspection collections now");
         }
 
         // We first do any cleanup/truncation work above and then allow the
@@ -718,19 +732,31 @@ where
 
             // Install the collection state in the appropriate spot.
             match &collection_state.data_source {
-                DataSource::Introspection(_) => {
+                DataSource::Introspection(typ) => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                    self.persist_monotonic_worker.register(id, write);
+                    // We always register the collection with the collection manager,
+                    // regardless of read-only mode. The CollectionManager itself is
+                    // aware of read-only mode and will not attempt to write before told
+                    // to do so.
+                    //
+                    self.register_introspection_collection(id, *typ, write)
+                        .await?;
                     self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                    self.persist_monotonic_worker.register(id, write);
                     self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                     // This collection of statistics is periodically aggregated into
                     // `source_statistics`.
                     new_webhook_statistic_entries.insert(id);
+                    // Register the collection so our manager knows about it.
+                    //
+                    // NOTE: Maybe this shouldn't be in the collection manager,
+                    // and collection manager should only be responsible for
+                    // built-in introspection collections?
+                    self.collection_manager
+                        .register_append_only_collection(id, false);
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -883,26 +909,8 @@ where
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
-                DataSource::Introspection(i) => {
-
-
-                    // We always register the collection with the collection manager,
-                    // regardless of read-only mode. The CollectionManager itself is
-                    // aware of read-only mode and will not attempt to write before told
-                    // to do so.
-                    //
-                    self.register_introspection_collection(id, *i)
-                        .await?;
-
-                }
-                DataSource::Webhook => {
-                    // Register the collection so our manager knows about it.
-                    //
-                    // NOTE: Maybe this shouldn't be in the collection manager,
-                    // and collection manager should only be responsible for
-                    // built-in introspection collections?
-                    self.collection_manager.register_append_only_collection(id, false);
-                }
+                DataSource::Introspection(_) => {}
+                DataSource::Webhook => {}
                 DataSource::Progress | DataSource::Other(_) => {}
             };
         }
@@ -1630,12 +1638,7 @@ where
         &mut self,
         id: GlobalId,
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
-        let upper = self
-            .persist_monotonic_worker
-            .recent_upper(id)
-            .await
-            .expect("sender hung up")?;
-
+        let upper = self.recent_upper(id).await?;
         let res = match upper.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
@@ -2774,6 +2777,33 @@ where
             .map(|(id, e)| (*id, e))
     }
 
+    async fn recent_upper(&self, id: GlobalId) -> Result<Antichain<T>, StorageError<T>> {
+        let metadata = &self.storage_collections.collection_metadata(id)?;
+        let persist_client = self
+            .persist
+            .open(metadata.persist_location.clone())
+            .await
+            .unwrap();
+        // Duplicate part of open_data_handles here because we don't need the
+        // fetch_recent_upper call. The pubsub-updated shared_upper is enough.
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+        // NB: Opening a WriteHandle is cheap if it's never used in a
+        // compare_and_append operation.
+        let write = persist_client
+            .open_writer::<SourceData, (), T, Diff>(
+                metadata.data_shard,
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
+        Ok(write.shared_upper())
+    }
+
     /// Opens a write and critical since handles for the given `shard`.
     ///
     /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
@@ -2824,6 +2854,7 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
+        mut write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
@@ -2877,6 +2908,8 @@ where
             fut.boxed()
         };
 
+        let recent_upper = write_handle.shared_upper();
+
         // Types of storage-managed/introspection collections:
         //
         // Append-only: Only accepts blind writes, writes that can
@@ -2892,7 +2925,6 @@ where
         // of the collection stays constant if the thing that is
         // mirrored doesn’t change in cardinality. At steady state,
         // updates always come in pairs of retractions/additions.
-
         match introspection_type {
             // For these, we first register the collection and then prepare it,
             // because the code that prepares differential collection expects to
@@ -2905,13 +2937,19 @@ where
             | IntrospectionType::StorageSinkStatistics => {
                 self.collection_manager.register_differential_collection(
                     id,
+                    write_handle,
                     read_handle_fn,
                     force_writable,
                 );
 
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        None,
+                    )
+                    .await?;
                 }
             }
 
@@ -2926,8 +2964,13 @@ where
             | IntrospectionType::SinkStatusHistory
             | IntrospectionType::PrivatelinkConnectionStatusHistory => {
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        Some(&mut write_handle),
+                    )
+                    .await?;
                 }
 
                 self.collection_manager
@@ -2943,13 +2986,19 @@ where
             | IntrospectionType::ComputeHydrationTimes => {
                 self.collection_manager.register_differential_collection(
                     id,
+                    write_handle,
                     read_handle_fn,
                     force_writable,
                 );
 
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        None,
+                    )
+                    .await?;
                 }
             }
 
@@ -2961,8 +3010,13 @@ where
             | IntrospectionType::StatementLifecycleHistory
             | IntrospectionType::SqlText => {
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        Some(&mut write_handle),
+                    )
+                    .await?;
                 }
 
                 self.collection_manager
@@ -2982,19 +3036,21 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
+        recent_upper: Antichain<T>,
+        write_handle: Option<&mut WriteHandle<SourceData, (), T, Diff>>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "preparing introspection collection for writes");
 
         match introspection_type {
             IntrospectionType::ShardMapping => {
-                self.initialize_shard_mapping().await;
+                // Done by the `self.append_shard_mappings` call.
             }
             IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
             }
             IntrospectionType::StorageSourceStatistics => {
-                let prev = self.snapshot_statistics(id).await;
+                let prev = self.snapshot_statistics(id, recent_upper).await;
 
                 let scraper_token = statistics::spawn_statistics_scraper::<
                     statistics::SourceStatistics,
@@ -3022,7 +3078,7 @@ where
                     .insert(id, Box::new((scraper_token, web_token)));
             }
             IntrospectionType::StorageSinkStatistics => {
-                let prev = self.snapshot_statistics(id).await;
+                let prev = self.snapshot_statistics(id, recent_upper).await;
 
                 let scraper_token =
                     statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
@@ -3041,8 +3097,12 @@ where
                 self.introspection_tokens.insert(id, scraper_token);
             }
             IntrospectionType::SourceStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
                 let last_status_per_id = self
-                    .partially_truncate_status_history(IntrospectionType::SourceStatusHistory)
+                    .partially_truncate_status_history(
+                        IntrospectionType::SourceStatusHistory,
+                        write_handle,
+                    )
                     .await;
 
                 let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
@@ -3066,8 +3126,12 @@ where
                 )
             }
             IntrospectionType::SinkStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
                 let last_status_per_id = self
-                    .partially_truncate_status_history(IntrospectionType::SinkStatusHistory)
+                    .partially_truncate_status_history(
+                        IntrospectionType::SinkStatusHistory,
+                        write_handle,
+                    )
                     .await;
 
                 let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
@@ -3091,8 +3155,10 @@ where
                 )
             }
             IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
                 self.partially_truncate_status_history(
                     IntrospectionType::PrivatelinkConnectionStatusHistory,
+                    write_handle,
                 )
                 .await;
             }
@@ -3129,14 +3195,7 @@ where
     ///
     // TODO(guswynn): we need to be more careful about the update time we get here:
     // <https://github.com/MaterializeInc/materialize/issues/25349>
-    async fn snapshot_statistics(&mut self, id: GlobalId) -> Vec<Row> {
-        let upper = self
-            .persist_monotonic_worker
-            .recent_upper(id)
-            .await
-            .expect("missing collection")
-            .expect("missing collection");
-
+    async fn snapshot_statistics(&mut self, id: GlobalId, upper: Antichain<T>) -> Vec<Row> {
         match upper.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
@@ -3171,34 +3230,6 @@ where
             .retain(|k, _| self.exports.contains_key(k));
     }
 
-    /// Initializes the data expressing which global IDs correspond to which
-    /// shards. Necessary because we cannot write any of these mappings that we
-    /// discover before the shard mapping collection exists.
-    ///
-    /// # Panics
-    /// - If `IntrospectionType::ShardMapping` is not associated with a
-    /// `GlobalId` in `self.introspection_ids`.
-    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
-    ///   a managed collection.
-    async fn initialize_shard_mapping(&mut self) {
-        let id =
-            self.introspection_ids.lock().expect("poisoned lock")[&IntrospectionType::ShardMapping];
-
-        let mut row_buf = Row::default();
-        let collection_metadatas = self.storage_collections.active_collection_metadatas();
-        let mut updates = Vec::with_capacity(collection_metadatas.len());
-        for (global_id, CollectionMetadata { data_shard, .. }) in collection_metadatas {
-            let mut packer = row_buf.packer();
-            packer.push(Datum::from(global_id.to_string().as_str()));
-            packer.push(Datum::from(data_shard.to_string().as_str()));
-            updates.push((row_buf.clone(), 1));
-        }
-
-        self.collection_manager
-            .differential_append(id, updates)
-            .await;
-    }
-
     /// Effectively truncates the status history shard except for the most
     /// recent updates from each ID.
     ///
@@ -3212,6 +3243,7 @@ where
     async fn partially_truncate_status_history(
         &mut self,
         collection: IntrospectionType,
+        write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     ) -> BTreeMap<GlobalId, Row> {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
@@ -3254,12 +3286,7 @@ where
 
         let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
-        let upper = self
-            .persist_monotonic_worker
-            .recent_upper(id)
-            .await
-            .expect("missing collection")
-            .expect("missing collection");
+        let upper = write_handle.fetch_recent_upper().await.clone();
 
         let mut rows = match upper.as_option() {
             Some(f) if f > &T::minimum() => {
@@ -3351,56 +3378,36 @@ where
                 // Re-pack all rows
                 let mut packer = row_buf.packer();
                 packer.extend(unpacked_row.into_iter());
-
-                let update = Update {
-                    row: row_buf.clone(),
-                    timestamp: expected_upper.clone(),
-                    diff: -1,
-                };
-
-                update
+                (
+                    (SourceData(Ok(row_buf.clone())), ()),
+                    expected_upper.clone(),
+                    -1,
+                )
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        let command = (id, updates, expected_upper.clone(), new_upper);
-
-        let res = self
-            .persist_monotonic_worker
-            .compare_and_append(vec![command])
+        let res = write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(expected_upper.clone()),
+                Antichain::from_elem(new_upper),
+            )
             .await
-            .expect("command must succeed");
+            .expect("usage was valid");
 
         match res {
             Ok(_) => {
                 // All good, yay!
             }
-            Err(storage_err) => {
-                match storage_err {
-                    StorageError::InvalidUppers(failed_ids) => {
-                        assert_eq!(
-                            failed_ids.len(),
-                            1,
-                            "received errors for more than one collection"
-                        );
-                        assert_eq!(
-                            failed_ids[0].id, id,
-                            "received errors for a different collection"
-                        );
-
-                        // This is fine, it just means the upper moved because
-                        // of continual upper advancement or because seomeone
-                        // already appended some more retractions/updates.
-                        //
-                        // NOTE: We might want to attempt these partial
-                        // retractions on an interval, instead of only when
-                        // starting up!
-                        info!(%id, ?expected_upper, current_upper = ?failed_ids[0].current_upper, "failed to append partial truncation");
-                    }
-                    // Uh-oh, something else went wrong!
-                    other => {
-                        panic!("Unhandled error while appending to managed collection {id:?}: {other:?}")
-                    }
-                }
+            Err(err) => {
+                // This is fine, it just means the upper moved because
+                // of continual upper advancement or because seomeone
+                // already appended some more retractions/updates.
+                //
+                // NOTE: We might want to attempt these partial
+                // retractions on an interval, instead of only when
+                // starting up!
+                info!(%id, ?expected_upper, current_upper = ?err.current, "failed to append partial truncation");
             }
         }
 
@@ -3424,11 +3431,6 @@ where
     /// Use a `diff` of 1 to append a new entry; -1 to retract an existing
     /// entry.
     ///
-    /// However, data is written iff we know of the `GlobalId` of the
-    /// `IntrospectionType::ShardMapping` collection; in other cases, data is
-    /// dropped on the floor. In these cases, the data is later written by
-    /// [`Self::initialize_shard_mapping`].
-    ///
     /// # Panics
     /// - If `self.collections` does not have an entry for `global_id`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
@@ -3441,15 +3443,12 @@ where
     {
         mz_ore::soft_assert_or_log!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
-        let id = match self
+        let id = *self
             .introspection_ids
             .lock()
             .expect("poisoned")
             .get(&IntrospectionType::ShardMapping)
-        {
-            Some(id) => *id,
-            _ => return,
-        };
+            .expect("should be registered before this call");
 
         let mut updates = vec![];
         // Pack updates into rows
