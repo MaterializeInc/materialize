@@ -27,11 +27,12 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 # * 2038-01-19 03:14:18
 # * 2038-01-19 03:14:18.123
 # * 2038-01-19 03:14:18.123+00
+# * 2038-01-19 03:14:18.123+00 BC
 # * 2038-01-19 03:14:18+00
 # * 2038-01-19 03:14:18-03:00
 # * 2038-01-19T03:14:18+00 (when used in JSONB)
 TIMESTAMP_PATTERN = re.compile(
-    r"^\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d+(:\d+)?)?$"
+    r"^\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d+(:\d+)?)?( (BC|AC))?$"
 )
 
 # Examples:
@@ -137,9 +138,11 @@ class PostgresResultComparator(ResultComparator):
         return TIMESTAMP_PATTERN.match(value) is not None
 
     def is_timestamp_equal(self, value1: str, value2: str) -> bool:
+        # try to match any of these
         last_second_and_milliseconds_regex = r"(\d\.\d+)"
         last_second_before_timezone_regex = r"(?<=:\d)(\d)(?=\+)"
         last_second_at_the_end_regex = r"(?<=:\d)(\d$)"
+
         last_second_and_milliseconds_pattern = re.compile(
             f"{last_second_and_milliseconds_regex}|{last_second_before_timezone_regex}|{last_second_at_the_end_regex}"
         )
