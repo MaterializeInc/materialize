@@ -12,7 +12,7 @@
 # pydoc -- generates docs for python API
 
 # Only allow the $PATH environment variable to prevent leaking any secrets through Python globals
-exec env -i PATH="$PATH" \
+exec env -i PATH="$PATH" MZ_DEV_CI_BUILDER="$MZ_DEV_CI_BUILDER" \
     "$(dirname "$0")"/pyactivate -Werror -Wignore::DeprecationWarning -m pdoc \
     -o target/pydoc \
     --logo "https://private-user-images.githubusercontent.com/23521087/267212323-39270ecb-7ac4-4829-b98b-c5b5699a16b8.svg?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3MjM3MjM3NTcsIm5iZiI6MTcyMzcyMzQ1NywicGF0aCI6Ii8yMzUyMTA4Ny8yNjcyMTIzMjMtMzkyNzBlY2ItN2FjNC00ODI5LWI5OGItYzViNTY5OWExNmI4LnN2Zz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNDA4MTUlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjQwODE1VDEyMDQxN1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTNhY2Y1OTBkYzA5YzM1ZTI5MDRmNTExOWE0Y2E4NDhmNmJkODQ5ODFkZWFiZDA3MWVkOTFhNThkMzk3YTRlZmMmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JmFjdG9yX2lkPTAma2V5X2lkPTAmcmVwb19pZD0wIn0.FmOX-kdzxqsUatq2v_KFOVtQ8PPKmXm9EQY0wPkRQzI" \
