@@ -408,6 +408,7 @@ impl Catalog {
                     cause: e.to_string(),
                 })
             })?;
+            txn.set_catalog_content_version(config.build_info.version.to_string())?;
             let op_item_updates = txn.get_and_commit_op_updates();
             let op_item_updates = into_consolidatable_updates(op_item_updates, commit_ts);
             item_updates.extend(op_item_updates);

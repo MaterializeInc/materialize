@@ -351,7 +351,6 @@ impl State {
     pub async fn with_catalog_copy<F, T>(
         &self,
         system_parameter_defaults: BTreeMap<String, String>,
-        version: semver::Version,
         f: F,
     ) -> Result<Option<T>, anyhow::Error>
     where
@@ -385,7 +384,6 @@ impl State {
                 SYSTEM_TIME.clone(),
                 self.materialize.environment_id.clone(),
                 system_parameter_defaults,
-                version,
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));

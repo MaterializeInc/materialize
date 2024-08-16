@@ -45,7 +45,7 @@ pub enum DurableCatalogError {
     },
     /// The applier version in persist is too old for the current catalog. Reading from persist
     /// would cause other readers to be fenced out.
-    #[error("incompatible persist version {found_version}, current: {catalog_version}, make sure to upgrade the catalog one version forward at a time")]
+    #[error("incompatible persist version {found_version}, current: {catalog_version}, make sure to upgrade the catalog one version at a time")]
     IncompatiblePersistVersion {
         found_version: semver::Version,
         catalog_version: semver::Version,

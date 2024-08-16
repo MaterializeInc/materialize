@@ -15,12 +15,6 @@
 //! codebase effecting our migrations because our application and serialization logic is decoupled,
 //! and the objects of the Catalog for a given version are "frozen in time".
 //!
-//! You cannot make any changes to the following message or anything that they depend on:
-//!
-//!   - Config
-//!   - Setting
-//!   - Epoch
-//!
 //! When you want to make a change to the `Catalog` you need to follow these steps:
 //!
 //! 1. Check the current [`CATALOG_VERSION`], make sure an `objects_v<CATALOG_VERSION>.proto` file

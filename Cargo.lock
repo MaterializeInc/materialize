@@ -6829,7 +6829,6 @@ dependencies = [
  "rdkafka",
  "regex",
  "reqwest",
- "semver",
  "serde",
  "serde_json",
  "similar",

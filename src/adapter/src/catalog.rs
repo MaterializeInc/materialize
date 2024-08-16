@@ -485,14 +485,12 @@ impl Catalog {
         now: NowFn,
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
-        version: semver::Version,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = mz_catalog::durable::test_persist_backed_catalog_state_with_version(
+        let openable_storage = mz_catalog::durable::test_persist_backed_catalog_state(
             persist_client,
             environment_id.organization_id(),
-            version,
         )
-        .await?;
+        .await;
         let storage = openable_storage
             .open_read_only(&test_bootstrap_args())
             .await?;

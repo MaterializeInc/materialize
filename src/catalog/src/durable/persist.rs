@@ -61,7 +61,6 @@ use crate::durable::upgrade::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
-    CATALOG_CONTENT_VERSION_KEY,
 };
 use crate::memory;
 
@@ -197,7 +196,6 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
         &mut self,
         update: StateUpdate<T>,
         current_epoch: &mut FenceableEpoch,
-        current_catalog_content_version: &semver::Version,
         metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<T>>, DurableCatalogError>;
 }
@@ -239,8 +237,6 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     pub(crate) upper: Timestamp,
     /// The epoch of the catalog, if one exists.
     epoch: FenceableEpoch,
-    /// The semantic version of the current binary.
-    catalog_content_version: semver::Version,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -476,7 +472,6 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             if let Some(StateUpdate { kind, ts, diff }) = self.update_applier.apply_update(
                 StateUpdate { kind, ts, diff },
                 &mut self.epoch,
-                &self.catalog_content_version,
                 &self.metrics,
             )? {
                 self.snapshot.push((kind, ts, diff));
@@ -681,8 +676,6 @@ pub(crate) struct UnopenedCatalogStateInner {
     organization_id: Uuid,
     /// A cache of the config collection of the catalog.
     configs: BTreeMap<String, u64>,
-    /// A cache of the settings collection of the catalog.
-    settings: BTreeMap<String, String>,
 }
 
 impl UnopenedCatalogStateInner {
@@ -690,7 +683,6 @@ impl UnopenedCatalogStateInner {
         UnopenedCatalogStateInner {
             organization_id,
             configs: BTreeMap::new(),
-            settings: BTreeMap::new(),
         }
     }
 }
@@ -700,7 +692,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         &mut self,
         update: StateUpdate<StateUpdateKindJson>,
         current_epoch: &mut FenceableEpoch,
-        current_catalog_content_version: &semver::Version,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, DurableCatalogError> {
         // TODO(jkosh44) It's a bit unfortunate that we have to clone all updates to attempt to
@@ -725,30 +716,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                         "retraction does not match existing value"
                     );
                 }
-                (StateUpdateKind::Setting(key, value), 1) => {
-                    if key.name == CATALOG_CONTENT_VERSION_KEY {
-                        let seen_catalog_content_version =
-                            value.value.parse().expect("invalid version persisted");
-                        validate_catalog_content_version(
-                            current_catalog_content_version,
-                            seen_catalog_content_version,
-                        )?;
-                    }
-
-                    let prev = self.settings.insert(key.name, value.value);
-                    assert_eq!(
-                        prev, None,
-                        "values must be explicitly retracted before inserting a new value"
-                    );
-                }
-                (StateUpdateKind::Setting(key, value), -1) => {
-                    let prev = self.settings.remove(&key.name);
-                    assert_eq!(
-                        prev,
-                        Some(value.value),
-                        "retraction does not match existing value"
-                    );
-                }
                 (StateUpdateKind::Epoch(epoch), 1) => {
                     current_epoch.maybe_fence(epoch)?;
                 }
@@ -760,10 +727,10 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
     }
 }
 
-/// A Handle to an unopened catalog stored in persist. The unopened catalog can serve `Config` data,
-/// `Setting` data, or the current epoch. All other catalog data may be un-migrated and should not
-/// be read until the catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible
-/// for opening the catalog, see [`OpenableDurableCatalogState::open`] for more details.
+/// A Handle to an unopened catalog stored in persist. The unopened catalog can serve `Config` data
+/// or the current epoch. All other catalog data may be un-migrated and should not be read until the
+/// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
+/// catalog, see [`OpenableDurableCatalogState::open`] for more details.
 ///
 /// Production users should call [`Self::expire`] before dropping an [`UnopenedPersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
@@ -794,8 +761,11 @@ impl UnopenedPersistCatalogState {
         // Check the catalog upgrade shard to see ensure that we don't fence anyone out of persist.
         let upgrade_version =
             fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
-        // If this is `None`, no version was found in the upgrade shard. This is a brand-new
-        // environment, and we don't need to worry about fencing existing users.
+        // If this is `None`, no version was found in the upgrade shard. Either this is a brand new
+        // environment and we don't need to worry about fencing existing users or we're upgrading
+        // from a version that doesn't contain the catalog upgrade shard and we need to proceed
+        // with caution for that one week until the catalog upgrade shard exists in all
+        // environments.
         if let Some(upgrade_version) = upgrade_version {
             if mz_persist_client::cfg::check_data_version(&upgrade_version, &version).is_err() {
                 return Err(DurableCatalogError::IncompatiblePersistVersion {
@@ -873,11 +843,10 @@ impl UnopenedPersistCatalogState {
             update_applier: UnopenedCatalogStateInner::new(organization_id),
             upper,
             epoch: FenceableEpoch::Unfenced(None),
-            catalog_content_version: version,
             metrics,
         };
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
-        // updates, then we might accidentally fence ourselves out.
+        // updates, then we might accidently fence ourselves out.
         soft_assert_no_log!(
             snapshot.iter().all(|(_, _, diff)| *diff == 1),
             "snapshot should be consolidated: {snapshot:?}"
@@ -965,7 +934,6 @@ impl UnopenedPersistCatalogState {
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
             update_applier: CatalogStateInner::new(),
-            catalog_content_version: self.catalog_content_version,
             metrics: self.metrics,
         };
         catalog.metrics.collection_entries.reset();
@@ -975,13 +943,11 @@ impl UnopenedPersistCatalogState {
         });
         catalog.apply_updates(updates)?;
 
-        let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
             if deploy_generation.is_some() {
                 txn.set_config(DEPLOY_GENERATION.into(), deploy_generation)?;
             }
-            txn.set_catalog_content_version(catalog_content_version)?;
             txn
         } else {
             soft_assert_eq_no_log!(
@@ -998,14 +964,7 @@ impl UnopenedPersistCatalogState {
                 return Err(CatalogError::Durable(DurableCatalogError::Uninitialized));
             };
             let mut txn = catalog.transaction().await?;
-            initialize::initialize(
-                &mut txn,
-                bootstrap_args,
-                initial_ts,
-                deploy_generation,
-                catalog_content_version,
-            )
-            .await?;
+            initialize::initialize(&mut txn, bootstrap_args, initial_ts, deploy_generation).await?;
             txn
         };
 
@@ -1043,7 +1002,7 @@ impl UnopenedPersistCatalogState {
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
     #[mz_ore::instrument]
-    async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, DurableCatalogError> {
+    async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
         self.sync_to_current_upper().await?;
         Ok(self.update_applier.configs.get(key).cloned())
     }
@@ -1052,35 +1011,8 @@ impl UnopenedPersistCatalogState {
     ///
     /// The user version is used to determine if a migration is needed.
     #[mz_ore::instrument]
-    pub(crate) async fn get_user_version(&mut self) -> Result<Option<u64>, DurableCatalogError> {
+    pub(crate) async fn get_user_version(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_current_config(USER_VERSION_KEY).await
-    }
-
-    /// Get the current value of setting `name`.
-    ///
-    /// Some settings need to be read before the catalog is opened for bootstrapping.
-    #[mz_ore::instrument]
-    async fn get_current_setting(
-        &mut self,
-        name: &str,
-    ) -> Result<Option<String>, DurableCatalogError> {
-        self.sync_to_current_upper().await?;
-        Ok(self.update_applier.settings.get(name).cloned())
-    }
-
-    /// Get the catalog content version.
-    ///
-    /// The catalog content version is the semantic version of the most recent binary that wrote to
-    /// the catalog.
-    #[mz_ore::instrument]
-    async fn get_catalog_content_version(
-        &mut self,
-    ) -> Result<Option<semver::Version>, DurableCatalogError> {
-        let version = self
-            .get_current_setting(CATALOG_CONTENT_VERSION_KEY)
-            .await?;
-        let version = version.map(|version| version.parse().expect("invalid version persisted"));
-        Ok(version)
     }
 }
 
@@ -1188,7 +1120,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 
     #[mz_ore::instrument]
-    async fn has_system_config_synced_once(&mut self) -> Result<bool, DurableCatalogError> {
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
         self.get_current_config(SYSTEM_CONFIG_SYNCED_KEY)
             .await
             .map(|value| value.map(|value| value > 0).unwrap_or(false))
@@ -1294,7 +1226,6 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
         &mut self,
         update: StateUpdate<StateUpdateKind>,
         current_epoch: &mut FenceableEpoch,
-        current_catalog_content_version: &semver::Version,
         metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKind>>, DurableCatalogError> {
         if let Some(collection_type) = update.kind.collection_type() {
@@ -1323,21 +1254,6 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
             (StateUpdateKind::Epoch(epoch), 1) => {
                 current_epoch.maybe_fence(epoch)?;
                 Ok(None)
-            }
-            (StateUpdateKind::Setting(key, value), diff @ 1)
-                if key.name == CATALOG_CONTENT_VERSION_KEY =>
-            {
-                let seen_catalog_content_version =
-                    value.value.parse().expect("invalid version persisted");
-                validate_catalog_content_version(
-                    current_catalog_content_version,
-                    seen_catalog_content_version,
-                )?;
-                Ok(Some(StateUpdate {
-                    kind: StateUpdateKind::Setting(key, value),
-                    ts: update.ts,
-                    diff,
-                }))
             }
             (kind, diff) => Ok(Some(StateUpdate {
                 kind,
@@ -1633,7 +1549,12 @@ fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Times
 }
 
 /// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
-/// exist if we are creating a brand-new environment.
+/// exist if the catalog upgrade shard itself doesn't exist which could happen in the following
+/// scenarios:
+///
+///   - We are creating a brand new environment.
+///   - We are upgrading from a version of the code where the catalog upgrade shard didn't
+///   exist.
 async fn fetch_catalog_upgrade_shard_version(
     persist_client: &PersistClient,
     upgrade_shard_id: ShardId,
@@ -1691,22 +1612,6 @@ async fn snapshot_binary_inner(
         .into_iter()
         .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
-}
-
-/// Validate that the binary version of the current catalog is not less than any binary version
-/// that has written to the catalog.
-fn validate_catalog_content_version(
-    current_catalog_content_version: &semver::Version,
-    seen_catalog_content_version: semver::Version,
-) -> Result<(), DurableCatalogError> {
-    if current_catalog_content_version < &seen_catalog_content_version {
-        Err(DurableCatalogError::IncompatiblePersistVersion {
-            found_version: seen_catalog_content_version,
-            catalog_version: current_catalog_content_version.clone(),
-        })
-    } else {
-        Ok(())
-    }
 }
 
 // Debug methods used by the catalog-debug tool.

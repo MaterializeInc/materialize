@@ -16,6 +16,7 @@ use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, CatalogError, DurableCatalogError,
     Epoch, OpenableDurableCatalogState, CATALOG_VERSION,
 };
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_persist_client::PersistClient;
 use mz_repr::{Diff, Timestamp};
@@ -168,9 +169,6 @@ async fn test_debug<'a>(
     );
 
     // Check adding a new value via `edit`.
-    let settings = unconsolidated_trace.settings.values;
-    assert_eq!(settings.len(), 1);
-
     let prev = debug_state
         .edit::<SettingCollection>(
             proto::SettingKey {
@@ -187,11 +185,8 @@ async fn test_debug<'a>(
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
-    assert_eq!(settings.len(), 2);
-    let ((key, value), _ts, diff) = settings
-        .into_iter()
-        .find(|((key, _), _, _)| key.name == "debug-key")
-        .unwrap();
+    assert_eq!(settings.len(), 1);
+    let ((key, value), _ts, diff) = settings.into_element();
     assert_eq!(
         key,
         proto::SettingKey {
@@ -228,11 +223,8 @@ async fn test_debug<'a>(
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
-    assert_eq!(settings.len(), 2);
-    let ((key, value), _ts, diff) = settings
-        .into_iter()
-        .find(|((key, _), _, _)| key.name == "debug-key")
-        .unwrap();
+    assert_eq!(settings.len(), 1);
+    let ((key, value), _ts, diff) = settings.into_element();
     assert_eq!(
         key,
         proto::SettingKey {
@@ -258,9 +250,9 @@ async fn test_debug<'a>(
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
-    assert_eq!(settings.len(), 1);
+    assert_eq!(settings.len(), 0);
 
     let consolidated_trace = openable_state_reader.trace_consolidated().await.unwrap();
     let settings = consolidated_trace.settings.values;
-    assert_eq!(settings.len(), 1);
+    assert_eq!(settings.len(), 0);
 }
