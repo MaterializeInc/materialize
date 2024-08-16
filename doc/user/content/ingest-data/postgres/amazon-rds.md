@@ -98,7 +98,11 @@ As a first step, you need to make sure logical replication is enabled.
 
 {{% postgres-direct/create-a-publication-aws %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If your database is publicly accessible you can skip this step.
+{{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -406,7 +410,7 @@ start by selecting the relevant option.
      u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
     ```
 
-1. Update your VPC endpoint service to [accept connections from the AWS principal](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html).  Skip this step if your database is publicly accessible.
+1. Update your VPC endpoint service to [accept connections from the AWS principal](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html).
 
 1. If your AWS PrivateLink service is configured to require acceptance of
    connection requests, [manually approve the connection request from Materialize](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
