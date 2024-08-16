@@ -234,6 +234,33 @@ Notices:
 
 EOF
 
+# Create a second, similar MV, to test the situation when two notices have the same object as their dependency.
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT *
+FROM t6
+WHERE y=5;
+
+query T multiline
+EXPLAIN WITH(humanized expressions) MATERIALIZED VIEW mv2;
+----
+materialize.notices.mv2:
+  Filter (#1{y} = 5)
+    ReadIndex on=t6 t6_idx_x_y=[*** full scan ***]
+
+Used Indexes:
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+
+EOF
+
 # Verify that the same notices can be found in the catalog.
 query TTTTTTTT
 SELECT
@@ -242,16 +269,39 @@ FROM
   mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
-  mv.name = 'mv1';
+  mv.name IN ('mv1', 'mv2');
 ----
 Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv2 AS
+SELECT *
+FROM t6
+WHERE y=7;
+
+# The notice text should have changed.
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
+WHERE
+  mv.name IN ('mv1', 'mv2');
+----
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 
 # Drop one of the indexes associated with the notices.
 statement ok
 DROP INDEX t6_idx_x_y_z;
 
-# Verify that the second notice is no longer in the catalog.
+# Verify that the associated notices are no longer in the catalog.
 query TTTTTTTT
 SELECT
   n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
@@ -259,24 +309,27 @@ FROM
   mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
-  mv.name = 'mv1';
+  mv.name IN ('mv1', 'mv2');
+----
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+
+# Drop one of the catalog items associated with the notices.
+statement ok
+DROP MATERIALIZED VIEW mv2;
+
+# Verify that one of the notices are no longer in the catalog.
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
+WHERE
+  mv.name IN ('mv1', 'mv2');
 ----
 Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 
-# Drop the catalog item associated with the notices.
-statement ok
-DROP MATERIALIZED VIEW mv1;
-
-# Verify that the notices are no longer in the catalog.
-query TTTTTTTT
-SELECT
-  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
-FROM
-  mz_internal.mz_notices n JOIN
-  mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
-WHERE
-  mv.name = 'mv1';
-----
 
 # Re-create the index dropped above.
 statement ok
