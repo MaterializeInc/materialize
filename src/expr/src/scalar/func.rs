@@ -69,7 +69,7 @@ use crate::{like_pattern, EvalError, MirScalarExpr};
 #[macro_use]
 mod macros;
 mod encoding;
-mod format;
+pub(crate) mod format;
 pub(crate) mod impls;
 
 pub use impls::*;
@@ -4790,6 +4790,8 @@ derive_unary!(
     TimezoneTimestampTz,
     TimezoneTime,
     ToTimestamp,
+    ToCharTimestamp,
+    ToCharTimestampTz,
     JustifyDays,
     JustifyHours,
     JustifyInterval,
@@ -5590,6 +5592,14 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 wall_time: Some(func.wall_time.into_proto()),
             }),
             UnaryFunc::ToTimestamp(_) => ToTimestamp(()),
+            UnaryFunc::ToCharTimestamp(func) => ToCharTimestamp(ProtoToCharTimestamp {
+                format_string: func.format_string.into_proto(),
+                format: Some(func.format.into_proto()),
+            }),
+            UnaryFunc::ToCharTimestampTz(func) => ToCharTimestampTz(ProtoToCharTimestamp {
+                format_string: func.format_string.into_proto(),
+                format: Some(func.format.into_proto()),
+            }),
             UnaryFunc::JustifyDays(_) => JustifyDays(()),
             UnaryFunc::JustifyHours(_) => JustifyHours(()),
             UnaryFunc::JustifyInterval(_) => JustifyInterval(()),
@@ -6069,6 +6079,20 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 }
                 .into()),
                 ToTimestamp(()) => Ok(impls::ToTimestamp.into()),
+                ToCharTimestamp(func) => Ok(impls::ToCharTimestamp {
+                    format_string: func.format_string,
+                    format: func
+                        .format
+                        .into_rust_if_some("ProtoToCharTimestamp::format")?,
+                }
+                .into()),
+                ToCharTimestampTz(func) => Ok(impls::ToCharTimestampTz {
+                    format_string: func.format_string,
+                    format: func
+                        .format
+                        .into_rust_if_some("ProtoToCharTimestamp::format")?,
+                }
+                .into()),
                 JustifyDays(()) => Ok(impls::JustifyDays.into()),
                 JustifyHours(()) => Ok(impls::JustifyHours.into()),
                 JustifyInterval(()) => Ok(impls::JustifyInterval.into()),
