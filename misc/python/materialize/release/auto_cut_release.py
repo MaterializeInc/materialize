@@ -11,13 +11,13 @@
 
 import os
 import sys
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from materialize import MZ_ROOT, git, spawn
 from materialize.mz_version import MzVersion
 
-version_file_text = """---
+VERSION_FILE_TEXT = """---
 title: "Materialize $VERSION"
 date: $DATE
 released: false
@@ -72,7 +72,7 @@ def main():
         MZ_ROOT / "doc" / "user" / "content" / "releases" / f"{next_version_final}.md"
     )
     if not next_version_doc_file.exists():
-        text = version_file_text.replace("$VERSION", str(next_version_final)).replace(
+        text = VERSION_FILE_TEXT.replace("$VERSION", str(next_version_final)).replace(
             "$DATE", next_thursday.strftime("%Y-%m-%d")
         )
         next_version_doc_file.write_text(text)
