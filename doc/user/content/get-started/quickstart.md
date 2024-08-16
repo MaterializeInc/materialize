@@ -18,7 +18,7 @@ use SQL to transform, deliver, and act on fast-changing data.
 
 This quickstart will get you up and running in a few minutes and with no
 dependencies, so you can experience the superpowers of an operational data
-warehouse first-hand:
+store first-hand:
 
 * **Interactivity**: get immediate responses from indexed warehouse relations and derived results.
 
