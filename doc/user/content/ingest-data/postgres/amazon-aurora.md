@@ -41,7 +41,13 @@ Materialize.
 
 {{% postgres-direct/create-a-publication-aws %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your Aurora instance is publicly accessible, **you can
+skip this step**. For production scenarios, we recommend configuring one of the
+network security options below.
+{{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -68,7 +74,7 @@ Select the option that works best for you.
     SELECT * FROM mz_egress_ips;
     ```
 
-1. [Add an inbound rule to your Aurora security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/changing-security-group.html#add-remove-instance-security-groups)
+1. In the AWS Management Console, [add an inbound rule to your Aurora security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/changing-security-group.html#add-remove-instance-security-groups)
     for each IP address from the previous step.
 
     In each rule:
@@ -102,8 +108,9 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
 
     To get the IP address of your database instance:
 
-    1. Select your database in the RDS Console. 1. Find your Aurora endpoint
-    under **Connectivity & security**. 1. Use the `dig` or `nslooklup` command
+    1. In the AWS Management Console, select your database.
+    1. Find your Aurora endpoint under **Connectivity & security**.
+    1. Use the `dig` or `nslooklup` command
     to find the IP address that the endpoint resolves to:
 
        ```sh
@@ -282,9 +289,9 @@ start by selecting the relevant option.
     ```
 
     - Replace `<host>` with the **Writer** endpoint for your Aurora database. To
-      find the endpoint, select your database in the RDS Console, then click
-      the **Connectivity & security** tab and look for the endpoint with
-      type **Writer**.
+      find the endpoint, select your database in the AWS Management Console,
+      then click the **Connectivity & security** tab and look for the endpoint
+      with type **Writer**.
 
         <div class="warning">
             <strong class="gutter">WARNING!</strong>
@@ -331,7 +338,7 @@ start by selecting the relevant option.
     );
     ```
 
-    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-configure-network-security).
+    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
 
     - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
       zones in your AWS account.
@@ -397,8 +404,8 @@ details for Materialize to use:
     ```
 
     - Replace `<host>` with your Aurora endpoint. To find your Aurora endpoint,
-      select your database in the RDS Console, and look under **Connectivity &
-      security**.
+      select your database in the AWS Management Console, and look
+      under **Connectivity & security**.
 
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.
@@ -439,7 +446,7 @@ details for Materialize to use:
     ```
 
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#b-configure-network-security).
+      address and port of the SSH bastion host you created [earlier](#b-optional-configure-network-security).
 
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you
       created for your SSH bastion host.
@@ -501,8 +508,8 @@ password for the `materialize` PostgreSQL user you created [earlier](#2-create-a
     ```
 
     - Replace `<host>` with your Aurora endpoint. To find your Aurora endpoint,
-      select your database in the RDS Console, and look under **Connectivity &
-      security**.
+      select your database in the AWS Management Console, and look
+      under **Connectivity & security**.
 
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.

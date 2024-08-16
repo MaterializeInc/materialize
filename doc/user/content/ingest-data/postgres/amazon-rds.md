@@ -101,7 +101,9 @@ As a first step, you need to make sure logical replication is enabled.
 ## B. (Optional) Configure network security
 
 {{< note >}}
-If your database is publicly accessible you can skip this step.
+If you are prototyping and your RDS instance is publicly accessible, **you can
+skip this step**. For production scenarios, we recommend configuring one of the
+network security options below.
 {{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
