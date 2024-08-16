@@ -236,6 +236,11 @@ case "$cmd" in
             --env COCKROACH_URL
             # For ci-closed-issues-detect
             --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
+            # For auto_cut_release
+            --env GIT_AUTHOR_EMAIL
+            --env GIT_AUTHOR_NAME
+            --env GIT_COMMITTER_EMAIL
+            --env GIT_COMMITTER_NAME
         )
 
         if [[ $detach_container == "true" ]]; then
