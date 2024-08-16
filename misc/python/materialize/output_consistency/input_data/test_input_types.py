@@ -27,14 +27,12 @@ class ConsistencyTestTypesInput:
         self.all_data_types_with_values: list[DataTypeWithValues] = (
             ALL_DATA_TYPES_WITH_VALUES
         )
-        self.max_value_count = self.get_max_value_count_of_all_types(table_index=None)
+        self.cached_max_value_count_per_table_index: dict[int | None, int] = dict()
 
     def remove_types(self, shall_remove: Callable[[DataType], bool]) -> None:
         self.all_data_types_with_values = [
             x for x in self.all_data_types_with_values if not shall_remove(x.data_type)
         ]
-
-        self.max_value_count = self.get_max_value_count_of_all_types(table_index=None)
 
     def remove_values(self, shall_remove: Callable[[DataValue], bool]) -> None:
         for data_type_with_values in self.all_data_types_with_values:
@@ -45,7 +43,10 @@ class ConsistencyTestTypesInput:
             ]
 
     def get_max_value_count_of_all_types(self, table_index: int | None) -> int:
-        return max(
+        if table_index in self.cached_max_value_count_per_table_index.keys():
+            return self.cached_max_value_count_per_table_index[table_index]
+
+        count = max(
             len(
                 [
                     value
@@ -56,6 +57,10 @@ class ConsistencyTestTypesInput:
             )
             for type_with_values in self.all_data_types_with_values
         )
+
+        self.cached_max_value_count_per_table_index[table_index] = count
+
+        return count
 
     def assign_columns_to_tables(
         self, vertical_tables: int, randomized_picker: RandomizedPicker

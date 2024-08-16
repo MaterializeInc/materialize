@@ -80,6 +80,9 @@ class ConsistencyTestRunner:
             self.input_data, self.evaluation_strategies
         )
 
+        # reset cache after having assigned columns to tables as a precaution
+        self.input_data.types_input.cached_max_value_count_per_table_index.clear()
+
     def start(self) -> ConsistencyTestSummary:
         expression_count = 0
         test_summary = ConsistencyTestSummary(
