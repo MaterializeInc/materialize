@@ -478,7 +478,7 @@ fn bench_json(c: &mut Criterion) {
                 std::hint::black_box(&mut builder).push(&row, &(), 1, 1);
             }
             let part = builder.finish();
-            std::hint::black_box((part.key, part.key_stats));
+            std::hint::black_box(part.key);
         });
     });
 
@@ -559,7 +559,7 @@ fn bench_string(c: &mut Criterion) {
                 std::hint::black_box(&mut builder).push(&row, &(), 1, 1);
             }
             let part = builder.finish();
-            std::hint::black_box((part.key, part.key_stats));
+            std::hint::black_box(part.key);
         });
     });
 

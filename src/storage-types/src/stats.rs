@@ -348,6 +348,7 @@ impl RelationPartStats<'_> {
 mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::columnar::{ColumnDecoder, Schema2};
     use mz_persist_types::part::{PartBuilder, PartBuilder2};
     use mz_persist_types::stats::PartStats;
     use mz_repr::{arb_datum_for_column, RelationType};
@@ -512,7 +513,12 @@ mod tests {
             builder2.push(data, &(), 1i64, 1i64);
         }
         let part2 = builder2.finish();
-        let stats2 = part2.key_stats.into_struct_stats().unwrap();
+        let stats2 = <RelationDesc as Schema2<SourceData>>::decoder_any(desc, part2.key.as_ref())
+            .map_err(|e| e.to_string())?
+            .stats();
+        let stats2 = stats2
+            .into_struct_stats()
+            .expect("row stats should be a struct");
 
         let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
 

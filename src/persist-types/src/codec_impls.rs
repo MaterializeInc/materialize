@@ -36,7 +36,9 @@ use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
 };
-use crate::stats::{BytesStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
+use crate::stats::{
+    BytesStats, ColumnarStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats,
+};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
 /// An implementation of [Schema] for [()].
@@ -142,11 +144,14 @@ impl ColumnDecoder<()> for UnitColumnar {
             panic!("index out of bounds, idx: {idx}, len: {}", self.len);
         }
     }
+
+    fn stats(&self) -> ColumnarStats {
+        ColumnarStats::NONE
+    }
 }
 
 impl ColumnEncoder<()> for UnitColumnar {
     type FinishedColumn = NullArray;
-    type FinishedStats = NoneStats;
 
     fn append(&mut self, _val: &()) {
         self.len += 1;
@@ -156,8 +161,8 @@ impl ColumnEncoder<()> for UnitColumnar {
         self.len += 1;
     }
 
-    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
-        (NullArray::new(self.len), NoneStats)
+    fn finish(self) -> Self::FinishedColumn {
+        NullArray::new(self.len)
     }
 }
 
@@ -246,7 +251,6 @@ pub struct SimpleColumnarEncoder<T: SimpleColumnarData>(T::ArrowBuilder);
 
 impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
     type FinishedColumn = T::ArrowColumn;
-    type FinishedStats = NoneStats;
 
     fn append(&mut self, val: &T) {
         T::push(val, &mut self.0);
@@ -254,7 +258,7 @@ impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
     fn append_null(&mut self) {
         T::push_null(&mut self.0)
     }
-    fn finish(mut self) -> (Self::FinishedColumn, Self::FinishedStats) {
+    fn finish(mut self) -> Self::FinishedColumn {
         let array = ArrayBuilder::finish(&mut self.0);
         let array = array
             .as_any()
@@ -262,7 +266,7 @@ impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
             .expect("created using StringBuilder")
             .clone();
 
-        (array, NoneStats)
+        array
     }
 }
 
@@ -283,6 +287,10 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     }
     fn is_null(&self, idx: usize) -> bool {
         self.0.is_null(idx)
+    }
+
+    fn stats(&self) -> ColumnarStats {
+        ColumnarStats::NONE
     }
 }
 
@@ -1323,7 +1331,6 @@ pub struct TodoColumnarEncoder<T>(PhantomData<T>);
 
 impl<T> ColumnEncoder<T> for TodoColumnarEncoder<T> {
     type FinishedColumn = StructArray;
-    type FinishedStats = NoneStats;
 
     fn append(&mut self, _val: &T) {
         panic!("TODO")
@@ -1333,7 +1340,7 @@ impl<T> ColumnEncoder<T> for TodoColumnarEncoder<T> {
         panic!("TODO")
     }
 
-    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
+    fn finish(self) -> Self::FinishedColumn {
         panic!("TODO")
     }
 }
@@ -1348,6 +1355,10 @@ impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
     }
 
     fn is_null(&self, _idx: usize) -> bool {
+        panic!("TODO")
+    }
+
+    fn stats(&self) -> ColumnarStats {
         panic!("TODO")
     }
 }
