@@ -202,7 +202,11 @@ impl Catalog {
                 entry.push(Arc::clone(notice))
             }
             if let Some(item_id) = notice.item_id {
-                soft_assert_eq_or_log!(item_id, id, "notice.item_id should match the id for whom we are saving the notice");
+                soft_assert_eq_or_log!(
+                    item_id,
+                    id,
+                    "notice.item_id should match the id for whom we are saving the notice"
+                );
             }
         }
         // Add the dataflow with the scoped entries.
@@ -239,12 +243,18 @@ impl Catalog {
             self.plans.optimized_plan_by_id.remove(id);
             self.plans.physical_plan_by_id.remove(id);
             if let Some(mut metainfo) = self.plans.dataflow_metainfos.remove(id) {
-                soft_assert_or_log!(metainfo.optimizer_notices.iter().all_unique(), "should have been pushed there by `push_optimizer_notice_dedup`");
+                soft_assert_or_log!(
+                    metainfo.optimizer_notices.iter().all_unique(),
+                    "should have been pushed there by `push_optimizer_notice_dedup`"
+                );
                 for n in metainfo.optimizer_notices.drain(..) {
                     // Remove the corresponding notices_by_dep_id entries.
                     for dep_id in n.dependencies.iter() {
                         if let Some(notices) = self.plans.notices_by_dep_id.get_mut(dep_id) {
-                            soft_assert_or_log!(notices.iter().any(|x| &n == x), "corrupt notices_by_dep_id");
+                            soft_assert_or_log!(
+                                notices.iter().any(|x| &n == x),
+                                "corrupt notices_by_dep_id"
+                            );
                             notices.retain(|x| &n != x)
                         }
                     }
@@ -295,12 +305,30 @@ impl Catalog {
             use mz_ore::str::{bracketed, separated};
             let bad_notices = dropped_notices.iter().filter(|n| Arc::strong_count(n) != 1);
             let bad_notices = bad_notices.map(|n| {
+                // Try to find where the bad reference is.
+                // Maybe in `dataflow_metainfos`?
+                let mut dataflow_metainfo_occurrences = Vec::new();
+                for (id, meta_info) in self.plans.dataflow_metainfos.iter() {
+                    if meta_info.optimizer_notices.contains(n) {
+                        dataflow_metainfo_occurrences.push(id);
+                    }
+                }
+                // Or `notices_by_dep_id`?
+                let mut notices_by_dep_id_occurrences = Vec::new();
+                for (id, notices) in self.plans.notices_by_dep_id.iter() {
+                    if notices.iter().contains(n) {
+                        notices_by_dep_id_occurrences.push(id);
+                    }
+                }
                 format!(
-                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {})",
+                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {}, \
+                    dataflow_metainfo_occurrences = {:?}, notices_by_dep_id_occurrences = {:?})",
                     n.id,
                     n.kind,
                     n.dependencies,
-                    Arc::strong_count(n)
+                    Arc::strong_count(n),
+                    dataflow_metainfo_occurrences,
+                    notices_by_dep_id_occurrences
                 )
             });
             let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
