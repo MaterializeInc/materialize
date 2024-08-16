@@ -74,10 +74,12 @@ use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::{TimestamplessUpdate, Update};
+use mz_storage_client::client::TimestamplessUpdate;
 use mz_storage_client::controller::{MonotonicAppender, StorageWriteOp};
+use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
@@ -211,6 +213,7 @@ where
     pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
         read_handle_fn: R,
         force_writable: bool,
     ) where
@@ -238,7 +241,7 @@ where
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = DifferentialWriteTask::spawn(
             id,
-            self.write_handle.clone(),
+            write_handle,
             read_handle_fn,
             read_only_rx,
             self.now.clone(),
@@ -442,7 +445,7 @@ where
     /// The collection that we are writing to.
     id: GlobalId,
 
-    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+    write_handle: WriteHandle<SourceData, (), T, Diff>,
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
@@ -501,7 +504,7 @@ where
     /// handles for interacting with it.
     fn spawn(
         id: GlobalId,
-        write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
         read_handle_fn: R,
         read_only_watch: watch::Receiver<bool>,
         now: NowFn,
@@ -610,31 +613,28 @@ where
             return ControlFlow::Continue(());
         }
 
-        let request = vec![(self.id, vec![], self.current_upper.clone(), now.clone())];
-
         assert!(!self.read_only);
-        match self.write_handle.compare_and_append(request).await {
+        let res = self
+            .write_handle
+            .compare_and_append_batch(
+                &mut [],
+                Antichain::from_elem(self.current_upper.clone()),
+                Antichain::from_elem(now.clone()),
+            )
+            .await
+            .expect("valid usage");
+        match res {
             // All good!
-            Ok(Ok(())) => {
+            Ok(()) => {
                 tracing::debug!(%self.id, "bumped upper of differential collection");
                 self.current_upper = now;
             }
-            Ok(Err(StorageError::InvalidUppers(failed_ids))) => {
+            Err(err) => {
                 // Someone else wrote to the collection or bumped the upper. We
                 // need to sync to latest persist state and potentially patch up
                 // our `to_write`, based on what we learn and `desired`.
 
-                assert_eq!(
-                    failed_ids.len(),
-                    1,
-                    "received errors for more than one collection"
-                );
-                assert_eq!(
-                    failed_ids[0].id, self.id,
-                    "received errors for a different collection"
-                );
-
-                let actual_upper = if let Some(ts) = failed_ids[0].current_upper.as_option() {
+                let actual_upper = if let Some(ts) = err.current.as_option() {
                     ts.clone()
                 } else {
                     return ControlFlow::Break("upper is the empty antichain".to_string());
@@ -645,17 +645,6 @@ where
                 self.current_upper = actual_upper;
 
                 self.sync_to_persist().await;
-            }
-            Ok(Err(err)) => {
-                panic!(
-                    "unexpected error while trying to bump upper of {}: {:?}",
-                    self.id, err
-                );
-            }
-            // Sender hung up, this seems fine and can happen when shutting down.
-            Err(_recv_error) => {
-                // Exit the run loop because there is no other work we can do.
-                return ControlFlow::Break("persist worker is gone".to_string());
             }
         }
 
@@ -785,47 +774,35 @@ where
 
         loop {
             // Append updates to persist!
-            let updates_to_write = self
-                .to_write
-                .iter()
-                .map(|(row, diff)| Update {
-                    row: row.clone(),
-                    timestamp: self.current_upper.clone(),
-                    diff: diff.clone(),
-                })
-                .collect();
-
             let now = T::from((self.now)());
             let new_upper = std::cmp::max(
                 now,
                 TimestampManipulation::step_forward(&self.current_upper),
             );
 
-            let request = vec![(
-                self.id,
-                updates_to_write,
-                self.current_upper.clone(),
-                new_upper.clone(),
-            )];
+            let updates_to_write = self
+                .to_write
+                .iter()
+                .map(|(row, diff)| {
+                    (
+                        (SourceData(Ok(row.clone())), ()),
+                        self.current_upper.clone(),
+                        diff.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
 
             assert!(!self.read_only);
-            let append_result = match self.write_handle.compare_and_append(request.clone()).await {
-                // We got a response!
-                Ok(append_result) => append_result,
-                // Failed to receive which means the worker shutdown.
-                Err(_recv_error) => {
-                    // Sender hung up, this seems fine and can happen when
-                    // shutting down.
-                    notify_listeners(responders, || {
-                        Err(StorageError::ShuttingDown("PersistMonotonicWriteWorker"))
-                    });
-
-                    // End the task since we can no longer send writes to persist.
-                    return ControlFlow::Break("sender hung up".to_string());
-                }
-            };
-
-            match append_result {
+            let res = self
+                .write_handle
+                .compare_and_append(
+                    updates_to_write,
+                    Antichain::from_elem(self.current_upper.clone()),
+                    Antichain::from_elem(new_upper.clone()),
+                )
+                .await
+                .expect("valid usage");
+            match res {
                 // Everything was successful!
                 Ok(()) => {
                     // Notify all of our listeners.
@@ -843,22 +820,11 @@ where
                     break;
                 }
                 // Failed to write to some collections,
-                Err(StorageError::InvalidUppers(failed_ids)) => {
+                Err(err) => {
                     // Someone else wrote to the collection. We need to read
                     // from persist and update to_write based on that and the
                     // desired state.
-
-                    assert_eq!(
-                        failed_ids.len(),
-                        1,
-                        "received errors for more than one collection"
-                    );
-                    assert_eq!(
-                        failed_ids[0].id, self.id,
-                        "received errors for a different collection"
-                    );
-
-                    let actual_upper = if let Some(ts) = failed_ids[0].current_upper.as_option() {
+                    let actual_upper = if let Some(ts) = err.current.as_option() {
                         ts.clone()
                     } else {
                         return ControlFlow::Break("upper is the empty antichain".to_string());
@@ -869,11 +835,16 @@ where
                     // We've exhausted all of our retries, notify listeners and
                     // break out of the retry loop so we can wait for more data.
                     if retries.next().await.is_none() {
+                        let invalid_upper = InvalidUpper {
+                            id: self.id,
+                            current_upper: err.current,
+                        };
                         notify_listeners(responders, || {
-                            Err(StorageError::InvalidUppers(failed_ids.clone()))
+                            Err(StorageError::InvalidUppers(vec![invalid_upper.clone()]))
                         });
                         error!(
-                            "exhausted retries when appending to managed collection {failed_ids:?}"
+                            "exhausted retries when appending to managed collection {}",
+                            self.id
                         );
                         break;
                     }
@@ -882,14 +853,7 @@ where
 
                     self.sync_to_persist().await;
 
-                    debug!("Retrying invalid-uppers error while appending to differential collection {failed_ids:?}");
-                }
-                // Uh-oh, something else went wrong!
-                Err(other) => {
-                    panic!(
-                        "Unhandled error while appending to managed collection {:?}: {:?}",
-                        self.id, other
-                    )
+                    debug!("Retrying invalid-uppers error while appending to differential collection {}", self.id);
                 }
             }
         }

@@ -262,7 +262,15 @@ where
                 }
                 DataSource::IngestionExport { .. } => (),
                 DataSource::Introspection(i) => {
-                    introspections_to_run.push((*id, i));
+                    let write_handle = self
+                        .open_data_handles(
+                            id,
+                            collection.collection_metadata.data_shard,
+                            collection.collection_metadata.relation_desc.clone(),
+                            &persist_client,
+                        )
+                        .await;
+                    introspections_to_run.push((*id, i, write_handle));
                 }
                 DataSource::Webhook => (),
                 DataSource::Other(DataSourceOther::TableWrites) => {
@@ -287,14 +295,20 @@ where
             };
         }
 
-        for (id, introspection_type) in introspections_to_run {
+        for (id, introspection_type, mut write_handle) in introspections_to_run {
+            let recent_upper = write_handle.shared_upper();
             // Introspection collections are registered with the
             // CollectionManager when they are created. We only bring ourselves
             // up to date with collection contents or do any preparatory
             // consolidation work when we actually start writing to them!
-            self.prepare_introspection_collection(id, introspection_type)
-                .await
-                .expect("cannot fail to prepare introspection collections now");
+            self.prepare_introspection_collection(
+                id,
+                introspection_type,
+                recent_upper,
+                Some(&mut write_handle),
+            )
+            .await
+            .expect("cannot fail to prepare introspection collections now");
         }
 
         // We first do any cleanup/truncation work above and then allow the
@@ -718,9 +732,15 @@ where
 
             // Install the collection state in the appropriate spot.
             match &collection_state.data_source {
-                DataSource::Introspection(_) => {
+                DataSource::Introspection(typ) => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                    self.persist_monotonic_worker.register(id, write);
+                    // We always register the collection with the collection manager,
+                    // regardless of read-only mode. The CollectionManager itself is
+                    // aware of read-only mode and will not attempt to write before told
+                    // to do so.
+                    //
+                    self.register_introspection_collection(id, *typ, write)
+                        .await?;
                     self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
@@ -883,18 +903,7 @@ where
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
-                DataSource::Introspection(i) => {
-
-
-                    // We always register the collection with the collection manager,
-                    // regardless of read-only mode. The CollectionManager itself is
-                    // aware of read-only mode and will not attempt to write before told
-                    // to do so.
-                    //
-                    self.register_introspection_collection(id, *i)
-                        .await?;
-
-                }
+                DataSource::Introspection(_) => {}
                 DataSource::Webhook => {
                     // Register the collection so our manager knows about it.
                     //
@@ -2824,6 +2833,7 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
+        mut write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
@@ -2877,6 +2887,8 @@ where
             fut.boxed()
         };
 
+        let recent_upper = write_handle.shared_upper();
+
         // Types of storage-managed/introspection collections:
         //
         // Append-only: Only accepts blind writes, writes that can
@@ -2892,7 +2904,6 @@ where
         // of the collection stays constant if the thing that is
         // mirrored doesn’t change in cardinality. At steady state,
         // updates always come in pairs of retractions/additions.
-
         match introspection_type {
             // For these, we first register the collection and then prepare it,
             // because the code that prepares differential collection expects to
@@ -2905,13 +2916,19 @@ where
             | IntrospectionType::StorageSinkStatistics => {
                 self.collection_manager.register_differential_collection(
                     id,
+                    write_handle,
                     read_handle_fn,
                     force_writable,
                 );
 
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        None,
+                    )
+                    .await?;
                 }
             }
 
@@ -2926,10 +2943,16 @@ where
             | IntrospectionType::SinkStatusHistory
             | IntrospectionType::PrivatelinkConnectionStatusHistory => {
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        Some(&mut write_handle),
+                    )
+                    .await?;
                 }
 
+                self.persist_monotonic_worker.register(id, write_handle);
                 self.collection_manager
                     .register_append_only_collection(id, force_writable);
             }
@@ -2943,13 +2966,19 @@ where
             | IntrospectionType::ComputeHydrationTimes => {
                 self.collection_manager.register_differential_collection(
                     id,
+                    write_handle,
                     read_handle_fn,
                     force_writable,
                 );
 
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        None,
+                    )
+                    .await?;
                 }
             }
 
@@ -2961,10 +2990,16 @@ where
             | IntrospectionType::StatementLifecycleHistory
             | IntrospectionType::SqlText => {
                 if !self.read_only {
-                    self.prepare_introspection_collection(id, introspection_type)
-                        .await?;
+                    self.prepare_introspection_collection(
+                        id,
+                        introspection_type,
+                        recent_upper,
+                        Some(&mut write_handle),
+                    )
+                    .await?;
                 }
 
+                self.persist_monotonic_worker.register(id, write_handle);
                 self.collection_manager
                     .register_append_only_collection(id, force_writable);
             }
@@ -2982,6 +3017,8 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
+        recent_upper: Antichain<T>,
+        write_handle: Option<&mut WriteHandle<SourceData, (), T, Diff>>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "preparing introspection collection for writes");
 
@@ -2994,7 +3031,7 @@ where
                 // desired state. No need to manually reset.
             }
             IntrospectionType::StorageSourceStatistics => {
-                let prev = self.snapshot_statistics(id).await;
+                let prev = self.snapshot_statistics(id, recent_upper).await;
 
                 let scraper_token = statistics::spawn_statistics_scraper::<
                     statistics::SourceStatistics,
@@ -3022,7 +3059,7 @@ where
                     .insert(id, Box::new((scraper_token, web_token)));
             }
             IntrospectionType::StorageSinkStatistics => {
-                let prev = self.snapshot_statistics(id).await;
+                let prev = self.snapshot_statistics(id, recent_upper).await;
 
                 let scraper_token =
                     statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
@@ -3041,8 +3078,12 @@ where
                 self.introspection_tokens.insert(id, scraper_token);
             }
             IntrospectionType::SourceStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
                 let last_status_per_id = self
-                    .partially_truncate_status_history(IntrospectionType::SourceStatusHistory)
+                    .partially_truncate_status_history(
+                        IntrospectionType::SourceStatusHistory,
+                        write_handle,
+                    )
                     .await;
 
                 let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
@@ -3066,8 +3107,12 @@ where
                 )
             }
             IntrospectionType::SinkStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
                 let last_status_per_id = self
-                    .partially_truncate_status_history(IntrospectionType::SinkStatusHistory)
+                    .partially_truncate_status_history(
+                        IntrospectionType::SinkStatusHistory,
+                        write_handle,
+                    )
                     .await;
 
                 let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
@@ -3091,8 +3136,10 @@ where
                 )
             }
             IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
                 self.partially_truncate_status_history(
                     IntrospectionType::PrivatelinkConnectionStatusHistory,
+                    write_handle,
                 )
                 .await;
             }
@@ -3129,14 +3176,7 @@ where
     ///
     // TODO(guswynn): we need to be more careful about the update time we get here:
     // <https://github.com/MaterializeInc/materialize/issues/25349>
-    async fn snapshot_statistics(&mut self, id: GlobalId) -> Vec<Row> {
-        let upper = self
-            .persist_monotonic_worker
-            .recent_upper(id)
-            .await
-            .expect("missing collection")
-            .expect("missing collection");
-
+    async fn snapshot_statistics(&mut self, id: GlobalId, upper: Antichain<T>) -> Vec<Row> {
         match upper.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
@@ -3212,6 +3252,7 @@ where
     async fn partially_truncate_status_history(
         &mut self,
         collection: IntrospectionType,
+        write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     ) -> BTreeMap<GlobalId, Row> {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
@@ -3254,12 +3295,7 @@ where
 
         let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
-        let upper = self
-            .persist_monotonic_worker
-            .recent_upper(id)
-            .await
-            .expect("missing collection")
-            .expect("missing collection");
+        let upper = write_handle.fetch_recent_upper().await.clone();
 
         let mut rows = match upper.as_option() {
             Some(f) if f > &T::minimum() => {
