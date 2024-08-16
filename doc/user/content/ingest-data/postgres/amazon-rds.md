@@ -71,7 +71,6 @@ As a first step, you need to make sure logical replication is enabled.
     Use the **Apply Immediately** option to immediately reboot your database and
     apply the change.  Keep in mind that rebooting the RDS instance can affect
     database performance.
-    rebooting the RDS instance can affect database performance.
 
     Do not move on to the next step until the database **Status**
     is **Available** in the RDS Console.
