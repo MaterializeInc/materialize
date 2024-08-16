@@ -212,7 +212,6 @@ case "$cmd" in
             --env COMMON_ANCESTOR_OVERRIDE
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
-            --env GITHUB_OUTPUT
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
@@ -270,6 +269,13 @@ case "$cmd" in
             args+=(
                 --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
                 --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
+            )
+        fi
+        # Forward the GitHub output file, if available.
+        if [[ "${GITHUB_OUTPUT:-}" ]]; then
+            args+=(
+                --volume "$GITHUB_OUTPUT:/tmp/github-output"
+                --env "GITHUB_OUTPUT=/tmp/github-output"
             )
         fi
         if [[ "$(uname -s)" = Linux ]]; then
