@@ -2522,6 +2522,13 @@ CREATE SOURCE lg FROM LOAD GENERATOR KEY VALUE (KEYS = 1, PARTITIONS = 2, TICK I
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: KeyValue, options: [LoadGeneratorOption { name: Keys, value: Some(Value(Number("1"))) }, LoadGeneratorOption { name: Partitions, value: Some(Value(Number("2"))) }, LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1m"))) }, LoadGeneratorOption { name: BatchSize, value: Some(Value(Number("100"))) }, LoadGeneratorOption { name: Seed, value: Some(Value(Number("200"))) }, LoadGeneratorOption { name: ValueSize, value: Some(Value(Number("150"))) }, LoadGeneratorOption { name: SnapshotRounds, value: Some(Value(Number("3"))) }, LoadGeneratorOption { name: TransactionalSnapshot, value: Some(Value(Boolean(false))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
+CREATE SOURCE clock FROM LOAD GENERATOR CLOCK (TICK INTERVAL '1s')
+----
+CREATE SOURCE clock FROM LOAD GENERATOR CLOCK (TICK INTERVAL = '1s')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("clock")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Clock, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s', SCALE FACTOR 1, MAX CARDINALITY 100, UP TO 5, AS OF 5)
 ----
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s', SCALE FACTOR = 1, MAX CARDINALITY = 100, UP TO = 5, AS OF = 5)

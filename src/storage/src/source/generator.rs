@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::ops::Rem;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +27,7 @@ use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tokio::time::{interval_at, Instant};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{
@@ -34,6 +36,7 @@ use crate::source::types::{
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
+mod clock;
 mod counter;
 mod datums;
 mod key_value;
@@ -41,6 +44,7 @@ mod marketing;
 mod tpch;
 
 pub use auction::Auction;
+pub use clock::Clock;
 pub use counter::Counter;
 pub use datums::Datums;
 pub use tpch::Tpch;
@@ -62,6 +66,20 @@ impl GeneratorKind {
         match g {
             LoadGenerator::Auction => GeneratorKind::Simple {
                 generator: Box::new(Auction {}),
+                tick_micros,
+                as_of,
+                up_to,
+            },
+            LoadGenerator::Clock => GeneratorKind::Simple {
+                generator: Box::new(Clock {
+                    tick_ms: tick_micros
+                        .map(Duration::from_micros)
+                        .unwrap_or(Duration::from_secs(1))
+                        .as_millis()
+                        .try_into()
+                        .expect("reasonable tick interval"),
+                    as_of_ms: as_of,
+                }),
                 tick_micros,
                 as_of,
                 up_to,
@@ -236,9 +254,28 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                 return;
             };
 
-            let mut rows = generator.by_seed(mz_ore::now::SYSTEM_TIME.clone(), None, resume_offset);
+            let now_fn = mz_ore::now::SYSTEM_TIME.clone();
 
+            let start_instant = {
+                // We want to have our interval start at a nice round number...
+                // for example, if our tick interval is one minute, to start at a minute boundary.
+                // However, the `Interval` type from tokio can't be "floored" in that way.
+                // Instead, figure out the amount we should step forward based on the wall clock,
+                // then apply that to our monotonic clock to make things start at approximately the
+                // right time.
+                let now_millis = now_fn();
+                let now_instant = Instant::now();
+                let delay_millis = tick_micros
+                    .map(|tick_micros| tick_micros / 1000)
+                    .filter(|tick_millis| *tick_millis > 0)
+                    .map(|tick_millis| tick_millis - now_millis.rem(tick_millis))
+                    .unwrap_or(0);
+                now_instant + Duration::from_millis(delay_millis)
+            };
             let tick = Duration::from_micros(tick_micros.unwrap_or(1_000_000));
+            let mut tick_interval = interval_at(start_instant, tick);
+
+            let mut rows = generator.by_seed(now_fn, None, resume_offset);
 
             let mut committed_uppers = std::pin::pin!(committed_uppers);
 
@@ -309,11 +346,9 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         // TODO(petrosagg): Remove the sleep below and make generators return an
                         // async stream so that they can drive the rate of production directly
                         if resume_offset < offset {
-                            let mut sleep = std::pin::pin!(tokio::time::sleep(tick));
-
                             loop {
                                 tokio::select! {
-                                    _ = &mut sleep => {
+                                    _tick = tick_interval.tick() => {
                                         break;
                                     }
                                     Some(frontier) = committed_uppers.next() => {

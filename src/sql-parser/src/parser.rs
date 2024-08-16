@@ -3230,9 +3230,10 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator = match self
-                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS, KEY])?
-                {
+                let generator = match self.expect_one_of_keywords(&[
+                    CLOCK, COUNTER, MARKETING, AUCTION, TPCH, DATUMS, KEY,
+                ])? {
+                    CLOCK => LoadGenerator::Clock,
                     COUNTER => LoadGenerator::Counter,
                     AUCTION => LoadGenerator::Auction,
                     TPCH => LoadGenerator::Tpch,

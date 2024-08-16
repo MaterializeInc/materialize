@@ -19,6 +19,7 @@ message ProtoLoadGeneratorSourceConnection {
     reserved 1;
     oneof kind {
         ProtoCounterLoadGenerator counter = 6;
+        google.protobuf.Empty clock = 11;
         google.protobuf.Empty auction = 3;
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
@@ -46,7 +47,7 @@ message ProtoKeyValueLoadGenerator {
     uint64 keys = 1;
     uint64 snapshot_rounds = 2;
     bool transactional_snapshot = 3;
-    uint64 value_size= 4;
+    uint64 value_size = 4;
     uint64 partitions = 5;
     optional mz_proto.ProtoDuration tick_interval = 6;
     uint64 batch_size = 7;
