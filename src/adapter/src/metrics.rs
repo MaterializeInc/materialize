@@ -32,6 +32,7 @@ pub struct Metrics {
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
     pub statement_logging_actual_bytes: IntCounterVec,
+    pub message_batch: HistogramVec,
     pub message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
     pub append_table_duration_seconds: HistogramVec,
@@ -119,6 +120,11 @@ impl Metrics {
             statement_logging_actual_bytes: registry.register(metric!(
                 name: "mz_statement_logging_actual_bytes",
                 help: "The total amount of SQL text that was logged by statement logging.",
+            )),
+            message_batch: registry.register(metric!(
+                name: "mz_coordinator_message_batch_size",
+                help: "Message batch size handled by the coordinator.",
+                buckets: vec![0., 1., 2., 3., 4., 6., 8., 12., 16., 24., 32., 48., 64.],
             )),
             message_handling: registry.register(metric!(
                 name: "mz_slow_message_handling",
