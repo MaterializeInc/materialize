@@ -9,12 +9,19 @@ menu:
 
 ---
 
-For testing/evaluation purposes, you can [download the Materialize Docker
-image](https://materialize.com/download/?utm_campaign=General&utm_source=documentation)
-and run Materilize locally in a Docker container. To more fully evaluate
+For testing/evaluation purposes, you can download the Materialize Docker image
+and run Materilize locally in a Docker container.  The Docker image:
+
+- Includes the [Quickstart](/get-started/quickstart) data source
+
+- Supports connecting your data sources
+
+- Provides [community support via
+  Slack](https://materializecommunity.slack.com/join/shared_invite/zt-2bad5ce4i-ZsiPWI5jd7Q9pRDGYj3dkw#/shared-invite/email)
+
+To more fully evaluate
 Materialize and its features, Materialize offers a [free trial
 account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
-
 
 {{< warning >}}
 
@@ -23,6 +30,14 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
 
 {{</ warning >}}
 
+### License and Privacy Policy
+
+- Use of the Docker image is subject to Materialize's [BSL
+  License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
+
+- By downloading the Docker image, you are agreeing to Materialize's [privacy
+  policy](https://materialize.com/privacy-policy/).
+
 ### Prerequisites
 
 - Docker. If [Docker](https://www.docker.com/) is not installed, refer to its
@@ -30,9 +45,23 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
 
 ### Run Materialize in a Docker container
 
-1. Go to the
-   [Download](https://materialize.com/download/?utm_campaign=General&utm_source=documentation)
-   page to download the Materialize image and run Materialize in a Docker container.
+{{< note >}}
+
+- Use of the Docker image is subject to Materialize's [BSL
+   License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
+
+- By downloading the Docker image, you are agreeing to Materialize's [privacy
+   policy](https://materialize.com/privacy-policy/).
+
+{{</ note >}}
+
+1. In a terminal, issue the following command to run a Docker container from the
+   Materialize image. The command downloads the Materialize image, if one has
+   not been already downloaded.
+
+   ```sh
+   docker run -v mzdata:/mzdata -p 6875:6875 -p 6876:6876 materialize/materialized
+   ```
 
    When running locally:
 
@@ -83,13 +112,15 @@ terminal window.
 
 ### Next steps
 
-Sign up for a [free
+To get started ingesting your own data from an external system like Kafka, MySQL
+or PostgreSQL, check the documentation for [sources](/sql/create-source/).
+
+To learn more about Materialize, sign up for a [free
 trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-or [schedule a demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation) to learn more about Materialize.
+or [schedule a
+demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
 
 ### Limitations
-
-{{< warning >}}
 
 The Docker image is for <redb> testing/evaluation purposes only</redb>.  That is:
 
@@ -97,13 +128,11 @@ The Docker image is for <redb> testing/evaluation purposes only</redb>.  That is
 
 - Materialize does <redb>not</redb> provide support for the Docker image.
 
-{{</ warning >}}
-
-Some limitations of the Docker image include:
+Additionally, the Docker image:
 
 - Does <redb>not</redb> support version upgrades.
 
-- Does <redb>not</redb> provide independent scaling of storage and compute.
+- Does <redb>not</redb> provide independent compute/storage scaling
 
 - Does <redb>not</redb> provide use case isolation.
 
