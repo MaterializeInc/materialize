@@ -218,7 +218,9 @@ class QueryGenerator:
                 contains_aggregations,
             )
 
-            row_selection = self._select_rows(storage_layout)
+            row_selection = self._select_rows(
+                storage_layout, [data_source] + additional_data_sources
+            )
 
             expressions = self._remove_known_inconsistencies(
                 test_summary, expressions, row_selection
@@ -279,7 +281,9 @@ class QueryGenerator:
                 [data_source] + additional_data_sources, all_expressions
             )
 
-            row_selection = self._select_rows(storage_layout)
+            row_selection = self._select_rows(
+                storage_layout, [data_source] + additional_data_sources
+            )
 
             ignore_verdict = self.ignore_filter.shall_ignore_expression(
                 expression, row_selection
@@ -329,36 +333,54 @@ class QueryGenerator:
 
         return queries
 
-    def _select_rows(self, storage_layout: ValueStorageLayout) -> DataRowSelection:
+    def _select_rows(
+        self, storage_layout: ValueStorageLayout, data_sources: list[DataSource]
+    ) -> DataRowSelection:
         if storage_layout == ValueStorageLayout.ANY:
             raise RuntimeError("Unresolved storage layout")
         elif storage_layout == ValueStorageLayout.HORIZONTAL:
             return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
-            # It is still unknown at this point if we need a join.
             if self.randomized_picker.random_boolean(
-                probability.RESTRICT_VERTICAL_LAYOUT_TO_ROWS_DISABLED
+                probability.RESTRICT_VERTICAL_LAYOUT_TO_ROWS_DISABLED_FOR_ALL_SOURCES
             ):
                 return ALL_ROWS_SELECTION
 
-            if self.randomized_picker.random_boolean(
-                probability.RESTRICT_VERTICAL_LAYOUT_ONLY_TO_FEW_ROWS
-            ):
-                # With some probability, try to pick a few rows
-                max_number_of_rows_to_select = self.randomized_picker.random_number(
-                    2, 4
-                )
-            else:
-                # With some probability, pick an arbitrary number of rows
-                max_number_of_rows_to_select = self.randomized_picker.random_number(
-                    0, self.vertical_storage_row_count
+            row_selection = DataRowSelection()
+            for data_source in data_sources:
+                if self.randomized_picker.random_boolean(
+                    probability.RESTRICT_VERTICAL_LAYOUT_TO_ROWS_DISABLED_FOR_SOURCE
+                ):
+                    # do not add an entry regarding this source into the selection
+                    continue
+
+                row_count = (
+                    self.input_data.types_input.get_max_value_count_of_all_types(
+                        data_source.table_index
+                    )
                 )
 
-            # when using joins, the number of rows may be lower or higher
-            row_indices = self.randomized_picker.random_row_indices(
-                self.vertical_storage_row_count, max_number_of_rows_to_select
-            )
-            return DataRowSelection(row_indices)
+                if self.randomized_picker.random_boolean(
+                    probability.RESTRICT_VERTICAL_LAYOUT_ONLY_TO_FEW_ROWS
+                ):
+                    # With some probability, try to pick a few rows
+                    max_number_of_rows_to_select = self.randomized_picker.random_number(
+                        2, 4
+                    )
+                else:
+                    # With some probability, pick an arbitrary number of rows
+                    max_number_of_rows_to_select = self.randomized_picker.random_number(
+                        0, row_count
+                    )
+
+                # when using joins, the number of rows may be lower or higher
+                row_indices_of_source = self.randomized_picker.random_row_indices(
+                    row_count, max_number_of_rows_to_select
+                )
+
+                row_selection.set_row_indices(data_source, row_indices_of_source)
+
+            return row_selection
         else:
             raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
@@ -519,7 +541,11 @@ class QueryGenerator:
         )
 
     def _generate_offset_or_limit(
-        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+        self,
+        storage_layout: ValueStorageLayout,
+        data_source: DataSource,
+        uses_joins: bool,
+        contains_aggregations: bool,
     ) -> int | None:
         if storage_layout != ValueStorageLayout.VERTICAL:
             return None

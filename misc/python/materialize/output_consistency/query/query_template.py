@@ -222,9 +222,8 @@ class QueryTemplate:
     def _create_where_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
         where_conditions = []
 
-        row_filter_clause = self._create_row_filter_clause()
-        if row_filter_clause:
-            where_conditions.append(row_filter_clause)
+        row_filter_clauses = self._create_row_filter_clauses()
+        where_conditions.extend(row_filter_clauses)
 
         if self.where_expression:
             where_conditions.append(
@@ -241,20 +240,27 @@ class QueryTemplate:
         )
         return f"WHERE {all_conditions_sql}"
 
-    def _create_row_filter_clause(self) -> str | None:
+    def _create_row_filter_clauses(self) -> list[str]:
         """Create a SQL clause to only include rows of certain indices"""
-        if self.row_selection.keys is None:
-            return None
+        row_filter_clauses = []
 
-        if len(self.row_selection.keys) == 0:
-            row_index_string = "-1"
-        else:
-            row_index_string = ", ".join(
-                str(index) for index in self.row_selection.keys
+        for data_source in self.get_all_data_sources():
+            if self.row_selection.includes_all_of_source(data_source):
+                continue
+
+            if len(self.row_selection.get_row_indices(data_source)) == 0:
+                row_index_string = "-1"
+            else:
+                row_index_string = ", ".join(
+                    str(index)
+                    for index in self.row_selection.get_row_indices(data_source)
+                )
+
+            row_filter_clauses.append(
+                f"{self._row_index_col_name(data_source)} IN ({row_index_string})"
             )
 
-        # only apply the row index filter to the main data source
-        return f"{self._row_index_col_name(self.data_source)} IN ({row_index_string})"
+        return row_filter_clauses
 
     def _create_order_by_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
         if self.custom_order_expressions is not None:

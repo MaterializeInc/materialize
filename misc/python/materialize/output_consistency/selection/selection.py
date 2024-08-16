@@ -38,14 +38,33 @@ class SelectionByKey(Generic[T]):
         return f"{type(self).__name__}({filter_string})"
 
 
-class DataRowSelection(SelectionByKey[int]):
+class DataRowSelection:
     """A selection of table rows, useful when collecting involved characteristics in vertical storage layout"""
 
-    def __init__(self, row_indices: set[int] | None = None):
-        """
-        :param row_indices: index of selected rows; all rows if not specified
-        """
-        super().__init__(row_indices)
+    def __init__(self):
+        self.row_indices_per_data_source: dict[DataSource, set[int]] = dict()
+
+    def includes_all_of_all_sources(self) -> bool:
+        return len(self.row_indices_per_data_source) == 0
+
+    def has_selection(self) -> bool:
+        return not self.includes_all_of_all_sources()
+
+    def set_row_indices(self, data_source: DataSource, row_indices: set[int]):
+        self.row_indices_per_data_source[data_source] = row_indices
+
+    def get_row_indices(self, data_source: DataSource) -> set[int]:
+        assert not self.includes_all_of_source(data_source)
+        return self.row_indices_per_data_source[data_source]
+
+    def includes_all_of_source(self, data_source: DataSource) -> bool:
+        return data_source not in self.row_indices_per_data_source.keys()
+
+    def is_included_in_source(self, data_source: DataSource, index: int) -> bool:
+        if self.includes_all_of_source(data_source):
+            return True
+
+        return index in self.get_row_indices(data_source)
 
 
 class QueryColumnByIndexSelection(SelectionByKey[int]):

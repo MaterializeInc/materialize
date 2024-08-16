@@ -172,7 +172,7 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
 
             if (
                 query_template.where_expression is not None
-                or not query_template.row_selection.includes_all()
+                or query_template.row_selection.has_selection()
             ) and query_template.uses_join():
                 # Both where expression / row filter and join constraint are set. They might be evaluated in a different order.
                 return YesIgnore("#17189: evaluation order")

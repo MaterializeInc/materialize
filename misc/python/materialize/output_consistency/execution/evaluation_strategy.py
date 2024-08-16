@@ -180,11 +180,11 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        table_index: int | None,
+        data_source: DataSource,
     ) -> list[str]:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             assert (
-                table_index is None
+                data_source.table_index is None
             ), "Table index is not supported for horizontal storage"
             return [
                 self.__create_horizontal_value_row(
@@ -194,10 +194,12 @@ class EvaluationStrategy:
         elif storage_layout == ValueStorageLayout.VERTICAL:
             return self.__create_vertical_value_rows(
                 types_input.all_data_types_with_values,
-                types_input.get_max_value_count_of_all_types(table_index=table_index),
+                types_input.get_max_value_count_of_all_types(
+                    table_index=data_source.table_index
+                ),
                 row_selection,
                 table_column_selection,
-                table_index,
+                data_source,
             )
         else:
             raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
@@ -227,7 +229,7 @@ class EvaluationStrategy:
         row_count: int,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        table_index: int | None,
+        data_source: DataSource,
     ) -> list[str]:
         """Creates table rows with the values of each type in a column. For types with fewer values, values are repeated."""
         rows = []
@@ -238,7 +240,7 @@ class EvaluationStrategy:
 
             for type_with_values in data_type_with_values:
                 data_column = type_with_values.create_assigned_vertical_storage_column(
-                    DataSource(table_index)
+                    data_source
                 )
 
                 if not table_column_selection.is_included(
@@ -246,10 +248,12 @@ class EvaluationStrategy:
                 ):
                     continue
 
-                data_value = data_column.get_value_at_row(row_index, table_index)
+                data_value = data_column.get_value_at_row(
+                    row_index, data_source.table_index
+                )
                 row_values.append(data_value.to_sql_as_value(self.sql_adjuster))
 
-            if row_selection.is_included(row_index):
+            if row_selection.is_included_in_source(data_source, row_index):
                 rows.append(f"{', '.join(row_values)}")
 
         return rows
@@ -308,7 +312,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
             storage_layout,
             row_selection,
             table_column_selection,
-            data_source.table_index,
+            data_source,
         )
 
         for value_row in value_rows:
@@ -354,7 +358,7 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
             storage_layout,
             row_selection,
             table_column_selection,
-            data_source.table_index,
+            data_source,
         )
         value_specification = "\n    UNION SELECT ".join(value_rows)
 

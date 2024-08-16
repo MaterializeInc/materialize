@@ -76,13 +76,15 @@ class DataColumn(LeafExpression):
         return set()
 
     def get_filtered_values(self, row_selection: DataRowSelection) -> list[DataValue]:
-        if row_selection.includes_all():
+        assert self.data_source is not None
+
+        if row_selection.includes_all_of_source(self.data_source):
             return self.values
 
         selected_rows = []
 
         for row_index, row_value in enumerate(self.values):
-            if row_selection.is_included(row_index):
+            if row_selection.is_included_in_source(self.data_source, row_index):
                 selected_rows.append(row_value)
 
         return selected_rows
@@ -90,11 +92,18 @@ class DataColumn(LeafExpression):
     def get_values_at_rows(
         self, row_selection: DataRowSelection, table_index: int | None
     ) -> list[DataValue]:
-        if row_selection.keys is None:
+        if row_selection.includes_all_of_all_sources():
+            return self.values
+
+        if self.data_source is None:
+            # still unknown, provide all values
+            return self.values
+
+        if row_selection.includes_all_of_source(self.data_source):
             return self.values
 
         values = []
-        for row_index in row_selection.keys:
+        for row_index in row_selection.get_row_indices(self.data_source):
             values.append(self.get_value_at_row(row_index, table_index))
 
         return values
