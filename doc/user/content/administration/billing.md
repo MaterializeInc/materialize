@@ -22,7 +22,7 @@ guarantees](/get-started/isolation-level/). The credit usage for a cluster is
 measured at a one second granularity.
 
 You must provision at least one cluster to power your workloads. You can then
-use the cluster to create the object ([indexes](/concepts/indexes/) and
+use the cluster to create the objects ([indexes](/concepts/indexes/) and
 [materialized views](/concepts/views/#materialized-views)) that provide
 always-fresh results. In Materialize, both indexes and materialized views are
 incrementally maintained when Materialize ingests new data. That is, Materialize
@@ -39,13 +39,8 @@ can process data faster and handle larger data volumes.
 
 {{< note >}}
 
-You can resize a cluster to respond to changes in your workload:
-
-- For clusters that contain storage objects (i.e., sources and sinks), resizing
-  incurs **downtime**.
-
-- For clusters that contain compute objects **only** (i.e., indexes and
-  materialized views), resizing does **not** incur downtime.
+You can resize a cluster to respond to changes in your workload. See [Sizing
+your clusters](/concepts/clusters/#sizing-your-clusters).
 
 {{</ note >}}
 

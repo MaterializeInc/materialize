@@ -30,13 +30,13 @@ the resource requirements of your workload. Larger clusters have more compute
 resources available and can therefore process data faster and handle larger data
 volumes.
 
-You can resize a cluster to respond to changes in your workload:
+You can resize a cluster to respond to changes in your workload.
 
-- For clusters that contain storage objects (i.e., sources and sinks), resizing
-  incurs downtime.
+{{< note >}}
 
-- For clusters that contain compute objects only (i.e., indexes and materialized
-  views), resizing does not incur downtime.
+Resizing incurs downtime.
+
+{{</ note >}}
 
 ## Key properties
 
