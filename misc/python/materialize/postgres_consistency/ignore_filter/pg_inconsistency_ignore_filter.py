@@ -206,6 +206,14 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#28193: bpchar in jsonb aggregation without spaces")
 
+        if expression.matches(
+            partial(matches_any_expression_arg, arg_matcher=is_table_function),
+            True,
+        ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL}):
+            return YesIgnore(
+                "#28806: table functions: combination with operations with NULL"
+            )
+
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, all_involved_characteristics
         )
@@ -330,14 +338,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 True,
             ):
                 return YesIgnore("Consequence of #25723: decimal 0s are not shown")
-
-        if expression.matches(
-            partial(matches_any_expression_arg, arg_matcher=is_table_function),
-            True,
-        ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL}):
-            return YesIgnore(
-                "#28806: table functions: combination with operations with NULL"
-            )
 
         return NoIgnore()
 
