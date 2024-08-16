@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyLikeOtherOperationParam,
     AnyOperationParam,
@@ -41,6 +43,7 @@ IS_NULL_OPERATION = DbOperation(
     [AnyOperationParam()],
     BooleanReturnTypeSpec(),
 )
+IS_NULL_OPERATION.added_characteristics.add(ExpressionCharacteristics.NULL)
 GENERIC_OPERATION_TYPES.append(IS_NULL_OPERATION)
 
 GENERIC_OPERATION_TYPES.append(
