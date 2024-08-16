@@ -74,8 +74,6 @@ class QueryGenerator:
         self.config = config
         self.randomized_picker = randomized_picker
         self.input_data = input_data
-        # count will be set after the values are assigned to tables in the setup
-        self.vertical_storage_row_count: int | None = None
         self.expression_generator = expression_generator
         self.ignore_filter = ignore_filter
 
@@ -313,10 +311,6 @@ class QueryGenerator:
         elif storage_layout == ValueStorageLayout.HORIZONTAL:
             return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
-            assert (
-                self.vertical_storage_row_count is not None
-            ), "Row count not initialized"
-
             # It is still unknown at this point if we need a join.
             if self.randomized_picker.random_boolean(
                 probability.RESTRICT_VERTICAL_LAYOUT_TO_ROWS_DISABLED

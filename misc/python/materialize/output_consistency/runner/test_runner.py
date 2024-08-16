@@ -75,9 +75,6 @@ class ConsistencyTestRunner:
         self.input_data.assign_columns_to_tables(
             self.config.vertical_join_tables, self.randomized_picker
         )
-        self.query_generator.vertical_storage_row_count = self.input_data.types_input.get_max_value_count_of_all_types_and_table_indices(
-            self.config.vertical_join_tables
-        )
 
         self.execution_manager.setup_database_objects(
             self.input_data, self.evaluation_strategies
