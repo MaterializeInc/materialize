@@ -9,7 +9,7 @@ aliases:
 ---
 
 `SHOW COLUMNS` lists the columns available for an object. This can be a source,
-subsource, sink, materialized view, view, or table.
+subsource, materialized view, view, or table.
 
 ## Syntax
 
@@ -17,7 +17,7 @@ subsource, sink, materialized view, view, or table.
 
 Field | Use
 ------|-----
-_item&lowbar;ref_ | The name of the object whose columns you want to view. This can be a source, subsource, sink, materialized view, view, or table.
+_item&lowbar;ref_ | The name of the object whose columns you want to view. This can be a source, subsource, materialized view, view, or table.
 
 ## Details
 
