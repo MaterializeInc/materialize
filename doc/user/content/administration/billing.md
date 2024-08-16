@@ -49,9 +49,8 @@ You can resize a cluster to respond to changes in your workload:
 
 {{</ note >}}
 
-Clusters are always "on", and you can adjust the [replication
-factor](https://materialize.com/docs/sql/create-cluster/#replication-factor) for
-fault tolerance. See [Compute cost factors](#compute-cost-factors) for more
+Clusters are always "on", and you can adjust the [replication factor](https://materialize.com/docs/sql/create-cluster/#replication-factor)
+for fault tolerance. See [Compute cost factors](#compute-cost-factors) for more
 information on the cost of increasing a cluster's replication factor.
 
 ### Compute cost factors
@@ -59,34 +58,34 @@ information on the cost of increasing a cluster's replication factor.
 The credit usage for a cluster is measured at a one second granularity. Factors
 that contribute to compute usage include:
 
-| Factor | Notes       |
+| Cost factor | Details       |
 |-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | [Replication factor for a cluster](/sql/create-cluster/#replication-factor). | Cost is calculated (at one second granularity) as cluster [`SIZE`](/sql/create-cluster/#size) * [`REPLICATION FACTOR`](/sql/create-cluster/#replication-factor). |
 | [Indexes](/concepts/indexes/) and [materialized views](/concepts/views) | As data changes (insert/update/delete), [indexes](/concepts/indexes/) and [materialized views](/concepts/views) perform incremental updates to provide up-to-date results. |
-| [Sources](/concepts/sources/) |• Sources that have upsert logic (i.e., [`ENVELOPE UPSERT`](/sql/create-sink/kafka/#upsert) or [`ENVELOPE DEBEZIUM` Kafka sources](/sql/create-sink/kafka/#debezium)) can lead to high memory and disk utilization.<br>•Non-upsert sources consume a negligible amount of resources, both during snapshotting and in steady state.|
+| [Sources](/concepts/sources/) |• Sources that use upsert logic (i.e., [`ENVELOPE UPSERT`](/sql/create-sink/kafka/#upsert) or [`ENVELOPE DEBEZIUM` Kafka sources](/sql/create-sink/kafka/#debezium)) can lead to high memory and disk utilization.<br>• Other sources consume a negligible amount of resources in steady state. |
 | [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/)  |• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that do not use indexes and materialized views perform work. <br>• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that use indexes and materialized views are **free**.|
 | [Sinks](/concepts/sinks/) | Only small CPU/memory costs.|
 
 ## Storage
 
 In Materialize, storage is roughly proportional to the size of your source
-datasets plus the size of materialized views, with some overhead from
-uncompacted previous values of data and system metrics.
+datasets plus the size of any materialized views, with some overhead from
+uncompacted data and system metrics.
 
-Materialize uses cheap, scalable object storage (S3 on AWS) as a
+Materialize uses cheap, scalable object storage (Amazon S3) for its
 storage layer, and primarily passes the cost through to the customer. At a rate
 of 0.0000411 USD per GB/hr, 1 TB stored for one month (730 hrs) equates to 30
 USD.
 
-With the exception of Append-only sources, most data in Materialize is
-continually compacted. As such, the total state stored in Materialize tends to
-grow at a rate that is more similar to OLTP databases than traditional cloud
-data warehouses.
+Most data in Materialize is continually compacted, with the exception of
+[append-only sources](/sql/create-source/#append-only-envelope). As such, the
+total state stored in Materialize tends to grow at a rate that is more similar
+to OLTP databases than traditional cloud data warehouses.
 
-## Invoice
+## Invoices
 
 {{< note >}}
-Access to usage and billing requires **administrator** privileges.
+Accessing usage and billing information in Materialize requires **administrator** privileges.
 {{</ note >}}
 
 From the [Materialize console](https://console.materialize.com/) (`Admin` >
