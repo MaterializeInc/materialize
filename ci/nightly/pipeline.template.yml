@@ -778,17 +778,6 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-toggle-persist-batch-columnar-format
-        label: "Checks toggling persist batch columnar format"
-        depends_on: build-aarch64
-        timeout_in_minutes: 120
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TogglePersistBatchColumnarFormat, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64

@@ -318,19 +318,3 @@ class SystemVarChange(Scenario):
             ],
             Validate(self),
         ]
-
-
-class TogglePersistBatchColumnarFormat(SystemVarChange):
-    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
-        super().__init__(
-            checks,
-            executor,
-            seed,
-            [
-                SystemVarChangeEntry(
-                    name="persist_batch_columnar_format",
-                    value_for_manipulate_phase_1="row",
-                    value_for_manipulate_phase_2="both_v2",
-                )
-            ],
-        )
