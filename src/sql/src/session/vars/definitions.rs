@@ -659,7 +659,7 @@ pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     value!(Option<CheckedTimestamp<DateTime<Utc>>>; None),
     "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. \
     If not set, uses the system's clock.",
-    // This needs to be false because `internal: true` things are only modifiable by the mz_system
+    // This needs to be true because `user_visible: false` things are only modifiable by the mz_system
     // and mz_support users, and we want sqllogictest to have access with its user. Because the name
     // starts with "unsafe" it still won't be visible or changeable by users unless unsafe mode is
     // enabled.
@@ -1596,12 +1596,11 @@ pub mod cluster_scheduling {
 /// availability of features.
 ///
 /// The arguments to `feature_flags!` are:
-/// - `$name`, which will be the name of the feature flag, in snake_case,
-/// - `$feature_desc`, a human-readable description of the feature,
-/// - `$value`, which if not provided, defaults to `false` and also defaults `$internal` to `true`.
-/// - `$internal`, which if not provided, defaults to `true`. Requires `$value`.
+/// - `$name`, which will be the name of the feature flag, in snake_case
+/// - `$feature_desc`, a human-readable description of the feature
+/// - `$value`, which if not provided, defaults to `false`
 ///
-/// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
+/// Note that not all `VarDefinition<bool>` are feature flags. Feature flags are for variables that:
 /// - Belong to `SystemVars`, _not_ `SessionVars`
 /// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
 ///
@@ -1627,7 +1626,7 @@ pub mod cluster_scheduling {
 /// Ensuring that all syntax-related feature flags *enable* behavior means that setting all such
 /// feature flags to `on` during catalog boot has the desired effect.
 macro_rules! feature_flags {
-    // Match `$name, $feature_desc, $value, $internal`.
+    // Match `$name, $feature_desc, $value`.
     (@inner
         // The feature flag name.
         name: $name:expr,
