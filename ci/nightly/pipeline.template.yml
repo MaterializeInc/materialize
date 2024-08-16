@@ -1516,7 +1516,8 @@ steps:
           composition: legacy-upgrade
           args: ["--versions-source=git"]
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      # Requires lots of disk
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: cloudtest-slow
     label: "Slow Cloudtest"
