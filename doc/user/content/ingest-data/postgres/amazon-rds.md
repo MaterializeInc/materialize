@@ -66,7 +66,7 @@ As a first step, you need to make sure logical replication is enabled.
 1. Edit the new parameter group and set the `rds.logical_replication` parameter
    to `1`.
 
-1. [Associate the db parameter group with your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Associating.html).
+1. [Associate the DB parameter group with your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Associating.html).
 
     Use the **Apply Immediately** option to immediately reboot your database and
     apply the change.  Keep in mind that rebooting the RDS instance can affect
