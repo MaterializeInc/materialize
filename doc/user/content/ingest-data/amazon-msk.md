@@ -12,9 +12,11 @@ menu:
 ---
 
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
-with the Postgres ones. We should include spill to disk in the guidance then."
+with the PostgreSQL ones. We should add information about using AWS IAM
+authentication then."
 
-This guide goes through the required steps to connect Materialize to an Amazon MSK cluster.
+This guide goes through the required steps to connect Materialize to an Amazon
+MSK cluster.
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
@@ -175,7 +177,6 @@ The process to connect Materialize to Amazon MSK consists of the following steps
       --kafka-versions "2.6.2" \
       --server-properties fileb://<config-file-path>/msk-config.txt
     ```
-
 
     You can find more information about making your cluster public [here](https://docs.aws.amazon.com/msk/latest/developerguide/public-access.html).
 
