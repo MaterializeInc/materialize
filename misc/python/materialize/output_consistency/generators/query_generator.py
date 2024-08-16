@@ -232,6 +232,8 @@ class QueryGenerator:
                 data_source, additional_data_sources, expressions
             )
 
+            uses_joins = len(additional_data_sources) > 0
+
             query = QueryTemplate(
                 expect_error,
                 expressions,
@@ -240,8 +242,18 @@ class QueryGenerator:
                 data_source,
                 contains_aggregations,
                 row_selection,
-                offset=self._generate_offset(storage_layout, contains_aggregations),
-                limit=self._generate_limit(storage_layout, contains_aggregations),
+                offset=self._generate_offset(
+                    storage_layout,
+                    data_source,
+                    uses_joins=uses_joins,
+                    contains_aggregations=contains_aggregations,
+                ),
+                limit=self._generate_limit(
+                    storage_layout,
+                    data_source,
+                    uses_joins=uses_joins,
+                    contains_aggregations=contains_aggregations,
+                ),
                 additional_data_sources=additional_data_sources,
             )
 
@@ -288,6 +300,8 @@ class QueryGenerator:
                 data_source, additional_data_sources, all_expressions
             )
 
+            uses_joins = len(additional_data_sources) > 0
+
             queries.append(
                 QueryTemplate(
                     expression.is_expect_error,
@@ -297,8 +311,18 @@ class QueryGenerator:
                     data_source,
                     contains_aggregation,
                     row_selection,
-                    offset=self._generate_offset(storage_layout, contains_aggregation),
-                    limit=self._generate_limit(storage_layout, contains_aggregation),
+                    offset=self._generate_offset(
+                        storage_layout,
+                        data_source,
+                        uses_joins=uses_joins,
+                        contains_aggregations=contains_aggregation,
+                    ),
+                    limit=self._generate_limit(
+                        storage_layout,
+                        data_source,
+                        uses_joins=uses_joins,
+                        contains_aggregations=contains_aggregation,
+                    ),
                     additional_data_sources=additional_data_sources,
                 )
             )
@@ -467,14 +491,32 @@ class QueryGenerator:
         return expressions
 
     def _generate_offset(
-        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+        self,
+        storage_layout: ValueStorageLayout,
+        data_source: DataSource,
+        uses_joins: bool,
+        contains_aggregations: bool,
     ) -> int | None:
-        return self._generate_offset_or_limit(storage_layout, contains_aggregations)
+        return self._generate_offset_or_limit(
+            storage_layout,
+            data_source,
+            uses_joins=uses_joins,
+            contains_aggregations=contains_aggregations,
+        )
 
     def _generate_limit(
-        self, storage_layout: ValueStorageLayout, contains_aggregations: bool
+        self,
+        storage_layout: ValueStorageLayout,
+        data_source: DataSource,
+        uses_joins: bool,
+        contains_aggregations: bool,
     ) -> int | None:
-        return self._generate_offset_or_limit(storage_layout, contains_aggregations)
+        return self._generate_offset_or_limit(
+            storage_layout,
+            data_source,
+            uses_joins=uses_joins,
+            contains_aggregations=contains_aggregations,
+        )
 
     def _generate_offset_or_limit(
         self, storage_layout: ValueStorageLayout, contains_aggregations: bool
@@ -488,8 +530,17 @@ class QueryGenerator:
             # do not apply it
             return None
 
-        assert self.vertical_storage_row_count is not None, "Row count not initialized"
-        max_value = self.vertical_storage_row_count + 1
+        main_source_row_count = (
+            self.input_data.types_input.get_max_value_count_of_all_types(
+                data_source.table_index
+            )
+        )
+
+        if uses_joins:
+            # the main data source might have most rows; though, the number might be even higher because of joins
+            max_value = main_source_row_count + 3
+        else:
+            max_value = main_source_row_count + 1
 
         if self.randomized_picker.random_boolean(0.7):
             # prefer lower numbers since queries may already contain where conditions or apply aggregations
