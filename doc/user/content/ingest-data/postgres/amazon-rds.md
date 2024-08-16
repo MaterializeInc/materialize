@@ -57,7 +57,7 @@ As a first step, you need to make sure logical replication is enabled.
     - If logical replication is already on, skip to [Create a publication and a
       Materialize user section](#2-create-a-publication-and-a-replication-user).
 
-1. [Create a db parameter group in RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Creating.html) using the AWS management console..
+1. Using the AWS Management Console, [create a DB parameter group in RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithParamGroups.Creating.html).
 
     - Set **Parameter group family** to your PostgreSQL version.
     - Set **Type** to **DB Parameter Group**.
