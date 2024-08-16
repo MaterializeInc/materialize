@@ -40,9 +40,10 @@ use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
     BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
     DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
-    AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
-    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
-    USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key used within the "config" collection stores the deploy generation.
@@ -180,6 +181,7 @@ pub(crate) async fn initialize(
     options: &BootstrapArgs,
     initial_ts: EpochMillis,
     deploy_generation: u64,
+    catalog_content_version: String,
 ) -> Result<(), CatalogError> {
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
@@ -658,6 +660,13 @@ pub(crate) async fn initialize(
         (SYSTEM_CONFIG_SYNCED_KEY.to_string(), 0),
     ] {
         tx.insert_config(key, value)?;
+    }
+
+    for (name, value) in [(
+        CATALOG_CONTENT_VERSION_KEY.to_string(),
+        catalog_content_version,
+    )] {
+        tx.set_setting(name, Some(value))?;
     }
 
     Ok(())

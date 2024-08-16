@@ -31,7 +31,7 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 from materialize.cloudtest.util.wait import wait
 from materialize.mz_version import MzVersion
 from materialize.util import all_subclasses
-from materialize.version_list import get_latest_published_version
+from materialize.version_list import get_previous_published_version
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +40,9 @@ class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""
 
     def base_version(self) -> MzVersion:
-        return get_latest_published_version()
+        return get_previous_published_version(
+            MzVersion.parse_cargo(), previous_minor=True
+        )
 
     def actions(self) -> list[Action]:
         return [
@@ -56,7 +58,9 @@ class CloudtestUpgrade(Scenario):
 @pytest.mark.long
 def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
-    last_released_version = get_latest_published_version()
+    last_released_version = get_previous_published_version(
+        MzVersion.parse_cargo(), previous_minor=True
+    )
 
     LOGGER.info(
         f"Testing upgrade from base version {last_released_version} to current version"

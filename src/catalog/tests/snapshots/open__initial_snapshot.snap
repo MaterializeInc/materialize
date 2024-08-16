@@ -1373,7 +1373,13 @@ Snapshot {
             value: 0,
         },
     },
-    settings: {},
+    settings: {
+        SettingKey {
+            name: "catalog_content_version",
+        }: SettingValue {
+            value: "0.0.0",
+        },
+    },
     system_object_mappings: {},
     system_configurations: {},
     default_privileges: {
