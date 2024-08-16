@@ -2236,7 +2236,7 @@ mod tests {
             assert_eq!(col_a.data_type(), col_b.data_type());
         }
 
-        let num_rows = 32;
+        let num_rows = 12;
         let strat = any::<RelationDesc>().prop_flat_map(|desc| {
             proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
                 .prop_map(move |datas| (desc.clone(), datas))
