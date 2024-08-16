@@ -33,19 +33,6 @@ def main():
     release_version = latest_version.bump_minor()
     next_version = MzVersion.parse_mz(f"{release_version.bump_minor()}-dev")
 
-    if os.getenv("CI"):
-        print("Installing credentials for Ci...")
-        github_token = os.getenv("GITHUB_TOKEN")
-        spawn.runv(
-            [
-                "git",
-                "remote",
-                "set-url",
-                "origin",
-                f"https://materializebot:{github_token}@github.com/MaterializeInc/materialize.git",
-            ]
-        )
-
     print("Creating temporary release branch...")
     git.create_branch(f"release-{release_version}")
 
