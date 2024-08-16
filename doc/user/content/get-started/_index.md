@@ -15,8 +15,9 @@ Materialize is the Cloud Operational Data Store that delivers the speed of
 streaming with the ease of a data warehouse. With Materialize, organizations can
 use SQL to transform, deliver, and act on fast-changing data.
 
-To keeps results up-to-date as new data arrives, Materialize incrementally updates results as it ingests data rather than recalculating results
-from scratch.
+To keeps results up-to-date as new data arrives, Materialize incrementally
+updates results as it ingests data rather than recalculating results from
+scratch.
 
 {{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
 
