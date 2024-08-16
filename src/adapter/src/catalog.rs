@@ -39,7 +39,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
-use mz_ore::soft_panic_or_log;
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -201,6 +201,9 @@ impl Catalog {
                 let entry = self.plans.notices_by_dep_id.entry(*dep_id).or_default();
                 entry.push(Arc::clone(notice))
             }
+            if let Some(item_id) = notice.item_id {
+                soft_assert_eq_or_log!(item_id, id, "notice.item_id should match the id for whom we are saving the notice");
+            }
         }
         // Add the dataflow with the scoped entries.
         self.plans.dataflow_metainfos.insert(id, metainfo);
@@ -236,10 +239,12 @@ impl Catalog {
             self.plans.optimized_plan_by_id.remove(id);
             self.plans.physical_plan_by_id.remove(id);
             if let Some(mut metainfo) = self.plans.dataflow_metainfos.remove(id) {
+                soft_assert_or_log!(metainfo.optimizer_notices.iter().all_unique(), "should have been pushed there by `push_optimizer_notice_dedup`");
                 for n in metainfo.optimizer_notices.drain(..) {
                     // Remove the corresponding notices_by_dep_id entries.
                     for dep_id in n.dependencies.iter() {
                         if let Some(notices) = self.plans.notices_by_dep_id.get_mut(dep_id) {
+                            soft_assert_or_log!(notices.iter().any(|x| &n == x), "corrupt notices_by_dep_id");
                             notices.retain(|x| &n != x)
                         }
                     }
@@ -255,7 +260,12 @@ impl Catalog {
                     // Remove the corresponding metainfo.optimizer_notices entries.
                     if let Some(item_id) = n.item_id.as_ref() {
                         if let Some(metainfo) = self.plans.dataflow_metainfos.get_mut(item_id) {
-                            metainfo.optimizer_notices.retain(|x| &n != x)
+                            metainfo.optimizer_notices.iter().for_each(|n2| {
+                                if let Some(item_id_2) = n2.item_id {
+                                    soft_assert_eq_or_log!(item_id_2, *item_id, "a notice's item_id should match the id for whom we have saved the notice");
+                                }
+                            });
+                            metainfo.optimizer_notices.retain(|x| &n != x);
                         }
                     }
                     dropped_notices.insert(n);
@@ -301,7 +311,7 @@ impl Catalog {
             );
         }
 
-        return dropped_notices;
+        dropped_notices
     }
 
     /// For the Sources ids in `ids`, return the read policies for all `ids` and additional ids that

@@ -45,7 +45,7 @@ use enum_kinds::EnumKind;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An long lived in-memory representation of a [`RawOptimizerNotice`] that is
 /// meant to be kept as part of the hydrated catalog state.
 pub struct OptimizerNotice {
@@ -121,7 +121,7 @@ impl OptimizerNotice {
     }
 }
 
-#[derive(EnumKind, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(EnumKind, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[enum_kind(ActionKind)]
 /// An action attached to an [`OptimizerNotice`]
 pub enum Action {
@@ -281,8 +281,8 @@ macro_rules! raw_optimizer_notices {
     ($($ty:ident => $name:literal,)+) => {
         paste::paste!{
             /// Notices that the optimizer wants to show to users.
-            #[derive(EnumKind, Clone, Debug, Eq, PartialEq)]
-            #[enum_kind(OptimizerNoticeKind, derive(PartialOrd, Ord))]
+            #[derive(EnumKind, Clone, Debug, Eq, PartialEq, Hash)]
+            #[enum_kind(OptimizerNoticeKind, derive(PartialOrd, Ord, Hash))]
             pub enum RawOptimizerNotice {
                 $(
                     #[doc = concat!("See [`", stringify!($ty), "`].")]
