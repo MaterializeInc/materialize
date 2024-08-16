@@ -59,16 +59,16 @@ ALTER USER postgres WITH replication;
 DROP PUBLICATION IF EXISTS mz_source_1;
 CREATE PUBLICATION mz_source_1 FOR ALL TABLES;
 CREATE TYPE an_enum AS ENUM ('var0', 'var1');
-CREATE TABLE public_1.table_a (pk INTEGER PRIMARY KEY, f2 TEXT, f3 an_enum);
-INSERT INTO public_1.table_a VALUES (1, 'one', 'var0');
+CREATE TABLE public_1.table_a (pk INTEGER PRIMARY KEY, f2 TEXT, f3 an_enum, f4 NUMERIC(50));
+INSERT INTO public_1.table_a VALUES (1, 'one', 'var0', 500.0);
 ALTER TABLE public_1.table_a REPLICA IDENTITY FULL;
-INSERT INTO public_1.table_a VALUES (2, 'two', 'var1');
+INSERT INTO public_1.table_a VALUES (2, 'two', 'var1', 1000.0);
 
 
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source_1',
-    TEXT COLUMNS [public_1.table_f.f2]
+    TEXT COLUMNS [public_1.table_f.f2, public_1.table_f.f4]
   )
   FOR TABLES (public_1.table_a);
 
