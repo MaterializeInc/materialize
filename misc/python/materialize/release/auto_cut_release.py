@@ -66,6 +66,8 @@ def main():
             "$DATE", next_thursday.strftime("%Y-%m-%d")
         )
         next_version_doc_file.write_text(text)
+        git.add_file(str(next_version_doc_file))
+        git.commit_all_changed(f"release: create doc file for ${next_version_final}")
 
     print(f"Pushing to {remote}...")
     spawn.runv(["git", "push", remote, "main"])

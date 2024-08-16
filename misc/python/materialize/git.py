@@ -355,6 +355,11 @@ def checkout(rev: str) -> None:
     spawn.runv(["git", "checkout", rev])
 
 
+def add_file(path: str) -> None:
+    """Commit all changed files with the given message"""
+    spawn.runv(["git", "add", path])
+
+
 def commit_all_changed(message: str) -> None:
     """Commit all changed files with the given message"""
     spawn.runv(["git", "commit", "-a", "-m", message])
