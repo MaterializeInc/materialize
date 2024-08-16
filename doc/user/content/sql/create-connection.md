@@ -28,7 +28,7 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 An Amazon Web Services (AWS) connection provides Materialize with access to an
 Identity and Access Management (IAM) user or role in your AWS account. You can
 use AWS connections to perform [bulk exports to Amazon s3](/serve-results/s3/),
-or perform [authentication with an Amazon MSK cluster](/sql/create-connection/#aws-iam-t1).
+or perform [authentication with an Amazon MSK cluster](#kafka).
 
 {{< diagram "create-connection-aws.svg" >}}
 
