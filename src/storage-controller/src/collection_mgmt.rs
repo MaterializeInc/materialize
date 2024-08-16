@@ -87,7 +87,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-use crate::{persist_handles, StorageError};
+use crate::StorageError;
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
 const CHANNEL_CAPACITY: usize = 4096;
@@ -142,8 +142,6 @@ where
     append_only_collections:
         Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)>>>,
 
-    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
-
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -163,11 +161,7 @@ impl<T> CollectionManager<T>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
-    pub(super) fn new(
-        read_only: bool,
-        write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
-        now: NowFn,
-    ) -> CollectionManager<T> {
+    pub(super) fn new(read_only: bool, now: NowFn) -> CollectionManager<T> {
         let batch_duration_ms: u64 = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT
             .as_millis()
             .try_into()
@@ -182,7 +176,6 @@ where
             hacky_always_false_watch: (always_false_tx, always_false_rx),
             differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
             append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
-            write_handle,
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }

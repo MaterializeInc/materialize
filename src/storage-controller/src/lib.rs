@@ -137,8 +137,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Write handle for table shards.
     pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
-    /// Write handle for monotonic shards.
-    pub(crate) persist_monotonic_worker: persist_handles::PersistMonotonicWriteWorker<T>,
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
@@ -1928,12 +1926,9 @@ where
                             // could probably use some love and maybe get merged together?
                             let unregister_notif =
                                 self.collection_manager.unregister_collection(id);
-                            let monotonic_worker = self.persist_monotonic_worker.clone();
                             let drop_fut = async move {
                                 // Wait for the collection manager to stop writing.
                                 unregister_notif.await;
-                                // Wait for the montonic worker to drop the handle.
-                                monotonic_worker.drop_handle(id).await;
                             };
                             let drop_fut = drop_fut.boxed();
 
@@ -2419,14 +2414,8 @@ where
             persist_handles::PersistTableWriteWorker::new_txns(txns)
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-        let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
-        let collection_manager_write_handle = persist_monotonic_worker.clone();
 
-        let collection_manager = collection_mgmt::CollectionManager::new(
-            read_only,
-            collection_manager_write_handle,
-            now.clone(),
-        );
+        let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
@@ -2446,7 +2435,6 @@ where
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             persist_table_worker,
-            persist_monotonic_worker,
             txns_read,
             txns_metrics,
             stashed_response: None,
