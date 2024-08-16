@@ -14,7 +14,7 @@ use arrow::array::{Array, AsArray};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
@@ -56,6 +56,71 @@ type KV<'a> = (&'a [u8], &'a [u8]);
 pub(crate) struct FetchData<T> {
     part_desc: Description<T>,
     part: BatchPart<T>,
+}
+
+pub(crate) trait RowSort<T, D> {
+    type Updates: Debug;
+
+    type KV<'a>: Ord + Copy + Debug;
+
+    fn key_lower(part: &FetchData<T>) -> Self::KV<'_>;
+
+    fn updates_from_blob(&self, updates: BlobTraceUpdates) -> Self::Updates;
+
+    fn len(updates: &Self::Updates) -> usize;
+
+    fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)>;
+
+    fn interleave_updates<'a>(
+        updates: &[&'a Self::Updates],
+        elements: impl IntoIterator<Item = (Indices, Self::KV<'a>, T, D)>,
+    ) -> Self::Updates;
+
+    fn updates_to_blob(&self, updates: Self::Updates) -> BlobTraceUpdates;
+}
+
+#[derive(Debug)]
+pub struct CodecSort<T, D>(PhantomData<fn(T, D)>);
+
+impl<T, D> Default for CodecSort<T, D> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
+    type Updates = Columnar<T, D>;
+    type KV<'a> = (&'a [u8], &'a [u8]);
+
+    fn key_lower(data: &FetchData<T>) -> Self::KV<'_> {
+        (data.part.key_lower(), &[])
+    }
+
+    fn updates_from_blob(&self, updates: BlobTraceUpdates) -> Self::Updates {
+        Columnar {
+            updates,
+            _phantom: Default::default(),
+        }
+    }
+
+    fn len(updates: &Self::Updates) -> usize {
+        updates.len()
+    }
+
+    fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
+        updates.get(index)
+    }
+
+    fn interleave_updates<'a>(
+        updates: &[&'a Self::Updates],
+        elements: impl IntoIterator<Item = (Indices, Self::KV<'a>, T, D)>,
+    ) -> Self::Updates {
+        Columnar::interleave(updates, elements)
+    }
+
+    fn updates_to_blob(&self, updates: Self::Updates) -> BlobTraceUpdates {
+        updates.updates
+    }
 }
 
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
