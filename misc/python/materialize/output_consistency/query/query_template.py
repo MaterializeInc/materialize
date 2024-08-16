@@ -103,7 +103,7 @@ class QueryTemplate:
         output_format: QueryOutputFormat,
         query_column_selection: QueryColumnByIndexSelection,
         query_output_mode: QueryOutputMode,
-        override_db_object_name: str | None = None,
+        override_db_object_base_name: str | None = None,
     ) -> str:
         space_separator = self._get_space_separator(output_format)
 
@@ -111,10 +111,15 @@ class QueryTemplate:
             query_column_selection, space_separator, strategy.sql_adjuster
         )
         from_clause = self._create_from_clause(
-            strategy, override_db_object_name, strategy.sql_adjuster, space_separator
+            strategy,
+            override_db_object_base_name,
+            space_separator,
         )
         join_clauses = self._create_join_clauses(
-            strategy, override_db_object_name, strategy.sql_adjuster, space_separator
+            strategy,
+            override_db_object_base_name,
+            strategy.sql_adjuster,
+            space_separator,
         )
         where_clause = self._create_where_clause(strategy.sql_adjuster)
         order_by_clause = self._create_order_by_clause(strategy.sql_adjuster)
@@ -161,15 +166,13 @@ class QueryTemplate:
     def _create_from_clause(
         self,
         strategy: EvaluationStrategy,
-        override_db_object_name: str | None,
-        sql_adjuster: SqlDialectAdjuster,
+        override_db_object_base_name: str | None,
         space_separator: str,
     ) -> str:
-        db_object_name = self.data_source.get_db_object_name(
-            strategy.get_db_object_name(
-                self.storage_layout, table_index=self.data_source.table_index
-            ),
-            override_db_object_name=override_db_object_name,
+        db_object_name = strategy.get_db_object_name(
+            self.storage_layout,
+            data_source=self.data_source,
+            override_base_name=override_db_object_base_name,
         )
         alias = f" {self.data_source.alias()}" if self.uses_join() else ""
         return f"FROM{space_separator}{db_object_name}{alias}"
@@ -177,7 +180,7 @@ class QueryTemplate:
     def _create_join_clauses(
         self,
         strategy: EvaluationStrategy,
-        override_db_object_name: str | None,
+        override_db_object_base_name: str | None,
         sql_adjuster: SqlDialectAdjuster,
         space_separator: str,
     ) -> str:
@@ -190,7 +193,7 @@ class QueryTemplate:
         for additional_data_source in self.additional_data_sources:
             join_clauses = (
                 f"{join_clauses}"
-                f"\n{self._create_join_clause(strategy, additional_data_source, override_db_object_name, sql_adjuster, space_separator)}"
+                f"\n{self._create_join_clause(strategy, additional_data_source, override_db_object_base_name, sql_adjuster, space_separator)}"
             )
 
         return join_clauses
@@ -199,16 +202,14 @@ class QueryTemplate:
         self,
         strategy: EvaluationStrategy,
         additional_data_source_to_join: AdditionalDataSource,
-        override_db_object_name: str | None,
+        override_db_object_base_name: str | None,
         sql_adjuster: SqlDialectAdjuster,
         space_separator: str,
     ) -> str:
-        db_object_name_to_join = additional_data_source_to_join.get_db_object_name(
-            strategy.get_db_object_name(
-                self.storage_layout,
-                table_index=additional_data_source_to_join.table_index,
-            ),
-            override_db_object_name=override_db_object_name,
+        db_object_name_to_join = strategy.get_db_object_name(
+            self.storage_layout,
+            data_source=additional_data_source_to_join,
+            override_base_name=override_db_object_base_name,
         )
 
         join_operator_sql = additional_data_source_to_join.join_operator.to_sql()

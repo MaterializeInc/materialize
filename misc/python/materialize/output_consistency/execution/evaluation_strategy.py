@@ -83,7 +83,7 @@ class EvaluationStrategy:
                 ValueStorageLayout.HORIZONTAL,
                 ALL_ROWS_SELECTION,
                 ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
-                table_index=None,
+                data_source=DataSource(table_index=None),
             )
         )
         for table_index in range(0, vertical_join_tables):
@@ -93,7 +93,7 @@ class EvaluationStrategy:
                     ValueStorageLayout.VERTICAL,
                     ALL_ROWS_SELECTION,
                     ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
-                    table_index=table_index,
+                    data_source=DataSource(table_index=table_index),
                 )
             )
         return statements
@@ -104,28 +104,29 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        table_index: int | None,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> list[str]:
         raise NotImplementedError
 
     def get_db_object_name(
         self,
         storage_layout: ValueStorageLayout,
-        table_index: int | None,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> str:
         if storage_layout == ValueStorageLayout.ANY:
             raise RuntimeError(f"{storage_layout} has not been resolved to a real one")
 
-        if override_db_object_name is not None:
-            return override_db_object_name
+        if override_base_name is None:
+            storage_suffix = (
+                "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
+            )
+            base_name = f"{self.object_name_base}_{storage_suffix}"
+        else:
+            base_name = override_base_name
 
-        storage_suffix = (
-            "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
-        )
-        table_index_suffix = f"_{table_index}" if table_index is not None else ""
-        return f"{self.object_name_base}_{storage_suffix}{table_index_suffix}"
+        return data_source.get_db_object_name(base_name=base_name)
 
     def __str__(self) -> str:
         return self.name
@@ -281,19 +282,23 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        table_index: int | None,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
             storage_layout,
-            table_index=table_index,
-            override_db_object_name=override_db_object_name,
+            data_source,
+            override_base_name=override_base_name,
         )
 
         statements = []
 
         column_specs = self._create_column_specs(
-            types_input, storage_layout, table_index, True, table_column_selection
+            types_input,
+            storage_layout,
+            data_source.table_index,
+            True,
+            table_column_selection,
         )
         statements.append(f"DROP TABLE IF EXISTS {db_object_name};")
         statements.append(f"CREATE TABLE {db_object_name} ({', '.join(column_specs)});")
@@ -303,7 +308,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
             storage_layout,
             row_selection,
             table_column_selection,
-            table_index,
+            data_source.table_index,
         )
 
         for value_row in value_rows:
@@ -327,17 +332,21 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        table_index: int | None,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
             storage_layout,
-            table_index=table_index,
-            override_db_object_name=override_db_object_name,
+            data_source,
+            override_base_name=override_base_name,
         )
 
         column_specs = self._create_column_specs(
-            types_input, storage_layout, table_index, False, table_column_selection
+            types_input,
+            storage_layout,
+            data_source.table_index,
+            False,
+            table_column_selection,
         )
 
         value_rows = self._create_value_rows(
@@ -345,7 +354,7 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
             storage_layout,
             row_selection,
             table_column_selection,
-            table_index,
+            data_source.table_index,
         )
         value_specification = "\n    UNION SELECT ".join(value_rows)
 

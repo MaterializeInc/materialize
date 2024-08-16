@@ -16,17 +16,15 @@ class DataSource:
 
     def get_db_object_name(
         self,
-        default_name: str,
-        override_db_object_name: str | None = None,
+        base_name: str,
     ) -> str:
+        if self.custom_db_object_name is not None:
+            return self.custom_db_object_name
+
         table_index_suffix = (
             f"_{self.table_index}" if self.table_index is not None else ""
         )
-        return (
-            override_db_object_name
-            or default_name
-            or f"{self.custom_db_object_name}{table_index_suffix}"
-        )
+        return f"{base_name}{table_index_suffix}"
 
     def alias(self) -> str:
         if self.table_index is None:

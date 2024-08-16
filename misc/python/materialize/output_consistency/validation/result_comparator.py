@@ -409,7 +409,7 @@ class ResultComparator:
                 data_source.get_db_object_name(
                     outcome1.strategy.get_db_object_name(
                         query_execution.query_template.storage_layout,
-                        table_index=data_source.table_index,
+                        data_source=data_source,
                     ),
                 ),
                 new_source_name,
@@ -418,7 +418,7 @@ class ResultComparator:
                 data_source.get_db_object_name(
                     outcome2.strategy.get_db_object_name(
                         query_execution.query_template.storage_layout,
-                        table_index=data_source.table_index,
+                        data_source=data_source,
                     ),
                 ),
                 new_source_name,

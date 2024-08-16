@@ -164,12 +164,8 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                     query_template.storage_layout,
                     row_selection,
                     table_column_selection,
-                    table_index=data_source.table_index,
-                    override_db_object_name=(
-                        data_source.custom_db_object_name
-                        if data_source.custom_db_object_name is not None
-                        else evaluation_strategy.simple_db_object_name
-                    ),
+                    data_source=data_source,
+                    override_base_name=evaluation_strategy.simple_db_object_name,
                 )
             )
 
@@ -202,7 +198,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
                 self.query_output_mode,
-                override_db_object_name=evaluation_strategy.simple_db_object_name,
+                override_db_object_base_name=evaluation_strategy.simple_db_object_name,
             )
         )
 
