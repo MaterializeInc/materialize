@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use futures::future::BoxFuture;
 use mz_adapter_types::dyncfgs::DEFAULT_SINK_PARTITION_STRATEGY;
+use mz_catalog::durable::Item;
 use mz_catalog::memory::objects::{StateDiff, StateUpdate};
 use mz_catalog::{durable::Transaction, memory::objects::StateUpdateKind};
 use mz_dyncfg::ConfigSet;
@@ -18,9 +19,11 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::visit_mut::VisitMut;
 use mz_sql::ast::{
     CreateSinkConnection, CreateSinkOption, CreateSinkOptionName, CreateSinkStatement,
-    KafkaSinkConfigOption, KafkaSinkConfigOptionName, Value, WithOptionValue,
+    CreateSourceStatement, KafkaSinkConfigOption, KafkaSinkConfigOptionName, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
@@ -36,13 +39,25 @@ where
         &'a mut Transaction<'_>,
         GlobalId,
         &'a mut Statement<Raw>,
+        &'a Vec<(Item, Statement<Raw>)>,
     ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
 {
     let mut updated_items = BTreeMap::new();
+    let items_with_statements = tx
+        .get_items()
+        .map(|item| {
+            let stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+            Ok((item, stmt))
+        })
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-    for mut item in tx.get_items() {
-        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-        f(tx, item.id, &mut stmt).await?;
+    // Clone this vec to be referenced within the closure if needed
+    // TODO(roshan): Remove this once the `ast_rewrite_create_postgres_subsource_text_columns`
+    // migration is removed.
+    let items_with_statements_ref = items_with_statements.clone();
+
+    for (mut item, mut stmt) in items_with_statements {
+        f(tx, item.id, &mut stmt, &items_with_statements_ref).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
@@ -98,7 +113,7 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, stmt| {
+    rewrite_ast_items(tx, |_tx, _id, stmt, all_items_and_statements| {
         let catalog_version = catalog_version.clone();
         let configs = state.system_config().dyncfgs().clone();
         Box::pin(async move {
@@ -110,6 +125,7 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+            ast_rewrite_create_postgres_subsource_text_columns(stmt, all_items_and_statements)?;
             ast_rewrite_create_sink_partition_strategy(&configs, stmt)?;
             if catalog_version < Version::parse("0.112.0-dev").expect("known to be valid") {
                 ast_rewrite_create_sink_default_compression(stmt)?;
@@ -199,6 +215,178 @@ fn ast_rewrite_create_sink_partition_strategy(
             value: Some(WithOptionValue::Value(Value::String(default_strategy))),
         });
     }
+
+    Ok(())
+}
+
+/// Copies the 'TEXT COLUMNS' option from the relevant `CREATE SOURCE` statement to each
+/// `CREATE SUBSOURCE` statement for Postgres subsources.
+/// This is a fix migration for a bug in the previous `ast_rewrite_create_subsource_options`
+/// migration that rolled out in `v0.111` and `v0.112` that did not copy the TEXT COLUMNS
+/// options for Postgres subsource due to a mistake in the expected structure of each
+/// TEXT COLUMN `UnresolvedItemName` for Postgres.
+fn ast_rewrite_create_postgres_subsource_text_columns(
+    stmt: &mut Statement<Raw>,
+    all_items_and_statements: &Vec<(Item, Statement<Raw>)>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{
+        CreateSourceConnection, CreateSubsourceOption, CreateSubsourceOptionName,
+        CreateSubsourceStatement, PgConfigOptionName, RawItemName, WithOptionValue,
+    };
+
+    // Since subsources have named-only references to their `of_source` and some have the
+    // global_id of their source, we first generate mapping from all source names and ids to their
+    // statements.
+    let source_name_to_stmt: BTreeMap<_, _> = all_items_and_statements
+        .iter()
+        .filter_map(|(_, statement)| match statement {
+            Statement::CreateSource(stmt) => Some((stmt.name.clone(), stmt)),
+            _ => None,
+        })
+        .collect();
+    let source_id_to_stmt: BTreeMap<_, _> = all_items_and_statements
+        .iter()
+        .filter_map(|(item, statement)| match statement {
+            Statement::CreateSource(stmt) => Some((item.id, stmt)),
+            _ => None,
+        })
+        .collect();
+
+    struct Rewriter<'a> {
+        source_name_to_stmt: BTreeMap<UnresolvedItemName, &'a CreateSourceStatement<Raw>>,
+        source_id_to_stmt: BTreeMap<GlobalId, &'a CreateSourceStatement<Raw>>,
+    }
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter<'_> {
+        fn visit_create_subsource_statement_mut(
+            &mut self,
+            node: &'ast mut CreateSubsourceStatement<Raw>,
+        ) {
+            match &node.of_source {
+                // Not a source-export subsource
+                None => (),
+                Some(source) => {
+                    let text_cols_option = node
+                        .with_options
+                        .iter()
+                        .find(|o| o.name == CreateSubsourceOptionName::TextColumns);
+                    if text_cols_option.is_some() {
+                        // if this subsource already has text-columns it does not need to be fixed.
+                        return;
+                    }
+                    let source_statement = match &source {
+                        RawItemName::Name(name) => self
+                            .source_name_to_stmt
+                            .get(name)
+                            .expect("source must exist"),
+                        RawItemName::Id(id, _) => {
+                            let gid = id
+                                .parse()
+                                .expect("RawItenName::Id must be uncorrupted GlobalId");
+                            self.source_id_to_stmt.get(&gid).expect("source must exist")
+                        }
+                    };
+                    if !matches!(
+                        &source_statement.connection,
+                        CreateSourceConnection::Postgres { .. }
+                    ) {
+                        // We only need to fix Postgres subsources.
+                        return;
+                    }
+
+                    info!("migrate: populating subsource details: {:?}", node);
+
+                    let external_reference = node
+                        .with_options
+                        .iter()
+                        .find(|o| o.name == CreateSubsourceOptionName::ExternalReference)
+                        .expect("subsources must have external reference");
+                    // For postgres sources the `external_reference` does include the database name
+                    // but since all tables in a source belong to the same publication they share
+                    // the same database too, so we can effectively ignore it.
+                    let (external_schema, external_table) = match &external_reference.value {
+                        Some(WithOptionValue::UnresolvedItemName(name)) => {
+                            let name_len = name.0.len();
+                            (
+                                name.0[name_len - 2].clone().into_string(),
+                                name.0[name_len - 1].clone().into_string(),
+                            )
+                        }
+                        _ => unreachable!("external reference must be an unresolved item name"),
+                    };
+
+                    match &source_statement.connection {
+                        CreateSourceConnection::Postgres {
+                            connection: _,
+                            options,
+                        } => {
+                            // Copy the relevant Text Columns from the top-level source option into the subsource option
+                            let text_columns = options
+                                .iter()
+                                .find(|o| o.name == PgConfigOptionName::TextColumns);
+                            if let Some(text_columns) = text_columns {
+                                let table_text_columns = self.postgres_columns_for_table(
+                                    &external_schema,
+                                    &external_table,
+                                    &text_columns.value,
+                                );
+                                if table_text_columns.len() > 0 {
+                                    node.with_options.push(CreateSubsourceOption {
+                                        name: CreateSubsourceOptionName::TextColumns,
+                                        value: Some(WithOptionValue::Sequence(table_text_columns)),
+                                    });
+                                }
+                            }
+                        }
+                        _ => unreachable!("already filtered to just postgres subsources"),
+                    };
+                    info!("migrated subsource: {:?}", node);
+                }
+            }
+        }
+    }
+
+    impl Rewriter<'_> {
+        fn postgres_columns_for_table(
+            &self,
+            external_schema: &str,
+            external_table: &str,
+            all_columns: &Option<WithOptionValue<Raw>>,
+        ) -> Vec<WithOptionValue<Raw>> {
+            let all_table_columns = match all_columns {
+                Some(WithOptionValue::Sequence(columns)) => {
+                    columns.into_iter().map(|column| match column {
+                        WithOptionValue::UnresolvedItemName(name) => name,
+                        _ => unreachable!("text columns must be UnresolvedItemName"),
+                    })
+                }
+                _ => {
+                    unreachable!("Source columns value must be a sequence")
+                }
+            };
+
+            all_table_columns
+                .filter_map(|name| {
+                    // Postgres CREATE SOURCE statement text columns are an UnresolvedItemName with
+                    // (database, schema, table, column) tuples
+                    // and we only need to copy the column name for the subsource option
+                    let name_len = name.0.len();
+                    if name.0[name_len - 3].clone().into_string() == external_schema
+                        && name.0[name_len - 2].clone().into_string() == external_table
+                    {
+                        Some(WithOptionValue::Ident(name.0[name_len - 1].clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+    }
+    Rewriter {
+        source_name_to_stmt,
+        source_id_to_stmt,
+    }
+    .visit_statement_mut(stmt);
 
     Ok(())
 }
