@@ -718,19 +718,31 @@ where
 
             // Install the collection state in the appropriate spot.
             match &collection_state.data_source {
-                DataSource::Introspection(_) => {
+                DataSource::Introspection(typ) => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                    self.persist_monotonic_worker.register(id, write);
+                    // We always register the collection with the collection manager,
+                    // regardless of read-only mode. The CollectionManager itself is
+                    // aware of read-only mode and will not attempt to write before told
+                    // to do so.
+                    //
+                    self.register_introspection_collection(id, *typ, write)
+                        .await?;
                     self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                    self.persist_monotonic_worker.register(id, write);
                     self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                     // This collection of statistics is periodically aggregated into
                     // `source_statistics`.
                     new_webhook_statistic_entries.insert(id);
+                    // Register the collection so our manager knows about it.
+                    //
+                    // NOTE: Maybe this shouldn't be in the collection manager,
+                    // and collection manager should only be responsble for
+                    // built-in introspection collections?
+                    self.collection_manager
+                        .register_append_only_collection(id, write, false);
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -883,26 +895,8 @@ where
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
-                DataSource::Introspection(i) => {
-
-
-                    // We always register the collection with the collection manager,
-                    // regardless of read-only mode. The CollectionManager itself is
-                    // aware of read-only mode and will not attempt to write before told
-                    // to do so.
-                    //
-                    self.register_introspection_collection(id, *i)
-                        .await?;
-
-                }
-                DataSource::Webhook => {
-                    // Register the collection so our manager knows about it.
-                    //
-                    // NOTE: Maybe this shouldn't be in the collection manager,
-                    // and collection manager should only be responsble for
-                    // built-in introspection collections?
-                    self.collection_manager.register_append_only_collection(id, false);
-                }
+                DataSource::Introspection(_) => {}
+                DataSource::Webhook => {}
                 DataSource::Progress | DataSource::Other(_) => {}
             };
         }
@@ -2824,6 +2818,7 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
@@ -2930,8 +2925,11 @@ where
                         .await?;
                 }
 
-                self.collection_manager
-                    .register_append_only_collection(id, force_writable);
+                self.collection_manager.register_append_only_collection(
+                    id,
+                    write_handle,
+                    force_writable,
+                );
             }
 
             // Same as our other differential collections, but for these the
@@ -2965,8 +2963,11 @@ where
                         .await?;
                 }
 
-                self.collection_manager
-                    .register_append_only_collection(id, force_writable);
+                self.collection_manager.register_append_only_collection(
+                    id,
+                    write_handle,
+                    force_writable,
+                );
             }
         }
 
