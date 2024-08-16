@@ -1,0 +1,13 @@
+In Materialize, you do not need to always create indexes to help optimize
+computations. For queries that have no supporting indexes, Materialize uses the
+same mechanics used by indexes to optimize computations.
+
+Specific instances where indexes can be useful to improve performance include:
+
+- When used in ad-hoc queries.
+
+- When used by multiple queries within the same cluster.
+
+- When used to enable delta joins.
+
+For more information, see [Optimization](/transform-data/optimization).

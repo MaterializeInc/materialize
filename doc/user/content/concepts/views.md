@@ -17,11 +17,8 @@ a shorthand for the underlying query.
 
 Type |
 -----|------------
-[**Views**](#views) | Results are **not** persisted in durable storage. Views can be indexed to maintain and incrementally update results in memory within a cluster.
+[**Views**](#views) | Results are **not** persisted in durable storage. Views can be indexed to compute and incrementally update results in memory within a cluster.
 [**Materialized views**](#materialized-views) | Results **are** persisted and incrementally updated in durable storage. Materialized views can be indexed to maintain the results in memory.
-
-All views in Materialize are built by reading data from
-[sources](/concepts/sources) and other views.
 
 ## Views
 
@@ -39,16 +36,16 @@ CREATE VIEW my_view_name AS
 ```
 
 However, in Materialize, you can create an [index](/concepts/indexes/) on a view
-to **maintain and incrementally update** its results in memory within a cluster.
-
+to **compute and, as new data arrives, incrementally update** its results in
+memory within a cluster.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 ```
 
-Once indexed, queries within that cluster can use the index to access view
-results from memory.  See [Indexes and views](#indexes-and-views) for more
-information.
+Once indexed, queries within that cluster can use the index to access already
+up-to-date view results from memory; i.e., they comutationally free. See
+[Indexes and views](#indexes-and-views) for more information.
 
 See also:
 
@@ -57,7 +54,7 @@ See also:
 
 ### Indexes and views
 
-In Materialize, views can be [indexed](/concepts/indexes/).
+In Materialize, views can be [indexed](/concepts/indexes/). Indexes represent query results stored in memory.
 
 For example, to create an index in the current cluster:
 
@@ -71,9 +68,10 @@ You can also explicitly specify the cluster:
 CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 ```
 
-Indexes on views both **maintain and incrementally update view results in
-memory** within that [cluster](/concepts/clusters/). The in-memory, up-to-date
-results are accessible to queries within the cluster.
+Indexes on views both **compute, and as new data arrives, incrementally update
+view results in memory** within that [cluster](/concepts/clusters/). Within the
+cluster, the in-memory up-to-date results are immediately available and
+computationally free to query.
 
 See also:
 
@@ -84,8 +82,8 @@ See also:
 ## Materialized views
 
 In Materialize, a materialized view is a view whose underlying query is executed
-during the view creation, and the view results are persisted **and
-incrementally updated** in durable storage.
+during the view creation. The view results are persisted in durable storage,
+**and, as new data arrives, incrementally updated**.
 
 ```mzsql
 CREATE MATERIALIZED VIEW my_mat_view_name AS
@@ -102,7 +100,6 @@ See also:
 
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view) for complete
   syntax information
-
 
 ### Indexes and materialized views
 
@@ -123,6 +120,9 @@ See also:
 - [Optimization](/transform-data/optimization)
 - [`CREATE INDEX`](/sql/create-index/)  for complete syntax information
 
+## Indexes on views vs. Materialized views
+
+{{% views-indexes/table-usage-pattern %}}
 
 ## General information
 

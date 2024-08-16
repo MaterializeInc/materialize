@@ -12,9 +12,7 @@ menu:
 Depending on your use case, instead of a materialized view, you might prefer to
 [create a view and index it](/concepts/views/#views). In Materialize, [indexes
 on views](/concepts/indexes/) **maintain and incrementally update view results
-in memory** for the cluster where you create the index.  For more information on
-views and indexes, see [Views](/concepts/views/#views) and [`CREATE
-VIEW`](/sql/create-view).
+in memory** for the cluster where you create the index.  See [Usage Patterns](#usage-patterns).
 
 {{</ note >}}
 
@@ -53,23 +51,7 @@ _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you wan
 
 ### Usage patterns
 
-Maintaining a materialized view in durable storage has resource and latency
-costs that should be carefully considered depending on the main usage of the
-view. It's a good idea to create a materialized view if:
-
-* The results need to be available across clusters;
-* View maintenance and query serving would benefit from being scaled
-  independently;
-* The final consumer of the view is a sink or a [`SUBSCRIBE`](../subscribe) operation.
-
-On the other hand, if you only need to access a view from a single cluster, you
-should consider creating a [view](../create-view) and building
-an index on it instead. The index will incrementally maintain the results of
-the view updated in memory within that cluster, allowing you to avoid the costs
-and latency overhead of materialization.
-
-[//]: # "TODO(morsapaes) Point to relevant architecture patterns once these
-exist."
+{{% views-indexes/table-usage-pattern %}}
 
 ### Indexes
 

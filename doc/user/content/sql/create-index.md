@@ -19,14 +19,23 @@ and maintain the appropriate indexes if they do not otherwise exist.
 
 ### Usage patterns
 
+#### Indexes on views vs. Materialized views
+
+{{% views-indexes/table-usage-pattern %}}
+
+#### Indexes and query optimizations
+
 You might want to create indexes when...
 
 -   You want to use non-primary keys (e.g. foreign keys) as a join condition. In
     this case, you could create an index on the columns in the join condition.
 -   You want to speed up searches filtering by literal values or expressions.
 
-[//]: # "TODO(morsapaes) Point to relevant operational guide on indexes once
-this exists."
+{{< tip >}}
+
+{{% views-indexes/index-considerations %}}
+
+{{</ tip >}}
 
 ## Syntax
 
@@ -92,8 +101,7 @@ When creating your own indexes, you can choose the indexed expressions.
 The in-memory sizes of indexes are proportional to the current size of the source
 or view they represent. The actual amount of memory required depends on several
 details related to the rate of compaction and the representation of the types of
-data in the source or view. We are working on a feature to let you see the size
-each index consumes {{% gh 1532 %}}.
+data in the source or view.
 
 Creating an index may also force the first materialization of a view, which may
 cause Materialize to install a dataflow to determine and maintain the results of

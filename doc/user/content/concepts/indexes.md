@@ -17,52 +17,34 @@ In Materialize, indexes represent query results stored in memory within a
 [sources](/concepts/sources/), [views](/concepts/views/#views), or [materialized
 views](/concepts/views/#materialized-views).
 
-
-Indexes can help [optimize query performance](/transform-data/optimization/),
-such as:
-
-- Provide faster sequential access than unindexed data.
-
-- Provide fast random access for lookup queries (i.e., selecting individual
-  keys).
-
-
-{{< tip >}}
-
-In Materialize, you do not need to always create indexes to help optimize
-computations. For queries that have no supporting indexes, Materialize uses the
-same mechanics used by indexes to optimize computations.
-
-Specific instances where indexes can be useful to improve performance include:
-
-- When used in ad-hoc queries.
-
-- When used by multiple queries within the same cluster.
-
-- When used to enable delta joins.
-
-For more information, see [Optimization](/transform-data/optimization).
-
-{{</ tip >}}
-
 ## Indexes and views
 
-In Materialize, indexes on a [view](/concepts/views/#views) **maintain and
-incrementally update** view results in memory within a
-[cluster](/concepts/clusters/). The in-memory up-to-date results are accessible
-to queries within the cluster.
+In Materialize, indexes on a [view](/concepts/views/#views) **compute and, as
+new data arrives, incrementally update** view results in memory within a
+[cluster](/concepts/clusters/) instead of recomputing the results from scratch.
 
-## Indexes and materialized views
-
-In Materialize, indexing a
-[materialized view](/concepts/views/#materialized-views) maintains results in memory within the [cluster](/concepts/clusters/). Because
-materialized views maintain the up-to-date results in durable storage, indexes
-on materialized views serve up-to-date results without themselves performing the
-incremental computation. However, unlike the materialized view, indexes are
-local to the cluster.
+Within the cluster, the in-memory up-to-date results are immediately available
+and computationally free to query.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
+```
+
+For considerations on using indexes as well as using indexes vs. materialized
+views, see [Usage patterns](#usage-patterns).
+
+## Indexes and materialized views
+
+In Materialize, materialized views already maintain the up-to-date results in
+durable storage. Indexing a [materialized
+view](/concepts/views/#materialized-views) loads the already up-to-date results
+into memory but is accessible only within a [cluster](/concepts/clusters/).
+
+For considerations on using indexes as well as using indexes vs. materialized
+views, see [Usage patterns](#usage-patterns).
+
+```mzsql
+CREATE INDEX idx_on_my_mat_view ON my_mat_view_name(...) ;
 ```
 
 ## Indexes and clusters
@@ -81,6 +63,26 @@ You can also explicitly specify the cluster:
 ```mzsql
 CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 ```
+
+## Usage Patterns
+
+### Indexes on views vs. Materialized views
+
+{{% views-indexes/table-usage-pattern %}}
+
+### Indexes and query optimizations
+
+Indexes can help [optimize query performance](/transform-data/optimization/),
+such as:
+
+- Provide faster sequential access than unindexed data.
+
+- Provide fast random access for lookup queries (i.e., selecting individual
+  keys).
+
+{{< tip >}}
+{{% views-indexes/index-considerations %}}
+{{</ tip >}}
 
 ## Related pages
 
