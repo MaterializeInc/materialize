@@ -9,9 +9,8 @@ weight: 1
 
 # Materialize documentation
 
-Materialize is the Cloud Operational Data Store that delivers the speed of
-streaming with the ease of a data warehouse. With Materialize, organizations can
-use SQL to transform, deliver, and act on fast-changing data.
+Materialize is the Cloud Operational Data Store that lets you use SQL to
+transform, deliver, and act on fast-changing data.
 
 {{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
 
