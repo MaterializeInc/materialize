@@ -29,18 +29,14 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-
 use mz_ore::collections::CollectionExt;
-use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
-use timely::progress::Timestamp as TimelyTimestamp;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -61,6 +57,7 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
 };
+use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -80,9 +77,10 @@ use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::mpsc;
 use tokio::sync::watch::{channel, Sender};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
@@ -1578,14 +1576,31 @@ where
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>> {
+        self.snapshot_async(id, as_of)
+            .await?
+            .await
+            .expect("sender hung up")
+    }
+
+    async fn snapshot_async(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<
+        oneshot::Receiver<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    > {
         let metadata = &self.storage_collections.collection_metadata(id)?;
-        let contents = match metadata.txns_shard.as_ref() {
+        let contents_fut = match metadata.txns_shard.as_ref() {
             None => {
                 // We're not using txn-wal for tables, so we can take a snapshot directly.
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                read_handle
-                    .snapshot_and_fetch(Antichain::from_elem(as_of))
-                    .await
+                async move {
+                    read_handle
+                        .snapshot_and_fetch(Antichain::from_elem(as_of))
+                        .await
+                }
+                .boxed()
             }
             Some(txns_id) => {
                 // We _are_ using txn-wal for tables. It advances the physical upper of the
@@ -1608,50 +1623,83 @@ where
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                data_snapshot.snapshot_and_fetch(&mut read_handle).await
+                async move { data_snapshot.snapshot_and_fetch(&mut read_handle).await }.boxed()
             }
         };
-        match contents {
-            Ok(contents) => {
-                let mut snapshot = Vec::with_capacity(contents.len());
-                for ((data, _), _, diff) in contents {
-                    // TODO(petrosagg): We should accumulate the errors too and let the user
-                    // interprret the result
-                    let row = data.expect("invalid protobuf data").0?;
-                    snapshot.push((row, diff));
+        let (tx, rx) = oneshot::channel();
+        mz_ore::task::spawn(|| format!("snapshot-{id}"), async move {
+            let contents = contents_fut.await;
+            let res = match contents {
+                Ok(contents) => {
+                    let mut snapshot = Vec::with_capacity(contents.len());
+                    for ((data, _), _, diff) in contents {
+                        // TODO(petrosagg): We should accumulate the errors too and let the user
+                        // interpret the result
+                        match data.expect("invalid protobuf data").0 {
+                            Ok(row) => snapshot.push((row, diff)),
+                            Err(e) => {
+                                // Not an error if the receiver hung up.
+                                let _ = tx.send(Err(e.into()));
+                                return;
+                            }
+                        }
+                    }
+                    Ok(snapshot)
                 }
-                Ok(snapshot)
-            }
-            Err(_) => Err(StorageError::ReadBeforeSince(id)),
-        }
+                Err(_) => Err(StorageError::ReadBeforeSince(id)),
+            };
+            // Not an error if the receiver hung up.
+            let _ = tx.send(res);
+        });
+
+        Ok(rx)
     }
 
     async fn snapshot_latest(
         &mut self,
         id: GlobalId,
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
+        Ok(self
+            .snapshot_latest_async(id)
+            .await?
+            .await
+            .expect("sender hung up"))
+    }
+
+    async fn snapshot_latest_async(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<oneshot::Receiver<Vec<Row>>, StorageError<Self::Timestamp>> {
         let upper = self
             .persist_monotonic_worker
             .recent_upper(id)
             .await
             .expect("sender hung up")?;
 
-        let res = match upper.as_option() {
+        let (tx, rx) = oneshot::channel();
+        match upper.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
-
-                let snapshot = self.snapshot(id, as_of).await.unwrap();
-                snapshot
-                    .into_iter()
-                    .map(|(row, diff)| {
-                        assert!(diff == 1, "snapshot doesn't accumulate to set");
-                        row
-                    })
-                    .collect()
+                let snapshot_rx = self.snapshot_async(id, as_of).await.unwrap();
+                mz_ore::task::spawn(|| format!("snapshot-latest-{id}"), async move {
+                    let snapshot = snapshot_rx
+                        .await
+                        .expect("sender hung up")
+                        .unwrap()
+                        .into_iter()
+                        .map(|(row, diff)| {
+                            assert_eq!(diff, 1, "snapshot doesn't accumulate to set");
+                            row
+                        })
+                        .collect();
+                    // Not an error if the receiver hung up.
+                    let _ = tx.send(snapshot);
+                });
             }
             Some(_min) => {
                 // The collection must be empty!
-                Vec::new()
+                // Not an error if the receiver hung up.
+                let _ = tx.send(Vec::new());
             }
             // The collection is closed, we cannot determine a latest read
             // timestamp based on the upper.
@@ -1661,9 +1709,9 @@ where
                         .to_string(),
                 ));
             }
-        };
+        }
 
-        Ok(res)
+        Ok(rx)
     }
 
     async fn snapshot_cursor(
