@@ -29,19 +29,14 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-
 use mz_ore::collections::CollectionExt;
-use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
-use mz_storage_types::dyncfgs::REPLICA_METRICS_HISTORY_RETENTION_INTERVAL;
-use timely::progress::Timestamp as TimelyTimestamp;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -62,10 +57,12 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
 };
+use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
+use mz_storage_types::dyncfgs::REPLICA_METRICS_HISTORY_RETENTION_INTERVAL;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -81,6 +78,7 @@ use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc;
 use tokio::sync::watch::{channel, Sender};
