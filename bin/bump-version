@@ -51,6 +51,4 @@ fi
 
 rm -f src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancerd}/Cargo.toml.bak LICENSE.bak
 
-cargo check
-
 git commit -am "release: bump to version v$version"
