@@ -383,7 +383,7 @@ start by selecting the relevant option.
     );
     ```
 
-    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-configure-network-security).
+    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
 
     - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
       zones in your AWS account.
@@ -492,7 +492,7 @@ start by selecting the relevant option.
     ```
 
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#b-configure-network-security).
+      address and port of the SSH bastion host you created [earlier](#b-optional-configure-network-security).
 
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you
       created for your SSH bastion host.
