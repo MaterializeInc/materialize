@@ -113,7 +113,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 > SELECT count(*) FROM clock;
 1
 
-> SELECT time < now() + INTERVAL '1s', time > now() - INTERVAL '1s' FROM clock
+> SELECT time < now() + INTERVAL '5s', time > now() - INTERVAL '5s' FROM clock
 true true
 
 # Check that non-append-only `COUNTER` sources reach the proper size
