@@ -816,12 +816,12 @@ where
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
     pub fn acquire_read_hold(
-        &self,
+        &mut self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
     ) -> Result<ReadHold<T>, CollectionUpdateError> {
         let hold = self
-            .instance(instance_id)?
+            .instance_mut(instance_id)?
             .acquire_read_hold(collection_id)?;
         Ok(hold)
     }
@@ -956,9 +956,10 @@ pub struct CollectionState<T: Timestamp> {
     /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
     /// collection, including `implied_read_hold` and `warmup_read_hold`.
     ///
-    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`]. Nobody else
-    /// should modify read capabilities directly. Instead, collection users should manage read
-    /// holds through [`ReadHold`] objects acquired through [`Instance::acquire_read_hold`].
+    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`] and
+    /// [`Instance::acquire_read_hold`]. Nobody else should modify read capabilities directly.
+    /// Instead, collection users should manage read holds through [`ReadHold`] objects acquired
+    /// through [`Instance::acquire_read_hold`].
     ///
     /// TODO(teskje): Restructure the code to enforce the above in the type system.
     read_capabilities: MutableAntichain<T>,

@@ -1471,8 +1471,25 @@ where
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
-    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
-        self.collection(id).map(|c| c.implied_read_hold.clone())
+    pub fn acquire_read_hold(&mut self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        // We acquire read holds at the earliest possible time rather than returning a copy
+        // of the implied read hold. This is so that in `create_dataflow` we can acquire read holds
+        // on compute dependencies at frontiers that are held back by other read holds the caller
+        // has previously taken.
+        //
+        // If/when we change the compute API to expect callers to pass in the `ReadHold`s rather
+        // than acquiring them ourselves, we might tighten this up and instead acquire read holds
+        // at the implied capability.
+
+        let collection = self.collection_mut(id)?;
+        let since = collection.read_capabilities.frontier().to_owned();
+
+        collection
+            .read_capabilities
+            .update_iter(since.iter().map(|t| (t.clone(), 1)));
+
+        let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
+        Ok(hold)
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection at the desired frontier.
