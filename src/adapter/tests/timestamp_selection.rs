@@ -144,8 +144,7 @@ impl TimestampProvider for Frontiers {
             read_holds.storage_holds.insert(*id, mock_storage_hold);
         }
 
-        let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();
-        ReadHolds::new(read_holds, dummy_tx)
+        ReadHolds::new(read_holds)
     }
 
     fn catalog_state(&self) -> &CatalogState {

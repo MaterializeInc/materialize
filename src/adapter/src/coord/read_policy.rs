@@ -176,19 +176,12 @@ impl<T: Eq + Hash + Ord> TimelineReadHolds<T> {
 /// _are_ released automatically when being dropped.
 pub struct ReadHolds<T: TimelyTimestamp> {
     pub inner: ReadHoldsInner<T>,
-    dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<ReadHoldsInner<T>>,
 }
 
 impl<T: TimelyTimestamp> ReadHolds<T> {
     /// Return empty `ReadHolds`.
-    pub fn new(
-        read_holds: ReadHoldsInner<T>,
-        dropped_read_holds_tx: tokio::sync::mpsc::UnboundedSender<ReadHoldsInner<T>>,
-    ) -> Self {
-        ReadHolds {
-            inner: read_holds,
-            dropped_read_holds_tx,
-        }
+    pub fn new(read_holds: ReadHoldsInner<T>) -> Self {
+        ReadHolds { inner: read_holds }
     }
 }
 impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
@@ -213,23 +206,6 @@ impl<T: TimelyTimestamp> Debug for ReadHolds<T> {
         f.debug_struct("ReadHolds")
             .field("read_holds", &self.inner)
             .finish_non_exhaustive()
-    }
-}
-
-impl<T: TimelyTimestamp> Drop for ReadHolds<T> {
-    fn drop(&mut self) {
-        let inner_holds = std::mem::take(&mut self.inner);
-
-        tracing::debug!(
-            "dropping ReadHolds on storage {:?} and compute {:?} ",
-            inner_holds.storage_holds.keys(),
-            inner_holds.compute_holds.keys()
-        );
-
-        let res = self.dropped_read_holds_tx.send(inner_holds);
-        if let Err(e) = res {
-            tracing::warn!("error when trying to drop ReadHold: {:?}", e)
-        }
     }
 }
 
@@ -837,7 +813,7 @@ impl crate::coord::Coordinator {
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
 
-        let read_holds = ReadHolds::new(read_holds, self.dropped_read_holds_tx.clone());
+        let read_holds = ReadHolds::new(read_holds);
         tracing::debug!(?read_holds, "acquire_read_holds");
         read_holds
     }
@@ -857,42 +833,6 @@ impl crate::coord::Coordinator {
             }
             btree_map::Entry::Occupied(mut o) => {
                 o.get_mut().merge(read_holds);
-            }
-        }
-    }
-
-    /// Release the given read holds.
-    ///
-    /// This method relies on a previous call to
-    /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
-    /// `ReadHolds`, and its behavior will be erratic if called on anything else,
-    /// or if called more than once on the same bundle of read holds.
-    pub(super) fn release_read_holds(&mut self, mut read_holdses: Vec<ReadHoldsInner<Timestamp>>) {
-        tracing::debug!(?read_holdses, "release_read_holds");
-        // STORAGE read holds are released implicitly by dropping the STORAGE
-        // ReadHolds.
-
-        // Update COMPUTE read policies
-        let mut policy_changes_per_instance = BTreeMap::new();
-        for read_holds in read_holdses.iter_mut() {
-            for ((compute_instance, id), hold) in read_holds.compute_holds.iter_mut() {
-                let policy_changes = policy_changes_per_instance
-                    .entry(compute_instance)
-                    .or_insert_with(Vec::new);
-                // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                if let Some(read_needs) = self.compute_read_capabilities.get_mut(id) {
-                    let inverted_hold = hold.updates().map(|(t, diff)| (*t, -diff));
-                    read_needs.holds.update_iter(inverted_hold);
-                    policy_changes.push((*id, read_needs.policy()));
-                }
-            }
-        }
-        for (compute_instance, policy_changes) in policy_changes_per_instance {
-            let compute = &mut self.controller.compute;
-            if compute.instance_exists(*compute_instance) {
-                compute
-                    .set_read_policy(*compute_instance, policy_changes)
-                    .unwrap_or_terminate("cannot fail to set read policy");
             }
         }
     }

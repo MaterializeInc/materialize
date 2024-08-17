@@ -173,7 +173,6 @@ use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::validity::PlanValidity;
@@ -238,7 +237,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     ),
     DeferredStatementReady,
     AdvanceTimelines,
-    DropReadHolds(Vec<ReadHoldsInner<Timestamp>>),
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -343,7 +341,6 @@ impl Message {
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
-            Message::DropReadHolds(_) => "drop_read_holds",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
@@ -1562,14 +1559,6 @@ pub struct Coordinator {
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
-
-    /// Channel for returning/releasing [read holds](ReadHoldsInner).
-    ///
-    /// We're using a special purpose channel rather than using
-    /// `internal_cmd_tx` so that we can control the priority of working off
-    /// dropped read holds. If we sent them as [Message] on the internal cmd
-    /// channel, these would always get top priority, which is not necessary.
-    dropped_read_holds_tx: mpsc::UnboundedSender<ReadHoldsInner<Timestamp>>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -2925,7 +2914,6 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<ReadHoldsInner<Timestamp>>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
@@ -3069,15 +3057,6 @@ impl Coordinator {
                             )
                         }
                         Message::LinearizeReads
-                    }
-                    // `recv()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                    Some(dropped_read_hold) = dropped_read_holds_rx.recv() => {
-                        let mut dropped_read_holds = vec![dropped_read_hold];
-                        while let Ok(dropped_read_hold) = dropped_read_holds_rx.try_recv() {
-                            dropped_read_holds.push(dropped_read_hold);
-                        }
-                        Message::DropReadHolds(dropped_read_holds)
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
@@ -3641,7 +3620,6 @@ pub fn serve(
         let (group_commit_tx, group_commit_rx) = appends::notifier();
         let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
             mpsc::unbounded_channel();
-        let (dropped_read_holds_tx, dropped_read_holds_rx) = mpsc::unbounded_channel();
 
         // Validate and process availability zones.
         if !availability_zones.iter().all_unique() {
@@ -3863,7 +3841,6 @@ pub fn serve(
                     internal_cmd_tx,
                     group_commit_tx,
                     strict_serializable_reads_tx,
-                    dropped_read_holds_tx,
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
@@ -3931,7 +3908,6 @@ pub fn serve(
                     handle.block_on(coord.serve(
                         internal_cmd_rx,
                         strict_serializable_reads_rx,
-                        dropped_read_holds_rx,
                         cmd_rx,
                         group_commit_rx,
                     ));
