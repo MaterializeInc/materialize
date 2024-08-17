@@ -507,7 +507,7 @@ impl Coordinator {
                 // point compute will have put in its own read holds.
                 drop(read_holds);
 
-                coord.update_compute_base_read_policy(
+                coord.update_compute_read_policy(
                     cluster_id,
                     exported_index_id,
                     compaction_window.unwrap_or_default().into(),

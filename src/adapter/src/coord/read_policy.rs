@@ -287,41 +287,23 @@ impl crate::coord::Coordinator {
         }
     }
 
-    pub(crate) fn update_storage_base_read_policies(
+    pub(crate) fn update_storage_read_policies(
         &mut self,
-        base_policies: Vec<(GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
+        policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>,
     ) {
-        let mut policies = Vec::with_capacity(base_policies.len());
-        for (id, base_policy) in base_policies {
-            let capability = self
-                .storage_read_capabilities
-                .get_mut(&id)
-                .expect("coord out of sync");
-            capability.base_policy = base_policy;
-            policies.push((id, capability.policy()))
-        }
-        self.controller.storage.set_read_policy(policies)
+        self.controller.storage.set_read_policy(policies);
     }
 
-    pub(crate) fn update_compute_base_read_policies(
+    pub(crate) fn update_compute_read_policies(
         &mut self,
-        mut base_policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
+        mut policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<Timestamp>)>,
     ) {
-        base_policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
-        for (cluster_id, group) in &base_policies
+        policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
+        for (cluster_id, group) in &policies
             .into_iter()
             .group_by(|&(cluster_id, _, _)| cluster_id)
         {
-            let group = group
-                .map(|(_, id, base_policy)| {
-                    let capability = self
-                        .compute_read_capabilities
-                        .get_mut(&id)
-                        .expect("coord out of sync");
-                    capability.base_policy = base_policy;
-                    (id, capability.policy())
-                })
-                .collect::<Vec<_>>();
+            let group = group.map(|(_, id, policy)| (id, policy)).collect();
             self.controller
                 .compute
                 .set_read_policy(cluster_id, group)
@@ -329,27 +311,13 @@ impl crate::coord::Coordinator {
         }
     }
 
-    pub(crate) fn update_compute_base_read_policy(
+    pub(crate) fn update_compute_read_policy(
         &mut self,
         compute_instance: ComputeInstanceId,
         id: GlobalId,
-        base_policy: ReadPolicy<mz_repr::Timestamp>,
+        base_policy: ReadPolicy<Timestamp>,
     ) {
-        self.update_compute_base_read_policies(vec![(compute_instance, id, base_policy)])
-    }
-
-    /// Drop read policy in STORAGE for `id`.
-    ///
-    /// Returns true if `id` had a read policy and false otherwise.
-    pub(crate) fn drop_storage_read_policy(&mut self, id: &GlobalId) -> bool {
-        self.storage_read_capabilities.remove(id).is_some()
-    }
-
-    /// Drop read policy in COMPUTE for `id`.
-    ///
-    /// Returns true if `id` had a read policy and false otherwise.
-    pub(crate) fn drop_compute_read_policy(&mut self, id: &GlobalId) -> bool {
-        self.compute_read_capabilities.remove(id).is_some()
+        self.update_compute_read_policies(vec![(compute_instance, id, base_policy)])
     }
 
     /// Attempt to acquire read holds on the indicated collections at the

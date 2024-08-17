@@ -93,7 +93,7 @@ use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use http::Uri;
 use itertools::{Either, Itertools};
-use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_CLUSTER_REPLICA_FRONTIERS};
@@ -1570,30 +1570,9 @@ pub struct Coordinator {
     /// active connections.
     active_conns: BTreeMap<ConnectionId, ConnMeta>,
 
-    /// For each identifier in STORAGE, its read policy and any read holds on time.
+    /// For each transaction, the read holds taken to support any performed reads.
     ///
-    /// Transactions should introduce and remove constraints through the methods
-    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
-    /// policy can also be updated, though one should be sure to communicate this
-    /// to the controller for it to have an effect.
-    ///
-    /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    storage_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
-    /// For each identifier in COMPUTE, its read policy and any read holds on time.
-    ///
-    /// Transactions should introduce and remove constraints through the methods
-    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
-    /// policy can also be updated, though one should be sure to communicate this
-    /// to the controller for it to have an effect.
-    ///
-    /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    compute_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
-
-    /// For each transaction, the pinned storage and compute identifiers and time at
-    /// which they are pinned.
-    ///
-    /// Upon completing a transaction, this timestamp should be removed from the holds
-    /// in `self.read_capability[id]`, using the `release_read_holds` method.
+    /// Upon completing a transaction, these read holds should be dropped.
     txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
@@ -3317,16 +3296,6 @@ impl Coordinator {
             .iter()
             .map(|(id, meta)| (id.unhandled().to_string(), format!("{meta:?}")))
             .collect();
-        let storage_read_capabilities: BTreeMap<_, _> = self
-            .storage_read_capabilities
-            .iter()
-            .map(|(id, capability)| (id.to_string(), format!("{capability:?}")))
-            .collect();
-        let compute_read_capabilities: BTreeMap<_, _> = self
-            .compute_read_capabilities
-            .iter()
-            .map(|(id, capability)| (id.to_string(), format!("{capability:?}")))
-            .collect();
         let txn_read_holds: BTreeMap<_, _> = self
             .txn_read_holds
             .iter()
@@ -3358,14 +3327,6 @@ impl Coordinator {
             (
                 "active_conns".to_string(),
                 serde_json::to_value(active_conns)?,
-            ),
-            (
-                "storage_read_capabilities".to_string(),
-                serde_json::to_value(storage_read_capabilities)?,
-            ),
-            (
-                "compute_read_capabilities".to_string(),
-                serde_json::to_value(compute_read_capabilities)?,
             ),
             (
                 "txn_read_holds".to_string(),
@@ -3844,8 +3805,6 @@ pub fn serve(
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
-                    storage_read_capabilities: Default::default(),
-                    compute_read_capabilities: Default::default(),
                     txn_read_holds: Default::default(),
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),

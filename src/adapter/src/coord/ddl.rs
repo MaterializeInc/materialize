@@ -216,7 +216,6 @@ impl Coordinator {
         let mut update_cluster_scheduling_config = false;
         let mut update_arrangement_exert_proportionality = false;
         let mut update_http_config = false;
-        let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
             match op {
@@ -284,13 +283,6 @@ impl Coordinator {
                             }
                             catalog::DropObjectInfo::Cluster(id) => {
                                 clusters_to_drop.push(*id);
-                                log_indexes_to_drop.extend(
-                                    self.catalog()
-                                        .get_cluster(*id)
-                                        .log_indexes
-                                        .values()
-                                        .cloned(),
-                                );
                             }
                             catalog::DropObjectInfo::ClusterReplica((
                                 cluster_id,
@@ -658,11 +650,6 @@ impl Coordinator {
                     self.drop_replica(cluster_id, replica_id).await;
                 }
             }
-            if !log_indexes_to_drop.is_empty() {
-                for id in log_indexes_to_drop {
-                    self.drop_compute_read_policy(&id);
-                }
-            }
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
                     self.controller.drop_cluster(cluster_id);
@@ -835,7 +822,6 @@ impl Coordinator {
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
             self.active_webhooks.remove(id);
-            self.drop_storage_read_policy(id);
         }
         let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
@@ -845,9 +831,6 @@ impl Coordinator {
     }
 
     fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
-        for id in &tables {
-            self.drop_storage_read_policy(id);
-        }
         self.controller
             .storage
             .drop_tables(tables, ts)
@@ -1022,9 +1005,6 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
-        for id in &sinks {
-            self.drop_storage_read_policy(id);
-        }
         self.controller
             .storage
             .drop_sinks(sinks)
@@ -1034,11 +1014,7 @@ impl Coordinator {
     pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (cluster_id, id) in indexes {
-            if self.drop_compute_read_policy(&id) {
-                by_cluster.entry(cluster_id).or_default().push(id);
-            } else {
-                tracing::error!("Instructed to drop a non-index index");
-            }
+            by_cluster.entry(cluster_id).or_default().push(id);
         }
         for (cluster_id, ids) in by_cluster {
             let compute = &mut self.controller.compute;
@@ -1203,8 +1179,8 @@ impl Coordinator {
                 }
             })
             .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(storage_policies);
-        self.update_compute_base_read_policies(compute_policies);
+        self.update_storage_read_policies(storage_policies);
+        self.update_compute_read_policies(compute_policies);
     }
 
     fn update_arrangement_exert_proportionality(&mut self) {

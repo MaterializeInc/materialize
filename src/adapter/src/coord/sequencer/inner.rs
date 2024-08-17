@@ -2906,7 +2906,7 @@ impl Coordinator {
                 CatalogItem::Index(index) => Some(index.cluster_id),
                 CatalogItem::Source(_) => {
                     let read_policies = coord.catalog().source_read_policies(plan.id);
-                    coord.update_storage_base_read_policies(read_policies);
+                    coord.update_storage_read_policies(read_policies);
                     return;
                 }
                 CatalogItem::Log(_)
@@ -2919,10 +2919,10 @@ impl Coordinator {
             };
             match cluster {
                 Some(cluster) => {
-                    coord.update_compute_base_read_policy(cluster, plan.id, plan.window.into());
+                    coord.update_compute_read_policy(cluster, plan.id, plan.window.into());
                 }
                 None => {
-                    coord.update_storage_base_read_policies(vec![(plan.id, plan.window.into())]);
+                    coord.update_storage_read_policies(vec![(plan.id, plan.window.into())]);
                 }
             }
         })
