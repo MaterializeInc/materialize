@@ -25,7 +25,6 @@ use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -126,21 +125,25 @@ impl TimestampProvider for Frontiers {
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
         let mut read_holds = ReadHolds::new();
 
+        let mock_read_hold = |id, frontier| {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            ReadHold::new(id, frontier, tx)
+        };
+
         for (instance_id, ids) in id_bundle.compute_ids.iter() {
             for id in ids.iter() {
                 let frontiers = self.compute.get(&(*instance_id, *id)).unwrap();
                 read_holds.compute_holds.insert(
                     (*instance_id, *id),
-                    MutableAntichain::from(frontiers.read.to_owned()),
+                    mock_read_hold(*id, frontiers.read.clone()),
                 );
             }
         }
         for id in id_bundle.storage_ids.iter() {
             let frontiers = self.storage.get(id).unwrap();
-
-            let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::unbounded_channel();
-            let mock_storage_hold = ReadHold::new(*id, frontiers.read.to_owned(), dummy_tx);
-            read_holds.storage_holds.insert(*id, mock_storage_hold);
+            read_holds
+                .storage_holds
+                .insert(*id, mock_read_hold(*id, frontiers.read.clone()));
         }
 
         read_holds

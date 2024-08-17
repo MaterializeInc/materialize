@@ -31,10 +31,9 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::instrument;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_storage_types::read_holds::ReadHold as StorageReadHold;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -174,8 +173,8 @@ impl<T: Eq + Hash + Ord> TimelineReadHolds<T> {
 /// _are_ released automatically when being dropped.
 #[derive(Debug)]
 pub struct ReadHolds<T: TimelyTimestamp> {
-    pub storage_holds: HashMap<GlobalId, StorageReadHold<T>>,
-    pub compute_holds: HashMap<(ComputeInstanceId, GlobalId), MutableAntichain<T>>,
+    pub storage_holds: HashMap<GlobalId, ReadHold<T>>,
+    pub compute_holds: HashMap<(ComputeInstanceId, GlobalId), ReadHold<T>>,
 }
 
 impl<T: TimelyTimestamp> ReadHolds<T> {
@@ -205,12 +204,12 @@ impl<T: TimelyTimestamp> ReadHolds<T> {
 impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
     pub fn least_valid_read(&self) -> Antichain<T> {
         let mut since = Antichain::from_elem(T::minimum());
-        for (_id, hold) in self.storage_holds.iter() {
-            since.join_assign(&hold.since().to_owned());
+        for hold in self.storage_holds.values() {
+            since.join_assign(hold.since());
         }
 
-        for (_id, hold) in self.compute_holds.iter() {
-            since.join_assign(&hold.frontier().to_owned());
+        for hold in self.compute_holds.values() {
+            since.join_assign(hold.since());
         }
 
         since
@@ -226,14 +225,14 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
         let mut since = Antichain::new();
 
         if let Some(hold) = self.storage_holds.get(desired_id) {
-            since.extend(hold.since().to_owned());
+            since.extend(hold.since().iter().cloned());
         }
 
         for ((_instance, id), hold) in self.compute_holds.iter() {
             if id != desired_id {
                 continue;
             }
-            since.extend(hold.frontier().to_owned());
+            since.extend(hold.since().iter().cloned());
         }
 
         since
@@ -241,8 +240,7 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
 
     pub fn merge(&mut self, other: Self) {
         for (id, other_hold) in other.storage_holds {
-            let existing_hold = self.storage_holds.entry(id);
-            match existing_hold {
+            match self.storage_holds.entry(id) {
                 hash_map::Entry::Occupied(mut o) => {
                     o.get_mut().merge_assign(other_hold);
                 }
@@ -251,9 +249,15 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
                 }
             }
         }
-        for (id, mut other_hold) in other.compute_holds {
-            let hold = self.compute_holds.entry(id).or_default();
-            hold.update_iter(other_hold.updates().cloned());
+        for (id, other_hold) in other.compute_holds {
+            match self.compute_holds.entry(id) {
+                hash_map::Entry::Occupied(mut o) => {
+                    o.get_mut().merge_assign(other_hold);
+                }
+                hash_map::Entry::Vacant(v) => {
+                    v.insert(other_hold);
+                }
+            }
         }
     }
 }
@@ -713,65 +717,33 @@ impl crate::coord::Coordinator {
         &mut self,
         id_bundle: &CollectionIdBundle,
     ) -> ReadHolds<Timestamp> {
-        // Create a `ReadHolds` that contains a read hold for each id in
-        // `id_bundle`. The time of each read holds is at `time`, if possible
-        // otherwise it is at the lowest possible time.
-        //
-        // This does not apply the read holds in COMPUTE. The code below applies
-        // those in the correct read capability.
         let mut read_holds = ReadHolds::new();
-        let time_antichain = Antichain::from_elem(Timestamp::MIN);
 
         let desired_storage_holds = id_bundle.storage_ids.iter().map(|id| *id).collect_vec();
         let storage_read_holds = self
             .controller
             .storage
             .acquire_read_holds(desired_storage_holds)
-            .expect("missing collections");
+            .expect("missing storage collections");
+        read_holds.storage_holds = storage_read_holds
+            .into_iter()
+            .map(|hold| (hold.id(), hold))
+            .collect();
 
-        for storage_read_hold in storage_read_holds {
-            let prev = read_holds
-                .storage_holds
-                .insert(storage_read_hold.id(), storage_read_hold);
-
-            assert!(
-                prev.is_none(),
-                "can only store one storage ReadHold per collection"
-            );
-        }
-
-        for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
-            for id in compute_ids.iter() {
-                let collection = self
+        for (&instance_id, collection_ids) in &id_bundle.compute_ids {
+            for &id in collection_ids {
+                let hold = self
                     .controller
                     .compute
-                    .collection(*compute_instance, *id)
-                    .expect("collection does not exist");
-                let read_frontier = collection.read_capability().clone();
-                let time_antichain = time_antichain.join(&read_frontier);
-                let hold_chain = MutableAntichain::from(time_antichain);
-                read_holds
-                    .compute_holds
-                    .insert((*compute_instance, *id), hold_chain);
+                    .acquire_read_hold(instance_id, id)
+                    .expect("missing compute collection");
+
+                let prev = read_holds.compute_holds.insert((instance_id, id), hold);
+                assert!(
+                    prev.is_none(),
+                    "duplicate compute ID in id_bundle {id_bundle:?}"
+                );
             }
-        }
-
-        // Update COMPUTE read policies
-        let mut policy_changes: HashMap<_, Vec<_>> = HashMap::new();
-        for ((compute_instance, id), hold) in read_holds.compute_holds.iter_mut() {
-            let read_needs = self.ensure_compute_capability(compute_instance, id, None);
-            read_needs.holds.update_iter(hold.updates().cloned());
-            policy_changes
-                .entry(*compute_instance)
-                .or_default()
-                .push((*id, read_needs.policy()));
-        }
-
-        for (compute_instance, policy_changes) in policy_changes {
-            self.controller
-                .compute
-                .set_read_policy(compute_instance, policy_changes)
-                .unwrap_or_terminate("cannot fail to set read policy");
         }
 
         tracing::debug!(?read_holds, "acquire_read_holds");
