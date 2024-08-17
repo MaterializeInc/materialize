@@ -26,6 +26,12 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 COMPLETE 0
 
 statement ok
+CREATE SCHEMA notices;
+
+statement ok
+SET SCHEMA = notices;
+
+statement ok
 CREATE TABLE t6(x int, y int, z int, w text);
 
 statement ok
@@ -39,15 +45,15 @@ WHERE x=5;
 ----
 Explained Query (fast path):
   Filter (#0{x} = 5)
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = 5`.
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = 5`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
 
 EOF
@@ -64,17 +70,17 @@ WHERE x=5;
 ----
 Explained Query (fast path):
   Filter (#0{x} = █)
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = █`.
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = █`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `x = █`.
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `x = █`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
 
 EOF
@@ -88,10 +94,10 @@ WHERE x=5 AND y=6;
 ----
 Explained Query (fast path):
   Project (#0{x}..=#3{w})
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[lookup value=(5, 6)]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[lookup value=(5, 6)]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (lookup)
+  - materialize.notices.t6_idx_x_y (lookup)
 
 Target cluster: quickstart
 
@@ -106,10 +112,10 @@ WHERE x=5 AND y=6 AND z=7;
 ----
 Explained Query (fast path):
   Project (#0{x}..=#3{w})
-    ReadIndex on=materialize.public.t6 t6_idx_x_y_z=[lookup value=(█, █, █)]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y_z=[lookup value=(█, █, █)]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y_z (lookup)
+  - materialize.notices.t6_idx_x_y_z (lookup)
 
 Target cluster: quickstart
 
@@ -127,10 +133,10 @@ WHERE x=5;
 ----
 Explained Query (fast path):
   Project (#0{x}..=#3{w})
-    ReadIndex on=materialize.public.t6 t6_idx_x=[lookup value=(5)]
+    ReadIndex on=materialize.notices.t6 t6_idx_x=[lookup value=(5)]
 
 Used Indexes:
-  - materialize.public.t6_idx_x (lookup)
+  - materialize.notices.t6_idx_x (lookup)
 
 Target cluster: quickstart
 
@@ -145,17 +151,17 @@ WHERE y=6;
 ----
 Explained Query (fast path):
   Filter (#1{y} = 6)
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 6`.
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 6`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 6`.
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 6`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
 
 EOF
@@ -170,10 +176,10 @@ WHERE x=5 AND z=7;
 Explained Query (fast path):
   Project (#0{x}..=#3{w})
     Filter (#2{z} = 7)
-      ReadIndex on=materialize.public.t6 t6_idx_x=[lookup value=(5)]
+      ReadIndex on=materialize.notices.t6 t6_idx_x=[lookup value=(5)]
 
 Used Indexes:
-  - materialize.public.t6_idx_x (lookup)
+  - materialize.notices.t6_idx_x (lookup)
 
 Target cluster: quickstart
 
@@ -188,15 +194,15 @@ WHERE z=7;
 ----
 Explained Query (fast path):
   Filter (#2{z} = 7)
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 7`.
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 7`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (z).
 
 EOF
@@ -211,19 +217,46 @@ WHERE y=5;
 query T multiline
 EXPLAIN WITH(humanized expressions) MATERIALIZED VIEW mv1;
 ----
-materialize.public.mv1:
+materialize.notices.mv1:
   Filter (#1{y} = 5)
     ReadIndex on=t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 5`.
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 5`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 5`.
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+
+EOF
+
+# Create a second, similar MV, to test the situation when two notices have the same object as their dependency.
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT *
+FROM t6
+WHERE y=5;
+
+query T multiline
+EXPLAIN WITH(humanized expressions) MATERIALIZED VIEW mv2;
+----
+materialize.notices.mv2:
+  Filter (#1{y} = 5)
+    ReadIndex on=t6 t6_idx_x_y=[*** full scan ***]
+
+Used Indexes:
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 5`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
 
 EOF
@@ -236,16 +269,39 @@ FROM
   mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
-  mv.name = 'mv1';
+  mv.name IN ('mv1', 'mv2');
 ----
-Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
-Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.public.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv2 AS
+SELECT *
+FROM t6
+WHERE y=7;
+
+# The notice text should have changed.
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
+WHERE
+  mv.name IN ('mv1', 'mv2');
+----
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 
 # Drop one of the indexes associated with the notices.
 statement ok
 DROP INDEX t6_idx_x_y_z;
 
-# Verify that the second notice is no longer in the catalog.
+# Verify that the associated notices are no longer in the catalog.
 query TTTTTTTT
 SELECT
   n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
@@ -253,15 +309,16 @@ FROM
   mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
-  mv.name = 'mv1';
+  mv.name IN ('mv1', 'mv2');
 ----
-Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 
-# Drop the catalog item associated with the notices.
+# Drop one of the catalog items associated with the notices.
 statement ok
-DROP MATERIALIZED VIEW mv1;
+DROP MATERIALIZED VIEW mv2;
 
-# Verify that the notices are no longer in the catalog.
+# Verify that one of the notices are no longer in the catalog.
 query TTTTTTTT
 SELECT
   n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
@@ -269,8 +326,10 @@ FROM
   mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
-  mv.name = 'mv1';
+  mv.name IN ('mv1', 'mv2');
 ----
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+
 
 # Re-create the index dropped above.
 statement ok
@@ -285,17 +344,17 @@ WHERE y=4 OR y=8;
 ----
 Explained Query (fast path):
   Filter ((#1{y} = 4) OR (#1{y} = 8))
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (4, 8)`.
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (4, 8)`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y IN (4, 8)`.
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y IN (4, 8)`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
 
 EOF
@@ -309,17 +368,17 @@ WHERE (y=5 AND z=7) OR (y=2 AND z=3);
 ----
 Explained Query (fast path):
   Filter (((#1{y} = 2) AND (#2{z} = 3)) OR ((#1{y} = 5) AND (#2{z} = 7)))
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (2, 5)`.
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (2, 5)`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y, z).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `(y, z) IN ((2, 3), (5, 7))`.
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `(y, z) IN ((2, 3), (5, 7))`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y, z).
 
 EOF
@@ -333,15 +392,15 @@ WHERE z=9 AND w='árvíztűrő tükörfúrógép';
 ----
 Explained Query (fast path):
   Filter (#2{z} = 9) AND (#3{w} = "árvíztűrő tükörfúrógép")
-    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
+    ReadIndex on=materialize.notices.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t6_idx_x_y (*** full scan ***)
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 9`.
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 9`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (z, w).
 
 EOF
@@ -372,15 +431,19 @@ Explained Query (fast path):
   Project (#4, #5, #3)
     Filter (#0{f2} = 1) AND (7 = (#2 + #2)) AND ((#2 * 2) < (#2 + 2))
       Map ((#1{f1} + #0{f2}), (#1{f1} + 1), 1, 2)
-        ReadIndex on=materialize.public.t1 t1i2=[*** full scan ***]
+        ReadIndex on=materialize.notices.t1 t1i2=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t1i2 (*** full scan ***)
+  - materialize.notices.t1i2 (*** full scan ***)
 
 Target cluster: quickstart
 
 Notices:
-  - Notice: Index materialize.public.t1i2 on t1(f2, f1) is too wide to use for literal equalities `f2 = 1`.
+  - Notice: Index materialize.notices.t1i2 on t1(f2, f1) is too wide to use for literal equalities `f2 = 1`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (f2, ((f1 + f2) + (f1 + f2))).
 
 EOF
+
+# This further tests `drop_plans_and_metainfos`
+statement ok
+DROP SCHEMA notices CASCADE;

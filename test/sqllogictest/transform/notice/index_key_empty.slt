@@ -24,6 +24,12 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 COMPLETE 0
 
 statement ok
+CREATE SCHEMA notices;
+
+statement ok
+SET SCHEMA = notices;
+
+statement ok
 CREATE TABLE t (
   a int,
   b int
@@ -37,11 +43,11 @@ CREATE INDEX t_idx_empty_key ON t();
 query T multiline
 EXPLAIN WITH(humanized expressions) INDEX t_idx_empty_key;
 ----
-materialize.public.t_idx_empty_key:
+materialize.notices.t_idx_empty_key:
   ArrangeBy keys=[[]]
-    ReadStorage materialize.public.t
+    ReadStorage materialize.notices.t
 
-Source materialize.public.t
+Source materialize.notices.t
 
 Target cluster: quickstart
 
@@ -84,3 +90,7 @@ FROM
 WHERE
   idx.name = 't_idx_empty_key'
 ----
+
+# This further tests `drop_plans_and_metainfos`
+statement ok
+DROP SCHEMA notices CASCADE;
