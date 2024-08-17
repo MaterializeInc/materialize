@@ -23,7 +23,6 @@
 use std::collections::{btree_map, hash_map, BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::ops::Deref;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -46,10 +45,9 @@ use crate::session::Session;
 use crate::util::ResultExt;
 
 /// For each timeline, we hold one [TimelineReadHolds] as the root read holds
-/// for that timeline. Even if there are no other read holds ([ReadHolds] and/or
-/// [ReadHoldsInner]), it acts as a backstop that makes sure that collections
-/// remain readable at the read timestamp (according to the
-/// timestamp oracle) of that timeline.
+/// for that timeline. Even if there are no other [ReadHolds] , it acts as a
+/// backstop that makes sure that collections remain readable at the read
+/// timestamp (according to the timestamp oracle) of that timeline.
 ///
 /// When creating a collection in a timeline, it is added to the one
 /// [TimelineReadHolds] of that timeline and when a collection is dropped it is
@@ -174,60 +172,23 @@ impl<T: Eq + Hash + Ord> TimelineReadHolds<T> {
 /// [ReadHolds] are used for short-lived read holds. For example, when
 /// processing peeks or rendering dataflows. These are never downgraded but they
 /// _are_ released automatically when being dropped.
-pub struct ReadHolds<T: TimelyTimestamp> {
-    pub inner: ReadHoldsInner<T>,
-}
-
-impl<T: TimelyTimestamp> ReadHolds<T> {
-    /// Return empty `ReadHolds`.
-    pub fn new(read_holds: ReadHoldsInner<T>) -> Self {
-        ReadHolds { inner: read_holds }
-    }
-}
-impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
-    pub fn merge(&mut self, mut other: Self) {
-        // Now, when other is dropped we don't release the holds anymore.
-        // Instead we take ownership and move them to ourselves.
-        let other_inner = std::mem::take(&mut other.inner);
-        self.inner.merge(other_inner)
-    }
-}
-
-impl<T: TimelyTimestamp> Deref for ReadHolds<T> {
-    type Target = ReadHoldsInner<T>;
-
-    fn deref(&self) -> &ReadHoldsInner<T> {
-        &self.inner
-    }
-}
-
-impl<T: TimelyTimestamp> Debug for ReadHolds<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReadHolds")
-            .field("read_holds", &self.inner)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Inner state of [ReadHolds]. We have this separate so that we can send the
-/// inner state along a channel, for releasing when dropped.
 #[derive(Debug)]
-pub struct ReadHoldsInner<T: TimelyTimestamp> {
+pub struct ReadHolds<T: TimelyTimestamp> {
     pub storage_holds: HashMap<GlobalId, StorageReadHold<T>>,
     pub compute_holds: HashMap<(ComputeInstanceId, GlobalId), MutableAntichain<T>>,
 }
 
-impl<T: TimelyTimestamp> ReadHoldsInner<T> {
+impl<T: TimelyTimestamp> ReadHolds<T> {
     /// Return empty `ReadHolds`.
     pub fn new() -> Self {
-        ReadHoldsInner {
+        ReadHolds {
             storage_holds: HashMap::new(),
             compute_holds: HashMap::new(),
         }
     }
 
     /// Return a `CollectionIdBundle` containing all the IDs in the
-    /// [ReadHoldsInner].
+    /// [ReadHolds].
     pub fn id_bundle(&self) -> CollectionIdBundle {
         let mut res = CollectionIdBundle::default();
         for id in self.storage_holds.keys() {
@@ -241,7 +202,7 @@ impl<T: TimelyTimestamp> ReadHoldsInner<T> {
     }
 }
 
-impl<T: TimelyTimestamp + Lattice> ReadHoldsInner<T> {
+impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
     pub fn least_valid_read(&self) -> Antichain<T> {
         let mut since = Antichain::from_elem(T::minimum());
         for (_id, hold) in self.storage_holds.iter() {
@@ -255,7 +216,7 @@ impl<T: TimelyTimestamp + Lattice> ReadHoldsInner<T> {
         since
     }
 
-    /// Returns the frontier at which this [ReadHoldsInner] is holding back the
+    /// Returns the frontier at which this [ReadHolds] is holding back the
     /// since of the collection identified by `id`. This does not mean that the
     /// overall since of the collection is what we report here. Only that it is
     /// _at least_ held back to the reported frontier by this read hold.
@@ -297,9 +258,9 @@ impl<T: TimelyTimestamp + Lattice> ReadHoldsInner<T> {
     }
 }
 
-impl<T: TimelyTimestamp> Default for ReadHoldsInner<T> {
+impl<T: TimelyTimestamp> Default for ReadHolds<T> {
     fn default() -> Self {
-        ReadHoldsInner::new()
+        ReadHolds::new()
     }
 }
 
@@ -752,13 +713,13 @@ impl crate::coord::Coordinator {
         &mut self,
         id_bundle: &CollectionIdBundle,
     ) -> ReadHolds<Timestamp> {
-        // Create a `ReadHoldsInner` that contains a read hold for each id in
+        // Create a `ReadHolds` that contains a read hold for each id in
         // `id_bundle`. The time of each read holds is at `time`, if possible
         // otherwise it is at the lowest possible time.
         //
         // This does not apply the read holds in COMPUTE. The code below applies
         // those in the correct read capability.
-        let mut read_holds = ReadHoldsInner::new();
+        let mut read_holds = ReadHolds::new();
         let time_antichain = Antichain::from_elem(Timestamp::MIN);
 
         let desired_storage_holds = id_bundle.storage_ids.iter().map(|id| *id).collect_vec();
@@ -813,7 +774,6 @@ impl crate::coord::Coordinator {
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
 
-        let read_holds = ReadHolds::new(read_holds);
         tracing::debug!(?read_holds, "acquire_read_holds");
         read_holds
     }

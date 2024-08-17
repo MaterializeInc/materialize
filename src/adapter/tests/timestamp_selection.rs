@@ -15,7 +15,6 @@ use async_trait::async_trait;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
 use mz_adapter::ReadHolds;
-use mz_adapter::ReadHoldsInner;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
@@ -125,7 +124,7 @@ impl TimestampProvider for Frontiers {
     }
 
     fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
-        let mut read_holds = ReadHoldsInner::new();
+        let mut read_holds = ReadHolds::new();
 
         for (instance_id, ids) in id_bundle.compute_ids.iter() {
             for id in ids.iter() {
@@ -144,7 +143,7 @@ impl TimestampProvider for Frontiers {
             read_holds.storage_holds.insert(*id, mock_storage_hold);
         }
 
-        ReadHolds::new(read_holds)
+        read_holds
     }
 
     fn catalog_state(&self) -> &CatalogState {
