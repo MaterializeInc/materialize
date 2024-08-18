@@ -14,13 +14,7 @@
 //! the controller from compacting the associated collections, and ensures that they
 //! remain "readable" at a specific time, as long as the hold is held.
 
-//! Allow usage of `std::collections::HashMap`.
-//! The code in this module deals with `Antichain`-keyed maps. `Antichain` does not implement
-//! `Ord`, so we cannot use `BTreeMap`s. We need to iterate through the maps, so we cannot use the
-//! `mz_ore` wrapper either.
-#![allow(clippy::disallowed_types)]
-
-use std::collections::{btree_map, hash_map, BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
@@ -49,16 +43,16 @@ use crate::util::ResultExt;
 /// relinquishes the associated read capabilities.
 #[derive(Debug)]
 pub struct ReadHolds<T: TimelyTimestamp> {
-    pub storage_holds: HashMap<GlobalId, ReadHold<T>>,
-    pub compute_holds: HashMap<(ComputeInstanceId, GlobalId), ReadHold<T>>,
+    pub storage_holds: BTreeMap<GlobalId, ReadHold<T>>,
+    pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold<T>>,
 }
 
 impl<T: TimelyTimestamp> ReadHolds<T> {
     /// Return empty `ReadHolds`.
     pub fn new() -> Self {
         ReadHolds {
-            storage_holds: HashMap::new(),
-            compute_holds: HashMap::new(),
+            storage_holds: BTreeMap::new(),
+            compute_holds: BTreeMap::new(),
         }
     }
 
@@ -149,22 +143,24 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
 
     /// Merge the read holds in `other` into the contained read holds.
     fn merge(&mut self, other: Self) {
+        use std::collections::btree_map::Entry;
+
         for (id, other_hold) in other.storage_holds {
             match self.storage_holds.entry(id) {
-                hash_map::Entry::Occupied(mut o) => {
+                Entry::Occupied(mut o) => {
                     o.get_mut().merge_assign(other_hold);
                 }
-                hash_map::Entry::Vacant(v) => {
+                Entry::Vacant(v) => {
                     v.insert(other_hold);
                 }
             }
         }
         for (id, other_hold) in other.compute_holds {
             match self.compute_holds.entry(id) {
-                hash_map::Entry::Occupied(mut o) => {
+                Entry::Occupied(mut o) => {
                     o.get_mut().merge_assign(other_hold);
                 }
-                hash_map::Entry::Vacant(v) => {
+                Entry::Vacant(v) => {
                     v.insert(other_hold);
                 }
             }
@@ -371,13 +367,14 @@ impl crate::coord::Coordinator {
         session: &Session,
         read_holds: ReadHolds<Timestamp>,
     ) {
-        let entry = self.txn_read_holds.entry(session.conn_id().clone());
+        use std::collections::btree_map::Entry;
 
-        match entry {
-            btree_map::Entry::Vacant(v) => {
+        let conn_id = session.conn_id().clone();
+        match self.txn_read_holds.entry(conn_id) {
+            Entry::Vacant(v) => {
                 v.insert(read_holds);
             }
-            btree_map::Entry::Occupied(mut o) => {
+            Entry::Occupied(mut o) => {
                 o.get_mut().merge(read_holds);
             }
         }
