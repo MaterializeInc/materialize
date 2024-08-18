@@ -112,8 +112,14 @@ pub async fn drop_replication_slots(
                 continue;
             }
             1 => {
+                // YugabyteDB does not yet support `DROP_REPLICATION_SLOT ...
+                // WAIT`.
+                let wait = match replication_client.is_yugabyte() {
+                    true => "",
+                    false => "WAIT",
+                };
                 replication_client
-                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
+                    .simple_query(&format!("DROP_REPLICATION_SLOT {} {wait}", slot))
                     .await?;
             }
             _ => {
