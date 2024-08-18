@@ -3291,6 +3291,11 @@ impl Coordinator {
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
         // prevents a future unrelated change from silently breaking this method.
 
+        let global_timelines: BTreeMap<_, _> = self
+            .global_timelines
+            .iter()
+            .map(|(timeline, state)| (timeline.to_string(), format!("{state:?}")))
+            .collect();
         let active_conns: BTreeMap<_, _> = self
             .active_conns
             .iter()
@@ -3324,6 +3329,10 @@ impl Coordinator {
             .collect();
 
         let map = serde_json::Map::from_iter([
+            (
+                "global_timelines".to_string(),
+                serde_json::to_value(global_timelines)?,
+            ),
             (
                 "active_conns".to_string(),
                 serde_json::to_value(active_conns)?,
