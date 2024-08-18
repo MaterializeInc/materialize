@@ -4860,7 +4860,13 @@ derive_unary!(
     QuoteIdent,
     TryParseMonotonicIso8601Timestamp,
     RegexpSplitToArray,
-    PgSizePretty
+    PgSizePretty,
+    Crc32Bytes,
+    Crc32String,
+    KafkaMurmur2Bytes,
+    KafkaMurmur2String,
+    SeahashBytes,
+    SeahashString
 );
 
 impl UnaryFunc {
@@ -5670,6 +5676,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => {
                 TryParseMonotonicIso8601Timestamp(())
             }
+            UnaryFunc::Crc32Bytes(_) => Crc32Bytes(()),
+            UnaryFunc::Crc32String(_) => Crc32String(()),
+            UnaryFunc::KafkaMurmur2Bytes(_) => KafkaMurmur2Bytes(()),
+            UnaryFunc::KafkaMurmur2String(_) => KafkaMurmur2String(()),
+            UnaryFunc::SeahashBytes(_) => SeahashBytes(()),
+            UnaryFunc::SeahashString(_) => SeahashString(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -6147,6 +6159,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 TryParseMonotonicIso8601Timestamp(_) => {
                     Ok(impls::TryParseMonotonicIso8601Timestamp.into())
                 }
+                Crc32Bytes(()) => Ok(impls::Crc32Bytes.into()),
+                Crc32String(()) => Ok(impls::Crc32String.into()),
+                KafkaMurmur2Bytes(()) => Ok(impls::KafkaMurmur2Bytes.into()),
+                KafkaMurmur2String(()) => Ok(impls::KafkaMurmur2String.into()),
+                SeahashBytes(()) => Ok(impls::SeahashBytes.into()),
+                SeahashString(()) => Ok(impls::SeahashString.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))

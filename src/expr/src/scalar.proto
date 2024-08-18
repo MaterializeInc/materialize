@@ -445,6 +445,12 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_mz_timestamp_to_timestamp = 322;
         google.protobuf.Empty cast_mz_timestamp_to_timestamp_tz = 323;
         google.protobuf.Empty pg_size_pretty = 324;
+        google.protobuf.Empty crc32_bytes = 325;
+        google.protobuf.Empty crc32_string = 326;
+        google.protobuf.Empty kafka_murmur2_bytes = 327;
+        google.protobuf.Empty kafka_murmur2_string = 328;
+        google.protobuf.Empty seahash_bytes = 329;
+        google.protobuf.Empty seahash_string = 330;
     }
 }
 

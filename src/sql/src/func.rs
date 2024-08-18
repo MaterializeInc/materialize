@@ -3541,6 +3541,10 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
         },
+        "crc32" => Scalar {
+            params!(String) => UnaryFunc::Crc32String(func::Crc32String) => UInt32, oid::FUNC_CRC32_STRING_OID;
+            params!(Bytes) => UnaryFunc::Crc32Bytes(func::Crc32Bytes) => UInt32, oid::FUNC_CRC32_BYTES_OID;
+        },
         "datediff" => Scalar {
             params!(String, Timestamp, Timestamp) => VariadicFunc::DateDiffTimestamp => Int64, oid::FUNC_DATEDIFF_TIMESTAMP;
             params!(String, TimestampTz, TimestampTz) => VariadicFunc::DateDiffTimestampTz => Int64, oid::FUNC_DATEDIFF_TIMESTAMPTZ;
@@ -3654,6 +3658,10 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_type_privilege", "mz_types")) => Bool, 3141;
             params!(String, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3142;
             params!(Oid, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3143;
+        },
+        "kafka_murmur2" => Scalar {
+            params!(String) => UnaryFunc::KafkaMurmur2String(func::KafkaMurmur2String) => Int32, oid::FUNC_KAFKA_MURMUR2_STRING_OID;
+            params!(Bytes) => UnaryFunc::KafkaMurmur2Bytes(func::KafkaMurmur2Bytes) => Int32, oid::FUNC_KAFKA_MURMUR2_BYTES_OID;
         },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
@@ -3833,6 +3841,10 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     column_names: vec![]
                 })
             }) => ReturnType::none(true), oid::FUNC_REPEAT_OID;
+        },
+        "seahash" => Scalar {
+            params!(String) => UnaryFunc::SeahashString(func::SeahashString) => UInt32, oid::FUNC_SEAHASH_STRING_OID;
+            params!(Bytes) => UnaryFunc::SeahashBytes(func::SeahashBytes) => UInt32, oid::FUNC_SEAHASH_BYTES_OID;
         },
         "timezone_offset" => Scalar {
             params!(String, TimestampTz) => BinaryFunc::TimezoneOffset => RecordAny, oid::FUNC_TIMEZONE_OFFSET;

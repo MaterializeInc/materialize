@@ -23,6 +23,48 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "crc32_bytes"]
+    fn crc32_bytes<'a>(a: &'a [u8]) -> u32 {
+        crc32fast::hash(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "crc32_string"]
+    fn crc32_string<'a>(a: &'a str) -> u32 {
+        crc32_bytes(a.as_bytes())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "kafka_murmur2_bytes"]
+    fn kafka_murmur2_bytes<'a>(a: &'a [u8]) -> i32 {
+        i32::from_ne_bytes((murmur2::murmur2(a, murmur2::KAFKA_SEED) & 0x7fffffff).to_ne_bytes())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "kafka_murmur2_string"]
+    fn kafka_murmur2_string<'a>(a: &'a str) -> i32 {
+        kafka_murmur2_bytes(a.as_bytes())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "seahash_bytes"]
+    fn seahash_bytes<'a>(a: &'a [u8]) -> u64 {
+        seahash::hash(a)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "seahash_string"]
+    fn seahash_string<'a>(a: &'a str) -> u64 {
+        seahash_bytes(a.as_bytes())
+    }
+);
+
+sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
         let val = a.len() * 8;

@@ -276,6 +276,11 @@ who = "Jan Teske <jteske@posteo.net>"
 criteria = "safe-to-deploy"
 version = "0.8.0"
 
+[[audits.crc32fast]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.4.2"
+
 [[audits.crossbeam-utils]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
@@ -582,6 +587,11 @@ version = "0.5.1"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "2.7.2"
+
+[[audits.murmur2]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
 
 [[audits.mysql_async]]
 who = "Roshan Jobanputra <roshan@materialize.com>"

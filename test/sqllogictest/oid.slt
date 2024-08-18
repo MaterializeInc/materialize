@@ -1092,3 +1092,9 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16983  mz_pending_cluster_replicas
 16985  mz_analytics
 16986  mz_materialization_dependencies
+16987  crc32
+16988  crc32
+16989  kafka_murmur2
+16990  kafka_murmur2
+16991  seahash
+16992  seahash

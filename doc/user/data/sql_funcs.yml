@@ -724,8 +724,16 @@
       The array must be one-dimensional. Comparisons are done using `IS NOT
       DISTINCT FROM semantics, so it is possible to remove NULLs.
 
-- type: Cryptography
+- type: Hash functions
   functions:
+    - signature: 'crc32(data: bytea) -> uint32'
+      description: |
+        Computes the 32-bit cyclic redundancy check of the given bytea `data` using the IEEE 802.3 polynomial.
+      version-added: v0.114
+    - signature: 'crc32(data: text) -> uint32'
+      description: |
+        Computes the 32-bit cyclic redundancy check of the given text `data` using the IEEE 802.3 polynomial.
+      version-added: v0.114
     - signature: 'digest(data: text, type: text) -> bytea'
       description: |
         Computes a binary hash of the given text `data` using the specified `type` algorithm.
@@ -742,10 +750,26 @@
       description: |
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
         `type` algorithm. The supported hash algorithms are the same as for `digest`.
+    - signature: 'kafka_murmur2(data: bytea) -> integer'
+      description: |
+        Computes the Murmur2 hash of the given bytea `data` using the seed used by Kafka's default partitioner and with the high bit cleared.
+      version-added: v0.114
+    - signature: 'kafka_murmur2(data: text) -> integer'
+      description: |
+        Computes the Murmur2 hash of the given text `data` using the seed used by Kafka's default partitioner and with the high bit cleared.
+      version-added: v0.114
     - signature: 'md5(data: bytea) -> text'
       description: |
         Computes the MD5 hash of the given bytea `data`.
         For PostgreSQL compatibility, returns a hex-encoded value of type `text` rather than `bytea`.
+    - signature: 'seahash(data: bytea) -> bigint'
+      description: |
+        Computes the [SeaHash](https://docs.rs/seahash) hash of the given bytea `data`.
+      version-added: v0.114
+    - signature: 'seahash(data: text) -> bigint'
+      description: |
+        Computes the [SeaHash](https://docs.rs/seahash) hash of the given bytea `data`.
+      version-added: v0.114
     - signature: 'sha224(data: bytea) -> bytea'
       description: |
         Computes the SHA-224 hash of the given bytea `data`.

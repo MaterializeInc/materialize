@@ -1,0 +1,70 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+query T
+SELECT crc32('')
+----
+0
+
+query T
+SELECT crc32('foobar')
+----
+2666930069
+
+query T
+SELECT crc32('\x666f6f626172'::bytea)
+----
+2666930069
+
+query T
+SELECT kafka_murmur2('21')
+----
+1173551340
+
+query T
+SELECT kafka_murmur2('foobar')
+----
+1357151166
+
+query T
+SELECT kafka_murmur2('\x666f6f626172'::bytea)
+----
+1357151166
+
+query T
+SELECT kafka_murmur2('a-little-bit-long-string')
+----
+1161502112
+
+query T
+SELECT kafka_murmur2('a-little-bit-longer-string')
+----
+661178819
+
+query T
+SELECT kafka_murmur2('lkjh234lh9fiuh90y23oiuhsafujhadof229phr9h19h89h8')
+----
+2088585677
+
+query T
+SELECT seahash('');
+----
+14492805990617963705
+
+query T
+SELECT seahash('foobar');
+----
+5348458858952426560
+
+query T
+SELECT seahash('\x666f6f626172'::bytea);
+----
+5348458858952426560
