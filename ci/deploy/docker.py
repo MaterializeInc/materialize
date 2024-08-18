@@ -10,7 +10,7 @@
 import os
 from pathlib import Path
 
-from materialize import git, mzbuild
+from materialize import ci_util, git, mzbuild
 from materialize.mz_version import MzVersion
 from materialize.rustc_flags import Sanitizer
 from materialize.version_list import get_all_mz_versions
@@ -50,8 +50,11 @@ def main() -> None:
         if version == latest_version:
             mzbuild.publish_multiarch_images("latest", deps)
     else:
+        mz_version = ci_util.get_mz_version()
         mzbuild.publish_multiarch_images("unstable", deps)
-        mzbuild.publish_multiarch_images(f'unstable-{git.rev_parse("HEAD")}', deps)
+        mzbuild.publish_multiarch_images(
+            f'v{mz_version}+main.g{git.rev_parse("HEAD")}', deps
+        )
 
         # Sync image descriptions to Docker Hub. The image descriptions are the
         # same across architectures, so we arbitrarily choose the first

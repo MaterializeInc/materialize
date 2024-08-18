@@ -31,7 +31,7 @@ def main():
     remote = git.get_remote()
     latest_version = git.get_latest_version(version_type=MzVersion)
     release_version = latest_version.bump_minor()
-    next_version = MzVersion.parse_mz(f"{release_version.bump_minor()}-dev")
+    next_version = MzVersion.parse_mz(f"{release_version.bump_minor()}-dev.0")
 
     print("Pulling latest main...")
     spawn.runv(["git", "pull", remote, "main"])
@@ -54,7 +54,7 @@ def main():
     print(f"Bumping version on main to {next_version}...")
     spawn.runv([MZ_ROOT / "bin" / "bump-version", str(next_version)])
 
-    next_version_final = str(next_version).removesuffix(".0-dev")
+    next_version_final = str(next_version).removesuffix(".0-dev.0")
     print(f"Creating {next_version_final}.md in the docs")
     today = datetime.today()
     next_thursday = today + timedelta(days=((3 - today.weekday()) % 7 or 7))

@@ -16,6 +16,7 @@ from materialize.mz_version import MzVersion
 
 EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 IMAGE_TAG_OF_VERSION_PREFIX = "v"
+# XXX TODO
 IMAGE_TAG_OF_COMMIT_PREFIX = "devel-"
 
 

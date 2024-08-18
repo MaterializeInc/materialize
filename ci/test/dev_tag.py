@@ -11,12 +11,13 @@
 
 from pathlib import Path
 
-from materialize import git, mzbuild
+from materialize import ci_util, git, mzbuild
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
 
 def main() -> None:
+    mz_version = ci_util.get_mz_version()
     repos = [
         mzbuild.Repository(
             Path("."), Arch.X86_64, coverage=False, sanitizer=Sanitizer.none
@@ -30,7 +31,7 @@ def main() -> None:
         repo.resolve_dependencies(image for image in repo if image.publish)
         for repo in repos
     ]
-    mzbuild.publish_multiarch_images(f'devel-{git.rev_parse("HEAD")}', deps)
+    mzbuild.publish_multiarch_images(f'v{mz_version}+pr.g{git.rev_parse("HEAD")}', deps)
 
 
 if __name__ == "__main__":
