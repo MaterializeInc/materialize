@@ -250,6 +250,8 @@ so it is executed.""",
                 f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
             )
 
+    print("Uploading new pipeline:")
+    print(yaml.dump(pipeline))
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
     )
@@ -289,7 +291,16 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
         priority -= 10
 
     def visit(config: Any) -> None:
-        config["priority"] = config.get("priority", 0) + priority
+        # Increase priority for larger Hetzner-based tests so that they get
+        # preferential treatment on the agents which also accept smaller jobs.
+        agent_priority = 0
+        if "agents" in config:
+            agent = config["agents"].get("queue", None)
+            if agent == "hetzner-aarch64-8cpu-16gb":
+                agent_priority = 1
+            if agent == "hetzner-aarch64-16cpu-32gb":
+                agent_priority = 2
+        config["priority"] = config.get("priority", 0) + priority + agent_priority
 
     for config in pipeline["steps"]:
         if "trigger" in config or "wait" in config:
