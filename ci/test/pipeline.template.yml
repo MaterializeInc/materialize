@@ -301,7 +301,7 @@ steps:
     label: Fast SQL logic tests %N
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    parallelism: 2
+    parallelism: 3
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
