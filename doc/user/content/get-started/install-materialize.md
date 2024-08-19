@@ -5,12 +5,12 @@ menu:
   main:
     parent: "get-started"
     weight: 16
-    name: "Install Materialize locally"
+    name: "Run Materialize in a Docker container"
 
 ---
 
 For testing/evaluation purposes, you can download the Materialize Docker image
-and run Materilize locally in a Docker container.  The Docker image:
+and run Materialize in a Docker container. The Docker image:
 
 - Includes the [Quickstart](/get-started/quickstart) data source
 
@@ -19,8 +19,9 @@ and run Materilize locally in a Docker container.  The Docker image:
 - Provides [community support via
   Slack](https://materializecommunity.slack.com/join/shared_invite/zt-2bad5ce4i-ZsiPWI5jd7Q9pRDGYj3dkw#/shared-invite/email)
 
-The Docker image is not representative of Materialize's performance and full feature set. To evaluate
-Materialize for production scenarios, we recommend signing up for a [free trial
+The Docker image is not representative of Materialize's performance and full
+feature set. To evaluate Materialize for production scenarios, we recommend
+signing up for a [free trial
 account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
 {{< warning >}}
@@ -60,14 +61,13 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
    not been already downloaded.
 
    ```sh
-   docker run -v mzdata:/mzdata -p 6875:6875 -p 6876:6876 materialize/materialized
+   docker run -v mzdata:/mzdata -p 6875:6875 materialize/materialized
    ```
 
    When running locally:
 
    - Materialize logs are emitted to the `stderr`.
    - The SQL interface is available on port `6875`.
-   - The HTTP interface is available on port `6876`.
    - A default user `materialize` is created.
    - A default database `materialize` is created.
 
@@ -81,7 +81,7 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
    | Port     | `6875`        |
    | Username | `materialize` |
 
-   For example, if using `psql`:
+   For example, if using [`psql`](/integrations/sql-clients/#psql):
 
    ```sh
    psql postgres://materialize@localhost:6875/materialize
