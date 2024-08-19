@@ -145,7 +145,7 @@ where
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
         writer_id: WriterId,
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
     ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) = mpsc::channel::<(
@@ -194,14 +194,14 @@ where
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
                 let writer_id = writer_id.clone();
-                let schemas = schemas.clone();
+                let write_schemas = write_schemas.clone();
 
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(&mut machine, req, writer_id, schemas)
+                    let res = Self::compact_and_apply(&mut machine, req, writer_id, write_schemas)
                         .instrument(compact_span)
                         .await;
                     let res = res.map(|(res, maintenance)| {
@@ -278,7 +278,7 @@ where
         machine: &mut Machine<K, V, T, D>,
         req: CompactReq<T>,
         writer_id: WriterId,
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Result<(ApplyMergeResult, RoutineMaintenance), anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
@@ -320,7 +320,7 @@ where
                         Arc::clone(&machine.applier.shard_metrics),
                         Arc::clone(&machine.isolated_runtime),
                         req,
-                        schemas,
+                        write_schemas,
                     )
                     .instrument(compact_span),
                 )
@@ -422,7 +422,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
 
@@ -489,7 +489,7 @@ where
                 Arc::clone(&metrics),
                 Arc::clone(&shard_metrics),
                 Arc::clone(&isolated_runtime),
-                schemas.clone(),
+                write_schemas.clone(),
             )
             .await?;
             let (parts, run_splits, run_meta, updates) =

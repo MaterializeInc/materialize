@@ -2481,7 +2481,7 @@ pub mod tests {
                     &cfg,
                     &client.metrics.user,
                     &client.isolated_runtime,
-                    &write.schemas,
+                    &write.write_schemas,
                 )
                 .await;
             let (_, writer_maintenance) = write

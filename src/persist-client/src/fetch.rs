@@ -115,7 +115,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) shard_id: ShardId,
-    pub(crate) schemas: Schemas<K, V>,
+    pub(crate) read_schemas: Schemas<K, V>,
     pub(crate) is_transient: bool,
 
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
@@ -207,7 +207,7 @@ where
             read_metrics: self.metrics.read.batch_fetcher.clone(),
             buf,
             registered_desc: part.desc.clone(),
-            schemas: self.schemas.clone(),
+            read_schemas: self.read_schemas.clone(),
             filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
             structured_part_audit: self.cfg.part_decode_format(),
@@ -317,7 +317,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     read_metrics: &ReadMetrics,
     shard_metrics: &ShardMetrics,
     reader_id: &LeasedReaderId,
-    schemas: Schemas<K, V>,
+    read_schemas: Schemas<K, V>,
 ) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
@@ -350,7 +350,7 @@ where
     FetchedPart::new(
         metrics,
         encoded_part,
-        schemas,
+        read_schemas,
         part.filter.clone(),
         part.filter_pushdown_audit,
         part_cfg.part_decode_format(),
@@ -572,7 +572,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     read_metrics: ReadMetrics,
     buf: FetchedBlobBuf<T>,
     registered_desc: Description<T>,
-    schemas: Schemas<K, V>,
+    read_schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
     structured_part_audit: PartDecodeFormat,
@@ -600,7 +600,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             read_metrics: self.read_metrics.clone(),
             buf: self.buf.clone(),
             registered_desc: self.registered_desc.clone(),
-            schemas: self.schemas.clone(),
+            read_schemas: self.read_schemas.clone(),
             filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             fetch_permit: self.fetch_permit.clone(),
@@ -675,7 +675,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
         let part = FetchedPart::new(
             Arc::clone(&self.metrics),
             part,
-            self.schemas.clone(),
+            self.read_schemas.clone(),
             self.filter.clone(),
             self.filter_pushdown_audit,
             self.structured_part_audit,
@@ -710,7 +710,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
         Option<Arc<<V::Schema as Schema2<V>>::Decoder>>,
     ),
     part_decode_format: PartDecodeFormat,
-    schemas: Schemas<K, V>,
+    read_schemas: Schemas<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
     part_cursor: Cursor,
     key_storage: Option<K::Storage>,
@@ -727,7 +727,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
             part: self.part.clone(),
             structured_part: self.structured_part.clone(),
             part_decode_format: self.part_decode_format,
-            schemas: self.schemas.clone(),
+            read_schemas: self.read_schemas.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             part_cursor: self.part_cursor.clone(),
             key_storage: None,
@@ -741,7 +741,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
     fn new(
         metrics: Arc<Metrics>,
         part: EncodedPart<T>,
-        schemas: Schemas<K, V>,
+        read_schemas: Schemas<K, V>,
         ts_filter: FetchBatchFilter<T>,
         filter_pushdown_audit: bool,
         part_decode_format: PartDecodeFormat,
@@ -770,7 +770,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             // (an audit of the data is requested OR we'd like to decode
             // directly from the structured data).
             (BlobTraceUpdates::Both(_codec, structured), true) => {
-                let key = match Schema2::decoder_any(schemas.key.as_ref(), &*structured.key) {
+                let key = match Schema2::decoder_any(read_schemas.key.as_ref(), &*structured.key) {
                     Ok(key) => Some(Arc::new(key)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create key decoder");
@@ -778,7 +778,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     }
                 };
 
-                let val = match Schema2::decoder_any(schemas.val.as_ref(), &*structured.val) {
+                let val = match Schema2::decoder_any(read_schemas.val.as_ref(), &*structured.val) {
                     Ok(val) => Some(Arc::new(val)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create val decoder");
@@ -797,7 +797,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             part,
             structured_part,
             part_decode_format,
-            schemas,
+            read_schemas,
             filter_pushdown_audit,
             part_cursor: Cursor::default(),
             key_storage: None,
@@ -899,7 +899,7 @@ where
 
             let (k, v) = Self::decode_codec(
                 &self.metrics,
-                &self.schemas,
+                &self.read_schemas,
                 k,
                 v,
                 key,
@@ -941,7 +941,7 @@ where
 
     fn decode_codec(
         metrics: &Metrics,
-        schemas: &Schemas<K, V>,
+        read_schemas: &Schemas<K, V>,
         key_buf: &[u8],
         val_buf: &[u8],
         key: &mut Option<K>,
@@ -950,18 +950,22 @@ where
         val_storage: &mut Option<V::Storage>,
     ) -> (Result<K, String>, Result<V, String>) {
         let k = metrics.codecs.key.decode(|| match key.take() {
-            Some(mut key) => match K::decode_from(&mut key, key_buf, key_storage, &schemas.key) {
-                Ok(()) => Ok(key),
-                Err(err) => Err(err),
-            },
-            None => K::decode(key_buf, &schemas.key),
+            Some(mut key) => {
+                match K::decode_from(&mut key, key_buf, key_storage, &read_schemas.key) {
+                    Ok(()) => Ok(key),
+                    Err(err) => Err(err),
+                }
+            }
+            None => K::decode(key_buf, &read_schemas.key),
         });
         let v = metrics.codecs.val.decode(|| match val.take() {
-            Some(mut val) => match V::decode_from(&mut val, val_buf, val_storage, &schemas.val) {
-                Ok(()) => Ok(val),
-                Err(err) => Err(err),
-            },
-            None => V::decode(val_buf, &schemas.val),
+            Some(mut val) => {
+                match V::decode_from(&mut val, val_buf, val_storage, &read_schemas.val) {
+                    Ok(()) => Ok(val),
+                    Err(err) => Err(err),
+                }
+            }
+            None => V::decode(val_buf, &read_schemas.val),
         });
         (k, v)
     }

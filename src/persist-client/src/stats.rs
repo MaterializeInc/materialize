@@ -124,7 +124,7 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
 
 /// Encodes a [`BlobTraceUpdates`] and calculates [`PartStats`].
 pub(crate) fn encode_updates<K, V>(
-    schemas: &Schemas<K, V>,
+    write_schemas: &Schemas<K, V>,
     updates: &BlobTraceUpdates,
 ) -> Result<(Option<ColumnarRecordsStructuredExt>, PartStats), String>
 where
@@ -136,14 +136,14 @@ where
     let ext = match updates.structured() {
         Some(ext) => ext.clone(),
         None => ColumnarRecordsStructuredExt {
-            key: codec_to_schema2::<K>(schemas.key.as_ref(), records.keys())
+            key: codec_to_schema2::<K>(write_schemas.key.as_ref(), records.keys())
                 .map_err(|e| e.to_string())?,
-            val: codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
+            val: codec_to_schema2::<V>(write_schemas.val.as_ref(), records.vals())
                 .map_err(|e| e.to_string())?,
         },
     };
 
-    let key_stats = schemas
+    let key_stats = write_schemas
         .key
         .decoder_any(ext.key.as_ref())
         .map_err(|e| e.to_string())?

@@ -1026,7 +1026,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
     pub(crate) async fn write<K: Codec, V: Codec, D: Codec64>(
         &mut self,
-        schemas: &Schemas<K, V>,
+        write_schemas: &Schemas<K, V>,
         key_lower: Vec<u8>,
         updates: ColumnarRecords,
         upper: Antichain<T>,
@@ -1037,7 +1037,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let batch_metrics = self.batch_metrics.clone();
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let ts_rewrite = None;
-        let schema_id = schemas.id;
+        let schema_id = write_schemas.id;
 
         // Decide this once per part and plumb it around as necessary so that we
         // use a consistent answer for things like inline threshold.
@@ -1053,7 +1053,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
         let handle = if updates.goodbytes() < inline_threshold {
             let metrics = Arc::clone(&self.metrics);
-            let schemas = schemas.clone();
+            let write_schemas = write_schemas.clone();
 
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
             mz_ore::task::spawn(
@@ -1065,7 +1065,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         let result = metrics
                             .columnar
                             .arrow()
-                            .measure_part_build(|| encode_updates(&schemas, &updates));
+                            .measure_part_build(|| encode_updates(&write_schemas, &updates));
                         match result {
                             Ok((struct_ext, _stats)) => struct_ext,
                             Err(err) => {
@@ -1124,7 +1124,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     key_lower,
                     ts_rewrite,
                     D::encode(&diffs_sum),
-                    schemas.clone(),
+                    write_schemas.clone(),
                 )
                 .instrument(write_span),
             )
@@ -1157,23 +1157,22 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         key_lower: Vec<u8>,
         ts_rewrite: Option<Antichain<T>>,
         diffs_sum: [u8; 8],
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> BatchPart<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&shard_metrics.shard_id);
         let goodbytes = updates.updates.records().goodbytes();
         let metrics_ = Arc::clone(&metrics);
-        let schema_id = schemas.id;
+        let schema_id = write_schemas.id;
 
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
                 // Only encode our updates in a structured format if required, it's expensive.
                 let stats = 'collect_stats: {
                     if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured() {
-                        let result = metrics_
-                            .columnar
-                            .arrow()
-                            .measure_part_build(|| encode_updates(&schemas, &updates.updates));
+                        let result = metrics_.columnar.arrow().measure_part_build(|| {
+                            encode_updates(&write_schemas, &updates.updates)
+                        });
 
                         // We can't collect stats if we failed to encode in a columnar format.
                         let Ok((extended_cols, stats)) = result else {

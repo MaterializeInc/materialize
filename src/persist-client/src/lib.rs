@@ -431,7 +431,7 @@ impl PersistClient {
         let _ = state_versions
             .maybe_init_shard::<K, V, T, D>(&shard_metrics)
             .await;
-        let schemas = Schemas {
+        let read_schemas = Schemas {
             id: None,
             key: key_schema,
             val: val_schema,
@@ -442,7 +442,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             shard_metrics,
             shard_id,
-            schemas,
+            read_schemas,
             is_transient,
             _phantom: PhantomData,
         };
@@ -859,7 +859,7 @@ mod tests {
         blob: &dyn Blob,
         key: &BlobKey,
         metrics: &Metrics,
-        schemas: &Schemas<K, V>,
+        read_schemas: &Schemas<K, V>,
     ) -> (
         BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -880,7 +880,10 @@ mod tests {
         let mut updates = Vec::new();
         for ((k, v), t, d) in part.updates.records().iter() {
             updates.push((
-                (K::decode(k, &schemas.key), V::decode(v, &schemas.val)),
+                (
+                    K::decode(k, &read_schemas.key),
+                    V::decode(v, &read_schemas.val),
+                ),
                 T::decode(t),
                 D::decode(d),
             ));

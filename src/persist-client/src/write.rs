@@ -117,7 +117,7 @@ pub struct WriteHandle<K: Codec, V: Codec, T, D> {
     pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) writer_id: WriterId,
     pub(crate) debug_state: HandleDebugState,
-    pub(crate) schemas: Schemas<K, V>,
+    pub(crate) write_schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
     expire_fn: Option<ExpireFn>,
@@ -138,7 +138,7 @@ where
         blob: Arc<dyn Blob>,
         writer_id: WriterId,
         purpose: &str,
-        schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Self {
         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
         let compact = cfg.compaction_enabled.then(|| {
@@ -146,7 +146,7 @@ where
                 cfg.clone(),
                 Arc::clone(&metrics),
                 writer_id.clone(),
-                schemas.clone(),
+                write_schemas.clone(),
                 gc.clone(),
             )
         });
@@ -166,7 +166,7 @@ where
             isolated_runtime,
             writer_id,
             debug_state,
-            schemas,
+            write_schemas,
             upper,
             expire_fn: Some(expire_fn),
         }
@@ -183,7 +183,7 @@ where
             Arc::clone(&read.blob),
             WriterId::new(),
             purpose,
-            read.schemas.clone(),
+            read.read_schemas.clone(),
         )
     }
 
@@ -194,7 +194,7 @@ where
 
     /// Returns the schema of this writer.
     pub fn schema_id(&self) -> Option<SchemaId> {
-        self.schemas.id
+        self.write_schemas.id
     }
 
     /// A cached version of the shard-global `upper` frontier.
@@ -549,7 +549,7 @@ where
                                     &cfg,
                                     &self.metrics.inline.backpressure,
                                     &self.isolated_runtime,
-                                    &self.schemas,
+                                    &self.write_schemas,
                                 )
                                 .await
                         })
@@ -623,7 +623,7 @@ where
         );
         BatchBuilder {
             builder,
-            stats_schemas: self.schemas.clone(),
+            stats_schemas: self.write_schemas.clone(),
             metrics: Arc::clone(&self.metrics),
             key_buf: vec![],
             val_buf: vec![],
