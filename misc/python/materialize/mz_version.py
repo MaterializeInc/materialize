@@ -86,6 +86,9 @@ class TypedVersionBase(Version):
     def __str__(self) -> str:
         return f"{self.get_prefix()}{self.str_without_prefix()}"
 
+    def is_dev_version(self) -> bool:
+        return self.prerelease is not None
+
 
 class MzVersion(TypedVersionBase):
     """Version of Materialize, can be parsed from version string, SQL, cargo"""
