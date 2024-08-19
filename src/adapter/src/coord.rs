@@ -2824,7 +2824,7 @@ impl Coordinator {
         } else if let Some(sink_id) = dataflow.persist_sink_ids().next() {
             // Materialized view dataflow.
 
-            let (_since, upper) = self
+            let (since, upper) = self
                 .controller
                 .storage
                 .collection_frontiers(sink_id)
@@ -2834,7 +2834,8 @@ impl Coordinator {
             // so `write_frontier` should never be greater than `max_as_of`.
             soft_assert_or_log!(
                 PartialOrder::less_equal(&upper, &max_as_of),
-                "`write_frontier` unexpectedly greater than `max_as_of`",
+                "`write_frontier` unexpectedly greater than `max_as_of`; \
+                materialized view {sink_id}, max_as_of {max_as_of:?}, since {since:?}, upper {upper:?}",
             );
 
             write_frontier = upper;
