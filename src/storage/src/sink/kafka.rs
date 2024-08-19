@@ -131,10 +131,6 @@ use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
 impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
-    fn uses_keys(&self) -> bool {
-        true
-    }
-
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()

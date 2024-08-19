@@ -109,66 +109,60 @@ fn apply_sink_envelope<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Some connections support keys - extract them.
-    let (keyed, expect_unique) = if sink_render.uses_keys() {
-        let user_key_indices = sink_render
-            .get_key_indices()
-            .map(|key_indices| key_indices.to_vec());
+    let user_key_indices = sink_render
+        .get_key_indices()
+        .map(|key_indices| key_indices.to_vec());
 
-        let relation_key_indices = sink_render
-            .get_relation_key_indices()
-            .map(|key_indices| key_indices.to_vec());
+    let relation_key_indices = sink_render
+        .get_relation_key_indices()
+        .map(|key_indices| key_indices.to_vec());
 
-        // We have three cases here, in descending priority:
-        //
-        // 1. if there is a user-specified key, use that to consolidate and
-        //  distribute work
-        // 2. if the sinked relation has a known primary key, use that to
-        //  consolidate and distribute work but don't write to the sink
-        // 3. if none of the above, use the whole row as key to
-        //  consolidate and distribute work but don't write to the sink
-        //
-        // In case 1 and 2 we expect only one value per-key per timestamp
-        // whereas for case 3 we might see more than 1 value per key, so
-        // we return `expect_unique` appropriately.
+    // We have three cases here, in descending priority:
+    //
+    // 1. if there is a user-specified key, use that to consolidate and
+    //  distribute work
+    // 2. if the sinked relation has a known primary key, use that to
+    //  consolidate and distribute work but don't write to the sink
+    // 3. if none of the above, use the whole row as key to
+    //  consolidate and distribute work but don't write to the sink
+    //
+    // In case 1 and 2 we expect only one value per-key per timestamp
+    // whereas for case 3 we might see more than 1 value per key, so
+    // we return `expect_unique` appropriately.
 
-        let (keyed, expect_unique) = if let Some(key_indices) = user_key_indices {
-            let mut datum_vec = mz_repr::DatumVec::new();
-            (
-                collection.map(move |row| {
-                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                    // Does it matter?
-                    let key = {
-                        let datums = datum_vec.borrow_with(&row);
-                        Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
-                    };
-                    (Some(key), row)
-                }),
-                true,
-            )
-        } else if let Some(relation_key_indices) = relation_key_indices {
-            let mut datum_vec = mz_repr::DatumVec::new();
-            (
-                collection.map(move |row| {
-                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                    // Does it matter?
-                    let key = {
-                        let datums = datum_vec.borrow_with(&row);
-                        Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()))
-                    };
-                    (Some(key), row)
-                }),
-                true,
-            )
-        } else {
-            (
-                collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row)),
-                false,
-            )
-        };
-        (keyed, expect_unique)
+    let (keyed, expect_unique) = if let Some(key_indices) = user_key_indices {
+        let mut datum_vec = mz_repr::DatumVec::new();
+        (
+            collection.map(move |row| {
+                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                // Does it matter?
+                let key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
+                };
+                (Some(key), row)
+            }),
+            true,
+        )
+    } else if let Some(relation_key_indices) = relation_key_indices {
+        let mut datum_vec = mz_repr::DatumVec::new();
+        (
+            collection.map(move |row| {
+                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                // Does it matter?
+                let key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()))
+                };
+                (Some(key), row)
+            }),
+            true,
+        )
     } else {
-        (collection.map(|row| (None, row)), false)
+        (
+            collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row)),
+            false,
+        )
     };
 
     // Rate limit how often we emit this warning to avoid flooding logs.
@@ -262,8 +256,6 @@ pub(crate) trait SinkRender<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// TODO
-    fn uses_keys(&self) -> bool;
     /// TODO
     fn get_key_indices(&self) -> Option<&[usize]>;
     /// TODO
