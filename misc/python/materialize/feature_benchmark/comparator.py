@@ -33,6 +33,9 @@ class Comparator(Generic[T]):
     ) -> None:
         if self._unit == MeasurementUnit.UNKNOWN:
             self._unit = unit
+        elif point is None:
+            # ignore unit check
+            pass
         else:
             assert (
                 self._unit == unit
