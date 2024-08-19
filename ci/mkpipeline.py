@@ -288,7 +288,7 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
 
     # main branch is less time sensitive than results on PRs
     if branch == "main":
-        priority -= 10
+        priority -= 50
 
     def visit(config: Any) -> None:
         # Increase priority for larger Hetzner-based tests so that they get
