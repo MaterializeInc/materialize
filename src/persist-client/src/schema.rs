@@ -17,6 +17,7 @@ use arrow::datatypes::{DataType, Field, Fields, SchemaBuilder};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::Schema2;
+use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +50,25 @@ impl TryFrom<String> for SchemaId {
             .map_err(|err| format!("invalid SchemaId {}: {}", encoded, err))?;
         Ok(SchemaId(usize::cast_from(schema_id)))
     }
+}
+
+/// The result returned by [crate::PersistClient::compare_and_evolve_schema].
+#[derive(Debug)]
+pub enum CaESchema<K: Codec, V: Codec> {
+    /// The schema was successfully evolved and registered with the included id.
+    Ok(SchemaId),
+    /// The schema was not compatible with previously registered schemas.
+    Incompatible,
+    /// The `expected` SchemaId did not match reality. The current one is
+    /// included for easy of retry.
+    ExpectedMismatch {
+        /// The current schema id.
+        schema_id: SchemaId,
+        /// The key schema at this id.
+        key: K::Schema,
+        /// The val schema at this id.
+        val: V::Schema,
+    },
 }
 
 /// Returns a function to migrate arrow data encoded by `old` to be the same
