@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for #28174.
+# Regression test for #28174 and #29110.
 
 # The setup is based on https://github.com/MaterializeInc/RQG/blob/main/conf/mz/simple.sql
 
@@ -127,6 +127,7 @@ CREATE MATERIALIZED VIEW pk2 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t2 WHERE f1
 statement ok
 CREATE MATERIALIZED VIEW pk3 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t3 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
 
+# #28174
 query RRRIR
 SELECT (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (count(a1.f2)) AS agg1, (max(a1.f1 + a1.f1)) AS agg2
 FROM
@@ -277,4 +278,22 @@ NULL
 4.571
 NULL
 0
+NULL
+
+# #29110
+query RR
+SELECT
+    a1.f1 AS c3,
+    a1.f2
+FROM
+    (SELECT 1 AS f1, 2 AS f2) AS a1
+RIGHT JOIN (
+    SELECT avg(a2.f2) AS f1, min(a1.f2) AS f2
+    FROM pk2 AS a1
+    LEFT JOIN pk2 AS a2 USING(f1)
+    WHERE a2.f1 IS NULL
+) AS a2
+ON (NULLIF (a1.f2, a2.f2) = a1.f1 + a2.f2);
+----
+NULL
 NULL

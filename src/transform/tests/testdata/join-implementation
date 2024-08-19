@@ -34,22 +34,22 @@ opt
 (join [(get x)] [[#0 #1 #2]])
 ----
 Project (#0..=#2)
-  Filter ((#5 AND #7 AND (#6 OR (#3 AND #4))) OR ((#0) IS NULL AND ((#3 AND (#4 OR (#5 AND #6))) OR (#4 AND #6 AND #7))))
-    Map ((#1) IS NULL, (#2) IS NULL, (#0 = #2), (#1 = #2), (#0 = #1))
+  Filter ((#4 AND #5) OR ((#0) IS NULL AND ((#3 AND #5) OR ((#1) IS NULL AND (#3 OR #4)))))
+    Map ((#2) IS NULL, (#0 = #2), (#0 = #1))
       Get x
 
 opt
 (join [(get x)] [[#0 #2 #1 #2]])
 ----
 Project (#0..=#2)
-  Filter ((#5 AND #7 AND (#6 OR (#3 AND #4))) OR ((#0) IS NULL AND ((#3 AND (#4 OR (#5 AND #6))) OR (#4 AND #6 AND #7))))
-    Map ((#1) IS NULL, (#2) IS NULL, (#0 = #2), (#1 = #2), (#0 = #1))
+  Filter ((#4 AND #5) OR ((#0) IS NULL AND ((#3 AND #5) OR ((#1) IS NULL AND (#3 OR #4)))))
+    Map ((#2) IS NULL, (#0 = #2), (#0 = #1))
       Get x
 
 opt
 (join [(get x)] [[#0 #1 5]])
 ----
-Filter (#0 = 5) AND (#1 = 5)
+Filter (#0 = 5) AND (#0 = #1)
   Get x
 
 opt
