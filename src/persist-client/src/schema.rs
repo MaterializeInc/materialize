@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use arrow::array::{new_null_array, Array, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, SchemaBuilder};
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::Schema2;
 use proptest_derive::Arbitrary;
@@ -59,7 +60,7 @@ pub fn backward_compatible<T, S: Schema2<T>>(
 ) -> Option<Box<dyn Fn(Arc<dyn Array>) -> Arc<dyn Array>>> {
     fn data_type<T>(schema: &impl Schema2<T>) -> DataType {
         use mz_persist_types::columnar::ColumnEncoder;
-        let (array, _stats) = Schema2::encoder(schema).expect("valid schema").finish();
+        let array = Schema2::encoder(schema).expect("valid schema").finish();
         Array::data_type(&array).clone()
     }
     let migration = backward_compatible_typ(&data_type(old), &data_type(new))?;
@@ -69,7 +70,6 @@ pub fn backward_compatible<T, S: Schema2<T>>(
 #[derive(Debug, PartialEq)]
 pub(crate) enum ArrayMigration {
     NoOp,
-    // TODO: MakeNullable,
     Struct(Vec<StructArrayMigration>),
     // TODO: Map -> List
 }
@@ -81,6 +81,9 @@ pub(crate) enum StructArrayMigration {
         typ: DataType,
     },
     DropField {
+        name: String,
+    },
+    AlterFieldNullable {
         name: String,
     },
     Recurse {
@@ -114,12 +117,7 @@ impl ArrayMigration {
                 let array = array
                     .as_any()
                     .downcast_ref::<StructArray>()
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "internal error: expected Struct got {:?}",
-                            array.data_type()
-                        )
-                    })
+                    .unwrap_or_else(|| panic!("expected Struct got {:?}", array.data_type()))
                     .clone();
                 let (mut fields, mut arrays, nulls) = array.into_parts();
                 for migration in migrations {
@@ -137,7 +135,17 @@ impl StructArrayMigration {
         match self {
             AddFieldNullable { .. } => false,
             DropField { .. } => true,
+            AlterFieldNullable { .. } => false,
             Recurse { migration, .. } => migration.contains_drop(),
+        }
+    }
+
+    fn name(&self) -> &String {
+        match self {
+            StructArrayMigration::AddFieldNullable { name, .. } => name,
+            StructArrayMigration::DropField { name } => name,
+            StructArrayMigration::AlterFieldNullable { name } => name,
+            StructArrayMigration::Recurse { name, .. } => name,
         }
     }
 
@@ -151,14 +159,29 @@ impl StructArrayMigration {
                 *fields = f.finish().fields;
             }
             DropField { name } => {
-                let (idx, _) = fields.find(name).expect("WIP");
+                let (idx, _) = fields
+                    .find(name)
+                    .unwrap_or_else(|| panic!("expected to find field {} in {:?}", name, fields));
                 arrays.remove(idx);
                 let mut f = SchemaBuilder::from(&*fields);
                 f.remove(idx);
                 *fields = f.finish().fields;
             }
+            AlterFieldNullable { name } => {
+                let (idx, _) = fields
+                    .find(name)
+                    .unwrap_or_else(|| panic!("expected to find field {} in {:?}", name, fields));
+                let mut f = SchemaBuilder::from(&*fields);
+                let field = f.field_mut(idx);
+                // Defensively assert field is not nullable.
+                assert_eq!(field.is_nullable(), false);
+                *field = Arc::new(Field::new(field.name(), field.data_type().clone(), true));
+                *fields = f.finish().fields;
+            }
             Recurse { name, migration } => {
-                let (idx, _) = fields.find(name).expect("WIP");
+                let (idx, _) = fields
+                    .find(name)
+                    .unwrap_or_else(|| panic!("expected to find field {} in {:?}", name, fields));
                 arrays[idx] = migration.migrate(Arc::clone(&arrays[idx]));
                 let mut f = SchemaBuilder::from(&*fields);
                 *f.field_mut(idx) = Arc::new(Field::new(
@@ -240,40 +263,60 @@ pub(crate) fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<
     }
 }
 
-pub(crate) fn backward_compatible_field(old: &Field, new: &Field) -> Option<ArrayMigration> {
-    // Not allowed to make a nullable field into non-nullable.
-    if old.is_nullable() && !new.is_nullable() {
-        return None;
-    }
-    // WIP make this work
-    if !old.is_nullable() && new.is_nullable() {
-        return None;
-    }
-    backward_compatible_typ(old.data_type(), new.data_type())
-}
-
 pub(crate) fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigration> {
+    use itertools::EitherOrBoth::*;
     use ArrayMigration::*;
     use StructArrayMigration::*;
-    let mut field_migrations = Vec::new();
 
-    for n in new.iter() {
-        // WIP not n^2
-        let Some((_, o)) = old.find(n.name()) else {
-            // Allowed to add a new field but must be nullable.
-            if n.is_nullable() {
+    // The common case is that fields will be in the same order, so start by
+    // assuming that and match them up pairwise. If this assumption is
+    // incorrect, then later there will be an add and drop for the same field
+    // name and we'll detect it then.
+    let old_new_fields = old
+        .iter()
+        .merge_join_by(new.iter(), |o, n| o.name().cmp(n.name()));
+
+    let mut field_migrations = Vec::new();
+    for x in old_new_fields {
+        let (o, n) = match x {
+            Both(o, n) => (o, n),
+            Left(o) => {
+                // Allowed to drop a field regardless of nullability.
+                field_migrations.push(DropField {
+                    name: o.name().to_owned(),
+                });
+                continue;
+            }
+            // Allowed to add a new field but it must be nullable.
+            Right(n) if !n.is_nullable() => return None,
+            Right(n) => {
                 field_migrations.push(AddFieldNullable {
                     name: n.name().to_owned(),
                     typ: n.data_type().clone(),
                 });
                 continue;
-            } else {
-                return None;
             }
         };
-        match backward_compatible_field(o, n) {
+
+        // Not allowed to make a nullable field into non-nullable.
+        if o.is_nullable() && !n.is_nullable() {
+            return None;
+        }
+        // However, allowed to make a non-nullable field nullable.
+        let make_nullable = !o.is_nullable() && n.is_nullable();
+
+        match backward_compatible_typ(o.data_type(), n.data_type()) {
             None => return None,
+            Some(NoOp) if make_nullable => {
+                field_migrations.push(AlterFieldNullable {
+                    name: n.name().clone(),
+                });
+            }
             Some(NoOp) => continue,
+            // For now, don't support both making a field nullable and also
+            // modifying it in some other way. It doesn't seem that we need this for
+            // mz usage.
+            Some(_) if make_nullable => return None,
             Some(migration) => field_migrations.push(Recurse {
                 name: n.name().clone(),
                 migration,
@@ -281,15 +324,12 @@ pub(crate) fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<A
         }
     }
 
-    // Also drop any fields in old but not in new
-    for o in old.iter() {
-        // WIP not n^2
-        if new.find(o.name()).is_some() {
-            continue;
+    // Now detect if any re-ordering happened.
+    field_migrations.sort_by(|x, y| x.name().cmp(y.name()));
+    for (a, b) in field_migrations.iter().tuple_windows() {
+        if a.name() == b.name() {
+            return None;
         }
-        field_migrations.push(DropField {
-            name: o.name().to_owned(),
-        });
     }
 
     if field_migrations.is_empty() {
@@ -327,10 +367,6 @@ mod tests {
             if let Some(migration) = migration {
                 let (old, new) = (new_empty_array(&old), new_empty_array(&new));
                 let migrated = migration.migrate(old);
-                if let Struct(_) = migrated.data_type() {
-                    // WIP implement the migration to make the field nullable.
-                    return;
-                }
                 assert_eq!(new.data_type(), migrated.data_type());
             }
         }
@@ -380,6 +416,13 @@ mod tests {
         testcase(struct_([("a", Boolean, true)]), struct_([]), Some(true));
         testcase(struct_([("a", Boolean, false)]), struct_([]), Some(true));
 
+        // Add AND remove field in a struct.
+        testcase(
+            struct_([("a", Boolean, true)]),
+            struct_([("b", Boolean, true)]),
+            Some(true),
+        );
+
         // Nested struct.
         testcase(
             struct_([("a", struct_([("b", Boolean, false)]), false)]),
@@ -405,6 +448,24 @@ mod tests {
             struct_([("a", struct_([("b", Boolean, false)]), false)]),
             struct_([("a", struct_([]), false)]),
             Some(true),
+        );
+
+        // For now, don't support both making a field nullable and also
+        // modifying it in some other way. It doesn't seem that we need this for
+        // mz usage.
+        testcase(
+            struct_([("a", struct_([]), false)]),
+            struct_([("a", struct_([("b", Boolean, false)]), true)]),
+            None,
+        );
+
+        // Similarly, don't support reordering fields. This matters to persist
+        // because it affects sortedness, which is used in the consolidating
+        // iter.
+        testcase(
+            struct_([("a", Boolean, false), ("b", Utf8, false)]),
+            struct_([("b", Utf8, false), ("a", Boolean, false)]),
+            None,
         );
     }
 }

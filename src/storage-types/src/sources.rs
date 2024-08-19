@@ -2230,8 +2230,8 @@ mod tests {
             for data in datas {
                 encoder.append(data);
             }
-            let (old, _) = encoder.finish();
-            let (new, _) = Schema2::<SourceData>::encoder(new)
+            let old = encoder.finish();
+            let new = Schema2::<SourceData>::encoder(new)
                 .expect("valid schema")
                 .finish();
             let old: Arc<dyn Array> = Arc::new(old);
