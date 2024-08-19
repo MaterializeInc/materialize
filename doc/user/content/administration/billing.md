@@ -32,7 +32,7 @@ objects.
 The cluster size for a workload will depend on the workload's compute and
 storage requirements. To help users select the correct cluster size for their
 workload, Materialize uses cluster size names that are based on the compute
-credit, specifically, "centicredits" or `cc` (1/100th of a compute credit). For
+credit spend, specifically, "centicredits" or `cc` (1/100th of a compute credit). For
 example, the `25cc` cluster size is equivalent to 0.25 compute credits/hour; the
 `200cc` cluster size is equivalent to 2 compute credits/hour. Larger clusters
 can process data faster and handle larger data volumes.
@@ -67,20 +67,21 @@ In Materialize, storage is roughly proportional to the size of your source
 datasets plus the size of any materialized views, with some overhead from
 uncompacted data and system metrics.
 
-Materialize uses cheap, scalable object storage (Amazon S3) for its
-storage layer, and primarily passes the cost through to the customer. At a rate
+Materialize uses cheap, scalable object storage for its storage layer
+(Amazon S3), and primarily passes the cost through to the customer. At a rate
 of 0.0000411 USD per GB/hr, 1 TB stored for one month (730 hrs) equates to 30
 USD.
 
 Most data in Materialize is continually compacted, with the exception of
 [append-only sources](/sql/create-source/#append-only-envelope). As such, the
 total state stored in Materialize tends to grow at a rate that is more similar
-to OLTP databases than traditional cloud data warehouses.
+to OLTP databases than cloud data warehouses.
 
 ## Invoices
 
 {{< note >}}
-Accessing usage and billing information in Materialize requires **administrator** privileges.
+Accessing usage and billing information in Materialize
+requires **administrator** privileges.
 {{</ note >}}
 
 From the [Materialize console](https://console.materialize.com/) (`Admin` >

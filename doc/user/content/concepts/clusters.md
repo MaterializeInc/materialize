@@ -34,7 +34,8 @@ You can resize a cluster to respond to changes in your workload.
 
 {{< note >}}
 
-Resizing incurs downtime.
+Resizing incurs downtime, as it requires all objects in the cluster to hydrate.
+In the future, it will be possible to resize clusters with no downtime {{% gh 20010 %}}.
 
 {{</ note >}}
 
