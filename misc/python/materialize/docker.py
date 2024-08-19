@@ -20,6 +20,7 @@ CACHED_IMAGE_NAME_BY_COMMIT_HASH: dict[str, str] = dict()
 EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 
 IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "+"
+LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
 
 # Examples:
 # * v0.114.0
@@ -108,11 +109,17 @@ def release_version_to_image_tag(version: MzVersion) -> str:
 
 
 def is_image_tag_of_release_version(image_tag: str) -> bool:
-    return IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR not in image_tag
+    return (
+        IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR not in image_tag
+        and not image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
+    )
 
 
 def is_image_tag_of_commit(image_tag: str) -> bool:
-    return IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR in image_tag
+    return (
+        IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR in image_tag
+        or image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
+    )
 
 
 def get_version_from_image_tag(image_tag: str) -> str:
@@ -165,6 +172,11 @@ def _search_docker_hub_for_image_name(
 
     for entry in json_results:
         image_name = entry.get("name")
+
+        if image_name.startswith("unstable-"):
+            # for images with the old version scheme favor "devel-" over "unstable-"
+            continue
+
         image_names.append(image_name)
 
     return image_names
