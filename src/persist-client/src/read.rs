@@ -898,7 +898,7 @@ pub(crate) struct UnexpiredReadHandleState {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     consolidator: Consolidator<T, D>,
     _lease: Lease,
     schemas: Schemas<K, V>,
