@@ -3957,10 +3957,22 @@ impl<'a> Parser<'a> {
         let (name, value) = match self.expect_one_of_keywords(&[WAIT])? {
             WAIT => {
                 let _ = self.consume_token(&Token::Eq);
-                let v = match self.expect_one_of_keywords(&[FOR])? {
+                let v = match self.expect_one_of_keywords(&[FOR, UNTIL])? {
                     FOR => Some(WithOptionValue::ClusterAlterStrategy(
                         ClusterAlterOptionValue::For(self.parse_value()?),
                     )),
+                    UNTIL => {
+                        self.expect_keyword(READY)?;
+                        let _ = self.consume_token(&Token::Eq);
+                        let _ = self.expect_token(&Token::LParen)?;
+                        let opts = Some(WithOptionValue::ClusterAlterStrategy(
+                            ClusterAlterOptionValue::UntilReady(self.parse_comma_separated(
+                                Parser::parse_cluster_alter_until_ready_option,
+                            )?),
+                        ));
+                        let _ = self.expect_token(&Token::RParen)?;
+                        opts
+                    }
                     _ => unreachable!(),
                 };
                 (ClusterAlterOptionName::Wait, v)
@@ -3968,6 +3980,21 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
         Ok(ClusterAlterOption { name, value })
+    }
+
+    fn parse_cluster_alter_until_ready_option(
+        &mut self,
+    ) -> Result<ClusterAlterUntilReadyOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[TIMEOUT, ON])? {
+            ON => {
+                self.expect_keywords(&[TIMEOUT])?;
+                ClusterAlterUntilReadyOptionName::OnTimeout
+            }
+            TIMEOUT => ClusterAlterUntilReadyOptionName::Timeout,
+            _ => unreachable!(),
+        };
+        let value = self.parse_optional_option_value()?;
+        Ok(ClusterAlterUntilReadyOption { name, value })
     }
 
     fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {

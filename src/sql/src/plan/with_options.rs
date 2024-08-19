@@ -800,7 +800,7 @@ impl ImpliedValue for ClusterScheduleOptionValue {
     }
 }
 
-impl ImpliedValue for ClusterAlterOptionValue {
+impl ImpliedValue for ClusterAlterOptionValue<Aug> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a value")
     }
@@ -859,7 +859,7 @@ impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>>
     }
 }
 
-impl TryFromValue<WithOptionValue<Aug>> for ClusterAlterOptionValue {
+impl TryFromValue<WithOptionValue<Aug>> for ClusterAlterOptionValue<Aug> {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         if let WithOptionValue::ClusterAlterStrategy(r) = v {
             Ok(r)
