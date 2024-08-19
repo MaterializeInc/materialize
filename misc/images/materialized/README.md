@@ -15,6 +15,12 @@ development and testing of Materialize.
 > several services into the same container, while in our hosted offering we
 > run these services scaled across many machines.
 
+## License and Privacy Policy
+
+* Use of the Docker image is subject to Materialize’s [BSL License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
+* By downloading the Docker image, you are agreeing to Materialize’s [privacy policy](https://materialize.com/privacy-policy/).
+
+
 ## Usage
 
 To launch the Docker container:
