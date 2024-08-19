@@ -567,23 +567,7 @@ fn show_all_objects<'a>(
          WHERE
              schema_id = '{schema_spec}'
                  AND
-             (
-                 comments.object_type
-                 IN (
-                 'table',
-                 'view',
-                 'materialized-view',
-                 'source',
-                 'sink',
-                 'index',
-                 'func',
-                 'connection',
-                 'secret',
-                 'type'
-                 )
-                     OR
-                 comments.object_type IS NULL
-             )",
+             (comments.object_type = objs.type OR comments.object_type IS NULL)",
     );
     ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "comment"]))
 }
