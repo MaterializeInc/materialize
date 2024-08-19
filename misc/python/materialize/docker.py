@@ -19,14 +19,14 @@ from materialize.mz_version import MzVersion
 CACHED_IMAGE_NAME_BY_COMMIT_HASH: dict[str, str] = dict()
 EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 
-IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "+"
+IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "--"
 LATEST_IMAGE_TAG = "latest"
 LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
 
 # Examples:
 # * v0.114.0
 # * v0.114.0-dev
-# * v0.114.0-dev.0+pr.g3d565dd11ba1224a41beb6a584215d99e6b3c576
+# * v0.114.0-dev.0--pr.g3d565dd11ba1224a41beb6a584215d99e6b3c576
 VERSION_IN_IMAGE_TAG_PATTERN = re.compile(r"^(v\d+\.\d+\.\d+(-dev)?)")
 
 

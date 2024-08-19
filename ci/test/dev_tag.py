@@ -31,7 +31,11 @@ def main() -> None:
         repo.resolve_dependencies(image for image in repo if image.publish)
         for repo in repos
     ]
-    mzbuild.publish_multiarch_images(f'v{mz_version}+pr.g{git.rev_parse("HEAD")}', deps)
+    # Ideally we'd use SemVer metadata (e.g., `v1.0.0+metadata`), but `+` is not
+    # a valid character in Docker tags, so we use `--` instead.
+    mzbuild.publish_multiarch_images(
+        f'v{mz_version}--pr.g{git.rev_parse("HEAD")}', deps
+    )
 
 
 if __name__ == "__main__":

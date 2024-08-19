@@ -52,8 +52,10 @@ def main() -> None:
     else:
         mz_version = ci_util.get_mz_version()
         mzbuild.publish_multiarch_images("unstable", deps)
+        # Ideally we'd use SemVer metadata (e.g., `v1.0.0+metadata`), but `+`
+        # is not a valid character in Docker tags, so we use `--` instead.
         mzbuild.publish_multiarch_images(
-            f'v{mz_version}+main.g{git.rev_parse("HEAD")}', deps
+            f'v{mz_version}--main.g{git.rev_parse("HEAD")}', deps
         )
 
         # Sync image descriptions to Docker Hub. The image descriptions are the
