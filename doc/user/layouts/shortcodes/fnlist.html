@@ -70,7 +70,7 @@
         {{ if not $releasePage.Params.released }}
           <p>
             <b>Unreleased: </b> This function will be released in
-            <a href="{{ printf "%s/releases/%s" $parentPath $versionAdded | relURL }}"><strong>{{$versionAdded}}</strong></a>.
+            <a href="{{ printf "%s/releases#release-notes" $parentPath | relURL }}"><strong>{{$versionAdded}}</strong></a>.
             It may not be available in your region yet.
             The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releasePage.Params.date}}</strong>.
           </p>
