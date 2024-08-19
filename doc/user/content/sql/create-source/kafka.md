@@ -180,7 +180,8 @@ Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
 Note that:
 
 - This envelope can lead to high memory utilization in the cluster maintaining
-  the source. To reduce memory utilization, consider [enabling spill to disk](#spilling-to-disk).
+  the source. Materialize can automatically offload processing to
+  disk as needed. See [spilling to disk](#spilling-to-disk) for details.
 
 ### Spilling to disk
 
