@@ -367,6 +367,78 @@ identifies each collection is updated. The migration would do the following:
     -   Drop the existing top-level collection tied to the source, since this is already
         unused and will no longer be owned by any statement
 
+### System Catalog & Introspection Updates
+
+We currently surface details about both Sources and Tables through various system catalog
+tables in both the `mz_catalog` and `mz_internal` schemas. These expose information
+about the objects themselves as well as statistics and statuses emitted from the active dataflows for each source.
+
+We would make the following updates to provide users and Materialize employees the same
+ability to introspect source-fed tables that they currently have for subsources.
+
+#### [mz_catalog.mz_tables](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_tables)
+
+`CREATE TABLE .. FROM SOURCE` statements would be added to this catalog table.
+
+Two new columns would be added:
+
+`data_source_type`: distinguishes these tables
+from 'normal' tables that are written to directly by users. The value of this will
+be one of `'direct'` or `'source'`.
+
+`data_source_id`: a nullable column that contains the `id` of the data source,
+if there is one. In the case of `CREATE TABLE .. FROM SOURCE` statements this would
+contain the `id` of the primary source.
+
+#### [mz_catalog.mz_sources](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_sources)
+
+`CREATE TABLE .. FROM SOURCE` statements will be added to this catalog table, despite
+them being 'tables', since this catalog table contains columns that are unique to
+source-related objects (e.g. `connection_id`).
+
+We will add the variant `'table'` to the `type` column which is currently a `text` column
+containing one of:
+`'kafka', 'mysql', 'postgres', 'load-generator', 'progress', or 'subsource'.`
+
+Once all customer's sources have been migrated to the new model, the `'subsource'` variant will be removed from the `type` column.
+
+Open Question: Will it be confusing to users that these source-fed tables will appear
+in both the `mz_sources` and `mz_tables` catalog tables?
+
+#### [mz_internal.mz_postgres_source_tables](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_postgres_source_tables) and [mz_internal.mz_mysql_source_tables](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_mysql_source_tables)
+
+Each row in these tables contains a mapping from a `subsource` `id` to the external
+`schema` and `table` of the Postgres/MySQL table being ingested into that subsource.
+
+These will be updated to include the same mappings for `CREATE TABLE .. FROM SOURCE`
+table objects to the external `schema` and `table` they are linked to.
+
+#### [mz_internal.mz_source_statistics](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statistics)
+
+This table does not require any changes to its schema. However it is important to highlight
+that since multiple tables will be able to ingest from the same upstream external reference,
+the values reported in the following fields will be representative of the total number of
+records output to all tables rather than the number of rows ingested from the external references
+of the upstream system:
+
+-   updates_staged
+-   updates_committed
+-   records_indexed
+-   bytes_indexed
+-   snapshot_records_known
+-   snapshot_records_staged
+
+#### [mz_internal.mz_source_statuses](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statuses)
+
+Similar to the change to `mz_catalog.mz_sources`, The `"table"` variant will be added
+to the `type` column and all `CREATE TABLE .. FROM SOURCE` statements
+will report a status in this table with the same semantics as existing subsources.
+
+#### [mz_internal.mz_source_status_history](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_status_history)
+
+No change is necessary to this table, besides noting that the `source_id` column will
+potentially represent an id of a `CREATE TABLE .. FROM SOURCE` statement.
+
 ## Minimal Viable Prototype
 
 ## Alternatives
@@ -410,3 +482,5 @@ document is merged.
 
 1. How does this affect the system catalog, and source-specific introspection?
    (e.g. `mz_source_statistics`)
+
+    Update: Section added above
