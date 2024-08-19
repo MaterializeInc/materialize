@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_expr_parser",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -37,6 +38,7 @@ rust_library(
 
 rust_test(
 	name = "mz_expr_parser_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_expr_parser",
 	aliases = aliases(
 		normal = True,
@@ -79,6 +81,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_expr_parser_test_mir_parser_tests",
+	version = "0.0.0",
 	srcs = ["tests/test_mir_parser.rs"],
 	aliases = aliases(
 		normal = True,

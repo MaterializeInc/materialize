@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_build_tools",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"default",
@@ -39,6 +40,7 @@ rust_library(
 
 rust_test(
 	name = "mz_build_tools_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_build_tools",
 	aliases = aliases(
 		normal = True,

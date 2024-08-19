@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_expr",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -46,6 +47,7 @@ rust_library(
 
 rust_test(
 	name = "mz_expr_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_expr",
 	aliases = aliases(
 		normal = True,
@@ -149,6 +151,7 @@ cargo_build_script(
 
 rust_test(
 	name = "mz_expr_test_runner_tests",
+	version = "0.0.0",
 	srcs = ["tests/test_runner.rs"],
 	aliases = aliases(
 		normal = True,

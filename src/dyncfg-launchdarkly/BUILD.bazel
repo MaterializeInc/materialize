@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_dyncfg_launchdarkly",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -37,6 +38,7 @@ rust_library(
 
 rust_test(
 	name = "mz_dyncfg_launchdarkly_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_dyncfg_launchdarkly",
 	aliases = aliases(
 		normal = True,

@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_sql_parser",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"datadriven",
@@ -43,6 +44,7 @@ rust_library(
 
 rust_test(
 	name = "mz_sql_parser_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_sql_parser",
 	aliases = aliases(
 		normal = True,
@@ -107,6 +109,7 @@ cargo_build_script(
 
 rust_test(
 	name = "mz_sql_parser_sqlparser_common_tests",
+	version = "0.0.0",
 	srcs = ["tests/sqlparser_common.rs"],
 	aliases = aliases(
 		normal = True,

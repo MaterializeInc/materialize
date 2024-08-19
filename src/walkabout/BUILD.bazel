@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_walkabout",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -33,6 +34,7 @@ rust_library(
 
 rust_test(
 	name = "mz_walkabout_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_walkabout",
 	aliases = aliases(
 		normal = True,
@@ -67,6 +69,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_walkabout_walkabout_tests",
+	version = "0.0.0",
 	srcs = ["tests/walkabout.rs"],
 	aliases = aliases(
 		normal = True,

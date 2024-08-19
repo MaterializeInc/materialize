@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_proc_macro", "rust_test", "rust_doc_tes
 
 rust_proc_macro(
 	name = "mz_lowertest_derive",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -33,6 +34,7 @@ rust_proc_macro(
 
 rust_test(
 	name = "mz_lowertest_derive_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_lowertest_derive",
 	aliases = aliases(
 		normal = True,

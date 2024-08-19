@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_postgres_util",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"default",
@@ -56,6 +57,7 @@ rust_library(
 
 rust_test(
 	name = "mz_postgres_util_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_postgres_util",
 	aliases = aliases(
 		normal = True,

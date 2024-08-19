@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_sql",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -64,6 +65,7 @@ rust_library(
 
 rust_test(
 	name = "mz_sql_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_sql",
 	aliases = aliases(
 		normal = True,

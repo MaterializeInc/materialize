@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "mz_clusterd",
+	version = "0.114.0-dev",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"default",
@@ -58,6 +59,7 @@ rust_library(
 
 rust_test(
 	name = "mz_clusterd_lib_tests",
+	version = "0.114.0-dev",
 	crate = ":mz_clusterd",
 	aliases = aliases(
 		normal = True,
@@ -134,6 +136,7 @@ rust_doc_test(
 
 rust_binary(
 	name = "clusterd",
+	version = "0.114.0-dev",
 	crate_root = "src/bin/clusterd.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_rocksdb",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -37,6 +38,7 @@ rust_library(
 
 rust_test(
 	name = "mz_rocksdb_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_rocksdb",
 	aliases = aliases(
 		normal = True,
@@ -79,6 +81,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_rocksdb_basic_tests",
+	version = "0.0.0",
 	srcs = ["tests/basic.rs"],
 	aliases = aliases(
 		normal = True,

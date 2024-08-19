@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_prof",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"] + select({
 		"@//misc/bazel/platforms:linux_arm": [
@@ -49,6 +50,7 @@ rust_library(
 
 rust_test(
 	name = "mz_prof_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_prof",
 	aliases = aliases(
 		normal = True,

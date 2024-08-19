@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_catalog",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -58,6 +59,7 @@ rust_library(
 
 rust_test(
 	name = "mz_catalog_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_catalog",
 	aliases = aliases(
 		normal = True,
@@ -182,6 +184,7 @@ cargo_build_script(
 
 rust_test(
 	name = "mz_catalog_debug_tests",
+	version = "0.0.0",
 	srcs = ["tests/debug.rs"],
 	aliases = aliases(
 		normal = True,
@@ -232,6 +235,7 @@ rust_test(
 
 rust_test(
 	name = "mz_catalog_open_tests",
+	version = "0.0.0",
 	srcs = ["tests/open.rs"],
 	aliases = aliases(
 		normal = True,
@@ -282,6 +286,7 @@ rust_test(
 
 rust_test(
 	name = "mz_catalog_read-write_tests",
+	version = "0.0.0",
 	srcs = ["tests/read-write.rs"],
 	aliases = aliases(
 		normal = True,

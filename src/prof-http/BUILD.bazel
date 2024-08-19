@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_prof_http",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"] + select({
 		"@//misc/bazel/platforms:linux_arm": [
@@ -53,6 +54,7 @@ rust_library(
 
 rust_test(
 	name = "mz_prof_http_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_prof_http",
 	aliases = aliases(
 		normal = True,
@@ -121,6 +123,7 @@ cargo_build_script(
 
 rust_binary(
 	name = "fgviz",
+	version = "0.0.0",
 	crate_root = "src/bin/fgviz.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

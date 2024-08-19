@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_mysql_util",
+	version = "0.1.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -41,6 +42,7 @@ rust_library(
 
 rust_test(
 	name = "mz_mysql_util_lib_tests",
+	version = "0.1.0",
 	crate = ":mz_mysql_util",
 	aliases = aliases(
 		normal = True,

@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "mz_sqllogictest",
+	version = "0.0.1",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -54,6 +55,7 @@ rust_library(
 
 rust_test(
 	name = "mz_sqllogictest_lib_tests",
+	version = "0.0.1",
 	crate = ":mz_sqllogictest",
 	aliases = aliases(
 		normal = True,
@@ -130,6 +132,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_sqllogictest_parser_tests",
+	version = "0.0.1",
 	srcs = ["tests/parser.rs"],
 	aliases = aliases(
 		normal = True,
@@ -177,6 +180,7 @@ rust_test(
 
 rust_binary(
 	name = "sqllogictest",
+	version = "0.0.1",
 	crate_root = "src/bin/sqllogictest.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

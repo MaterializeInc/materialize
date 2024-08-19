@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_fivetran_destination",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -39,6 +40,7 @@ rust_library(
 
 rust_test(
 	name = "mz_fivetran_destination_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_fivetran_destination",
 	aliases = aliases(
 		normal = True,
@@ -104,6 +106,7 @@ cargo_build_script(
 
 rust_binary(
 	name = "mz_fivetran_destination_bin",
+	version = "0.0.0",
 	crate_root = "src/bin/mz-fivetran-destination.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

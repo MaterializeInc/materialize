@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_pgtz",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -39,6 +40,7 @@ rust_library(
 
 rust_test(
 	name = "mz_pgtz_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_pgtz",
 	aliases = aliases(
 		normal = True,

@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_lowertest",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -33,6 +34,7 @@ rust_library(
 
 rust_test(
 	name = "mz_lowertest_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_lowertest",
 	aliases = aliases(
 		normal = True,
@@ -67,6 +69,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_lowertest_test_runner_tests",
+	version = "0.0.0",
 	srcs = ["tests/test_runner.rs"],
 	aliases = aliases(
 		normal = True,
