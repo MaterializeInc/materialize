@@ -126,8 +126,8 @@ brought into Materialize to be ingested, and by using explicit statements for ea
 table to be ingested it makes Materialize configuration much more amenable to
 object<->state mappings in tools like dbt and Terraform.
 
-We will instead introduce a SQL statement to return all known upstream tables
-similar for a given source, optionally filtered by schema(s). This will allow
+We will instead introduce a SQL statement or catalog table to return all known upstream
+tables for a given source, optionally filtered by schema(s). This will allow
 the web console to expose a guided 'create source' workflow for users where
 they can select from a list of upstream tables and the console can generate
 the appropriate `CREATE TABLE .. FROM SOURCE` statements for those selected.
@@ -366,6 +366,57 @@ identifies each collection is updated. The migration would do the following:
         longer have a collection to own
     -   Drop the existing top-level collection tied to the source, since this is already
         unused and will no longer be owned by any statement
+
+#### Exposing available upstream references to users
+
+Since creating a source will no longer automatically create any subsources, users that
+do not already know all the upstream references available in their system may find it difficult
+to know which `CREATE TABLE .. FROM SOURCE` statements they could use to ingest their
+upstream data. Additionally, the Web Console will need a way to present a dynamic UI
+to users after they have created a source to allow them to create any downstream tables
+from a selection of the available upstream references of that source.
+
+We have two options available to us for exposing this information to users:
+
+1.  Add a new statement to fetch from the upstream all possible 'upstream references' available
+    for ingestion.
+2.  Create a new system table that periodically updates with the set of available upstream
+    references in each sources, and a new statement to trigger a refresh of this system table.
+
+The 2nd option is more complex to implement, but presents the information in a form that
+is more similar to other similar information in Materialize. However since the data can
+become out of date, it's important that the refresh statement is highlighted prominently
+in user-facing documentation and related guides.
+
+The proposal for the 2nd option (a new system table):
+
+Introduce a `mz_catalog.mz_available_source_references` with the following columns:
+
+-   `source_id`: The source (e.g. a Postgres, MySQL, Kafka source) this reference is available for.
+-   `reference`: The 'external reference' for this available object, such that using `reference`
+    in a `CREATE TABLE <table_name> FROM SOURCE <source_id> (REFERENCE <reference>)` would
+    construct a table ingesting this upstream reference. This is essentially the fully-qualified
+    upstream name of the reference.
+-   `columns`: If available, an array of of columns that this external reference would have if it
+    were ingested as a table in Materialize. This will be NULL for source types where an
+    external registry is needed to determine the upstream schema (e.g. Kafka).
+-   `name`: The object name of the reference. E.g. for a Postgres source this is the table name,
+    and for kafka is the topic name.
+-   `namespace`: Any namespace that this reference object exists in, if applicable. For Postgres
+    this would be `<database>.<schema>`, for MySQL this would be `<schema>`, and for Kafka this
+    would be NULL.
+-   `last_updated_at`: The timestamp of when this reference was fetched from the upstream system.
+
+Note that we do not expose the types of any of the upstream columns, since each source has
+different constructs for how types are represented, and since some source-types can't
+represent all upstream types (e.g. MySQL) without knowing which of them will be represented
+as TEXT using a TEXT COLUMNS option. Therefore the list of `columns` does not imply that each
+of those columns is one that Materialize can actually ingest.
+
+A new `REFRESH SOURCE <source_id or name>` statement will be introduced that can trigger
+a refresh of the rows in `mz_catalog.mz_available_source_references` that pertain to the
+requested source. Otherwise, this catalog table will only be populated at source creation
+time and upon a defined refresh interval in the source operator (perhaps every 60 seconds).
 
 ### System Catalog & Introspection Updates
 
