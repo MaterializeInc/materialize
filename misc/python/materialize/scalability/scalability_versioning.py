@@ -10,7 +10,7 @@ from pathlib import Path
 
 from materialize import MZ_ROOT
 
-SCALABILITY_FRAMEWORK_VERSION = "1.2.0"
+SCALABILITY_FRAMEWORK_VERSION = "1.3.0"
 SCALABILITY_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 
 SCALABILITY_FRAMEWORK_DIR = Path(__file__).resolve().parent

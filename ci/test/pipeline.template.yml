@@ -643,7 +643,9 @@ steps:
             ]
     coverage: skip
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
+      queue: linux-aarch64-small
+      # queue: hetzner-aarch64-4cpu-8gb
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
