@@ -21,7 +21,7 @@ class Aggregation:
         self._data: list[float] = []
         self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
 
-    def append(self, measurement: Measurement) -> None:
+    def append_measurement(self, measurement: Measurement) -> None:
         assert measurement.unit != MeasurementUnit.UNKNOWN, "Unknown unit"
         self._unit = measurement.unit
         self._data.append(measurement.value)

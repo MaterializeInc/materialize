@@ -260,7 +260,7 @@ def run_one_scenario(
                 scenario_version = benchmark.create_scenario_instance().version()
                 for aggregation, comparator in zip(aggregations, comparators):
                     comparator.set_scenario_version(scenario_version)
-                    comparator.append(
+                    comparator.append_point(
                         aggregation.aggregate(),
                         aggregation.unit(),
                         aggregation.name(),
@@ -514,7 +514,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if len(comparators) == 0:
                 continue
 
-            report.extend(comparators)
+            report.add_comparisons(comparators)
 
             # Do not retry the scenario if no regressions
             if _shall_retry_scenario(scenario, comparators, cycle_index):
