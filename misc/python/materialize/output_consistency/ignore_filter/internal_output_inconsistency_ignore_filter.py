@@ -44,7 +44,7 @@ from materialize.output_consistency.operation.operation import (
 )
 from materialize.output_consistency.query.query_result import QueryFailure
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.column_selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
 )
 from materialize.output_consistency.validation.validation_message import (

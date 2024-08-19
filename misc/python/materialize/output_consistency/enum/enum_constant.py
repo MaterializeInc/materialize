@@ -25,7 +25,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 from materialize.util import stable_int_hash
 
 ENUM_RETURN_TYPE_SPEC = ReturnTypeSpec(DataTypeCategory.ENUM)

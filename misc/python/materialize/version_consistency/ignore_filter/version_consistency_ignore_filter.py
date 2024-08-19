@@ -37,7 +37,7 @@ from materialize.output_consistency.input_data.operations.string_operations_prov
     TAG_REGEX,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 from materialize.output_consistency.validation.validation_message import ValidationError
 
 # Do not specify "-dev" versions. The suffix will be cropped; it is not necessary.

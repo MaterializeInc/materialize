@@ -23,11 +23,13 @@ from materialize.output_consistency.input_data.test_input_types import (
     ConsistencyTestTypesInput,
 )
 from materialize.output_consistency.query.data_source import DataSource
-from materialize.output_consistency.selection.selection import (
-    ALL_ROWS_SELECTION,
+from materialize.output_consistency.selection.column_selection import (
     ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
-    DataRowSelection,
     TableColumnByNameSelection,
+)
+from materialize.output_consistency.selection.row_selection import (
+    ALL_ROWS_SELECTION,
+    DataRowSelection,
 )
 
 EVALUATION_STRATEGY_NAME_DFR = "dataflow_rendering"

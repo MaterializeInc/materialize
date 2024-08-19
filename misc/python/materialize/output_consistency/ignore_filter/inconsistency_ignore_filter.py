@@ -28,7 +28,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
     ValidationErrorType,

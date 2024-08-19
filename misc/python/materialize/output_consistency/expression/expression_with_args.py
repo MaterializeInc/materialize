@@ -31,7 +31,7 @@ from materialize.output_consistency.operation.return_type_spec import (
     InputArgTypeHints,
     ReturnTypeSpec,
 )
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 from materialize.util import stable_int_hash
 
 
