@@ -44,9 +44,9 @@ $ kafka-ingest format=avro topic=data schema=${schema}
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SHOW COLUMNS FROM data
-name   nullable  type
----------------------
-u      false     uuid
+name   nullable  type  comment
+------------------------------
+u      false     uuid  ""
 
 > SELECT * FROM data
 "16fd95b0-65b7-4249-9b66-1547cd95923d"

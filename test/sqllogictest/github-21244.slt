@@ -22,7 +22,7 @@ CREATE VIEW v AS SELECT nullif(to_jsonb(true), to_jsonb(x)) as y FROM r;
 # When the bug is present, the type of `y` is wrongly computed as `boolean` when
 # the `(true, _)` simplification of the `case` statement resulting from the
 # desugared `nullif` is triggered in `MirScalarExpr::reduce`.
-query TTT
+query TTTT
 SHOW COLUMNS from v;
 ----
-y  true  jsonb
+y  true  jsonb (empty)

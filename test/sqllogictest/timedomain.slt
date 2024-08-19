@@ -211,12 +211,43 @@ query T multiline
 EXPLAIN SHOW VIEWS
 ----
 Explained Query:
-  Project (#3)
-    Filter (#2 = "u3")
-      ReadStorage mz_catalog.mz_views
+  Return
+    Project (#0, #2)
+      Map (coalesce(#1, ""))
+        Union
+          Map (null)
+            Union
+              Negate
+                Project (#1)
+                  Join on=(#0 = #2) type=differential
+                    ArrangeBy keys=[[#0]]
+                      Project (#0, #3)
+                        Get l1
+                    ArrangeBy keys=[[#0]]
+                      Distinct project=[#0]
+                        Project (#0)
+                          Get l0
+              Project (#3)
+                Get l1
+          Project (#2, #4)
+            Filter (#1 = "u3") AND (#3 = "view")
+              Get l0
+  With
+    cte l1 =
+      Filter (#2 = "u3")
+        ReadStorage mz_catalog.mz_views
+    cte l0 =
+      Project (#0..=#2, #4, #5)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0, #2, #3)
+              ReadStorage mz_catalog.mz_views
+          ArrangeBy keys=[[#0]]
+            Project (#0, #1, #3)
+              ReadStorage mz_internal.mz_comments
 
 Source mz_catalog.mz_views
-  filter=((#2 = "u3"))
+Source mz_internal.mz_comments
 
 Target cluster: quickstart
 

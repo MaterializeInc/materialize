@@ -156,18 +156,18 @@ SELECT * FROM v
 ----
 1
 
-query TTTT
+query TTTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-v_primary_idx v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
 
 statement ok
 CREATE DEFAULT INDEX foo_v_idx IN CLUSTER foo ON v
 
-query TTTT
+query TTTTT
 SHOW INDEXES IN CLUSTER bar WHERE name NOT LIKE 'mz_%';
 ----
-v_primary_idx v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
 
 query TTTTTTT
 SELECT
@@ -259,11 +259,11 @@ bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_pri
 bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  3  requested_ns  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
-query TTTT
+query TTTTT
 SHOW INDEXES;
 ----
-foo_v_idx v foo {?column?}
-v_primary_idx v bar {?column?}
+foo_v_idx v foo {?column?} (empty)
+v_primary_idx v bar {?column?} (empty)
 
 query T
 SELECT
@@ -306,11 +306,11 @@ v_primary_idx
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER bar ON v
 
-query TTTT
+query TTTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-v_primary_idx v bar {?column?}
-v_primary_idx1 v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
+v_primary_idx1 v bar {?column?} (empty)
 
 statement error unknown cluster 'noexist'
 CREATE DEFAULT INDEX IN CLUSTER noexist ON v
@@ -328,11 +328,11 @@ DROP CLUSTER baz
 statement error cannot drop cluster "bar" because other objects depend on it
 DROP CLUSTER bar
 
-query TTTT
+query TTTTT
 SHOW INDEXES IN CLUSTER bar WHERE on = 'v';
 ----
-v_primary_idx v bar {?column?}
-v_primary_idx1 v bar {?column?}
+v_primary_idx v bar {?column?} (empty)
+v_primary_idx1 v bar {?column?} (empty)
 
 statement ok
 DROP INDEX v_primary_idx
@@ -420,7 +420,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-253
+254
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -428,7 +428,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-224
+225
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize

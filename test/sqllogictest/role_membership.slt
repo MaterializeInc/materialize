@@ -429,15 +429,15 @@ statement ok
 DROP ROLE joe
 
 # SHOW ROLES/USERS
-query T
+query TT
 show roles
 ----
-materialize
+materialize (empty)
 
-query T
+query TT
 show users
 ----
-materialize
+materialize (empty)
 
 # Test grant/revoke multiple roles
 

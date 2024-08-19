@@ -33,7 +33,10 @@ class CheckSchemas(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW SCHEMAS LIKE 'to_be_%';
+                >[version>=11400] SHOW SCHEMAS LIKE 'to_be_%';
+                to_be_created ""
+
+                >[version<11400] SHOW SCHEMAS LIKE 'to_be_%';
                 to_be_created
                 """
             )

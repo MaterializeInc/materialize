@@ -50,9 +50,9 @@ detail: subsources referencing table: x, y
   FOR SCHEMAS (other);
 
 > SHOW sources
- mz_source          mysql     quickstart
- mz_source_progress progress  <null>
- t                  subsource quickstart
+ mz_source          mysql     quickstart  ""
+ mz_source_progress progress  <null>      ""
+ t                  subsource quickstart  ""
 
 $ mysql-execute name=mysql
 DROP DATABASE other;

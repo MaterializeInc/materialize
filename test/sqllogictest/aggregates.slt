@@ -175,12 +175,12 @@ SELECT sum(column1) FROM (VALUES (NULL::numeric), (NULL))
 ----
 NULL
 
-query TTT colnames
+query TTTT colnames
 SHOW COLUMNS FROM t
 ----
-name  nullable  type
- a    true      integer
- b    true      integer
+name  nullable  type     comment
+ a    true      integer  (empty)
+ b    true      integer  (empty)
 
 # Tests on int8 sums to make sure we handle overflow and underflow correctly
 

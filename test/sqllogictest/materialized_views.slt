@@ -75,12 +75,12 @@ CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name      cluster
-mv        quickstart
-other_mv  other
+name      cluster     comment
+mv        quickstart  (empty)
+other_mv  other       (empty)
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -385,18 +385,18 @@ COMPLETE 1
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name      cluster
-mv        quickstart
-other_mv  other
+name      cluster     comment
+mv        quickstart  (empty)
+other_mv  other       (empty)
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS IN CLUSTER other
 ----
-name      cluster
-other_mv  other
+name      cluster  comment
+other_mv  other    (empty)
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -443,14 +443,16 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 mode standard
 
-query TT colnames,rowsort
+query TTT colnames,rowsort
 SHOW OBJECTS
 ----
-name type
+name type comment
 mv
 materialized-view
+(empty)
 t
 table
+(empty)
 
 mode cockroach
 
@@ -459,11 +461,11 @@ mode cockroach
 statement ok
 CREATE DEFAULT INDEX ON mv
 
-query TTTT colnames
+query TTTTT colnames
 SHOW INDEXES ON mv
 ----
-name            on  cluster key
-mv_primary_idx  mv  quickstart {?column?}
+name            on  cluster    key         comment
+mv_primary_idx  mv  quickstart {?column?}  (empty)
 
 
 # Test: Creating materialized views that depend on log sources is forbidden.

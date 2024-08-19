@@ -54,7 +54,7 @@ name       type
 testconn   kafka
 
 > SHOW CONNECTIONS
-testconn    kafka
+testconn    kafka    ""
 
 > SHOW CREATE CONNECTION testconn
 name   create_sql

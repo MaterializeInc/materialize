@@ -49,8 +49,8 @@ class CheckDatabaseCreate(Check):
             dedent(
                 """
                 > SHOW DATABASES LIKE 'to_be_created%';
-                to_be_created1
-                to_be_created2
+                to_be_created1  ""
+                to_be_created2  ""
 
                 > SET DATABASE=to_be_created1;
                 > SELECT * FROM t1;

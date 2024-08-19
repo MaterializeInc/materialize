@@ -267,7 +267,11 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             # We can create a cluster with sizes '1' and '2'
             > CREATE CLUSTER test REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'))
 
-            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true ""
+            test r2 2 true ""
+
+            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true
             test r2 2 true
 
@@ -292,7 +296,11 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # Cluster replica of disallowed sizes still exist
-            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true ""
+            test r2 2 true ""
+
+            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true
             test r2 2 true
 
@@ -306,7 +314,12 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
             > CREATE CLUSTER REPLICA test.r3 SIZE '2'
 
-            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true ""
+            test r2 2 true ""
+            test r3 2 true ""
+
+            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true
             test r2 2 true
             test r3 2 true

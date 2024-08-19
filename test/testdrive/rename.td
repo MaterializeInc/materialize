@@ -53,9 +53,9 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE DEFAULT INDEX ON mz_view
 
 > SHOW INDEXES ON mz_view
-name                on          cluster             key
+name                on          cluster             key    comment
 --------------------------------------------------------------------------------------------
-mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}
+mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}  ""
 
 > CREATE VIEW dependent_view AS
     SELECT * FROM mz_view;
@@ -194,25 +194,25 @@ renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name               type      cluster
+name               type      cluster            comment
 -----------------------------------------------------------------
-mz_data_progress   progress  <null>
-renamed_mz_data    kafka     <VARIABLE_OUTPUT>
+mz_data_progress   progress  <null>             ""
+renamed_mz_data    kafka     <VARIABLE_OUTPUT>  ""
 
 # Sink was successfully renamed
 > SHOW SINKS
-name               type   cluster
----------------------------------
-renamed_sink       kafka  <VARIABLE_OUTPUT>
+name               type   cluster            comment
+----------------------------------------------------
+renamed_sink       kafka  <VARIABLE_OUTPUT>  ""
 
 # View was successfully renamed
 > SHOW VIEWS
-name
------------------
-byzantine_view
-dependent_view
-oppositional_view
-renamed_mz_view
+name               comment
+--------------------------
+byzantine_view     ""
+dependent_view     ""
+oppositional_view  ""
+renamed_mz_view    ""
 
 # Item's own `CREATE VIEW` statement updated
 > SHOW CREATE VIEW renamed_mz_view
@@ -222,9 +222,9 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES ON renamed_mz_view
-name            on              cluster             key
+name            on              cluster             key    comment
 --------------------------------------------------------------------------------------------
-renamed_index   renamed_mz_view <VARIABLE_OUTPUT>   {a,b}
+renamed_index   renamed_mz_view <VARIABLE_OUTPUT>   {a,b}  ""
 
 > SHOW CREATE INDEX renamed_index
 name                             create_sql
@@ -811,16 +811,16 @@ materialize.public.count "CREATE VIEW \"materialize\".\"public\".\"count\" AS SE
 > CREATE TABLE j (b int)
 
 > SHOW TABLES
-name
-----
-j
+name  comment
+-------------
+j     ""
 
 > ALTER TABLE j RENAME TO renamed_j
 
 > SHOW TABLES
-name
----------
-renamed_j
+name       comment
+------------------
+renamed_j  ""
 
 > SELECT name FROM mz_tables WHERE id like 'u%';
 name

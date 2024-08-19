@@ -249,26 +249,26 @@ CREATE ROLE external_foo
 
 # Test SHOW ROLES
 
-query T
+query TT
 SHOW ROLES
 ----
-materialize
+materialize (empty)
 
 statement ok
 CREATE ROLE foo
 
-query T
+query TT
 SHOW ROLES
 ----
-foo
-materialize
+foo (empty)
+materialize (empty)
 
-query T
+query TT
 SHOW ROLES WHERE name = 'foo'
 ----
-foo
+foo (empty)
 
-query T
+query TT
 SHOW ROLES LIKE 'f%'
 ----
-foo
+foo (empty)

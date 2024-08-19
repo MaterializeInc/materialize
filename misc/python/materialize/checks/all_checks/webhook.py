@@ -97,14 +97,14 @@ class Webhook(Check):
             dedent(
                 """
                 > SHOW COLUMNS FROM webhook_text
-                body false text
+                body false text ""
 
                 > SHOW COLUMNS FROM webhook_json
-                body false jsonb
-                headers false map
+                body false jsonb ""
+                headers false map ""
 
                 > SHOW COLUMNS FROM webhook_bytes
-                body false bytea
+                body false bytea ""
 
                 > SELECT * FROM webhook_text
                 fooä

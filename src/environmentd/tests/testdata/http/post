@@ -257,7 +257,7 @@ http
 {"query":"SHOW VIEWS"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["v"]],"desc":{"columns":[{"name":"name","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[["v",""]],"desc":{"columns":[{"name":"name","type_oid":25,"type_len":-1,"type_mod":-1},{"name":"comment","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
 
 http
 {"query":"SET cluster = quickstart"}

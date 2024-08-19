@@ -54,13 +54,13 @@ exact:COUNTER load generators do not support SCALE FACTOR values
 "materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301) FOR ALL TABLES EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
 
 > SHOW SOURCES
-accounts                subsource      ${arg.single-replica-cluster}
-auction_house           load-generator ${arg.single-replica-cluster}
-auction_house_progress  progress       <null>
-auctions                subsource      ${arg.single-replica-cluster}
-bids                    subsource      ${arg.single-replica-cluster}
-organizations           subsource      ${arg.single-replica-cluster}
-users                   subsource      ${arg.single-replica-cluster}
+accounts                subsource      ${arg.single-replica-cluster}    ""
+auction_house           load-generator ${arg.single-replica-cluster}    ""
+auction_house_progress  progress       <null>                           ""
+auctions                subsource      ${arg.single-replica-cluster}    ""
+bids                    subsource      ${arg.single-replica-cluster}    ""
+organizations           subsource      ${arg.single-replica-cluster}    ""
+users                   subsource      ${arg.single-replica-cluster}    ""
 
 > SELECT count(*) FROM bids
 255
@@ -81,13 +81,13 @@ contains:LOAD GENERATOR source validation: FOR TABLES (..) unsupported
   FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES FROM another;
-accounts                subsource      ${arg.single-replica-cluster}
-auction_house           load-generator ${arg.single-replica-cluster}
-auction_house_progress  progress       <null>
-auctions                subsource      ${arg.single-replica-cluster}
-bids                    subsource      ${arg.single-replica-cluster}
-organizations           subsource      ${arg.single-replica-cluster}
-users                   subsource      ${arg.single-replica-cluster}
+accounts                subsource      ${arg.single-replica-cluster}    ""
+auction_house           load-generator ${arg.single-replica-cluster}    ""
+auction_house_progress  progress       <null>                           ""
+auctions                subsource      ${arg.single-replica-cluster}    ""
+bids                    subsource      ${arg.single-replica-cluster}    ""
+organizations           subsource      ${arg.single-replica-cluster}    ""
+users                   subsource      ${arg.single-replica-cluster}    ""
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 

@@ -155,44 +155,51 @@ class Identifiers(Check):
 
     def validate(self) -> Testdrive:
         cmds = f"""
-        > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
+        >[version<11400] SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
         materialize
         {dq_print(self.ident["db"])}
+
+        >[version>=11400] SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
+        materialize ""
+        {dq_print(self.ident["db"])} ""
 
         > SET DATABASE={dq(self.ident["db"])};
 
         > SELECT name FROM mz_roles WHERE name = {sq(self.ident["role"])}
         {dq_print(self.ident["role"])}
 
-        > SHOW TYPES;
+        >[version>=11400] SHOW TYPES;
+        {dq_print(self.ident["type"])} ""
+
+        >[version<11400] SHOW TYPES;
         {dq_print(self.ident["type"])}
 
-        >[version>=10600] SHOW SCHEMAS FROM {dq(self.ident["db"])};
+        >[version>=11400] SHOW SCHEMAS FROM {dq(self.ident["db"])};
+        public ""
+        information_schema ""
+        mz_catalog ""
+        mz_catalog_unstable ""
+        mz_unsafe ""
+        mz_internal ""
+        mz_introspection ""
+        pg_catalog ""
+        {dq_print(self.ident["schema"])} ""
+
+        >[version<11400] SHOW SCHEMAS FROM {dq(self.ident["db"])};
         public
         information_schema
         mz_catalog
-        mz_catalog_unstable
-        mz_unsafe
-        mz_internal
-        mz_introspection
-        pg_catalog
-        {dq_print(self.ident["schema"])}
-
-        >[version<10600] SHOW SCHEMAS FROM {dq(self.ident["db"])};
-        public
-        information_schema
-        mz_catalog
         mz_unsafe
         mz_internal
         pg_catalog
-        {dq_print(self.ident["schema"])}
+        {dq_print(self.ident["schema"])} ""
 
-        >[version>=11300] SHOW SINKS FROM {dq(self.ident["schema"])};
-        {dq_print(self.ident["sink0"])} kafka identifiers
-        {dq_print(self.ident["sink1"])} kafka identifiers
-        {dq_print(self.ident["sink2"])} kafka identifiers
+        >[version>=11400] SHOW SINKS FROM {dq(self.ident["schema"])};
+        {dq_print(self.ident["sink0"])} kafka identifiers ""
+        {dq_print(self.ident["sink1"])} kafka identifiers ""
+        {dq_print(self.ident["sink2"])} kafka identifiers ""
 
-        >[version<11300] SHOW SINKS FROM {dq(self.ident["schema"])};
+        >[version<11400] SHOW SINKS FROM {dq(self.ident["schema"])};
         {dq_print(self.ident["sink0"])} kafka 4 identifiers
         {dq_print(self.ident["sink1"])} kafka 4 identifiers
         {dq_print(self.ident["sink2"])} kafka 4 identifiers
@@ -221,7 +228,10 @@ class Identifiers(Check):
         """
         if self.base_version >= MzVersion(0, 44, 0):
             cmds += f"""
-        > SHOW SECRETS;
+        >[version<11400] SHOW SECRETS;
         {dq_print(self.ident["secret"])}
+
+        >[version>=11400] SHOW SECRETS;
+        {dq_print(self.ident["secret"])} ""
         """
         return Testdrive(dedent(cmds))

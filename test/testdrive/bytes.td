@@ -28,10 +28,10 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
   INCLUDE OFFSET
 
 > SHOW COLUMNS FROM data
-name       nullable  type
---------------------------
-data       false     bytea
-offset     false     uint8
+name       nullable  type    comment
+------------------------------------
+data       false     bytea   ""
+offset     false     uint8   ""
 
 > SELECT * FROM data
 data           offset
@@ -48,9 +48,9 @@ data           offset
   FORMAT BYTES
 
 > SHOW COLUMNS FROM data_named_col
-name       nullable  type
---------------------------
-named_col  false     bytea
+name       nullable  type   comment
+-----------------------------------
+named_col  false     bytea  ""
 
 > CREATE CLUSTER data_offset_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE data_offset

@@ -1098,3 +1098,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16990  kafka_murmur2
 16991  seahash
 16992  seahash
+16993  mz_comments_ind
