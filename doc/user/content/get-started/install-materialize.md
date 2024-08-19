@@ -1,6 +1,6 @@
 ---
-title: "Install Materialize locally"
-description: "Download the Docker image and run Materialize locally for evaluation"
+title: "Run Materialize on Docker"
+description: "Run a containerized version of Materialize for evaluation or testing using Docker."
 menu:
   main:
     parent: "get-started"
@@ -19,8 +19,8 @@ and run Materilize locally in a Docker container.  The Docker image:
 - Provides [community support via
   Slack](https://materializecommunity.slack.com/join/shared_invite/zt-2bad5ce4i-ZsiPWI5jd7Q9pRDGYj3dkw#/shared-invite/email)
 
-To more fully evaluate
-Materialize and its features, Materialize offers a [free trial
+The Docker image is not representative of Materialize's performance and full feature set. To evaluate
+Materialize for production scenarios, we recommend signing up for a [free trial
 account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
 {{< warning >}}
@@ -30,7 +30,7 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
 
 {{</ warning >}}
 
-### License and Privacy Policy
+### License and privacy policy
 
 - Use of the Docker image is subject to Materialize's [BSL
   License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
@@ -81,7 +81,7 @@ suitable for production deployments</redb>.  See also [Limitations](#limitations
    | Port     | `6875`        |
    | Username | `materialize` |
 
-   For example, if using `psql`
+   For example, if using `psql`:
 
    ```sh
    psql postgres://materialize@localhost:6875/materialize
