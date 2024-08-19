@@ -528,7 +528,7 @@ steps:
       - id: checks-restart-cockroach
         label: "Checks + restart Cockroach"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           # A larger instance is needed due to frequent OOMs, same in all other platform-checks
           queue: hetzner-aarch64-16cpu-32gb
@@ -540,7 +540,7 @@ steps:
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -551,7 +551,7 @@ steps:
       - id: checks-backup-restore-before-manipulate
         label: "Checks backup + restore between the two manipulate()"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -562,7 +562,7 @@ steps:
       - id: checks-backup-restore-after-manipulate
         label: "Checks backup + restore after manipulate()"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -573,7 +573,7 @@ steps:
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -584,7 +584,7 @@ steps:
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -596,7 +596,7 @@ steps:
         label: "Checks parallel + DROP/CREATE replica"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -608,7 +608,7 @@ steps:
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -620,7 +620,7 @@ steps:
         label: "Checks parallel + restart of the entire Mz"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -632,7 +632,7 @@ steps:
         label: "Checks parallel + restart of environmentd & storage clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -644,7 +644,7 @@ steps:
         label: "Checks parallel + kill storage clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -656,7 +656,7 @@ steps:
         label: "Checks parallel + restart Redpanda & Debezium"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -667,7 +667,7 @@ steps:
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -678,7 +678,7 @@ steps:
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -689,7 +689,7 @@ steps:
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -700,7 +700,7 @@ steps:
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -711,7 +711,7 @@ steps:
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -722,7 +722,7 @@ steps:
       - id: checks-upgrade-clusterd-compute-first
         label: "Platform checks upgrade, restarting compute clusterd first"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -733,7 +733,7 @@ steps:
       - id: checks-upgrade-clusterd-compute-last
         label: "Platform checks upgrade, restarting compute clusterd last"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -744,7 +744,7 @@ steps:
       - id: checks-kill-clusterd-storage
         label: "Checks + kill storage clusterd"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -755,7 +755,7 @@ steps:
       - id: checks-restart-source-postgres
         label: "Checks + restart source Postgres"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -766,7 +766,7 @@ steps:
       - id: checks-restart-clusterd-compute
         label: "Checks + restart clusterd compute"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -777,7 +777,7 @@ steps:
       - id: checks-drop-create-default-replica
         label: "Checks + DROP/CREATE replica"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           # Seems to require more memory on aarch64
           queue: hetzner-aarch64-16cpu-32gb
@@ -789,7 +789,7 @@ steps:
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -801,7 +801,7 @@ steps:
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -813,7 +813,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -825,7 +825,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -837,7 +837,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -849,7 +849,7 @@ steps:
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
@@ -1323,7 +1323,7 @@ steps:
   - id: pubsub-disruption
     label: "PubSub disruption"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
+    timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:
@@ -1364,7 +1364,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1376,7 +1376,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1388,7 +1388,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1414,7 +1414,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1426,7 +1426,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1439,7 +1439,7 @@ steps:
         timeout_in_minutes: 90
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1451,7 +1451,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1464,7 +1464,7 @@ steps:
         timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
