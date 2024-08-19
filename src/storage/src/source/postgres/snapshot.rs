@@ -144,7 +144,7 @@ use futures::{StreamExt as _, TryStreamExt};
 use mz_expr::MirScalarExpr;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{simple_query_opt, PostgresError};
+use mz_postgres_util::{simple_query_opt, Client, PostgresError};
 use mz_repr::{Datum, DatumVec, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::DataflowError;
@@ -160,7 +160,6 @@ use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop,
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::types::{Oid, PgLsn};
-use tokio_postgres::Client;
 use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;

@@ -9,21 +9,27 @@
 
 use std::collections::BTreeSet;
 use std::net::IpAddr;
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
 use mz_ore::task;
+use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
-use tokio_postgres::Client;
 use tracing::{info, warn};
 
 use crate::PostgresError;
+
+include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.tunnel.rs"));
 
 macro_rules! bail_generic {
     ($fmt:expr, $($arg:tt)*) => {
@@ -59,6 +65,87 @@ pub enum TunnelConfig {
 }
 
 pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
+
+/// A wrapper for [`tokio_postgres::Client`] that can report the server version.
+pub struct Client {
+    inner: tokio_postgres::Client,
+    server_version: Option<String>,
+}
+
+impl Client {
+    fn new<S, T>(
+        client: tokio_postgres::Client,
+        connection: &tokio_postgres::Connection<S, T>,
+    ) -> Client
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+        T: AsyncRead + AsyncWrite + Unpin,
+    {
+        let server_version = connection
+            .parameter("server_version")
+            .map(|v| v.to_string());
+        Client {
+            inner: client,
+            server_version,
+        }
+    }
+
+    /// Reports the value of the `server_version` parameter reported by the
+    /// server.
+    pub fn server_version(&self) -> Option<&str> {
+        self.server_version.as_deref()
+    }
+
+    /// Reports the postgres flavor as indicated by the server version.
+    pub fn server_flavor(&self) -> PostgresFlavor {
+        match self.server_version.as_ref() {
+            Some(v) if v.contains("-YB-") => PostgresFlavor::Yugabyte,
+            _ => PostgresFlavor::Vanilla,
+        }
+    }
+}
+
+impl Deref for Client {
+    type Target = tokio_postgres::Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Client {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+pub enum PostgresFlavor {
+    /// A normal PostgreSQL server.
+    Vanilla,
+    /// A Yugabyte server.
+    Yugabyte,
+}
+
+impl RustType<ProtoPostgresFlavor> for PostgresFlavor {
+    fn into_proto(&self) -> ProtoPostgresFlavor {
+        let kind = match self {
+            PostgresFlavor::Vanilla => proto_postgres_flavor::Kind::Vanilla(()),
+            PostgresFlavor::Yugabyte => proto_postgres_flavor::Kind::Yugabyte(()),
+        };
+        ProtoPostgresFlavor { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoPostgresFlavor) -> Result<Self, TryFromProtoError> {
+        let flavor = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("kind"))?;
+        Ok(match flavor {
+            proto_postgres_flavor::Kind::Vanilla(()) => PostgresFlavor::Vanilla,
+            proto_postgres_flavor::Kind::Yugabyte(()) => PostgresFlavor::Yugabyte,
+        })
+    }
+}
 
 /// Configuration for PostgreSQL connections.
 ///
@@ -200,6 +287,7 @@ impl Config {
                 let (client, connection) = async move { postgres_config.connect(tls).await }
                     .run_in_task_if(self.in_task, || "pg_connect".to_string())
                     .await?;
+                let client = Client::new(client, &connection);
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
@@ -231,6 +319,7 @@ impl Config {
                     async move { postgres_config.connect_raw(tcp_stream, tls).await }
                         .run_in_task_if(self.in_task, || "pg_connect".to_string())
                         .await?;
+                let client = Client::new(client, &connection);
                 task::spawn(|| task_name, async {
                     let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
 
@@ -274,6 +363,7 @@ impl Config {
                 let (client, connection) = async move { postgres_config.connect(tls).await }
                     .run_in_task_if(self.in_task, || "pg_connect".to_string())
                     .await?;
+                let client = Client::new(client, &connection);
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }

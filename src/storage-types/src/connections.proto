@@ -13,6 +13,7 @@ import "google/protobuf/empty.proto";
 
 import "repr/src/global_id.proto";
 import "repr/src/url.proto";
+import "postgres-util/src/tunnel.proto";
 import "proto/src/tokio_postgres.proto";
 import "storage-types/src/errors.proto";
 import "storage-types/src/connections/string_or_secret.proto";
@@ -85,6 +86,7 @@ message ProtoPostgresConnection {
     string_or_secret.ProtoStringOrSecret tls_root_cert = 7;
     ProtoTlsIdentity tls_identity = 8;
     ProtoTunnel tunnel = 12;
+    mz_postgres_util.tunnel.ProtoPostgresFlavor flavor = 13;
 }
 
 message ProtoTunnel {

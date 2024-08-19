@@ -41,6 +41,7 @@ fn main() {
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_orchestrator", "::mz_orchestrator")
         .extern_path(".mz_pgcopy.copy", "::mz_pgcopy")
+        .extern_path(".mz_postgres_util.tunnel", "::mz_postgres_util::tunnel")
         .extern_path(".mz_proto", "::mz_proto")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")

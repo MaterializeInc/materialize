@@ -2296,28 +2296,30 @@ impl<'a> Parser<'a> {
             TO => true,
             _ => unreachable!(),
         };
-        let connection_type =
-            match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, MYSQL])? {
-                AWS => {
-                    if self.parse_keyword(PRIVATELINK) {
-                        CreateConnectionType::AwsPrivatelink
-                    } else {
-                        CreateConnectionType::Aws
-                    }
+        let connection_type = match self
+            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, MYSQL, YUGABYTE])?
+        {
+            AWS => {
+                if self.parse_keyword(PRIVATELINK) {
+                    CreateConnectionType::AwsPrivatelink
+                } else {
+                    CreateConnectionType::Aws
                 }
-                KAFKA => CreateConnectionType::Kafka,
-                CONFLUENT => {
-                    self.expect_keywords(&[SCHEMA, REGISTRY])?;
-                    CreateConnectionType::Csr
-                }
-                POSTGRES => CreateConnectionType::Postgres,
-                SSH => {
-                    self.expect_keyword(TUNNEL)?;
-                    CreateConnectionType::Ssh
-                }
-                MYSQL => CreateConnectionType::MySql,
-                _ => unreachable!(),
-            };
+            }
+            KAFKA => CreateConnectionType::Kafka,
+            CONFLUENT => {
+                self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                CreateConnectionType::Csr
+            }
+            POSTGRES => CreateConnectionType::Postgres,
+            SSH => {
+                self.expect_keyword(TUNNEL)?;
+                CreateConnectionType::Ssh
+            }
+            MYSQL => CreateConnectionType::MySql,
+            YUGABYTE => CreateConnectionType::Yugabyte,
+            _ => unreachable!(),
+        };
         if expect_paren {
             self.expect_token(&Token::LParen)?;
         }
@@ -3174,7 +3176,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD, YUGABYTE])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -3188,6 +3190,23 @@ impl<'a> Parser<'a> {
                 };
 
                 Ok(CreateSourceConnection::Postgres {
+                    connection,
+                    options,
+                })
+            }
+            YUGABYTE => {
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_raw_name()?;
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options = self.parse_comma_separated(Parser::parse_pg_connection_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
+                } else {
+                    vec![]
+                };
+
+                Ok(CreateSourceConnection::Yugabyte {
                     connection,
                     options,
                 })
