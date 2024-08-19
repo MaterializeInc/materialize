@@ -28,7 +28,9 @@ class Comparator(Generic[T]):
         self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
         self.version: ScenarioVersion | None = None
 
-    def append(self, point: T, unit: MeasurementUnit, aggregation_name: str) -> None:
+    def append_point(
+        self, point: T, unit: MeasurementUnit, aggregation_name: str
+    ) -> None:
         if self._unit == MeasurementUnit.UNKNOWN:
             self._unit = unit
         else:

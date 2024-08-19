@@ -204,7 +204,7 @@ class Benchmark:
     ) -> None:
         if not self._filter or not self._filter.filter(performance_measurement):
             print(f"{i} {performance_measurement}")
-            self._performance_aggregation.append(performance_measurement)
+            self._performance_aggregation.append_measurement(performance_measurement)
 
     def _collect_message_count(self, i: int) -> None:
         messages = self._executor.Messages()
@@ -215,7 +215,7 @@ class Benchmark:
                 unit=MeasurementUnit.COUNT,
             )
             print(f"{i}: {messages_measurement}")
-            self._messages_aggregation.append(messages_measurement)
+            self._messages_aggregation.append_measurement(messages_measurement)
 
     def _collect_memory_measurement(
         self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
@@ -229,7 +229,7 @@ class Benchmark:
         if memory_measurement.value > 0:
             if not self._filter or not self._filter.filter(memory_measurement):
                 print(f"{i} {memory_measurement}")
-                aggregation.append(memory_measurement)
+                aggregation.append_measurement(memory_measurement)
 
 
 class Report:
@@ -238,10 +238,10 @@ class Report:
         """ 1-based cycle number. """
         self._comparisons: list[Comparator] = []
 
-    def append(self, comparison: Comparator) -> None:
+    def add_comparison(self, comparison: Comparator) -> None:
         self._comparisons.append(comparison)
 
-    def extend(self, comparisons: Iterable[Comparator]) -> None:
+    def add_comparisons(self, comparisons: Iterable[Comparator]) -> None:
         self._comparisons.extend(comparisons)
 
     def as_string(self, use_colors: bool, limit_to_scenario: str | None = None) -> str:
