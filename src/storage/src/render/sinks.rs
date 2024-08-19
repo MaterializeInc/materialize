@@ -9,7 +9,6 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,14 +16,13 @@ use std::time::{Duration, Instant};
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
+use mz_interchange::avro::DiffPair;
+use mz_interchange::envelopes::combine_at_timestamp;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_operators::persist_source;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::{
-    MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
-};
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::dataflow::operators::Leave;
 use timely::dataflow::scopes::Child;
@@ -84,7 +82,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     tokens.extend(persist_tokens);
 
     let ok_collection =
-        apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
+        zip_into_diff_pairs(sink_id, sink, &*sink_render, ok_collection.as_collection());
 
     let (health, sink_tokens) = sink_render.render_sink(
         storage_state,
@@ -99,13 +97,14 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     (health.leave(), tokens)
 }
 
-#[allow(clippy::borrowed_box)]
-fn apply_sink_envelope<G>(
+/// Zip the input to a sink so that updates to the same key appear as
+/// `DiffPair`s.
+fn zip_into_diff_pairs<G>(
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-    sink_render: &Box<dyn SinkRender<G>>,
+    sink_render: &dyn SinkRender<G>,
     collection: Collection<G, Row, Diff>,
-) -> Collection<G, (Option<Row>, Option<Row>), Diff>
+) -> Collection<G, (Option<Row>, DiffPair<Row>), Diff>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -141,25 +140,6 @@ where
         }
     };
 
-    // Rate limit how often we emit this warning to avoid flooding logs.
-    let mut last_warning = Instant::now();
-
-    fn warn_on_dups<T>(v: &[T], sink_id: GlobalId, from_id: GlobalId, last_warning: &mut Instant) {
-        if v.len() > 1 {
-            let now = Instant::now();
-            if now.duration_since(*last_warning) >= Duration::from_secs(10) {
-                *last_warning = now;
-                warn!(
-                    sink_id =? sink_id,
-                    from_id =? from_id,
-                    "primary key error: expected at most one update per key and timestamp; \
-                    this can happen when the configured sink key is not a primary key of \
-                    the sinked relation"
-                )
-            }
-        }
-    }
-
     // Group messages by key at each timestamp.
     //
     // Allow access to `arrange_named` because we cannot access Mz's wrapper
@@ -176,44 +156,39 @@ where
         collection = collection.map(|(_key, value)| (None, value))
     }
 
-    // Apply the envelope.
-    // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
-    //   It then renders those as Avro.
-    // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
-    //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
-    match sink.envelope {
-        SinkEnvelope::Debezium => {
-            // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
-            let row_buf = Rc::new(RefCell::new(Row::default()));
-            let from_id = sink.from;
-            collection.flat_map(move |(mut k, v)| {
-                if !key_is_synthetic {
-                    warn_on_dups(&v, sink_id, from_id, &mut last_warning);
+    collection.flat_map({
+        let mut last_warning = Instant::now();
+        let from_id = sink.from;
+        move |(mut k, vs)| {
+            // If the key is not synthetic, emit a warning to internal logs if
+            // we discover a primary key violation.
+            //
+            // TODO: put the sink in a user-visible errored state instead of
+            // only logging internally. See:
+            // https://github.com/MaterializeInc/materialize/issues/17549.
+            if !key_is_synthetic && vs.len() > 1 {
+                // We rate limit how often we emit this warning to avoid
+                // flooding logs.
+                let now = Instant::now();
+                if now.duration_since(last_warning) >= Duration::from_secs(10) {
+                    last_warning = now;
+                    warn!(
+                        ?sink_id,
+                        ?from_id,
+                        "primary key error: expected at most one update per key and timestamp; \
+                            this can happen when the configured sink key is not a primary key of \
+                            the sinked relation"
+                    )
                 }
-                let max_idx = v.len() - 1;
-                let row_buf = Rc::clone(&row_buf);
-                v.into_iter().enumerate().map(move |(idx, dp)| {
-                    let k = if idx == max_idx { k.take() } else { k.clone() };
-                    let mut row_buf = row_buf.borrow_mut();
-                    dbz_format(&mut row_buf.packer(), dp);
-                    (k, Some(row_buf.clone()))
-                })
+            }
+
+            let max_idx = vs.len() - 1;
+            vs.into_iter().enumerate().map(move |(idx, dp)| {
+                let k = if idx == max_idx { k.take() } else { k.clone() };
+                (k, dp)
             })
         }
-        SinkEnvelope::Upsert => {
-            let from_id = sink.from;
-            collection.flat_map(move |(mut k, v)| {
-                if !key_is_synthetic {
-                    warn_on_dups(&v, sink_id, from_id, &mut last_warning);
-                }
-                let max_idx = v.len() - 1;
-                v.into_iter().enumerate().map(move |(idx, dp)| {
-                    let k = if idx == max_idx { k.take() } else { k.clone() };
-                    (k, dp.after)
-                })
-            })
-        }
-    }
+    })
 }
 
 /// A type that can be rendered as a dataflow sink.
@@ -235,7 +210,7 @@ where
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
         sink_id: GlobalId,
-        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>);
 }
