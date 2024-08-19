@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
@@ -26,7 +26,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
-use tracing::{debug_span, warn, Instrument, Span};
+use tracing::{debug_span, info, warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
@@ -161,7 +161,15 @@ impl Coordinator {
     /// writes.
     #[instrument(level = "debug")]
     pub(crate) async fn try_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
+        let peek_ts_start = Instant::now();
+        info!("try_group_commit peek timestamp beginning");
         let timestamp = self.peek_local_write_ts().await;
+        info!(
+            "try_group_commit peek timestamp complete in {:?}",
+            peek_ts_start.elapsed()
+        );
+        let postamble_start = Instant::now();
+        info!("try_group_commit postamble beginning");
         let now = Timestamp::from((self.catalog().config().now)());
 
         // HACK: This is a special case to allow writes to the mz_sessions table to proceed even
@@ -195,7 +203,15 @@ impl Coordinator {
                 }
                 .instrument(Span::current()),
             );
+            info!(
+                "try_group_commit postamble complete in {:?}",
+                postamble_start.elapsed()
+            );
         } else {
+            info!(
+                "try_group_commit postamble complete in {:?}",
+                postamble_start.elapsed()
+            );
             self.group_commit_initiate(None, permit).await;
         }
     }
@@ -218,6 +234,8 @@ impl Coordinator {
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
         permit: Option<GroupCommitPermit>,
     ) {
+        let mutex_start = Instant::now();
+        info!("group_commit_initiate acquire mutex beginning");
         let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
         {
             // If the caller passed in the write lock, then we can execute a group commit.
@@ -260,7 +278,13 @@ impl Coordinator {
                 .collect();
             (None, pending_writes)
         };
+        info!(
+            "group_commit_initiate acquire mutex complete in {:?}",
+            mutex_start.elapsed()
+        );
 
+        let get_ts_start = Instant::now();
+        info!("group_commit_initiate get timestamp beginning");
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method or if this was triggered from DDL. We will still commit the
         // write without waiting for `now()` to advance. This is ok because the next batch of writes
@@ -272,7 +296,13 @@ impl Coordinator {
             timestamp,
             advance_to,
         } = self.get_local_write_ts().await;
+        info!(
+            "group_commit_initiate get timestamp complete in {:?}",
+            get_ts_start.elapsed()
+        );
 
+        let confirm_leadership_start = Instant::now();
+        info!("group_commit_initiate confirm leadership beginning");
         // While we're flipping on the feature flags for txn-wal tables and
         // the separated Postgres timestamp oracle, we also need to confirm
         // leadership on writes _after_ getting the timestamp and _before_
@@ -285,6 +315,13 @@ impl Coordinator {
             .confirm_leadership()
             .await
             .unwrap_or_terminate("unable to confirm leadership");
+        info!(
+            "group_commit_initiate confirm leadership complete in {:?}",
+            confirm_leadership_start.elapsed()
+        );
+
+        let write_collect_start = Instant::now();
+        info!("group_commit_initiate collect writes beginning");
 
         let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
@@ -352,6 +389,14 @@ impl Coordinator {
             })
             .collect();
 
+        info!(
+            "group_commit_initiate collect writes complete in {:?}",
+            write_collect_start.elapsed()
+        );
+
+        let append_fut_start = Instant::now();
+        info!("group_commit_initiate append future beginning");
+
         // Instrument our table writes since they can block the coordinator.
         let histogram = self
             .metrics
@@ -364,6 +409,14 @@ impl Coordinator {
             .expect("invalid updates")
             .wall_time()
             .observe(histogram);
+
+        info!(
+            "group_commit_initiate append future complete in {:?}",
+            append_fut_start.elapsed()
+        );
+
+        let postamble_start = Instant::now();
+        info!("group_commit_initiate postamble beginning");
 
         // Spawn a task to do the table writes.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -414,6 +467,11 @@ impl Coordinator {
                 }
             }
             .instrument(span),
+        );
+
+        info!(
+            "group_commit_initiate postamble complete in {:?}",
+            postamble_start.elapsed()
         );
     }
 
