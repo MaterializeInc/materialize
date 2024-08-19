@@ -20,6 +20,7 @@ CACHED_IMAGE_NAME_BY_COMMIT_HASH: dict[str, str] = dict()
 EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 
 IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "+"
+LATEST_IMAGE_TAG = "latest"
 LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
 
 # Examples:
@@ -112,6 +113,7 @@ def is_image_tag_of_release_version(image_tag: str) -> bool:
     return (
         IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR not in image_tag
         and not image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
+        and image_tag != LATEST_IMAGE_TAG
     )
 
 
