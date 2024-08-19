@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_metabase",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -33,6 +34,7 @@ rust_library(
 
 rust_test(
 	name = "mz_metabase_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_metabase",
 	aliases = aliases(
 		normal = True,

@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "persistcli",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"default",
@@ -46,6 +47,7 @@ rust_library(
 
 rust_test(
 	name = "persistcli_lib_tests",
+	version = "0.0.0",
 	crate = ":persistcli",
 	aliases = aliases(
 		normal = True,
@@ -100,6 +102,7 @@ rust_doc_test(
 
 rust_binary(
 	name = "persistcli",
+	version = "0.0.0",
 	crate_root = "src/main.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

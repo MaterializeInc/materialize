@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "mz_lsp_server",
+	version = "0.3.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -39,6 +40,7 @@ rust_library(
 
 rust_test(
 	name = "mz_lsp_server_lib_tests",
+	version = "0.3.0",
 	crate = ":mz_lsp_server",
 	aliases = aliases(
 		normal = True,
@@ -85,6 +87,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_lsp_server_test_tests",
+	version = "0.3.0",
 	srcs = ["tests/test.rs"],
 	aliases = aliases(
 		normal = True,
@@ -117,6 +120,7 @@ rust_test(
 
 rust_binary(
 	name = "mz_lsp_server_bin",
+	version = "0.3.0",
 	crate_root = "src/main.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

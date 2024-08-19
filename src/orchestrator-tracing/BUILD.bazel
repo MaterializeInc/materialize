@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_orchestrator_tracing",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"capture",
@@ -47,6 +48,7 @@ rust_library(
 
 rust_test(
 	name = "mz_orchestrator_tracing_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_orchestrator_tracing",
 	aliases = aliases(
 		normal = True,

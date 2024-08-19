@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "cargo_gazelle",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -33,6 +34,7 @@ rust_library(
 
 rust_test(
 	name = "cargo_gazelle_lib_tests",
+	version = "0.0.0",
 	crate = ":cargo_gazelle",
 	aliases = aliases(
 		normal = True,
@@ -67,6 +69,7 @@ rust_doc_test(
 
 rust_binary(
 	name = "main",
+	version = "0.0.0",
 	crate_root = "src/bin/main.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "mz_kafka_util",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -38,6 +39,7 @@ rust_library(
 
 rust_test(
 	name = "mz_kafka_util_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_kafka_util",
 	aliases = aliases(
 		normal = True,
@@ -82,6 +84,7 @@ rust_doc_test(
 
 rust_binary(
 	name = "kgen",
+	version = "0.0.0",
 	crate_root = "src/bin/kgen.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

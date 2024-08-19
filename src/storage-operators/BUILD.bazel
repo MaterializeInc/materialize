@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_storage_operators",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -46,6 +47,7 @@ rust_library(
 
 rust_test(
 	name = "mz_storage_operators_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_storage_operators",
 	aliases = aliases(
 		normal = True,

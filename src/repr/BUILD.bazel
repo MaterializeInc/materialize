@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_repr",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"default",
@@ -46,6 +47,7 @@ rust_library(
 
 rust_test(
 	name = "mz_repr_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_repr",
 	aliases = aliases(
 		normal = True,
@@ -150,6 +152,7 @@ cargo_build_script(
 
 rust_test(
 	name = "mz_repr_strconv_tests",
+	version = "0.0.0",
 	srcs = ["tests/strconv.rs"],
 	aliases = aliases(
 		normal = True,

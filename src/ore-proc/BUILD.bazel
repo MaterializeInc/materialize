@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_proc_macro", "rust_test", "rust_doc_tes
 
 rust_proc_macro(
 	name = "mz_ore_proc",
+	version = "0.1.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -33,6 +34,7 @@ rust_proc_macro(
 
 rust_test(
 	name = "mz_ore_proc_lib_tests",
+	version = "0.1.0",
 	crate = ":mz_ore_proc",
 	aliases = aliases(
 		normal = True,
@@ -67,6 +69,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_ore_proc_instrument_tests",
+	version = "0.1.0",
 	srcs = ["tests/instrument.rs"],
 	aliases = aliases(
 		normal = True,

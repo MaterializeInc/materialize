@@ -18,6 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_persist_client",
+	version = "0.114.0-dev",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -44,6 +45,7 @@ rust_library(
 
 rust_test(
 	name = "mz_persist_client_lib_tests",
+	version = "0.114.0-dev",
 	crate = ":mz_persist_client",
 	aliases = aliases(
 		normal = True,

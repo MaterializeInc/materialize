@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_ore",
+	version = "0.1.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"anyhow",
@@ -89,6 +90,7 @@ rust_library(
 
 rust_test(
 	name = "mz_ore_lib_tests",
+	version = "0.1.0",
 	crate = ":mz_ore",
 	aliases = aliases(
 		normal = True,
@@ -123,6 +125,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_ore_future_tests",
+	version = "0.1.0",
 	srcs = ["tests/future.rs"],
 	aliases = aliases(
 		normal = True,
@@ -148,6 +151,7 @@ rust_test(
 
 rust_test(
 	name = "mz_ore_panic_tests",
+	version = "0.1.0",
 	srcs = ["tests/panic.rs"],
 	aliases = aliases(
 		normal = True,
@@ -173,6 +177,7 @@ rust_test(
 
 rust_test(
 	name = "mz_ore_task_tests",
+	version = "0.1.0",
 	srcs = ["tests/task.rs"],
 	aliases = aliases(
 		normal = True,

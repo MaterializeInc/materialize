@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 rust_library(
 	name = "mz_pgrepr",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -38,6 +39,7 @@ rust_library(
 
 rust_test(
 	name = "mz_pgrepr_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_pgrepr",
 	aliases = aliases(
 		normal = True,

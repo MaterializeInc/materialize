@@ -17,6 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "mz_pgtest",
+	version = "0.0.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -33,6 +34,7 @@ rust_library(
 
 rust_test(
 	name = "mz_pgtest_lib_tests",
+	version = "0.0.0",
 	crate = ":mz_pgtest",
 	aliases = aliases(
 		normal = True,
@@ -67,6 +69,7 @@ rust_doc_test(
 
 rust_binary(
 	name = "mz_pgtest_bin",
+	version = "0.0.0",
 	crate_root = "src/main.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],
