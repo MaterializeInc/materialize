@@ -730,7 +730,7 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(2)]]"           3
 "ArrangeBy[[Column(1), Column(2)]]"           1
 "ArrangeBy[[Column(0)]]-errors"              27
-"ArrangeBy[[Column(0)]]"                     91
+"ArrangeBy[[Column(0)]]"                    107
 "ArrangeBy[[Column(1), Column(3)]]"           1
 "ArrangeBy[[Column(1)]]-errors"               6
 ArrangeBy[[Column(13)]]                       1
@@ -750,13 +750,13 @@ ArrangeBy[[Column(13)]]                       1
 "ArrangeBy[[Column(20)]]-errors"              1
 "ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
 "ArrangeBy[[]]"                               10
-"Arranged DistinctBy"                         24
+"Arranged DistinctBy"                         29
 "Arranged MinsMaxesHierarchical input"        14
 "Arranged ReduceInaccumulable"                1
 "Arranged TopK input"                        24
 "Distinct recursive err"                      1
-"DistinctBy"                                  24
-"DistinctByErrorCheck"                        24
+"DistinctBy"                                  29
+"DistinctByErrorCheck"                        29
 "ReduceAccumulable"                           9
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1
@@ -765,7 +765,7 @@ ArrangeBy[[Column(13)]]                       1
 "ReduceInaccumulable Error Check"             1
 "ReduceInaccumulable"                         1
 "ReduceMinsMaxes"                             2
-"Threshold local"                             4
+"Threshold local"                            10
 
 > SET cluster TO distinct_arrangements
 

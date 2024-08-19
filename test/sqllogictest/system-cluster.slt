@@ -197,43 +197,12 @@ EOF
 query T multiline
 EXPLAIN SHOW SOURCES
 ----
-Explained Query:
-  Return
-    Project (#0..=#2, #4)
-      Map (coalesce(#3, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#1..=#3)
-                  Join on=(#0 = #4) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Project (#0..=#3)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#0)
-                          Get l0
-              Project (#1..=#3)
-                Get l1
-          Project (#1..=#3, #6)
-            Filter (#4 = "u3") AND (#5 = "source")
-              Get l0
-  With
-    cte l1 =
-      ReadIndex on=mz_internal.mz_show_sources mz_show_sources_ind=[lookup value=("u3")]
-    cte l0 =
-      Project (#0..=#4, #6, #8)
-        Join on=(#0 = #5) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0..=#4)
-              ReadIndex on=mz_show_sources mz_show_sources_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
+Explained Query (fast path):
+  Project (#2..=#4, #6)
+    ReadIndex on=mz_internal.mz_show_sources mz_show_sources_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_sources_ind (*** full scan ***, lookup)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_show_sources_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -287,43 +256,12 @@ EOF
 query T multiline
 EXPLAIN SHOW MATERIALIZED VIEWS
 ----
-Explained Query:
-  Return
-    Project (#0, #1, #3)
-      Map (coalesce(#2, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#1, #2)
-                  Join on=(#0 = #3) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Project (#0..=#2)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#0)
-                          Get l0
-              Project (#1, #2)
-                Get l1
-          Project (#1, #2, #5)
-            Filter (#3 = "u3") AND (#4 = "materialized-view")
-              Get l0
-  With
-    cte l1 =
-      ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
-    cte l0 =
-      Project (#0..=#3, #5, #7)
-        Join on=(#0 = #4) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0..=#3)
-              ReadIndex on=mz_show_materialized_views mz_show_materialized_views_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
+Explained Query (fast path):
+  Project (#2, #3, #5)
+    ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_materialized_views_ind (*** full scan ***, lookup)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_show_materialized_views_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -332,43 +270,13 @@ EOF
 query T multiline
 EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
 ----
-Explained Query:
-  Return
-    Project (#0, #1, #3)
-      Map (coalesce(#2, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#1, #2)
-                  Join on=(#0 = #3) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Project (#0..=#2)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#0)
-                          Get l0
-              Project (#1, #2)
-                Get l1
-          Project (#1, #2, #6)
-            Filter (#3 = "u3") AND (#4 = "u1") AND (#5 = "materialized-view")
-              Get l0
-  With
-    cte l1 =
-      Filter (#4 = "u1")
-        ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
-    cte l0 =
-      Project (#0..=#4, #6, #8)
-        Join on=(#0 = #5) type=differential
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_show_materialized_views mz_show_materialized_views_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
+Explained Query (fast path):
+  Project (#2, #3, #5)
+    Filter (#4 = "u1")
+      ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_materialized_views_ind (*** full scan ***, lookup)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_show_materialized_views_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -377,44 +285,13 @@ EOF
 query T multiline
 EXPLAIN SHOW INDEXES
 ----
-Explained Query:
-  Return
-    Project (#0..=#3, #5)
-      Map (coalesce(#4, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#1..=#4)
-                  Join on=(#0 = #5) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Project (#0..=#4)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#0)
-                          Get l0
-              Project (#1..=#4)
-                Get l1
-          Project (#1..=#4, #8)
-            Filter (#6 = "u3") AND (#7 = "index") AND NOT(like["s%"](#5))
-              Get l0
-  With
-    cte l1 =
-      Filter NOT(like["s%"](#5))
-        ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[lookup value=("u3")]
-    cte l0 =
-      Project (#0..=#6, #8, #10)
-        Join on=(#0 = #7) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0..=#6)
-              ReadIndex on=mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
+Explained Query (fast path):
+  Project (#2..=#5, #8)
+    Filter NOT(like["s%"](#6))
+      ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_indexes_ind (*** full scan ***, lookup)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_show_indexes_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -423,44 +300,13 @@ EOF
 query T multiline
 EXPLAIN SHOW INDEXES IN CLUSTER quickstart
 ----
-Explained Query:
-  Return
-    Project (#0..=#3, #5)
-      Map (coalesce(#4, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#1..=#4)
-                  Join on=(#0 = #5) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Project (#0..=#4)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#0)
-                          Get l0
-              Project (#1..=#4)
-                Get l1
-          Project (#1..=#4, #7)
-            Filter (#5 = "u1") AND (#6 = "index")
-              Get l0
-  With
-    cte l1 =
-      Filter (#7 = "u1")
-        ReadIndex on=mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
-    cte l0 =
-      Project (#0..=#5, #7, #9)
-        Join on=(#0 = #6) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0..=#4, #7)
-              ReadIndex on=mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
+Explained Query (fast path):
+  Project (#2..=#5, #8)
+    Filter (#7 = "u1")
+      ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (*** full scan ***)
-  - mz_internal.mz_comments_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -469,43 +315,12 @@ EOF
 query T multiline
 EXPLAIN SHOW SINKS
 ----
-Explained Query:
-  Return
-    Project (#0..=#2, #4)
-      Map (coalesce(#3, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#1..=#3)
-                  Join on=(#0 = #4) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Project (#0..=#3)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#0)
-                          Get l0
-              Project (#1..=#3)
-                Get l1
-          Project (#1..=#3, #6)
-            Filter (#4 = "u3") AND (#5 = "sink")
-              Get l0
-  With
-    cte l1 =
-      ReadIndex on=mz_internal.mz_show_sinks mz_show_sinks_ind=[lookup value=("u3")]
-    cte l0 =
-      Project (#0..=#4, #6, #8)
-        Join on=(#0 = #5) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0..=#4)
-              ReadIndex on=mz_show_sinks mz_show_sinks_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
+Explained Query (fast path):
+  Project (#2..=#4, #6)
+    ReadIndex on=mz_internal.mz_show_sinks mz_show_sinks_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_sinks_ind (*** full scan ***, lookup)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_show_sinks_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -579,7 +394,7 @@ Explained Query:
               Project (#3, #4)
                 Get l1
           Project (#2, #3, #5)
-            Filter (#1 = "u3") AND ((#4 = "func") OR (#4 = "sink") OR (#4 = "type") OR (#4 = "view") OR (#4 = "index") OR (#4 = "table") OR (#4 = "secret") OR (#4 = "source") OR (#4 = "connection") OR (#4 = "materialized-view"))
+            Filter (#1 = "u3") AND (#3 = #4)
               Get l0
   With
     cte l1 =
@@ -680,40 +495,12 @@ EOF
 query T multiline
 EXPLAIN SHOW CLUSTER REPLICAS
 ----
-Explained Query:
-  Return
-    Project (#0..=#3, #5)
-      Map (coalesce(#4, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#0, #1, #3, #4)
-                  Join on=(#2 = #5) type=differential
-                    Get l0
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#2)
-                          Get l1
-              Project (#0, #1, #3, #4)
-                ReadIndex on=mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
-          Project (#0, #1, #3, #4, #6)
-            Filter (#5 = "cluster-replica")
-              Get l1
-  With
-    cte l1 =
-      Project (#0..=#4, #6, #8)
-        Join on=(#2 = #5) type=differential
-          Get l0
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
-    cte l0 =
-      ArrangeBy keys=[[#2]]
-        ReadIndex on=mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
+Explained Query (fast path):
+  Project (#0, #1, #3..=#5)
+    ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
-  - mz_internal.mz_comments_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -722,42 +509,12 @@ EOF
 query T multiline
 EXPLAIN SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
 ----
-Explained Query:
-  Return
-    Project (#0..=#3, #5)
-      Map (coalesce(#4, ""))
-        Union
-          Map (null)
-            Union
-              Negate
-                Project (#0, #1, #3, #4)
-                  Join on=(#2 = #5) type=differential
-                    ArrangeBy keys=[[#2]]
-                      Project (#0..=#4)
-                        Get l1
-                    ArrangeBy keys=[[#0]]
-                      Distinct project=[#0]
-                        Project (#2)
-                          Get l0
-              Project (#0, #1, #3, #4)
-                Get l1
-          Project (#0, #1, #3, #4, #6)
-            Filter (#5 = "cluster-replica") AND ((#0 = "ingest_qck") OR (#0 = "compute_qck"))
-              Get l0
-  With
-    cte l1 =
-      ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[lookup values=[("ingest_qck"); ("compute_qck")]]
-    cte l0 =
-      Project (#0..=#4, #6, #8)
-        Join on=(#2 = #5) type=differential
-          ArrangeBy keys=[[#2]]
-            ReadIndex on=mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            ReadIndex on=mz_comments mz_comments_ind=[differential join]
+Explained Query (fast path):
+  Project (#0, #1, #3..=#5)
+    ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[lookup values=[("ingest_qck"); ("compute_qck")]]
 
 Used Indexes:
-  - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***, lookup)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_show_cluster_replicas_ind (lookup)
 
 Target cluster: mz_catalog_server
 

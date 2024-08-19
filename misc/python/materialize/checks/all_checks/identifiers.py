@@ -185,7 +185,7 @@ class Identifiers(Check):
         pg_catalog ""
         {dq_print(self.ident["schema"])} ""
 
-        >[version<11400] SHOW SCHEMAS FROM {dq(self.ident["db"])};
+        >[version<10600] SHOW SCHEMAS FROM {dq(self.ident["db"])};
         public
         information_schema
         mz_catalog
