@@ -66,7 +66,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [Materialize console's SQL Shell](https://console.materialize.com/) or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -307,7 +307,6 @@ start by selecting the relevant option.
 
     ```mzsql
     CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
       FOR ALL TABLES;
     ```
@@ -417,7 +416,6 @@ details for Materialize to use:
 
     ```mzsql
     CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
       FOR ALL TABLES;
     ```
@@ -520,7 +518,6 @@ password for the `materialize` PostgreSQL user you created [earlier](#2-create-a
 
     ```mzsql
     CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
       FOR ALL TABLES;
     ```
