@@ -21,7 +21,7 @@ IMAGE_TAG_OF_COMMIT_PREFIX = "devel-"
 
 
 def image_of_release_version_exists(version: MzVersion) -> bool:
-    return mz_image_tag_exists(version_to_image_tag(version))
+    return mz_image_tag_exists(release_version_to_image_tag(version))
 
 
 def image_of_commit_exists(commit_hash: str) -> bool:
@@ -92,11 +92,11 @@ def commit_to_image_tag(commit_hash: str) -> str:
     return f"{IMAGE_TAG_OF_COMMIT_PREFIX}{commit_hash}"
 
 
-def version_to_image_tag(version: MzVersion) -> str:
+def release_version_to_image_tag(version: MzVersion) -> str:
     return str(version)
 
 
-def is_image_tag_of_version(image_tag: str) -> bool:
+def is_image_tag_of_release_version(image_tag: str) -> bool:
     return image_tag.startswith(IMAGE_TAG_OF_VERSION_PREFIX)
 
 
