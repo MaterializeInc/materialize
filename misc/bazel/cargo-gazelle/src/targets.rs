@@ -52,6 +52,7 @@ impl<T: RustTarget> RustTarget for Option<T> {
 #[derive(Debug)]
 pub struct RustLibrary {
     name: Field<QuotedString>,
+    version: Field<QuotedString>,
     is_proc_macro: bool,
     features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
@@ -157,6 +158,7 @@ impl RustLibrary {
 
         Ok(Some(RustLibrary {
             name: Field::new("name", name),
+            version: Field::new("version", metadata.version().to_string().into()),
             is_proc_macro: metadata.is_proc_macro(),
             features: Field::new("crate_features", features),
             aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
@@ -187,6 +189,7 @@ impl ToBazelDefinition for RustLibrary {
             let mut w = w.indent();
 
             self.name.format(&mut w)?;
+            self.version.format(&mut w)?;
 
             writeln!(w, r#"srcs = glob(["src/**/*.rs"]),"#)?;
 
@@ -218,6 +221,7 @@ impl ToBazelDefinition for RustLibrary {
 #[derive(Debug)]
 pub struct RustBinary {
     name: Field<QuotedString>,
+    version: Field<QuotedString>,
     crate_root: Field<QuotedString>,
     features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
@@ -333,6 +337,7 @@ impl RustBinary {
 
         Ok(Some(RustBinary {
             name: Field::new("name", target_name),
+            version: Field::new("version", metadata.version().to_string().into()),
             crate_root: Field::new("crate_root", binary_path),
             features: Field::new("features", List::empty()),
             aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
@@ -356,6 +361,7 @@ impl ToBazelDefinition for RustBinary {
             let mut w = w.indent();
 
             self.name.format(&mut w)?;
+            self.version.format(&mut w)?;
             self.crate_root.format(&mut w)?;
 
             writeln!(w, r#"srcs = glob(["src/**/*.rs"]),"#)?;
@@ -380,6 +386,7 @@ impl ToBazelDefinition for RustBinary {
 #[derive(Debug)]
 pub struct RustTest {
     name: Field<QuotedString>,
+    version: Field<QuotedString>,
     kind: RustTestKind,
     aliases: Field<Aliases>,
     deps: Field<List<QuotedString>>,
@@ -475,6 +482,7 @@ impl RustTest {
 
         Ok(Some(RustTest {
             name: Field::new("name", name),
+            version: Field::new("version", metadata.version().to_string().into()),
             kind,
             aliases: Field::new("aliases", aliases),
             deps: Field::new("deps", deps),
@@ -545,6 +553,7 @@ impl ToBazelDefinition for RustTest {
             let mut w = w.indent();
 
             self.name.format(&mut w)?;
+            self.version.format(&mut w)?;
             self.kind.format(&mut w)?;
             self.aliases.format(&mut w)?;
             self.deps.format(&mut w)?;
