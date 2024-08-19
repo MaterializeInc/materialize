@@ -277,7 +277,7 @@ SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
 By default, scheduled clusters will turn on at the scheduled refresh time. To
 avoid [unavailability of the objects scheduled for refresh](/sql/create-materialized-view/#querying-materialized-views-with-refresh-strategies) during the refresh
 operation, we recommend turning the cluster on ahead of the scheduled time to
-allow rehydration to complete. This can be controlled using the `HYDRATION
+allow hydration to complete. This can be controlled using the `HYDRATION
 TIME ESTIMATE` clause.
 
 #### Introspection
