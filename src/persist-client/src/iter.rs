@@ -52,13 +52,10 @@ type KV<'a> = (&'a [u8], &'a [u8]);
 
 /// The data needed to fetch a batch part, bundled up to make it easy
 /// to send between threads.
-#[derive(Debug)]
-pub(crate) enum FetchData<T> {
-    Unfetched {
-        part_desc: Description<T>,
-        part: BatchPart<T>,
-    },
-    AlreadyFetched,
+#[derive(Debug, Clone)]
+pub(crate) struct FetchData<T> {
+    part_desc: Description<T>,
+    part: BatchPart<T>,
 }
 
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
@@ -67,27 +64,17 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     /// our modern definition, even if the metadata indicates they've been compacted before.
     fn wrong_sort(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
-        match self {
-            FetchData::Unfetched { part, .. } => match part.writer_key() {
-                // Old hollow parts may have used a different sort
-                Some(key) => key < min_version,
-                // Inline parts are all recent enough to have been sorted using the latest ordering,
-                // if they're sorted at all.
-                None => false,
-            },
-            FetchData::AlreadyFetched => false,
+        match self.part.writer_key() {
+            // Old hollow parts may have used a different sort
+            Some(key) => key < min_version,
+            // Inline parts are all recent enough to have been sorted using the latest ordering,
+            // if they're sorted at all.
+            None => false,
         }
-    }
-
-    fn take(&mut self) -> Self {
-        mem::replace(self, FetchData::AlreadyFetched)
     }
 
     fn key_lower(&self) -> &[u8] {
-        match self {
-            FetchData::Unfetched { part, .. } => part.key_lower(),
-            FetchData::AlreadyFetched => &[],
-        }
+        self.part.key_lower()
     }
 
     async fn fetch(
@@ -98,22 +85,17 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
     ) -> anyhow::Result<EncodedPart<T>> {
-        match self {
-            FetchData::Unfetched {
-                part_desc, part, ..
-            } => EncodedPart::fetch(
-                &shard_id,
-                &*blob,
-                metrics,
-                shard_metrics,
-                read_metrics,
-                &part_desc,
-                &part,
-            )
-            .await
-            .map_err(|blob_key| anyhow!("missing unleased key {blob_key}")),
-            FetchData::AlreadyFetched => Err(anyhow!("attempt to fetch an already-fetched part")),
-        }
+        EncodedPart::fetch(
+            &shard_id,
+            &*blob,
+            metrics,
+            shard_metrics,
+            read_metrics,
+            &self.part_desc,
+            &self.part,
+        )
+        .await
+        .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))
     }
 }
 
@@ -146,11 +128,7 @@ impl PartIndices {
 enum ConsolidationPart<T, D> {
     Queued {
         data: FetchData<T>,
-    },
-    Prefetched {
-        handle: JoinHandle<anyhow::Result<EncodedPart<T>>>,
-        wrong_sort: bool,
-        key_lower: Vec<u8>,
+        task: Option<JoinHandle<anyhow::Result<EncodedPart<T>>>>,
     },
     Encoded {
         part: Columnar<T, D>,
@@ -250,10 +228,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
 
     fn kvt_lower(&self) -> Option<(KV, T)> {
         match self {
-            ConsolidationPart::Queued { data } => Some(((data.key_lower(), &[]), T::minimum())),
-            ConsolidationPart::Prefetched { key_lower, .. } => {
-                Some(((key_lower.as_slice(), &[]), T::minimum()))
-            }
+            ConsolidationPart::Queued { data, .. } => Some(((data.key_lower(), &[]), T::minimum())),
             ConsolidationPart::Encoded { part, cursor } => {
                 let (kv, t, _d) = part.get(cursor.index())?;
                 Some((kv, t))
@@ -266,7 +241,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             ConsolidationPart::Encoded { part, cursor, .. } => cursor.index() >= part.len(),
-            ConsolidationPart::Queued { .. } | ConsolidationPart::Prefetched { .. } => false,
+            ConsolidationPart::Queued { .. } => false,
         }
     }
 }
@@ -376,10 +351,11 @@ where
                         ConsolidationPart::from_encoded(part, true, &self.metrics.columnar)
                     }
                     part => ConsolidationPart::Queued {
-                        data: FetchData::Unfetched {
+                        data: FetchData {
                             part_desc: desc.clone(),
                             part,
                         },
+                        task: None,
                     },
                 };
                 (c_part, bytes)
@@ -393,8 +369,7 @@ where
         // runs if we change our sort order or have bugs, for example. Defend against this by
         // splitting up a run if it contains possibly-unconsolidated parts.
         let wrong_sort = run.iter().any(|(p, _)| match p {
-            ConsolidationPart::Queued { data } => data.wrong_sort(),
-            ConsolidationPart::Prefetched { wrong_sort, .. } => *wrong_sort,
+            ConsolidationPart::Queued { data, .. } => data.wrong_sort(),
             ConsolidationPart::Encoded { .. } => false,
         });
 
@@ -456,8 +431,7 @@ where
                     ConsolidationPart::Encoded { part, cursor } => {
                         iter.push(part, cursor, last_in_run);
                     }
-                    other @ ConsolidationPart::Queued { .. }
-                    | other @ ConsolidationPart::Prefetched { .. } => {
+                    other @ ConsolidationPart::Queued { .. } => {
                         // We don't want the iterator to return anything at or above this bound,
                         // since it might require data that we haven't fetched yet.
                         if let Some(bound) = other.kvt_lower() {
@@ -495,13 +469,25 @@ where
             .iter_mut()
             .map(|run| async {
                 let part = &mut run.front_mut().expect("trimmed run should be nonempty").0;
-                match part {
-                    ConsolidationPart::Queued { data } => {
-                        self.metrics.compaction.parts_waited.inc();
-                        self.metrics.consolidation.parts_fetched.inc();
-                        let wrong_sort = data.wrong_sort();
-                        *part = ConsolidationPart::from_encoded(
-                            data.take()
+                if let ConsolidationPart::Queued { data, task } = part {
+                    let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
+                    if is_prefetched {
+                        self.metrics.compaction.parts_prefetched.inc();
+                    } else {
+                        self.metrics.compaction.parts_waited.inc()
+                    }
+                    self.metrics.consolidation.parts_fetched.inc();
+
+                    let wrong_sort = data.wrong_sort();
+
+                    *part = match task.take() {
+                        Some(handle) => ConsolidationPart::from_encoded(
+                            handle.await??,
+                            wrong_sort,
+                            &self.metrics.columnar,
+                        ),
+                        None => ConsolidationPart::from_encoded(
+                            data.clone()
                                 .fetch(
                                     self.shard_id,
                                     &*self.blob,
@@ -512,25 +498,10 @@ where
                                 .await?,
                             wrong_sort,
                             &self.metrics.columnar,
-                        );
-                    }
-                    ConsolidationPart::Prefetched {
-                        handle, wrong_sort, ..
-                    } => {
-                        if handle.is_finished() {
-                            self.metrics.compaction.parts_prefetched.inc();
-                        } else {
-                            self.metrics.compaction.parts_waited.inc()
-                        }
-                        self.metrics.consolidation.parts_fetched.inc();
-                        *part = ConsolidationPart::from_encoded(
-                            handle.await??,
-                            *wrong_sort,
-                            &self.metrics.columnar,
-                        );
-                    }
-                    ConsolidationPart::Encoded { .. } => {}
+                        ),
+                    };
                 }
+
                 Ok::<_, anyhow::Error>(true)
             })
             .collect();
@@ -585,10 +556,9 @@ where
             .iter()
             .flat_map(|run| {
                 run.iter().map(|(part, size)| match part {
-                    ConsolidationPart::Queued { .. } => 0,
-                    ConsolidationPart::Prefetched { .. } | ConsolidationPart::Encoded { .. } => {
-                        *size
-                    }
+                    ConsolidationPart::Queued { task: None, .. } => 0,
+                    ConsolidationPart::Queued { task: Some(_), .. }
+                    | ConsolidationPart::Encoded { .. } => *size,
                 })
             })
             .sum()
@@ -623,16 +593,15 @@ where
         for idx in 0..max_run_len {
             for run in self.runs.iter_mut() {
                 if let Some((c_part, size)) = run.get_mut(idx) {
-                    let data = match c_part {
-                        ConsolidationPart::Queued { data } => {
+                    let (data, task) = match c_part {
+                        ConsolidationPart::Queued { data, task } if task.is_none() => {
                             check_budget(*size)?;
-                            data.take()
+                            (data, task)
                         }
                         _ => continue,
                     };
-                    let key_lower = data.key_lower().to_vec();
-                    let wrong_sort = data.wrong_sort();
                     let span = debug_span!("compaction::prefetch");
+                    let data = data.clone();
                     let handle = mz_ore::task::spawn(|| "persist::compaction::prefetch", {
                         let shard_id = self.shard_id;
                         let blob = Arc::clone(&self.blob);
@@ -645,11 +614,7 @@ where
                                 .await
                         }
                     });
-                    *c_part = ConsolidationPart::Prefetched {
-                        handle,
-                        wrong_sort,
-                        key_lower,
-                    };
+                    *task = Some(handle);
                 }
             }
         }
@@ -663,10 +628,10 @@ impl<T, D> Drop for Consolidator<T, D> {
         for run in &self.runs {
             for (part, _) in run {
                 match part {
-                    ConsolidationPart::Queued { .. } => {
+                    ConsolidationPart::Queued { task: None, .. } => {
                         self.metrics.consolidation.parts_skipped.inc();
                     }
-                    ConsolidationPart::Prefetched { .. } => {
+                    ConsolidationPart::Queued { task: Some(_), .. } => {
                         self.metrics.consolidation.parts_wasted.inc();
                     }
                     _ => {}
@@ -1083,7 +1048,7 @@ mod tests {
             if prefetch_all {
                 // If we up the budget to match the total size, we should prefetch everything.
                 consolidator.budget = total_size;
-                assert!(consolidator.start_prefetches() == Some(0));
+                assert_eq!(consolidator.start_prefetches(), Some(0));
             } else {
                 // Let the consolidator drop without fetching everything to check the Drop
                 // impl works when not all parts are prefetched.
