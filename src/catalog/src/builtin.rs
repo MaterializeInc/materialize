@@ -6167,12 +6167,17 @@ pub static MZ_SHOW_SOURCES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     sources.type,
     clusters.name AS cluster,
     schema_id,
-    cluster_id
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
 FROM
     mz_catalog.mz_sources AS sources
         LEFT JOIN
             mz_catalog.mz_clusters AS clusters
-            ON clusters.id = sources.cluster_id;",
+            ON clusters.id = sources.cluster_id
+        LEFT JOIN
+            mz_internal.mz_comments comments
+            ON sources.id = comments.id
+WHERE (comments.object_type = 'source' OR comments.object_type IS NULL)",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6187,12 +6192,17 @@ pub static MZ_SHOW_SINKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
         sinks.type,
         clusters.name AS cluster,
         schema_id,
-        cluster_id
+        cluster_id,
+        COALESCE(comments.comment, '') as comment
     FROM
         mz_catalog.mz_sinks AS sinks
             JOIN
                 mz_catalog.mz_clusters AS clusters
-                ON clusters.id = sinks.cluster_id;",
+                ON clusters.id = sinks.cluster_id
+            LEFT JOIN
+                mz_internal.mz_comments AS comments
+                ON sinks.id = comments.id
+    WHERE (comments.object_type = 'sink' OR comments.object_type IS NULL)",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6201,9 +6211,18 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
-    sql: "SELECT mviews.id as id, mviews.name, clusters.name AS cluster, schema_id, cluster_id
-FROM mz_catalog.mz_materialized_views AS mviews
-JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
+    sql: "SELECT
+    mviews.id as id,
+    mviews.name,
+    clusters.name AS cluster,
+    schema_id,
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
+FROM
+    mz_catalog.mz_materialized_views AS mviews
+    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
+    LEFT JOIN mz_internal.mz_comments comments ON mviews.id = comments.id
+WHERE (comments.object_type = 'materialized-view' OR comments.object_type IS NULL)",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6220,7 +6239,8 @@ pub static MZ_SHOW_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     COALESCE(keys.key, '{}'::_text) AS key,
     idxs.on_id AS on_id,
     objs.schema_id AS schema_id,
-    clusters.id AS cluster_id
+    clusters.id AS cluster_id,
+    COALESCE(comments.comment, '') as comment
 FROM
     mz_catalog.mz_indexes AS idxs
     JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
@@ -6241,7 +6261,9 @@ FROM
             LEFT JOIN mz_catalog.mz_columns obj_cols ON
                 idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         GROUP BY idxs.id) AS keys
-    ON idxs.id = keys.id",
+    ON idxs.id = keys.id
+    LEFT JOIN mz_internal.mz_comments comments ON idxs.id = comments.id
+WHERE (comments.object_type = 'index' OR comments.object_type IS NULL)",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6255,7 +6277,8 @@ pub static MZ_SHOW_CLUSTER_REPLICAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinVie
     mz_catalog.mz_cluster_replicas.name AS replica,
     mz_catalog.mz_cluster_replicas.id as replica_id,
     mz_catalog.mz_cluster_replicas.size AS size,
-    coalesce(statuses.ready, FALSE) AS ready
+    coalesce(statuses.ready, FALSE) AS ready,
+    coalesce(comments.comment, '') as comment
 FROM
     mz_catalog.mz_cluster_replicas
         JOIN mz_catalog.mz_clusters
@@ -6270,6 +6293,9 @@ FROM
                 GROUP BY replica_id
             ) AS statuses
             ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
+        LEFT JOIN mz_internal.mz_comments comments
+            ON mz_catalog.mz_cluster_replicas.id = comments.id
+WHERE (comments.object_type = 'cluster-replica' OR comments.object_type IS NULL)
 ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
 });

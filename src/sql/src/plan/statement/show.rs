@@ -397,12 +397,9 @@ fn show_sources<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, cluster, COALESCE(comment, '') as comment
+        "SELECT name, type, cluster, comment
         FROM mz_internal.mz_show_sources sources
-        LEFT JOIN mz_internal.mz_comments comments
-        ON sources.id = comments.id
-        WHERE {where_clause}
-          AND (comments.object_type = 'source' OR comments.object_type IS NULL)"
+        WHERE {where_clause}"
     );
     ShowSelect::new(
         scx,
@@ -492,12 +489,9 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT name, cluster, COALESCE(comment, '') as comment
-         FROM mz_internal.mz_show_materialized_views mat_views
-         LEFT JOIN mz_internal.mz_comments comments
-         ON mat_views.id = comments.id
-         WHERE {where_clause}
-           AND (comments.object_type = 'materialized-view' OR comments.object_type IS NULL)"
+        "SELECT name, cluster, comment
+        FROM mz_internal.mz_show_materialized_views
+        WHERE {where_clause}"
     );
 
     ShowSelect::new(
@@ -529,12 +523,9 @@ fn show_sinks<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, cluster, COALESCE(comment, '') as comment
+        "SELECT name, type, cluster, comment
         FROM mz_internal.mz_show_sinks sinks
-        LEFT JOIN mz_internal.mz_comments comments
-        ON sinks.id = comments.id
-        WHERE {where_clause}
-          AND (comments.object_type = 'sink' OR comments.object_type IS NULL)"
+        WHERE {where_clause}"
     );
     ShowSelect::new(
         scx,
@@ -638,12 +629,9 @@ pub fn show_indexes<'a>(
     };
 
     let query = format!(
-        "SELECT name, on, cluster, key, COALESCE(comment, '') as comment
-        FROM mz_internal.mz_show_indexes idxs
-        LEFT JOIN mz_internal.mz_comments comments
-        ON idxs.id = comments.id
-        WHERE {}
-          AND (comments.object_type = 'index' OR comments.object_type IS NULL)",
+        "SELECT name, on, cluster, key, comment
+        FROM mz_internal.mz_show_indexes
+        WHERE {}",
         itertools::join(query_filter.iter(), " AND ")
     );
 
@@ -722,7 +710,7 @@ WITH clusters AS (
 comments AS (
     SELECT id, comment
     FROM mz_internal.mz_comments
-    WHERE object_type = 'cluster' OR object_type IS NULL
+    WHERE object_type = 'cluster'
 )
 SELECT name, replicas, COALESCE(comment, '') as comment
 FROM clusters
@@ -743,11 +731,8 @@ pub fn show_cluster_replicas<'a>(
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let query = "
-    SELECT cluster, replica, size, ready, COALESCE(comment, '') as comment
-    FROM mz_internal.mz_show_cluster_replicas replicas
-    LEFT JOIN mz_internal.mz_comments comments
-    ON replicas.replica_id = comments.id
-    WHERE (comments.object_type = 'cluster-replica' OR comments.object_type IS NULL)
+    SELECT cluster, replica, size, ready, comment
+    FROM mz_internal.mz_show_cluster_replicas
     "
     .to_string();
 
