@@ -121,7 +121,7 @@ role, which has the required `REPLICATION` privilege.
    While you can use the default user for replication, we recommend creating a
    dedicated user for security reasons.
 
-{{< tabs >}}
+    {{< tabs >}}
 {{< tab "Neon CLI">}}
 
 Use the [`roles create` CLI command](https://neon.tech/docs/reference/cli-roles)
@@ -166,7 +166,7 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
 
 {{< /tab >}}
 
-{{< /tabs >}}
+    {{< /tabs >}}
 
 4. Grant the user the required permissions on the schema(s) you want to
    replicate:
