@@ -6162,6 +6162,7 @@ pub static MZ_SHOW_SOURCES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     oid: oid::VIEW_MZ_SHOW_SOURCES_OID,
     column_defs: None,
     sql: "SELECT
+    sources.id,
     sources.name,
     sources.type,
     clusters.name AS cluster,
@@ -6181,6 +6182,7 @@ pub static MZ_SHOW_SINKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     oid: oid::VIEW_MZ_SHOW_SINKS_OID,
     column_defs: None,
     sql: "SELECT
+        sinks.id,
         sinks.name,
         sinks.type,
         clusters.name AS cluster,
@@ -6199,7 +6201,7 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
-    sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
+    sql: "SELECT mviews.id as id, mviews.name, clusters.name AS cluster, schema_id, cluster_id
 FROM mz_catalog.mz_materialized_views AS mviews
 JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
     access: vec![PUBLIC_SELECT],
@@ -6211,6 +6213,7 @@ pub static MZ_SHOW_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     oid: oid::VIEW_MZ_SHOW_INDEXES_OID,
     column_defs: None,
     sql: "SELECT
+    idxs.id AS id,
     idxs.name AS name,
     objs.name AS on,
     clusters.name AS cluster,
@@ -6250,6 +6253,7 @@ pub static MZ_SHOW_CLUSTER_REPLICAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinVie
     sql: r#"SELECT
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
+    mz_catalog.mz_cluster_replicas.id as replica_id,
     mz_catalog.mz_cluster_replicas.size AS size,
     coalesce(statuses.ready, FALSE) AS ready
 FROM
@@ -7247,6 +7251,15 @@ ON mz_internal.mz_webhook_sources (id)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_COMMENTS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_comments_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_COMMENTS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_comments (id)",
+    is_retained_metrics_object: true,
+};
+
 pub static MZ_ANALYTICS: BuiltinConnection = BuiltinConnection {
     name: "mz_analytics",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7808,6 +7821,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_FRONTIERS_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
+        Builtin::Index(&MZ_COMMENTS_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),

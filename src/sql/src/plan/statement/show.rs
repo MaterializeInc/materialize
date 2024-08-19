@@ -237,8 +237,13 @@ pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    let query = "SELECT name, COALESCE(comment, '') as comment
+         FROM mz_catalog.mz_databases databases
+         LEFT JOIN mz_internal.mz_comments comments
+           ON databases.id = comments.id
+         WHERE (comments.object_type = 'database' OR comments.object_type IS NULL)"
+        .to_string();
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_schemas<'a>(
@@ -257,20 +262,29 @@ pub fn show_schemas<'a>(
         }
     };
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_schemas
-        WHERE database_id IS NULL OR database_id = '{database_id}'",
+        "SELECT name, COALESCE(comment, '') as comment
+        FROM mz_catalog.mz_schemas schemas
+        LEFT JOIN mz_internal.mz_comments comments
+          ON schemas.id = comments.id
+        WHERE database_id IS NULL OR database_id = '{database_id}'
+          AND (comments.object_type = 'schema' OR comments.object_type IS NULL)",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_roles<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT name FROM mz_catalog.mz_roles WHERE id NOT LIKE 's%' AND id NOT LIKE 'g%'"
+    let query = "SELECT name, COALESCE(comment, '') as comment
+        FROM mz_catalog.mz_roles roles
+        LEFT JOIN mz_internal.mz_comments comments
+        ON roles.id = comments.id
+        WHERE roles.id NOT LIKE 's%'
+          AND roles.id NOT LIKE 'g%'
+          AND (comments.object_type = 'role' OR comments.object_type IS NULL)"
         .to_string();
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_objects<'a>(
@@ -340,11 +354,14 @@ fn show_connections<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name, type
-        FROM mz_catalog.mz_connections
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, type, COALESCE(comment, '') as comment
+        FROM mz_catalog.mz_connections connections
+        LEFT JOIN mz_internal.mz_comments comments
+        ON connections.id = comments.id
+        WHERE schema_id = '{schema_spec}'
+          AND (comments.object_type = 'connection' OR comments.object_type IS NULL)",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "comment"]))
 }
 
 fn show_tables<'a>(
@@ -354,11 +371,15 @@ fn show_tables<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_tables
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, COALESCE(comment, '') as comment
+        FROM mz_catalog.mz_tables tables
+        LEFT JOIN mz_internal.mz_comments comments
+        ON tables.id = comments.id
+        WHERE tables.schema_id = '{schema_spec}'
+          AND (comments.object_type = 'table' OR comments.object_type IS NULL)
+    ",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 fn show_sources<'a>(
@@ -376,11 +397,20 @@ fn show_sources<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, cluster
-        FROM mz_internal.mz_show_sources
-        WHERE {where_clause}"
+        "SELECT name, type, cluster, COALESCE(comment, '') as comment
+        FROM mz_internal.mz_show_sources sources
+        LEFT JOIN mz_internal.mz_comments comments
+        ON sources.id = comments.id
+        WHERE {where_clause}
+          AND (comments.object_type = 'source' OR comments.object_type IS NULL)"
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "type", "cluster", "comment"]),
+    )
 }
 
 fn show_subsources<'a>(
@@ -437,11 +467,14 @@ fn show_views<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_views
-        WHERE schema_id = '{schema_spec}'"
+        "SELECT name, COALESCE(comment, '') as comment
+        FROM mz_catalog.mz_views views
+        LEFT JOIN mz_internal.mz_comments comments
+        ON views.id = comments.id
+        WHERE schema_id = '{schema_spec}'
+          AND (comments.object_type = 'view' OR comments.object_type IS NULL)"
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 fn show_materialized_views<'a>(
@@ -459,12 +492,21 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT name, cluster
-         FROM mz_internal.mz_show_materialized_views
-         WHERE {where_clause}"
+        "SELECT name, cluster, COALESCE(comment, '') as comment
+         FROM mz_internal.mz_show_materialized_views mat_views
+         LEFT JOIN mz_internal.mz_comments comments
+         ON mat_views.id = comments.id
+         WHERE {where_clause}
+           AND (comments.object_type = 'materialized-view' OR comments.object_type IS NULL)"
     );
 
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "cluster", "comment"]),
+    )
 }
 
 fn show_sinks<'a>(
@@ -487,11 +529,20 @@ fn show_sinks<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, cluster
-        FROM mz_internal.mz_show_sinks
-        WHERE {where_clause}"
+        "SELECT name, type, cluster, COALESCE(comment, '') as comment
+        FROM mz_internal.mz_show_sinks sinks
+        LEFT JOIN mz_internal.mz_comments comments
+        ON sinks.id = comments.id
+        WHERE {where_clause}
+          AND (comments.object_type = 'sink' OR comments.object_type IS NULL)"
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "type", "cluster", "comment"]),
+    )
 }
 
 fn show_types<'a>(
@@ -501,11 +552,14 @@ fn show_types<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_types
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, COALESCE(comment, '') as comment
+        FROM mz_catalog.mz_types types
+        LEFT JOIN mz_internal.mz_comments comments
+        ON types.id = comments.id
+        WHERE schema_id = '{schema_spec}'
+          AND (comments.object_type = 'type' OR comments.object_type IS NULL)",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 fn show_all_objects<'a>(
@@ -515,11 +569,32 @@ fn show_all_objects<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name, type
-        FROM mz_catalog.mz_objects
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, type, COALESCE(comment, '') AS comment
+         FROM
+             mz_catalog.mz_objects AS objs
+                 LEFT JOIN mz_internal.mz_comments AS comments ON objs.id = comments.id
+         WHERE
+             schema_id = '{schema_spec}'
+                 AND
+             (
+                 comments.object_type
+                 IN (
+                 'table',
+                 'view',
+                 'materialized-view',
+                 'source',
+                 'sink',
+                 'index',
+                 'func',
+                 'connection',
+                 'secret',
+                 'type'
+                 )
+                     OR
+                 comments.object_type IS NULL
+             )",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "comment"]))
 }
 
 pub fn show_indexes<'a>(
@@ -563,9 +638,12 @@ pub fn show_indexes<'a>(
     };
 
     let query = format!(
-        "SELECT name, on, cluster, key
-        FROM mz_internal.mz_show_indexes
-        WHERE {}",
+        "SELECT name, on, cluster, key, COALESCE(comment, '') as comment
+        FROM mz_internal.mz_show_indexes idxs
+        LEFT JOIN mz_internal.mz_comments comments
+        ON idxs.id = comments.id
+        WHERE {}
+          AND (comments.object_type = 'index' OR comments.object_type IS NULL)",
         itertools::join(query_filter.iter(), " AND ")
     );
 
@@ -574,7 +652,7 @@ pub fn show_indexes<'a>(
         query,
         filter,
         None,
-        Some(&["name", "on", "cluster", "key"]),
+        Some(&["name", "on", "cluster", "key", "comment"]),
     )
 }
 
@@ -601,13 +679,11 @@ pub fn show_columns<'a>(
     }
 
     let query = format!(
-        "SELECT
-            mz_columns.name,
-            mz_columns.nullable,
-            mz_columns.type,
-            mz_columns.position
-         FROM mz_catalog.mz_columns
-         WHERE mz_columns.id = '{}'",
+        "SELECT name, nullable, type, position, COALESCE(comment, '') as comment
+         FROM mz_catalog.mz_columns columns
+         LEFT JOIN mz_internal.mz_comments comments
+         ON columns.id = comments.id AND columns.position = comments.object_sub_id
+         WHERE columns.id = '{}'",
         entry.id(),
     );
     let (show_select, new_resolved_ids) = ShowSelect::new_with_resolved_ids(
@@ -615,7 +691,7 @@ pub fn show_columns<'a>(
         query,
         filter,
         Some("position"),
-        Some(&["name", "nullable", "type"]),
+        Some(&["name", "nullable", "type", "comment"]),
     )?;
     Ok(ShowColumnsSelect {
         id: entry.id(),
@@ -632,31 +708,55 @@ pub fn show_clusters<'a>(
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let query = "
-SELECT
-    mc.name,
-    pg_catalog.string_agg(mcr.name || ' (' || mcr.size || ')', ', ' ORDER BY mcr.name)
-        AS replicas
-FROM
-    mz_catalog.mz_clusters mc
-        LEFT JOIN mz_catalog.mz_cluster_replicas mcr ON mc.id = mcr.cluster_id
-GROUP BY mc.name"
-        .to_string();
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "replicas"]))
+WITH clusters AS (
+    SELECT
+        mc.id,
+        mc.name,
+        pg_catalog.string_agg(mcr.name || ' (' || mcr.size || ')', ', ' ORDER BY mcr.name)
+            AS replicas
+    FROM mz_catalog.mz_clusters mc
+    LEFT JOIN mz_catalog.mz_cluster_replicas mcr
+      ON mc.id = mcr.cluster_id
+    GROUP BY mc.id, mc.name
+),
+comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'cluster' OR object_type IS NULL
+)
+SELECT name, replicas, COALESCE(comment, '') as comment
+FROM clusters
+LEFT JOIN comments ON clusters.id = comments.id
+"
+    .to_string();
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "replicas", "comment"]),
+    )
 }
 
 pub fn show_cluster_replicas<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT cluster, replica, size, ready FROM mz_internal.mz_show_cluster_replicas"
-        .to_string();
+    let query = "
+    SELECT cluster, replica, size, ready, COALESCE(comment, '') as comment
+    FROM mz_internal.mz_show_cluster_replicas replicas
+    LEFT JOIN mz_internal.mz_comments comments
+    ON replicas.replica_id = comments.id
+    WHERE (comments.object_type = 'cluster-replica' OR comments.object_type IS NULL)
+    "
+    .to_string();
 
     ShowSelect::new(
         scx,
         query,
         filter,
         None,
-        Some(&["cluster", "replica", "size", "ready"]),
+        Some(&["cluster", "replica", "size", "ready", "comment"]),
     )
 }
 
@@ -668,12 +768,15 @@ pub fn show_secrets<'a>(
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_secrets
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, COALESCE(comment, '') as comment
+        FROM mz_catalog.mz_secrets secrets
+        LEFT JOIN mz_internal.mz_comments comments
+        ON secrets.id = comments.id
+        WHERE schema_id = '{schema_spec}'
+          AND (comments.object_type = 'secret' OR comments.object_type IS NULL)",
     );
 
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_privileges<'a>(
