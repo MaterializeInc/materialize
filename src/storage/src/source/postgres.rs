@@ -131,30 +131,16 @@ impl SourceRender for PostgresSourceConnection {
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
-        // Determined which collections need to be snapshot and which already have been.
-        let subsource_resume_uppers: BTreeMap<_, _> = config
-            .source_resume_uppers
-            .iter()
-            .map(|(id, upper)| {
-                assert!(
-                    config.source_exports.contains_key(id),
-                    "all source resume uppers must be present in source exports"
-                );
-
-                (
-                    *id,
-                    Antichain::from_iter(upper.iter().map(MzOffset::decode_row)),
-                )
-            })
-            .collect();
-
-        // Collect the tables that we will be ingesting.
+        // Collect the source outputs that we will be exporting into a per-table map.
         let mut table_info = BTreeMap::new();
-        for SourceExport {
-            ingestion_output,
-            details,
-            storage_metadata: _,
-        } in config.source_exports.values()
+        for (
+            id,
+            SourceExport {
+                ingestion_output,
+                details,
+                storage_metadata: _,
+            },
+        ) in &config.source_exports
         {
             // Output index 0 is the primary source which is not a table.
             if *ingestion_output == 0 {
@@ -165,16 +151,25 @@ impl SourceRender for PostgresSourceConnection {
                 SourceExportDetails::Postgres(details) => details,
                 _ => panic!("unexpected source export details: {:?}", details),
             };
-
             let desc = details.table.clone();
-
             let casts = details.column_casts.clone();
-            let exists =
-                table_info.insert(desc.oid, (*ingestion_output, desc.clone(), casts.clone()));
-
-            // TODO(roshan): Remove this when we allow multiple source_exports to ingest the same
-            // table in https://github.com/MaterializeInc/materialize/issues/28435
-            assert!(exists.is_none(), "duplicate table oid in source exports");
+            let resume_upper = Antichain::from_iter(
+                config
+                    .source_resume_uppers
+                    .get(id)
+                    .expect("all source exports must be present in source resume uppers")
+                    .iter()
+                    .map(MzOffset::decode_row),
+            );
+            let output = SourceOutputInfo {
+                desc,
+                casts,
+                resume_upper,
+            };
+            table_info
+                .entry(output.desc.oid)
+                .or_insert_with(BTreeMap::new)
+                .insert(*ingestion_output, output);
         }
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
@@ -184,7 +179,6 @@ impl SourceRender for PostgresSourceConnection {
                 scope.clone(),
                 config.clone(),
                 self.clone(),
-                subsource_resume_uppers.clone(),
                 table_info.clone(),
                 metrics.snapshot_metrics.clone(),
             );
@@ -193,7 +187,6 @@ impl SourceRender for PostgresSourceConnection {
             scope.clone(),
             config,
             self,
-            subsource_resume_uppers,
             table_info,
             &rewinds,
             resume_uppers,
@@ -249,6 +242,13 @@ impl SourceRender for PostgresSourceConnection {
             vec![snapshot_token, repl_token],
         )
     }
+}
+
+#[derive(Clone, Debug)]
+struct SourceOutputInfo {
+    desc: PostgresTableDesc,
+    casts: Vec<(CastType, MirScalarExpr)>,
+    resume_upper: Antichain<MzOffset>,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
