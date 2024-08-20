@@ -6,16 +6,17 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from dataclasses import dataclass
 from typing import TypeVar
 
-from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.df.df_details import DfDetails
 from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
-from materialize.scalability.workload import Workload
-from materialize.scalability.workload_markers import WorkloadMarker
-from materialize.scalability.workload_result import WorkloadResult
-from materialize.scalability.workload_version import WorkloadVersion
+from materialize.scalability.result.comparison_outcome import ComparisonOutcome
+from materialize.scalability.result.workload_result import WorkloadResult
+from materialize.scalability.workload.workload import Workload
+from materialize.scalability.workload.workload_markers import WorkloadMarker
+from materialize.scalability.workload.workload_version import WorkloadVersion
 
 T = TypeVar("T")
 

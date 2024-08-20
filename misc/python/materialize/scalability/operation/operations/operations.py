@@ -8,15 +8,15 @@
 # by the Apache License, Version 2.0.
 from psycopg import Connection
 
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.operation import (
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.operation.operation_data import OperationData
+from materialize.scalability.operation.scalability_operation import (
     Operation,
     SimpleSqlOperation,
     SqlOperationWithSeed,
     SqlOperationWithTwoSeeds,
 )
-from materialize.scalability.operation_data import OperationData
-from materialize.scalability.schema import Schema
+from materialize.scalability.schema.schema import Schema
 
 
 class InsertDefaultValues(SimpleSqlOperation):

@@ -16,23 +16,23 @@ from typing import Any
 import pandas as pd
 from psycopg import Cursor
 
-from materialize.scalability.benchmark_config import BenchmarkConfiguration
-from materialize.scalability.benchmark_result import BenchmarkResult
-from materialize.scalability.comparison_outcome import ComparisonOutcome
+from materialize.scalability.config.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.df.df_details import DfDetails, concat_df_details
 from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
-from materialize.scalability.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoint import Endpoint
 from materialize.scalability.io import paths
-from materialize.scalability.operation import Operation
-from materialize.scalability.result_analyzer import ResultAnalyzer
-from materialize.scalability.schema import Schema
-from materialize.scalability.workload import Workload, WorkloadWithContext
-from materialize.scalability.workload_result import WorkloadResult
-from materialize.scalability.workloads.connection_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.ddl_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.dml_dql_workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads.self_test_workloads import *  # noqa: F401 F403
+from materialize.scalability.operation.scalability_operation import Operation
+from materialize.scalability.result.benchmark_result import BenchmarkResult
+from materialize.scalability.result.comparison_outcome import ComparisonOutcome
+from materialize.scalability.result.result_analyzer import ResultAnalyzer
+from materialize.scalability.result.workload_result import WorkloadResult
+from materialize.scalability.schema.schema import Schema
+from materialize.scalability.workload.workload import Workload, WorkloadWithContext
+from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.self_test_workloads import *  # noqa: F401 F403
 
 # number of retries in addition to the first run
 MAX_RETRIES_ON_REGRESSION = 2

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from materialize.scalability.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoint import Endpoint
 
 
 class ScalabilityChange:

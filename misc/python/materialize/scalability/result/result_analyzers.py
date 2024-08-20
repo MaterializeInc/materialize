@@ -6,18 +6,14 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
-from materialize.scalability.comparison_outcome import ComparisonOutcome
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.result_analyzer import (
-    ResultAnalyzer,
-)
-from materialize.scalability.scalability_change import (
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.result.comparison_outcome import ComparisonOutcome
+from materialize.scalability.result.result_analyzer import ResultAnalyzer
+from materialize.scalability.result.scalability_change import (
     Regression,
     ScalabilityImprovement,
 )
-from materialize.scalability.workload_result import WorkloadResult
+from materialize.scalability.result.workload_result import WorkloadResult
 
 
 class DefaultResultAnalyzer(ResultAnalyzer):

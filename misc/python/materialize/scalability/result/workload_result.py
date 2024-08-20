@@ -10,8 +10,8 @@
 
 from materialize.scalability.df.df_details import DfDetails
 from materialize.scalability.df.df_totals import DfTotals
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.workload import Workload
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.workload.workload import Workload
 
 
 class WorkloadResult:

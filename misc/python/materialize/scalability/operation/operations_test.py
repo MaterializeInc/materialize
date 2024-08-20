@@ -10,8 +10,11 @@
 
 import time
 
-from materialize.scalability.operation import Operation, SimpleSqlOperation
-from materialize.scalability.operation_data import OperationData
+from materialize.scalability.operation.operation_data import OperationData
+from materialize.scalability.operation.scalability_operation import (
+    Operation,
+    SimpleSqlOperation,
+)
 
 
 class EmptyOperation(Operation):

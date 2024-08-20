@@ -9,7 +9,7 @@
 
 from psycopg import Cursor, ProgrammingError
 
-from materialize.scalability.operation_data import OperationData
+from materialize.scalability.operation.operation_data import OperationData
 
 
 class Operation:
