@@ -1056,8 +1056,14 @@ where
 
         let key_dt = data_type(key_schema);
         let val_dt = data_type(val_schema);
-        let key_fn = backward_compatible(&EncodedSchemas::decode_data_type(&current.key), &key_dt);
-        let val_fn = backward_compatible(&EncodedSchemas::decode_data_type(&current.val), &val_dt);
+        let key_fn = backward_compatible(
+            &EncodedSchemas::decode_data_type(&current.key_data_type),
+            &key_dt,
+        );
+        let val_fn = backward_compatible(
+            &EncodedSchemas::decode_data_type(&current.val_data_type),
+            &val_dt,
+        );
         let (Some(key_fn), Some(val_fn)) = (key_fn, val_fn) else {
             return Break(NoOpStateTransition(CaESchema::Incompatible));
         };

@@ -40,6 +40,7 @@ use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsens
 use crate::internal::state::TypedState;
 use crate::internal::watch::StateWatchNotifier;
 use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
+use crate::schema::SchemaCacheMaps;
 use crate::{Diagnostics, PersistClient, PersistConfig, PersistLocation, ShardId};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -567,6 +568,9 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
+    /// A [SchemaCacheMaps<K, V>], but stored as an Any so the `: Codec` bounds
+    /// don't propagate to basically every struct in persist.
+    schema_cache: Arc<dyn Any + Send + Sync>,
     _subscription_token: Arc<ShardSubscriptionToken>,
 }
 
@@ -579,6 +583,7 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
             cfg: _cfg,
             metrics: _metrics,
             shard_metrics: _shard_metrics,
+            schema_cache: _schema_cache,
             _subscription_token,
         } = self;
         f.debug_struct("LockingTypedState")
@@ -589,7 +594,7 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
     }
 }
 
-impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
     fn new(
         shard_id: ShardId,
         initial_state: TypedState<K, V, T, D>,
@@ -604,11 +609,20 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
             shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
+            schema_cache: Arc::new(SchemaCacheMaps::<K, V>::new(&metrics.schema)),
             metrics,
             _subscription_token: subscription_token,
         }
     }
 
+    pub(crate) fn schema_cache(&self) -> Arc<SchemaCacheMaps<K, V>> {
+        Arc::clone(&self.schema_cache)
+            .downcast::<SchemaCacheMaps<K, V>>()
+            .expect("K and V match")
+    }
+}
+
+impl<K, V, T, D> LockingTypedState<K, V, T, D> {
     pub(crate) fn shard_id(&self) -> &ShardId {
         &self.shard_id
     }
