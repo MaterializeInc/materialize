@@ -56,20 +56,10 @@ def get_default_system_parameters(
         "enable_unsafe_functions": "true",
         "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
         # -----
-        # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
-        "persist_next_listen_batch_retryer_clamp": "16s",
-        "persist_next_listen_batch_retryer_initial_backoff": "100ms",
-        "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
-        # -----
-        # Persist internals changes: advance coverage
-        "persist_enable_arrow_lgalloc_noncc_sizes": "true",
-        "persist_enable_s3_lgalloc_noncc_sizes": "true",
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
         "cluster_always_use_disk": "true",
-        "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
-        "compute_hydration_concurrency": "2",
         "disk_cluster_replicas_default": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_alter_swap": "true",
@@ -96,39 +86,6 @@ def get_default_system_parameters(
         "enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
-        "persist_batch_columnar_format": (
-            "both_v2" if version >= MzVersion.parse_mz("v0.112.0-dev") else "row"
-        ),
-        "persist_batch_columnar_format_percent": "100",
-        "persist_batch_delete_enabled": "true",
-        "persist_batch_record_part_format": "true",
-        "persist_fast_path_limit": "1000",
-        "persist_inline_writes_single_max_bytes": "4096",
-        "persist_inline_writes_total_max_bytes": "1048576",
-        "persist_pubsub_client_enabled": "true",
-        "persist_pubsub_push_diff_enabled": "true",
-        "persist_record_compactions": "true",
-        "persist_roundtrip_spine": "true",
-        "persist_schema_register": (
-            "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
-        ),
-        "persist_schema_require": "true",
-        "persist_sink_minimum_batch_updates": "128",
-        "persist_stats_audit_percent": "100",
-        "persist_txn_tables": "lazy",  # removed, but keep value for older versions
-        "persist_use_critical_since_catalog": "true",
-        "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
-        "persist_use_critical_since_source": "false" if zero_downtime else "true",
-        "persist_part_decode_format": "row_with_validate",
-        "statement_logging_default_sample_rate": "0.01",
-        "statement_logging_max_sample_rate": "0.01",
-        "storage_persist_sink_minimum_batch_updates": "100",
-        "storage_source_decode_fuel": "100000",
-        "storage_use_reclock_v2": "true",
-        "timestamp_oracle": "postgres",
-        "wait_catalog_consolidation_on_startup": "true",
-        "with_0dt_deployment_max_wait": "100d",  # forever, time out and fail test!
-        # End of list (ordered by name)
     }
 
 
