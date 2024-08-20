@@ -21,6 +21,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.selection.selection import (
     DataRowSelection,
 )
@@ -52,6 +53,11 @@ class ConstantExpression(LeafExpression):
     def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
+        return self.to_sql_as_value(sql_adjuster)
+
     def to_sql_as_value(self, sql_adjuster: SqlDialectAdjuster) -> str:
         return self.data_type.value_to_sql(self.value, sql_adjuster)
 
@@ -62,6 +68,9 @@ class ConstantExpression(LeafExpression):
 
     def collect_vertical_table_indices(self) -> set[int]:
         return set()
+
+    def get_data_source(self) -> DataSource:
+        return DataSource(table_index=None)
 
     def __str__(self) -> str:
         return f"ConstantExpression (value={self.value}, type={self.data_type})"

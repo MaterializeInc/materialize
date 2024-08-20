@@ -22,6 +22,7 @@ from materialize.output_consistency.execution.value_storage_layout import (
 from materialize.output_consistency.input_data.test_input_types import (
     ConsistencyTestTypesInput,
 )
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.selection.selection import (
     ALL_ROWS_SELECTION,
     ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
@@ -73,6 +74,7 @@ class EvaluationStrategy:
     def generate_sources(
         self,
         types_input: ConsistencyTestTypesInput,
+        vertical_join_tables: int,
     ) -> list[str]:
         statements = []
         statements.extend(
@@ -81,16 +83,19 @@ class EvaluationStrategy:
                 ValueStorageLayout.HORIZONTAL,
                 ALL_ROWS_SELECTION,
                 ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
+                data_source=DataSource(table_index=None),
             )
         )
-        statements.extend(
-            self.generate_source_for_storage_layout(
-                types_input,
-                ValueStorageLayout.VERTICAL,
-                ALL_ROWS_SELECTION,
-                ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
+        for table_index in range(0, vertical_join_tables):
+            statements.extend(
+                self.generate_source_for_storage_layout(
+                    types_input,
+                    ValueStorageLayout.VERTICAL,
+                    ALL_ROWS_SELECTION,
+                    ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
+                    data_source=DataSource(table_index=table_index),
+                )
             )
-        )
         return statements
 
     def generate_source_for_storage_layout(
@@ -99,25 +104,29 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> list[str]:
         raise NotImplementedError
 
     def get_db_object_name(
         self,
         storage_layout: ValueStorageLayout,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> str:
         if storage_layout == ValueStorageLayout.ANY:
             raise RuntimeError(f"{storage_layout} has not been resolved to a real one")
 
-        if override_db_object_name is not None:
-            return override_db_object_name
+        if override_base_name is None:
+            storage_suffix = (
+                "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
+            )
+            base_name = f"{self.object_name_base}_{storage_suffix}"
+        else:
+            base_name = override_base_name
 
-        storage_suffix = (
-            "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
-        )
-        return f"{self.object_name_base}_{storage_suffix}"
+        return data_source.get_db_object_name(base_name=base_name)
 
     def __str__(self) -> str:
         return self.name
@@ -126,6 +135,7 @@ class EvaluationStrategy:
         self,
         types_input: ConsistencyTestTypesInput,
         storage_layout: ValueStorageLayout,
+        table_index: int | None,
         include_type: bool,
         table_column_selection: TableColumnByNameSelection,
     ) -> list[str]:
@@ -144,14 +154,18 @@ class EvaluationStrategy:
 
             if storage_layout == ValueStorageLayout.HORIZONTAL:
                 for data_value in type_with_values.raw_values:
-                    if table_column_selection.is_included(data_value.column_name):
+                    if table_column_selection.is_included(
+                        data_value.get_source_column_identifier()
+                    ):
                         column_specs.append(f"{data_value.column_name}{type_info}")
             elif storage_layout == ValueStorageLayout.VERTICAL:
-                column_name = (
-                    type_with_values.create_vertical_storage_column().column_name
+                column = type_with_values.create_assigned_vertical_storage_column(
+                    DataSource(table_index)
                 )
-                if table_column_selection.is_included(column_name):
-                    column_specs.append(f"{column_name}{type_info}")
+                if table_column_selection.is_included(
+                    column.get_source_column_identifier()
+                ):
+                    column_specs.append(f"{column.column_name}{type_info}")
             else:
                 raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
@@ -166,8 +180,12 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
+        data_source: DataSource,
     ) -> list[str]:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
+            assert (
+                data_source.table_index is None
+            ), "Table index is not supported for horizontal storage"
             return [
                 self.__create_horizontal_value_row(
                     types_input.all_data_types_with_values, table_column_selection
@@ -176,9 +194,12 @@ class EvaluationStrategy:
         elif storage_layout == ValueStorageLayout.VERTICAL:
             return self.__create_vertical_value_rows(
                 types_input.all_data_types_with_values,
-                types_input.max_value_count,
+                types_input.get_max_value_count_of_all_types(
+                    table_index=data_source.table_index
+                ),
                 row_selection,
                 table_column_selection,
+                data_source,
             )
         else:
             raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
@@ -195,7 +216,9 @@ class EvaluationStrategy:
 
         for type_with_values in data_type_with_values:
             for data_value in type_with_values.raw_values:
-                if table_column_selection.is_included(data_value.column_name):
+                if table_column_selection.is_included(
+                    data_value.get_source_column_identifier()
+                ):
                     row_values.append(data_value.to_sql_as_value(self.sql_adjuster))
 
         return f"{', '.join(row_values)}"
@@ -206,6 +229,7 @@ class EvaluationStrategy:
         row_count: int,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
+        data_source: DataSource,
     ) -> list[str]:
         """Creates table rows with the values of each type in a column. For types with fewer values, values are repeated."""
         rows = []
@@ -215,16 +239,21 @@ class EvaluationStrategy:
             row_values = [str(row_index)]
 
             for type_with_values in data_type_with_values:
-                data_column = type_with_values.create_vertical_storage_column()
-                column_name = data_column.column_name
+                data_column = type_with_values.create_assigned_vertical_storage_column(
+                    data_source
+                )
 
-                if not table_column_selection.is_included(column_name):
+                if not table_column_selection.is_included(
+                    data_column.get_source_column_identifier()
+                ):
                     continue
 
-                data_value = data_column.get_value_at_row(row_index)
+                data_value = data_column.get_value_at_row(
+                    row_index, data_source.table_index
+                )
                 row_values.append(data_value.to_sql_as_value(self.sql_adjuster))
 
-            if row_selection.is_included(row_index):
+            if row_selection.is_included_in_source(data_source, row_index):
                 rows.append(f"{', '.join(row_values)}")
 
         return rows
@@ -237,6 +266,7 @@ class DummyEvaluation(EvaluationStrategy):
     def generate_sources(
         self,
         types_input: ConsistencyTestTypesInput,
+        vertical_join_tables: int,
     ) -> list[str]:
         return []
 
@@ -256,22 +286,33 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
-            storage_layout, override_db_object_name
+            storage_layout,
+            data_source,
+            override_base_name=override_base_name,
         )
 
         statements = []
 
         column_specs = self._create_column_specs(
-            types_input, storage_layout, True, table_column_selection
+            types_input,
+            storage_layout,
+            data_source.table_index,
+            True,
+            table_column_selection,
         )
         statements.append(f"DROP TABLE IF EXISTS {db_object_name};")
         statements.append(f"CREATE TABLE {db_object_name} ({', '.join(column_specs)});")
 
         value_rows = self._create_value_rows(
-            types_input, storage_layout, row_selection, table_column_selection
+            types_input,
+            storage_layout,
+            row_selection,
+            table_column_selection,
+            data_source,
         )
 
         for value_row in value_rows:
@@ -295,18 +336,29 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: str | None = None,
+        data_source: DataSource,
+        override_base_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
-            storage_layout, override_db_object_name
+            storage_layout,
+            data_source,
+            override_base_name=override_base_name,
         )
 
         column_specs = self._create_column_specs(
-            types_input, storage_layout, False, table_column_selection
+            types_input,
+            storage_layout,
+            data_source.table_index,
+            False,
+            table_column_selection,
         )
 
         value_rows = self._create_value_rows(
-            types_input, storage_layout, row_selection, table_column_selection
+            types_input,
+            storage_layout,
+            row_selection,
+            table_column_selection,
+            data_source,
         )
         value_specification = "\n    UNION SELECT ".join(value_rows)
 

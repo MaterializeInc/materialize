@@ -19,6 +19,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -31,6 +32,17 @@ class DataColumn(LeafExpression):
             column_name, data_type, set(), ValueStorageLayout.VERTICAL, False, False
         )
         self.values = row_values_of_column
+        self.data_source: DataSource | None = None
+
+    def assign_data_source(self, data_source: DataSource, force: bool) -> None:
+        if self.data_source is not None:
+            if self.is_shared:
+                # the source has already been set
+                return
+            if not force:
+                raise RuntimeError("Data source already assigned")
+
+        self.data_source = data_source
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         # do not provide characteristics on purpose, the spec of this class is not value-specific
@@ -44,7 +56,12 @@ class DataColumn(LeafExpression):
     ) -> set[ExpressionCharacteristics]:
         involved_characteristics: set[ExpressionCharacteristics] = set()
 
-        selected_values = self.get_values_at_rows(row_selection)
+        selected_values = self.get_values_at_rows(
+            row_selection,
+            table_index=(
+                self.data_source.table_index if self.data_source is not None else None
+            ),
+        )
         for value in selected_values:
             characteristics_of_value = (
                 value.recursively_collect_involved_characteristics(row_selection)
@@ -55,45 +72,83 @@ class DataColumn(LeafExpression):
 
         return involved_characteristics
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        return set()
+
     def get_filtered_values(self, row_selection: DataRowSelection) -> list[DataValue]:
-        if row_selection.includes_all():
+        assert self.data_source is not None
+
+        if row_selection.includes_all_of_source(self.data_source):
             return self.values
 
         selected_rows = []
 
         for row_index, row_value in enumerate(self.values):
-            if row_selection.is_included(row_index):
+            if row_selection.is_included_in_source(self.data_source, row_index):
                 selected_rows.append(row_value)
 
         return selected_rows
 
-    def get_values_at_rows(self, row_selection: DataRowSelection) -> list[DataValue]:
-        if row_selection.keys is None:
+    def get_values_at_rows(
+        self, row_selection: DataRowSelection, table_index: int | None
+    ) -> list[DataValue]:
+        if row_selection.includes_all_of_all_sources():
+            return self.values
+
+        if self.data_source is None:
+            # still unknown, provide all values
+            return self.values
+
+        if row_selection.includes_all_of_source(self.data_source):
             return self.values
 
         values = []
-        for row_index in row_selection.keys:
-            values.append(self.get_value_at_row(row_index))
+        for row_index in row_selection.get_row_indices(self.data_source):
+            values.append(self.get_value_at_row(row_index, table_index))
 
         return values
 
-    def get_value_at_row(self, row_index: int) -> DataValue:
+    def get_value_at_row(
+        self,
+        row_index: int,
+        table_index: int | None,
+    ) -> DataValue:
         """All types need to have the same number of rows, but not all have the same number of distinct values. After
         having iterated through of all values of the given type, begin repeating values but skip the NULL value, which
         is known to be the first value of all types.
         :param row_index: an arbitrary, positive number, may be out of the value range
         """
 
+        values_of_table = self._get_values_of_table(table_index)
+        assert len(values_of_table) > 0, f"No values for table index {table_index}"
+
+        # if there is a NULL value, it will always be at position 0; we can only exclude it if we have other values
+        has_null_value_to_exclude = (
+            values_of_table[0].is_null_value and len(values_of_table) > 1
+        )
         value_index = row_index
 
-        if value_index >= len(self.values):
-            null_value_offset = 1
-            available_value_count_without_null = len(self.values) - 1
+        if value_index >= len(values_of_table):
+            null_value_offset = 1 if has_null_value_to_exclude else 0
+            available_value_count = len(values_of_table) - (
+                1 if has_null_value_to_exclude else 0
+            )
             value_index = null_value_offset + (
-                (value_index - null_value_offset) % available_value_count_without_null
+                (value_index - null_value_offset) % available_value_count
             )
 
-        return self.values[value_index]
+        return values_of_table[value_index]
+
+    def _get_values_of_table(self, table_index: int | None) -> list[DataValue]:
+        return [
+            value
+            for value in self.values
+            if table_index is None or table_index in value.vertical_table_indices
+        ]
+
+    def get_data_source(self) -> DataSource:
+        assert self.data_source is not None, "Data source not assigned"
+        return self.data_source
 
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', type={self.data_type})"

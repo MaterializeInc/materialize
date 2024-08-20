@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -22,6 +25,7 @@ from materialize.output_consistency.output.base_output_printer import (
     BaseOutputPrinter,
     OutputPrinterMode,
 )
+from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
@@ -88,14 +92,13 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.print_separator_line()
 
         # evaluation strategy 1
-        if not query_template.custom_db_object_name:
-            self.__print_setup_code_for_error(
-                query_template,
-                error.details1.strategy,
-                table_column_selection,
-                apply_row_filter,
-            )
-            self.print_separator_line()
+        self.__print_setup_code_for_error(
+            query_template,
+            error.details1.strategy,
+            table_column_selection,
+            apply_row_filter,
+        )
+        self.print_separator_line()
 
         self.__print_query_of_error(
             query_template, error.details1.strategy, query_column_selection
@@ -103,14 +106,13 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.print_separator_line()
 
         # evaluation strategy 2
-        if not query_template.custom_db_object_name:
-            self.__print_setup_code_for_error(
-                query_template,
-                error.details2.strategy,
-                table_column_selection,
-                apply_row_filter,
-            )
-            self.print_separator_line()
+        self.__print_setup_code_for_error(
+            query_template,
+            error.details2.strategy,
+            table_column_selection,
+            apply_row_filter,
+        )
+        self.print_separator_line()
 
         self.__print_query_of_error(
             query_template, error.details2.strategy, query_column_selection
@@ -140,20 +142,46 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         row_selection = (
             query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
         )
-        setup_code_lines = evaluation_strategy.generate_source_for_storage_layout(
-            self.input_data.types_input,
-            query_template.storage_layout,
-            row_selection,
-            table_column_selection,
-            override_db_object_name=(
-                query_template.custom_db_object_name
-                if query_template.custom_db_object_name is not None
-                else evaluation_strategy.simple_db_object_name
-            ),
+        data_sources_of_non_select_expressions = (
+            self._collect_data_sources_of_non_select_expressions(query_template)
         )
+
+        setup_code_lines = []
+        for data_source in query_template.get_all_data_sources():
+            if data_source.custom_db_object_name is not None:
+                # we assume that the custom object already exists
+                continue
+
+            if (
+                not table_column_selection.requires_data_source(data_source)
+                and data_source not in data_sources_of_non_select_expressions
+            ):
+                continue
+
+            setup_code_lines.extend(
+                evaluation_strategy.generate_source_for_storage_layout(
+                    self.input_data.types_input,
+                    query_template.storage_layout,
+                    row_selection,
+                    table_column_selection,
+                    data_source=data_source,
+                    override_base_name=evaluation_strategy.simple_db_object_name,
+                )
+            )
 
         for line in setup_code_lines:
             self._print_executable(line)
+
+    def _collect_data_sources_of_non_select_expressions(
+        self, query_template: QueryTemplate
+    ) -> set[DataSource]:
+        data_sources = set()
+        for expression in query_template.get_all_expressions(
+            include_select_expressions=False, include_join_constraints=True
+        ):
+            data_sources.update(expression.collect_data_sources())
+
+        return data_sources
 
     def __print_query_of_error(
         self,
@@ -170,8 +198,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
                 self.query_output_mode,
-                override_db_object_name=query_template.custom_db_object_name
-                or evaluation_strategy.simple_db_object_name,
+                override_db_object_base_name=evaluation_strategy.simple_db_object_name,
             )
         )
 
@@ -179,20 +206,22 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self,
         query_template: QueryTemplate,
         query_column_selection: QueryColumnByIndexSelection,
-    ) -> set[str]:
-        column_names = set()
+    ) -> set[SourceColumnIdentifier]:
+        column_tuples = set()
 
         for index, expression in enumerate(query_template.select_expressions):
             if not query_column_selection.is_included(index):
                 continue
 
-            leave_expressions = expression.collect_leaves()
-            for leaf_expression in leave_expressions:
-                column_names.add(leaf_expression.column_name)
+            leaf_expressions = expression.collect_leaves()
+            for leaf_expression in leaf_expressions:
+                column_tuples.add(leaf_expression.get_source_column_identifier())
 
-        if query_template.where_expression is not None:
-            where_leaf_expressions = query_template.where_expression.collect_leaves()
-            for leaf_expression in where_leaf_expressions:
-                column_names.add(leaf_expression.column_name)
+        for further_expression in query_template.get_all_expressions(
+            include_select_expressions=False, include_join_constraints=True
+        ):
+            leaf_expressions = further_expression.collect_leaves()
+            for leaf_expression in leaf_expressions:
+                column_tuples.add(leaf_expression.get_source_column_identifier())
 
-        return column_names
+        return column_tuples

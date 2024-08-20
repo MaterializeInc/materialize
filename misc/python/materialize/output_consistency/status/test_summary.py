@@ -49,7 +49,7 @@ class DbOperationOrFunctionStats:
                 success_experienced_info = "expression never generated"
             elif self.count_included_in_executed_queries == 0:
                 success_experienced_info = "query with this expression never generated"
-            elif self.count_included_in_executed_queries < 10:
+            elif self.count_included_in_executed_queries < 15:
                 success_experienced_info = "not included in any query that was successfully executed in all strategies!"
             else:
                 success_experienced_info = "not included in any query that was successfully executed in all strategies (possibly invalid operation specification)!"

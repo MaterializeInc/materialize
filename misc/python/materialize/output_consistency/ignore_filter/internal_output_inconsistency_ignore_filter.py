@@ -164,12 +164,20 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#17189")
 
-        if (
-            dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds
-        ) and query_template.where_expression is not None:
-            # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
-            # errors (while the other uses another order).
-            return YesIgnore("#17189")
+        if dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds:
+            if query_template.where_expression is not None:
+                # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
+                # errors (while the other uses another order).
+                return YesIgnore("#17189")
+
+            if (
+                query_template.where_expression is not None
+                or query_template.row_selection.has_selection()
+            ) or query_template.uses_join():
+                # Where expression, or row filter, or join constraint are set. They might be evaluated in a different
+                # order. Furthermore, constant folding may detect that the join constraint cannot be satisfied without
+                # evaluating it (which will fail).
+                return YesIgnore("#17189: evaluation order")
 
         if self._uses_eager_evaluation(query_template):
             return YesIgnore("#17189")
@@ -209,8 +217,8 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         if self._uses_eager_evaluation(query_template):
             return YesIgnore("#17189: evaluation order")
 
-        if query_template.where_expression is not None:
-            # The error message may depend on the evaluation order of the where expression.
+        if query_template.where_expression is not None or query_template.uses_join():
+            # The error message may depend on the evaluation order of the where expression or join constraint.
             return YesIgnore("#17189: evaluation order")
 
         if (

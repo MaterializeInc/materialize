@@ -158,6 +158,7 @@ class OutputConsistencyTest:
             print_reproduction_code=True,
             disable_predefined_queries=disable_predefined_queries,
             query_output_mode=query_output_mode,
+            vertical_join_tables=4,
         )
 
         output_printer = OutputPrinter(input_data, config.query_output_mode)

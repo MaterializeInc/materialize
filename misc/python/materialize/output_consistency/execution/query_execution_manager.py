@@ -67,7 +67,9 @@ class QueryExecutionManager:
                 f"Setup for evaluation strategy '{strategy.name}'"
             )
             executor = self.executors.get_executor(strategy)
-            ddl_statements = strategy.generate_sources(input_data.types_input)
+            ddl_statements = strategy.generate_sources(
+                input_data.types_input, self.config.vertical_join_tables
+            )
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)
@@ -232,20 +234,26 @@ class QueryExecutionManager:
             query1_args,
             original_query_template.where_expression,
             original_query_template.storage_layout,
+            original_query_template.data_source,
             original_query_template.contains_aggregations,
             original_query_template.row_selection,
             original_query_template.offset,
             original_query_template.limit,
+            # keep the original data sources
+            additional_data_sources=original_query_template.additional_data_sources,
         )
         new_query_template2 = QueryTemplate(
             False,
             query2_args,
             original_query_template.where_expression,
             original_query_template.storage_layout,
+            original_query_template.data_source,
             original_query_template.contains_aggregations,
             original_query_template.row_selection,
             original_query_template.offset,
             original_query_template.limit,
+            # keep the original data sources
+            additional_data_sources=original_query_template.additional_data_sources,
         )
         query_id_prefix = f"{query_id}."
 

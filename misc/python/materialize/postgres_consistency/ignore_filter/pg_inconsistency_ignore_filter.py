@@ -648,6 +648,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Evaluation shortcut for IS NULL")
 
+        if (
+            "FULL JOIN is only supported with merge-joinable or hash-joinable join conditions"
+            in pg_error_msg
+        ):
+            return YesIgnore("Not supported by Postgres")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
@@ -793,6 +799,14 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore(
                 "#28871: table functions are not allowed in aggregate function calls"
+            )
+
+        if (
+            query_template.where_expression is not None
+            or query_template.row_selection.has_selection()
+        ) and query_template.uses_join():
+            return YesIgnore(
+                "Different evaluation order of join clause and where filter"
             )
 
         return NoIgnore()

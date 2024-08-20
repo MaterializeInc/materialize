@@ -403,14 +403,26 @@ class ResultComparator:
         explain_plan1 = outcome1.result_rows[0][0]
         explain_plan2 = outcome2.result_rows[0][0]
 
-        explain_plan1 = explain_plan1.replace(
-            query_execution.query_template.get_db_object_name(outcome1.strategy),
-            "<db_object>",
-        )
-        explain_plan2 = explain_plan2.replace(
-            query_execution.query_template.get_db_object_name(outcome2.strategy),
-            "<db_object>",
-        )
+        for data_source in query_execution.query_template.get_all_data_sources():
+            new_source_name = f"<db_object-{data_source.table_index or 1}>"
+            explain_plan1 = explain_plan1.replace(
+                data_source.get_db_object_name(
+                    outcome1.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        data_source=data_source,
+                    ),
+                ),
+                new_source_name,
+            )
+            explain_plan2 = explain_plan2.replace(
+                data_source.get_db_object_name(
+                    outcome2.strategy.get_db_object_name(
+                        query_execution.query_template.storage_layout,
+                        data_source=data_source,
+                    ),
+                ),
+                new_source_name,
+            )
 
         if explain_plan1 == explain_plan2:
             return

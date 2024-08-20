@@ -68,12 +68,16 @@ class ExpressionWithArgs(Expression):
     def has_args(self) -> bool:
         return self.count_args() > 0
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
         sql: str = self.pattern
 
         for arg in self.args:
             sql = sql.replace(
-                EXPRESSION_PLACEHOLDER, arg.to_sql(sql_adjuster, False), 1
+                EXPRESSION_PLACEHOLDER,
+                arg.to_sql(sql_adjuster, include_alias, False),
+                1,
             )
 
         if len(self.args) != self.pattern.count(EXPRESSION_PLACEHOLDER):
@@ -143,6 +147,14 @@ class ExpressionWithArgs(Expression):
 
         return leaves
 
+    def collect_vertical_table_indices(self) -> set[int]:
+        vertical_table_indices = set()
+
+        for arg in self.args:
+            vertical_table_indices.update(arg.collect_vertical_table_indices())
+
+        return vertical_table_indices
+
     def is_leaf(self) -> bool:
         return False
 
@@ -173,6 +185,12 @@ class ExpressionWithArgs(Expression):
 
     def operation_to_pattern(self) -> str:
         return self.operation.to_pattern(self.count_args())
+
+    def recursively_mark_as_shared(self) -> None:
+        super().recursively_mark_as_shared()
+
+        for arg in self.args:
+            arg.recursively_mark_as_shared()
 
 
 def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
