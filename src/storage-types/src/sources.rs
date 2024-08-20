@@ -2047,8 +2047,8 @@ mod tests {
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
-    use mz_persist_client::schema::backward_compatible;
     use mz_persist_types::parquet::EncodingConfig;
+    use mz_persist_types::schema::backward_compatible;
     use mz_repr::{arb_datum_for_scalar, ProtoRelationDesc, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -2187,11 +2187,11 @@ mod tests {
 
         // Verify that the RelationDesc is backward compatible with itself (this
         // mostly checks for `unimplemented!` type panics).
-        let migrate_fn =
-            mz_persist_client::schema::backward_compatible::<SourceData, _>(&desc, &desc);
-        let migrate_fn = migrate_fn.expect("should be backward compatible with self");
+        let migration =
+            mz_persist_types::schema::backward_compatible(&col.data_type(), &col.data_type());
+        let migration = migration.expect("should be backward compatible with self");
         // Also verify that the Fn doesn't do anything wonky.
-        let migrated = migrate_fn(Arc::new(col.clone()));
+        let migrated = migration.migrate(Arc::new(col.clone()));
         assert_eq!(col.data_type(), migrated.data_type());
     }
 
@@ -2223,7 +2223,13 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn backward_compatible_migrate() {
         fn testcase(old: &RelationDesc, new: &RelationDesc, datas: &[SourceData]) {
-            let Some(migrate_fn) = backward_compatible::<SourceData, _>(old, new) else {
+            fn data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
+                use mz_persist_types::columnar::ColumnEncoder;
+                let array = Schema2::encoder(schema).expect("valid schema").finish();
+                Array::data_type(&array).clone()
+            }
+
+            let Some(migration) = backward_compatible(&data_type(old), &data_type(new)) else {
                 return;
             };
             let mut encoder = Schema2::<SourceData>::encoder(old).expect("valid schema");
@@ -2236,7 +2242,7 @@ mod tests {
                 .finish();
             let old: Arc<dyn Array> = Arc::new(old);
             let new: Arc<dyn Array> = Arc::new(new);
-            let migrated = migrate_fn(Arc::clone(&old));
+            let migrated = migration.migrate(Arc::clone(&old));
             assert_eq!(migrated.data_type(), new.data_type());
         }
 

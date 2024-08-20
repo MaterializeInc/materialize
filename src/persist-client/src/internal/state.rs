@@ -27,6 +27,7 @@ use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
 use mz_persist_types::columnar::{ColumnEncoder, Schema2};
+use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
@@ -48,7 +49,7 @@ use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
 use crate::read::LeasedReaderId;
-use crate::schema::{backward_compatible_typ, CaESchema, SchemaId};
+use crate::schema::{CaESchema, SchemaId};
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -990,10 +991,8 @@ where
 
         let key_dt = data_type(key_schema);
         let val_dt = data_type(val_schema);
-        let key_fn =
-            backward_compatible_typ(&EncodedSchemas::decode_data_type(&current.key), &key_dt);
-        let val_fn =
-            backward_compatible_typ(&EncodedSchemas::decode_data_type(&current.val), &val_dt);
+        let key_fn = backward_compatible(&EncodedSchemas::decode_data_type(&current.key), &key_dt);
+        let val_fn = backward_compatible(&EncodedSchemas::decode_data_type(&current.val), &val_dt);
         let (Some(key_fn), Some(val_fn)) = (key_fn, val_fn) else {
             return Break(NoOpStateTransition(CaESchema::Incompatible));
         };

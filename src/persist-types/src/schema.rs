@@ -9,32 +9,36 @@
 
 //! Persist schema evolution.
 
-use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, Array, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, SchemaBuilder};
 use itertools::Itertools;
-use mz_ore::cast::CastFrom;
-use mz_persist_types::columnar::Schema2;
-use mz_persist_types::Codec;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
 
 /// Returns a function to migrate arrow data encoded by `old` to be the same
 /// DataType as arrow data encoded by `new`, if `new` is backward compatible
 /// with `old`. Exposed for testing.
-pub fn backward_compatible<T, S: Schema2<T>>(
-    old: &S,
-    new: &S,
-) -> Option<Box<dyn Fn(Arc<dyn Array>) -> Arc<dyn Array>>> {
-    fn data_type<T>(schema: &impl Schema2<T>) -> DataType {
-        use mz_persist_types::columnar::ColumnEncoder;
-        let array = Schema2::encoder(schema).expect("valid schema").finish();
-        Array::data_type(&array).clone()
+pub fn backward_compatible(old: &DataType, new: &DataType) -> Option<Migration> {
+    backward_compatible_typ(old, new).map(Migration)
+}
+
+/// See [backward_compatible].
+pub struct Migration(ArrayMigration);
+
+impl Migration {
+    /// Returns true if the migration requires dropping data, including nested
+    /// structs.
+    pub fn contains_drop(&self) -> bool {
+        self.0.contains_drop()
     }
-    let migration = backward_compatible_typ(&data_type(old), &data_type(new))?;
-    Some(Box::new(move |old| migration.migrate(old)))
+
+    // TODO: fn preserves_order(&self) -> bool
+
+    /// For the `old` and `new` schemas used at construction time, migrates data
+    /// encoded by `old` to be the same arrow DataType as data encoded by `new`.
+    pub fn migrate(&self, array: Arc<dyn Array>) -> Arc<dyn Array> {
+        self.0.migrate(array)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -63,10 +67,7 @@ pub(crate) enum StructArrayMigration {
 }
 
 impl ArrayMigration {
-    /// Returns true if the migration requires dropping data, including nested
-    /// structs.
-    #[allow(dead_code)]
-    pub(crate) fn contains_drop(&self) -> bool {
+    fn contains_drop(&self) -> bool {
         use ArrayMigration::*;
         match self {
             NoOp => false,
@@ -74,11 +75,7 @@ impl ArrayMigration {
         }
     }
 
-    // TODO: fn preserves_order(&self) -> bool
-
-    /// For the `old` and `new` schemas used at construction time, migrates data
-    /// encoded by `old` to be the same arrow DataType as data encoded by `new`.
-    pub(crate) fn migrate(&self, array: Arc<dyn Array>) -> Arc<dyn Array> {
+    fn migrate(&self, array: Arc<dyn Array>) -> Arc<dyn Array> {
         use ArrayMigration::*;
         match self {
             NoOp => array,
@@ -165,7 +162,7 @@ impl StructArrayMigration {
     }
 }
 
-pub(crate) fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigration> {
+fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigration> {
     use ArrayMigration::NoOp;
     use DataType::*;
     match (old, new) {
@@ -233,7 +230,7 @@ pub(crate) fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<
     }
 }
 
-pub(crate) fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigration> {
+fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigration> {
     use itertools::EitherOrBoth::*;
     use ArrayMigration::*;
     use StructArrayMigration::*;

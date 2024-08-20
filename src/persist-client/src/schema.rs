@@ -10,13 +10,8 @@
 //! Persist shard schema information.
 
 use std::str::FromStr;
-use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, StructArray};
-use arrow::datatypes::{DataType, Field, Fields, SchemaBuilder};
-use itertools::Itertools;
 use mz_ore::cast::CastFrom;
-use mz_persist_types::columnar::Schema2;
 use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
