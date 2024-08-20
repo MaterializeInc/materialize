@@ -7604,6 +7604,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
+ "mz-storage-types",
  "mz-timestamp-oracle",
  "mz-txn-wal",
  "num_cpus",
