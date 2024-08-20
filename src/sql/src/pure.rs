@@ -1530,12 +1530,17 @@ async fn purify_create_table_from_source(
     match &purified_export.details {
         PurifiedExportDetails::Postgres { .. } => {
             let mut unsupported_cols = vec![];
-            let (gen_columns, gen_constraints, gen_text_columns, gen_details, _) =
-                postgres::generate_source_export_statement_values(
-                    &scx,
-                    purified_export,
-                    &mut unsupported_cols,
-                )?;
+            let postgres::PostgresExportStatementValues {
+                columns: gen_columns,
+                constraints: gen_constraints,
+                text_columns: gen_text_columns,
+                details: gen_details,
+                external_reference: _,
+            } = postgres::generate_source_export_statement_values(
+                &scx,
+                purified_export,
+                &mut unsupported_cols,
+            )?;
             if !unsupported_cols.is_empty() {
                 unsupported_cols.sort();
                 Err(PgSourcePurificationError::UnrecognizedTypes {
@@ -1565,14 +1570,14 @@ async fn purify_create_table_from_source(
             })
         }
         PurifiedExportDetails::MySql { .. } => {
-            let (
-                gen_columns,
-                gen_constraints,
-                gen_text_columns,
-                gen_ignore_columns,
-                gen_details,
-                _,
-            ) = mysql::generate_source_export_statement_values(&scx, purified_export)?;
+            let mysql::MySqlExportStatementValues {
+                columns: gen_columns,
+                constraints: gen_constraints,
+                text_columns: gen_text_columns,
+                ignore_columns: gen_ignore_columns,
+                details: gen_details,
+                external_reference: _,
+            } = mysql::generate_source_export_statement_values(&scx, purified_export)?;
 
             if let Some(text_cols_option) = with_options
                 .iter_mut()

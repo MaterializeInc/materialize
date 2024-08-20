@@ -147,8 +147,13 @@ pub fn generate_create_subsource_statements(
     let mut subsources = Vec::with_capacity(requested_subsources.len());
 
     for (subsource_name, purified_export) in requested_subsources {
-        let (columns, constraints, text_columns, details, external_reference) =
-            generate_source_export_statement_values(scx, purified_export, &mut unsupported_cols)?;
+        let PostgresExportStatementValues {
+            columns,
+            constraints,
+            text_columns,
+            details,
+            external_reference,
+        } = generate_source_export_statement_values(scx, purified_export, &mut unsupported_cols)?;
 
         let mut with_options = vec![
             CreateSubsourceOption {
@@ -202,20 +207,19 @@ pub fn generate_create_subsource_statements(
     Ok(subsources)
 }
 
+pub(super) struct PostgresExportStatementValues {
+    pub(super) columns: Vec<ColumnDef<Aug>>,
+    pub(super) constraints: Vec<TableConstraint<Aug>>,
+    pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) details: SourceExportStatementDetails,
+    pub(super) external_reference: UnresolvedItemName,
+}
+
 pub(super) fn generate_source_export_statement_values(
     scx: &StatementContext,
     purified_export: PurifiedSourceExport,
     unsupported_cols: &mut Vec<(String, mz_repr::adt::system::Oid)>,
-) -> Result<
-    (
-        Vec<ColumnDef<Aug>>,
-        Vec<TableConstraint<Aug>>,
-        Option<Vec<WithOptionValue<Aug>>>,
-        SourceExportStatementDetails,
-        UnresolvedItemName,
-    ),
-    PlanError,
-> {
+) -> Result<PostgresExportStatementValues, PlanError> {
     let (text_columns, table) = match purified_export.details {
         PurifiedExportDetails::Postgres {
             text_columns,
@@ -308,13 +312,13 @@ pub(super) fn generate_source_export_statement_values(
             .collect()
     });
 
-    Ok((
+    Ok(PostgresExportStatementValues {
         columns,
         constraints,
         text_columns,
         details,
-        purified_export.external_reference,
-    ))
+        external_reference: purified_export.external_reference,
+    })
 }
 
 pub(super) struct PurifiedSourceExports {

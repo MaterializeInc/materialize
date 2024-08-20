@@ -66,8 +66,14 @@ pub fn generate_create_subsource_statements(
     let mut subsources = Vec::with_capacity(requested_subsources.len());
 
     for (subsource_name, purified_export) in requested_subsources {
-        let (columns, constraints, text_columns, ignore_columns, details, external_reference) =
-            generate_source_export_statement_values(scx, purified_export)?;
+        let MySqlExportStatementValues {
+            columns,
+            constraints,
+            text_columns,
+            ignore_columns,
+            details,
+            external_reference,
+        } = generate_source_export_statement_values(scx, purified_export)?;
 
         let mut with_options = vec![
             CreateSubsourceOption {
@@ -111,20 +117,19 @@ pub fn generate_create_subsource_statements(
     Ok(subsources)
 }
 
+pub(super) struct MySqlExportStatementValues {
+    pub(super) columns: Vec<ColumnDef<Aug>>,
+    pub(super) constraints: Vec<TableConstraint<Aug>>,
+    pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) ignore_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) details: SourceExportStatementDetails,
+    pub(super) external_reference: UnresolvedItemName,
+}
+
 pub(super) fn generate_source_export_statement_values(
     scx: &StatementContext,
     purified_export: PurifiedSourceExport,
-) -> Result<
-    (
-        Vec<ColumnDef<Aug>>,
-        Vec<TableConstraint<Aug>>,
-        Option<Vec<WithOptionValue<Aug>>>,
-        Option<Vec<WithOptionValue<Aug>>>,
-        SourceExportStatementDetails,
-        UnresolvedItemName,
-    ),
-    PlanError,
-> {
+) -> Result<MySqlExportStatementValues, PlanError> {
     let PurifiedExportDetails::MySql {
         table,
         text_columns,
@@ -205,14 +210,14 @@ pub(super) fn generate_source_export_statement_values(
             .map(WithOptionValue::Ident::<Aug>)
             .collect()
     });
-    Ok((
+    Ok(MySqlExportStatementValues {
         columns,
         constraints,
         text_columns,
         ignore_columns,
         details,
-        purified_export.external_reference,
-    ))
+        external_reference: purified_export.external_reference,
+    })
 }
 
 /// Map a list of column references to a map of table references to column names.
