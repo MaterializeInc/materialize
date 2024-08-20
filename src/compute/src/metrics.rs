@@ -16,7 +16,7 @@ use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
 use mz_repr::SharedRow;
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::proto::LabelPair;
-use prometheus::Histogram;
+use prometheus::{Histogram, HistogramVec};
 
 /// Metrics exposed by compute replicas.
 //
@@ -60,6 +60,31 @@ pub struct ComputeMetrics {
     pub(crate) shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
 
     pub(crate) persist_peek_seconds: Histogram,
+
+    /// Histogram of command handling durations.
+    pub(crate) handle_command_duration_seconds: HistogramVec,
+}
+
+/// Per-worker metrics.
+pub struct WorkerMetrics {
+    /// Histogram of command handling durations.
+    pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
+}
+
+impl WorkerMetrics {
+    // Initialize worker metrics from the global compute metrics.
+    pub fn from(metrics: &ComputeMetrics, worker_id: usize) -> Self {
+        let worker = worker_id.to_string();
+        let handle_command_duration_seconds = CommandMetrics::build(|typ| {
+            metrics
+                .handle_command_duration_seconds
+                .with_label_values(&[&worker, typ])
+        });
+
+        Self {
+            handle_command_duration_seconds,
+        }
+    }
 }
 
 impl ComputeMetrics {
@@ -136,6 +161,13 @@ impl ComputeMetrics {
             persist_peek_seconds: registry.register(metric!(
                 name: "mz_persist_peek_seconds",
                 help: "Time spent in (experimental) Persist fast-path peeks.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            handle_command_duration_seconds: registry.register(metric!(
+                name: "mz_cluster_handle_command_duration_seconds",
+                help: "Time spent in handling commands.",
+                const_labels: {"cluster" => "compute"},
+                var_labels: ["worker_id", "command_type"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
         }
