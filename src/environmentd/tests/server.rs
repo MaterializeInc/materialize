@@ -1503,6 +1503,72 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 }
 
 #[mz_ore::test]
+fn test_storage_usage_records_are_not_cleared_on_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let collection_interval = Duration::from_secs(1);
+    let retention_period = Duration::from_secs(u64::MAX);
+    let harness = test_util::TestHarness::default()
+        .with_storage_usage_collection_interval(collection_interval)
+        .with_storage_usage_retention_period(retention_period)
+        .data_directory(data_dir.path());
+
+    let initial_server_usage_records = {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        // Create a table with no data, which should have some overhead and therefore some storage usage.
+        client
+            .batch_execute("CREATE TABLE usage_test (a int)")
+            .unwrap();
+
+        // Wait for initial storage usage collection, to be sure records are present.
+        let initial_server_usage_records = Retry::default()
+            .max_duration(Duration::from_secs(5))
+            .retry(|_| {
+                let count = client
+                    .query_one(
+                        "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                        &[],
+                    )
+                    .unwrap()
+                    .try_get::<_, i32>(0)
+                    .expect("Could not get initial count of records");
+                if count > 0 {
+                    Ok(count)
+                } else {
+                    Err("empty storage usage")
+                }
+            })
+            .expect("Could not fetch initial count");
+
+        info!(%initial_server_usage_records);
+
+        initial_server_usage_records
+    };
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let subsequent_server_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%subsequent_server_usage_records);
+        assert!(
+            subsequent_server_usage_records >= initial_server_usage_records,
+            "storage usage was cleared!"
+        );
+    };
+}
+
+#[mz_ore::test]
 fn test_default_cluster_sizes() {
     let server = test_util::TestHarness::default()
         .with_builtin_system_cluster_replica_size("1".to_string())
