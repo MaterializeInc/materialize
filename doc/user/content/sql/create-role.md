@@ -27,7 +27,7 @@ the following options exceptions:
 
 | Option   | Description                                                                                                                                                                                            |
 |-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `INHERIT`   | Materialize implicitly uses `INHERIT` for the `CREATE ROLE`command. That is, `CREATE ROLE <name>` and `CREATE ROLE <name> WITH INHERIT` are equivalent.                                                   |
+| `INHERIT`   | Materialize implicitly uses `INHERIT` for the `CREATE ROLE` command. That is, `CREATE ROLE <name>` and `CREATE ROLE <name> WITH INHERIT` are equivalent.                                                   |
 | `NOINHERIT` | Materialize does not support the `NOINHERIT` option for `CREATE ROLE`.                                                                                                                                  |
 | `LOGIN`     | Materialize does not support the `LOGIN` option for `CREATE ROLE`.<ul><li>Instead, Materialize derives the `LOGIN` option for a role during authentication every time that role tries to connect.</li><li>Materialize does not support the `CREATE USER` command as the command implies a `LOGIN` attribute for the role.</li></ul>|
 | `SUPERUSER` | Materialize does not support the `SUPERUSER` option for `CREATE ROLE`.<ul><li>Instead, Materialize derives the `SUPERUSER` option for a role during authentication every time that role tries to connect.</li></ul>|
