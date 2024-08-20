@@ -521,16 +521,10 @@ where
                     }
                     self.metrics.consolidation.parts_fetched.inc();
 
-                    let wrong_sort = !Sort::desired_sort(&data);
-
-                    *part = match task.take() {
-                        Some(handle) => ConsolidationPart::from_encoded(
-                            handle.await??,
-                            wrong_sort,
-                            &self.metrics.columnar,
-                            &self.sort,
-                        ),
-                        None => ConsolidationPart::from_encoded(
+                    let wrong_sort = !Sort::desired_sort(data);
+                    let encoded_part = match task.take() {
+                        Some(handle) => handle.await??,
+                        None => {
                             data.clone()
                                 .fetch(
                                     self.shard_id,
@@ -539,12 +533,15 @@ where
                                     &*self.shard_metrics,
                                     &self.read_metrics,
                                 )
-                                .await?,
-                            wrong_sort,
-                            &self.metrics.columnar,
-                            &self.sort,
-                        ),
+                                .await?
+                        }
                     };
+                    *part = ConsolidationPart::from_encoded(
+                        encoded_part,
+                        wrong_sort,
+                        &self.metrics.columnar,
+                        &self.sort,
+                    );
                 }
 
                 Ok::<_, anyhow::Error>(true)
