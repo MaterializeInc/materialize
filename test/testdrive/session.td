@@ -13,7 +13,7 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_rbac_checks = true;
 
-$ set-regex match="cluster1|^quickstart$|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
+$ set-regex match="cluster1|^quickstart$|v\d+\.\d+\.\d+(-[a-z0-9]+)?(\.\d+)? \([a-f0-9]{9}\)" replacement=<VARIES>
 
 > SHOW ALL
 allowed_cluster_replica_sizes       ""                      "The allowed sizes when creating a new cluster replica (Materialize)."
