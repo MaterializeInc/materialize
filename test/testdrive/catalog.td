@@ -632,10 +632,15 @@ mz_recent_activity_log_redacted          ""
 mz_recent_sql_text                       ""
 mz_recent_sql_text_redacted              ""
 mz_show_all_my_privileges                ""
+mz_show_all_objects                      ""
 mz_show_all_privileges                   ""
 mz_show_cluster_privileges               ""
 mz_show_cluster_replicas                 ""
+mz_show_clusters                         ""
+mz_show_columns                          ""
+mz_show_connections                      ""
 mz_show_database_privileges              ""
+mz_show_databases                        ""
 mz_show_default_privileges               ""
 mz_show_indexes                          ""
 mz_show_materialized_views               ""
@@ -648,10 +653,16 @@ mz_show_my_schema_privileges             ""
 mz_show_my_system_privileges             ""
 mz_show_object_privileges                ""
 mz_show_role_members                     ""
+mz_show_roles                            ""
 mz_show_schema_privileges                ""
+mz_show_schemas                          ""
+mz_show_secrets                          ""
 mz_show_sinks                            ""
 mz_show_sources                          ""
 mz_show_system_privileges                ""
+mz_show_tables                           ""
+mz_show_types                            ""
+mz_show_views                            ""
 mz_sink_statistics                       ""
 mz_sink_statuses                         ""
 mz_source_statistics                     ""
@@ -762,7 +773,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-225
+235
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

@@ -97,21 +97,21 @@ class Webhook(Check):
             dedent(
                 """
                 >[version<11400] SHOW COLUMNS FROM webhook_text
-                body false text ""
+                body false text
 
                 >[version>=11400] SHOW COLUMNS FROM webhook_text
                 body false text ""
 
                 >[version<11400] SHOW COLUMNS FROM webhook_json
-                body false jsonb ""
-                headers false map ""
+                body false jsonb
+                headers false map
 
                 >[version>=11400] SHOW COLUMNS FROM webhook_json
                 body false jsonb ""
                 headers false map ""
 
                 >[version<11400] SHOW COLUMNS FROM webhook_bytes
-                body false bytea ""
+                body false bytea
 
                 >[version>=11400] SHOW COLUMNS FROM webhook_bytes
                 body false bytea ""

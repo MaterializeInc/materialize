@@ -729,18 +729,20 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5)]]-errors" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]-errors" 1
-"ArrangeBy[[Column(0), Column(1)]]"           1
+"ArrangeBy[[Column(0), Column(1)]]"           4
 "ArrangeBy[[Column(0), Column(2)]]"           3
 "ArrangeBy[[Column(1), Column(2)]]"           1
 "ArrangeBy[[Column(0)]]-errors"              37
-"ArrangeBy[[Column(0)]]"                    140
+"ArrangeBy[[Column(0)]]"                    142
+"ArrangeBy[[Column(1), CallVariadic { func: ListIndex, exprs: [Column(2), Literal(Ok(Row{[Int64(1)]}), ColumnType { scalar_type: Int64, nullable: false })] }]]" 2
 "ArrangeBy[[Column(1), Column(3)]]"           1
-"ArrangeBy[[Column(1)]]-errors"               5
+"ArrangeBy[[Column(1)]]-errors"               6
 ArrangeBy[[Column(13)]]                       1
-"ArrangeBy[[Column(1)]]"                     19
-"ArrangeBy[[Column(2)]]"                     12
-"ArrangeBy[[Column(3)]]"                      4
-"ArrangeBy[[Column(3)]]-errors"               1
+"ArrangeBy[[Column(1)]]"                     20
+"ArrangeBy[[Column(2)]]"                     19
+"ArrangeBy[[Column(2)]]-errors"               7
+"ArrangeBy[[Column(3)]]"                      6
+"ArrangeBy[[Column(3)]]-errors"               2
 "ArrangeBy[[Column(4)]]"                      5
 "ArrangeBy[[Column(4)]]-errors"               2
 "ArrangeBy[[Column(5)]]-errors"               1
@@ -752,13 +754,13 @@ ArrangeBy[[Column(13)]]                       1
 "ArrangeBy[[Column(20)]]-errors"              1
 "ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
 "ArrangeBy[[]]"                               10
-"Arranged DistinctBy"                         41
+"Arranged DistinctBy"                         42
 "Arranged MinsMaxesHierarchical input"        14
 "Arranged ReduceInaccumulable"                2
 "Arranged TopK input"                        24
 "Distinct recursive err"                      1
-"DistinctBy"                                  41
-"DistinctByErrorCheck"                        41
+"DistinctBy"                                  42
+"DistinctByErrorCheck"                        42
 "ReduceAccumulable"                           10
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1

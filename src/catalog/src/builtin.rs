@@ -7040,7 +7040,7 @@ JOIN root_times r USING (id)",
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_DATABASES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_databases (name)",
@@ -7049,7 +7049,7 @@ ON mz_internal.mz_show_databases (name)",
 
 pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_schemas_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SCHEMAS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_schemas (database_id)",
@@ -7058,7 +7058,7 @@ ON mz_internal.mz_show_schemas (database_id)",
 
 pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_connections_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CONNECTIONS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_connections (schema_id)",
@@ -7067,7 +7067,7 @@ ON mz_internal.mz_show_connections (schema_id)",
 
 pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_tables_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TABLES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_tables (schema_id)",
@@ -7085,7 +7085,7 @@ ON mz_internal.mz_show_sources (schema_id)",
 
 pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_views_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_views (schema_id)",
@@ -7112,7 +7112,7 @@ ON mz_internal.mz_show_sinks (schema_id)",
 
 pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_types_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TYPES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_types (schema_id)",
@@ -7121,7 +7121,7 @@ ON mz_internal.mz_show_types (schema_id)",
 
 pub const MZ_SHOW_ROLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_roles_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_ROLES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_roles (name)",
@@ -7130,7 +7130,7 @@ ON mz_internal.mz_show_roles (name)",
 
 pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_all_objects_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_ALL_OBJECTS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_all_objects (schema_id)",
@@ -7148,7 +7148,7 @@ ON mz_internal.mz_show_indexes (schema_id)",
 
 pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_columns_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_COLUMNS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_columns (id)",
@@ -7157,7 +7157,7 @@ ON mz_internal.mz_show_columns (id)",
 
 pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_clusters_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CLUSTERS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_clusters (name)",
@@ -7175,10 +7175,91 @@ ON mz_internal.mz_show_cluster_replicas (cluster)",
 
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_secrets_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SECRETS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_show_secrets (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_databases_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_databases (name)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_schemas_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_SCHEMAS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_schemas (database_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_connections_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_CONNECTIONS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_connections (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_TABLES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_tables_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_TABLES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_tables (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_TYPES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_types_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_TYPES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_types (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_objects_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECTS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_objects (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_columns_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_COLUMNS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_columns (name)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SECRETS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_secrets_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_SECRETS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_secrets (name)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_VIEWS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_views_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_VIEWS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -8074,6 +8155,15 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
         Builtin::Index(&MZ_COMMENTS_IND),
+        Builtin::Index(&MZ_DATABASES_IND),
+        Builtin::Index(&MZ_SCHEMAS_IND),
+        Builtin::Index(&MZ_CONNECTIONS_IND),
+        Builtin::Index(&MZ_TABLES_IND),
+        Builtin::Index(&MZ_TYPES_IND),
+        Builtin::Index(&MZ_OBJECTS_IND),
+        Builtin::Index(&MZ_COLUMNS_IND),
+        Builtin::Index(&MZ_SECRETS_IND),
+        Builtin::Index(&MZ_VIEWS_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),

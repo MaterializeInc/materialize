@@ -343,6 +343,11 @@ SELECT objsubid, description FROM pg_description;
 1  json_blob
 0  all_the_data
 
+query TT
+SELECT name, comment FROM (SHOW SOURCES);
+----
+my_webhook  all_the_data
+
 statement ok
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
@@ -360,6 +365,13 @@ COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
 
 statement error cannot be depended upon
 COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
+
+query TT
+SHOW TYPES;
+----
+custom_map_type  custom_map_type_comment
+custom_type  (empty)
+int4_list  supercool_list
 
 statement ok
 CREATE TYPE custom_list_type AS LIST (ELEMENT TYPE = custom_type)
