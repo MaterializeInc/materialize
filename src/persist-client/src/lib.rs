@@ -618,7 +618,7 @@ impl PersistClient {
     /// This new schema must be [backward_compatible] with all previous schemas
     /// for this shard. If it's not, [CaESchema::Incompatible] is returned.
     ///
-    /// [backward_compatible]: crate::schema::backward_compatible
+    /// [backward_compatible]: mz_persist_types::schema::backward_compatible
     ///
     /// To prevent races, the caller must declare what it believes to be the
     /// latest schema id. If this doesn't match reality,
