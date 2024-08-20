@@ -72,6 +72,12 @@ name = "Network security"
 parent = 'ingest-data'
 weight= 35
 
+[[menu.main]]
+identifier = 'ingest-data-appendix'
+name = "Appendix"
+parent = 'ingest-data'
+weight = 45
+
 #
 # Transform data
 #

@@ -171,23 +171,15 @@ cluster, use the `IN CLUSTER` clause.
 #### Transaction support
 
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata)
-that can be used to preserve transactional boundaries downstream. Work is in
-progress to utilize this topic to support transaction-aware processing in
-[Materialize #7537](https://github.com/MaterializeInc/database-issues/issues/2337)!
+that can be used to preserve transactional boundaries downstream.
 
-### Create a materialized view
+### Create a view
 
-Any materialized view defined on top of this source will be incrementally
-updated as new change events stream in through Kafka, resulting from `INSERT`,
-`UPDATE`, and `DELETE` operations in the original SQL Server database.
+{{% ingest-data/ingest-data-kafka-debezium-view %}}
 
-```mzsql
-CREATE MATERIALIZED VIEW cnt_table AS
-    SELECT field1,
-           COUNT(*) AS cnt
-    FROM kafka_repl
-    GROUP BY field1;
-```
+### Create an index on the view
+
+{{% ingest-data/ingest-data-kafka-debezium-index %}}
 
 ## Known limitations
 

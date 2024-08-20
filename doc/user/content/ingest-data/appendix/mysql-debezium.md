@@ -6,21 +6,25 @@ aliases:
   - /integrations/cdc-mysql/
   - /connect-sources/cdc-mysql/
   - /ingest-data/cdc-mysql/
+  - /ingest-data/mysql/debezium/
 menu:
   main:
-    parent: "mysql"
-    name: "Using Kafka and Debezium"
+    parent: "ingest-data-appendix"
+    name: "MySQL: Using Kafka and Debezium"
     identifier: "mysql-dbz"
 ---
+
+{{< tip >}}
+- As an alternative to using Kafka and Debezium, Materialize also provides
+  native support for MySQL.
+
+- {{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a MySQL
 database to downstream consumers based on its binary log (`binlog`). In this
 guide, we'll cover how to use Materialize to create and efficiently maintain
 real-time materialized views on top of CDC data.
-
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
 
 ## Kafka + Debezium
 
@@ -208,19 +212,12 @@ cluster, use the `IN CLUSTER` clause.
 #### Transaction support
 
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-transaction-metadata)
-that can be used to preserve transactional boundaries downstream. We are working
-on using this topic to support transaction-aware processing in [Materialize #7537](https://github.com/MaterializeInc/database-issues/issues/2337)!
+that can be used to preserve transactional boundaries downstream.
 
-### Create a materialized view
+### Create a view on the source
 
-Any materialized view defined on top of this source will be incrementally
-updated as new change events stream in through Kafka, as a result of `INSERT`,
-`UPDATE` and `DELETE` operations in the original MySQL database.
+{{% ingest-data/ingest-data-kafka-debezium-view %}}
 
-```mzsql
-CREATE MATERIALIZED VIEW cnt_table1 AS
-    SELECT field1,
-           COUNT(*) AS cnt
-    FROM kafka_repl
-    GROUP BY field1;
-```
+### Create an index on the view
+
+{{% ingest-data/ingest-data-kafka-debezium-index %}}

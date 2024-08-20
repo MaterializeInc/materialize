@@ -4,12 +4,21 @@ description: "How to propagate Change Data Capture (CDC) data from a PostgreSQL 
 aliases:
   - /connect-sources/cdc-postgres-kafka-debezium/
   - /ingest-data/cdc-postgres-kafka-debezium/
+  - /ingest-data/postgres/debezium/
+
 menu:
   main:
-    parent: "postgresql"
-    name: "Using Kafka and Debezium"
+    parent: "ingest-data-appendix"
+    name: "PosgreSQL: Using Kafka and Debezium"
     identifier: "pg-dbz"
 ---
+
+{{< tip >}}
+- As an alternative to using Kafka and Debezium, Materialize also provides
+  native support for PostgreSQL.
+
+- {{< guided-tour-blurb-for-ingest-data >}}
+{{< /tip >}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
 Postgres database to downstream consumers based on its Write-Ahead Log (WAL).
@@ -20,9 +29,7 @@ changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the
 upstream database and publishes them as events to Kafka using Kafka
 Connect-compatible connectors.
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+
 
 ## A. Configure database
 
@@ -350,20 +357,12 @@ This allows you to replicate tables with `REPLICA IDENTITY DEFAULT`, `INDEX`, or
 #### Transaction support
 
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata)
-that can be used to preserve transactional boundaries downstream. We are
-working on using this topic to support transaction-aware processing in
-[Materialize #7537](https://github.com/MaterializeInc/database-issues/issues/2337)!
+that can be used to preserve transactional boundaries downstream.
 
-## D. Create a materialized view
+## D. Create a view on the source
 
-Any materialized view defined on top of this source will be incrementally
-updated as new change events stream in through Kafka, as a result of `INSERT`,
-`UPDATE` and `DELETE` operations in the original Postgres database.
+{{% ingest-data/ingest-data-kafka-debezium-view %}}
 
-```mzsql
-CREATE MATERIALIZED VIEW cnt_table1 AS
-    SELECT field1,
-           COUNT(*) AS cnt
-    FROM kafka_repl
-    GROUP BY field1;
-```
+## E. Create an index on the view
+
+{{% ingest-data/ingest-data-kafka-debezium-index %}}
