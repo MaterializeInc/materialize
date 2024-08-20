@@ -32,11 +32,10 @@ A Materialize account. If you do not have an account, you can [sign up for a
 free
 trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
-Alternatively, you can [download a Docker
-image](/get-started/install-materialize) to test locally. However, the Docker
-image does not provide the full experience of using Materialize. Where a command
-for the Materialize console can differ from other SQL clients, both versions of
-the command are presented.
+Alternatively, you can [download the Materialize
+Emulator](/get-started/install-materialize-emulator/) to test locally. However,
+the Materialize Emulator does not provide the full experience of using
+Materialize.
 
 ## Step 0. Sign in to Materialize
 
@@ -240,7 +239,7 @@ fraudulent accounts.
    ```
    {{< /tab >}}
    {{< tab "Other Clients" >}}
-   If running Materialize in a Docker container, run the following command in
+   If running against the Materialize Emulator, run the following command in
    your preferred SQL client:
 
    ```mzsql
@@ -325,8 +324,8 @@ and total debit amounts should always add up.
    {{< /tab >}}
    {{< tab "Other Clients" >}}
 
-   If running Materialize in a Docker container, run the following command in
-   your preferred SQL client.
+   If running against the Materialize Emulator, run the following command in
+   your preferred SQL client:
 
    ```mzsql
      COPY (SUBSCRIBE TO (

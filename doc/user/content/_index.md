@@ -12,11 +12,26 @@ weight: 1
 Materialize is the Cloud Operational Data Store that lets you use SQL to
 transform, deliver, and act on fast-changing data.
 
-{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
+{{< callout >}}
+
+## What's new!
+
+- [Materialize Emulator](/get-started/install-materialize-emulator/). The
+Materialize Emulator is an all-in-one Docker image available on Docker Hub,
+offering the fastest way to get hands-on experience with Materialize in a local
+environment. For more information, see [Materialize Emulator](/get-started/install-materialize-emulator/).
+
+{{</ callout >}}
+
+{{< callout
+primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation"
+primary_text="Get Started">}}
 
 ## Ready to get started? 🚀
 
-1. Sign up for a [free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+1. Sign up for a [free trial
+   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
+   or [download the Materialize Emulator Docker image](/get-started/install-materialize-emulator/).
 2. Follow the quickstart guide to learn the basics.
 3. Connect your own data sources and start building.
 
