@@ -33,9 +33,11 @@ from materialize.output_consistency.query.data_source import (
     DataSource,
 )
 from materialize.output_consistency.query.query_format import QueryOutputFormat
-from materialize.output_consistency.selection.selection import (
-    DataRowSelection,
+from materialize.output_consistency.selection.column_selection import (
     QueryColumnByIndexSelection,
+)
+from materialize.output_consistency.selection.row_selection import (
+    DataRowSelection,
 )
 
 

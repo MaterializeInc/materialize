@@ -45,7 +45,7 @@ from materialize.output_consistency.input_data.types.string_type_provider import
 )
 from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.row_selection import (
     ALL_ROWS_SELECTION,
 )
 

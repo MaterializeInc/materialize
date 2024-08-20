@@ -28,11 +28,13 @@ from materialize.output_consistency.output.base_output_printer import (
 from materialize.output_consistency.query.data_source import DataSource
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.column_selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
-    ALL_ROWS_SELECTION,
     QueryColumnByIndexSelection,
     TableColumnByNameSelection,
+)
+from materialize.output_consistency.selection.row_selection import (
+    ALL_ROWS_SELECTION,
 )
 from materialize.output_consistency.validation.validation_message import ValidationError
 

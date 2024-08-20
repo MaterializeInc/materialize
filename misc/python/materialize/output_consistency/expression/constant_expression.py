@@ -22,7 +22,7 @@ from materialize.output_consistency.expression.expression_characteristics import
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.query.data_source import DataSource
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.row_selection import (
     DataRowSelection,
 )
 

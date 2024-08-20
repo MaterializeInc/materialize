@@ -50,7 +50,7 @@ from materialize.output_consistency.query.data_source import (
 from materialize.output_consistency.query.join import JoinTarget
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.row_selection import (
     ALL_ROWS_SELECTION,
     DataRowSelection,
 )
