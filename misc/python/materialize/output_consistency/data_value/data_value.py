@@ -20,7 +20,8 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.query.data_source import DataSource
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 
 
 class DataValue(LeafExpression):
@@ -47,6 +48,7 @@ class DataValue(LeafExpression):
             False,
         )
         self.value = value
+        self.vertical_table_indices: set[int] = set()
         self.is_null_value = is_null_value
         self.is_pg_compatible = is_pg_compatible
 
@@ -63,6 +65,12 @@ class DataValue(LeafExpression):
         self, row_selection: DataRowSelection
     ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
+
+    def collect_vertical_table_indices(self) -> set[int]:
+        return self.vertical_table_indices
+
+    def get_data_source(self) -> DataSource:
+        return DataSource(table_index=None)
 
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', value={self.value}, type={self.data_type})"

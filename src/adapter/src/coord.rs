@@ -93,7 +93,7 @@ use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use http::Uri;
 use itertools::{Either, Itertools};
-use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
@@ -175,7 +175,6 @@ use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::validity::PlanValidity;
@@ -240,7 +239,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     ),
     DeferredStatementReady,
     AdvanceTimelines,
-    DropReadHolds(Vec<ReadHoldsInner<Timestamp>>),
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
@@ -345,7 +343,6 @@ impl Message {
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
-            Message::DropReadHolds(_) => "drop_read_holds",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
@@ -1565,14 +1562,6 @@ pub struct Coordinator {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
-    /// Channel for returning/releasing [read holds](ReadHoldsInner).
-    ///
-    /// We're using a special purpose channel rather than using
-    /// `internal_cmd_tx` so that we can control the priority of working off
-    /// dropped read holds. If we sent them as [Message] on the internal cmd
-    /// channel, these would always get top priority, which is not necessary.
-    dropped_read_holds_tx: mpsc::UnboundedSender<ReadHoldsInner<Timestamp>>,
-
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
@@ -1583,30 +1572,9 @@ pub struct Coordinator {
     /// active connections.
     active_conns: BTreeMap<ConnectionId, ConnMeta>,
 
-    /// For each identifier in STORAGE, its read policy and any read holds on time.
+    /// For each transaction, the read holds taken to support any performed reads.
     ///
-    /// Transactions should introduce and remove constraints through the methods
-    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
-    /// policy can also be updated, though one should be sure to communicate this
-    /// to the controller for it to have an effect.
-    ///
-    /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    storage_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
-    /// For each identifier in COMPUTE, its read policy and any read holds on time.
-    ///
-    /// Transactions should introduce and remove constraints through the methods
-    /// `acquire_read_holds` and `release_read_holds`, respectively. The base
-    /// policy can also be updated, though one should be sure to communicate this
-    /// to the controller for it to have an effect.
-    ///
-    /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    compute_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
-
-    /// For each transaction, the pinned storage and compute identifiers and time at
-    /// which they are pinned.
-    ///
-    /// Upon completing a transaction, this timestamp should be removed from the holds
-    /// in `self.read_capability[id]`, using the `release_read_holds` method.
+    /// Upon completing a transaction, these read holds should be dropped.
     txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
@@ -2935,7 +2903,6 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
-        mut dropped_read_holds_rx: mpsc::UnboundedReceiver<ReadHoldsInner<Timestamp>>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
         storage_usage_retention_period: Option<Duration>,
@@ -3088,15 +3055,6 @@ impl Coordinator {
                             )
                         }
                         Message::LinearizeReads
-                    }
-                    // `recv()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                    Some(dropped_read_hold) = dropped_read_holds_rx.recv() => {
-                        let mut dropped_read_holds = vec![dropped_read_hold];
-                        while let Ok(dropped_read_hold) = dropped_read_holds_rx.try_recv() {
-                            dropped_read_holds.push(dropped_read_hold);
-                        }
-                        Message::DropReadHolds(dropped_read_holds)
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
@@ -3352,20 +3310,15 @@ impl Coordinator {
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
         // prevents a future unrelated change from silently breaking this method.
 
+        let global_timelines: BTreeMap<_, _> = self
+            .global_timelines
+            .iter()
+            .map(|(timeline, state)| (timeline.to_string(), format!("{state:?}")))
+            .collect();
         let active_conns: BTreeMap<_, _> = self
             .active_conns
             .iter()
             .map(|(id, meta)| (id.unhandled().to_string(), format!("{meta:?}")))
-            .collect();
-        let storage_read_capabilities: BTreeMap<_, _> = self
-            .storage_read_capabilities
-            .iter()
-            .map(|(id, capability)| (id.to_string(), format!("{capability:?}")))
-            .collect();
-        let compute_read_capabilities: BTreeMap<_, _> = self
-            .compute_read_capabilities
-            .iter()
-            .map(|(id, capability)| (id.to_string(), format!("{capability:?}")))
             .collect();
         let txn_read_holds: BTreeMap<_, _> = self
             .txn_read_holds
@@ -3396,16 +3349,12 @@ impl Coordinator {
 
         let map = serde_json::Map::from_iter([
             (
+                "global_timelines".to_string(),
+                serde_json::to_value(global_timelines)?,
+            ),
+            (
                 "active_conns".to_string(),
                 serde_json::to_value(active_conns)?,
-            ),
-            (
-                "storage_read_capabilities".to_string(),
-                serde_json::to_value(storage_read_capabilities)?,
-            ),
-            (
-                "compute_read_capabilities".to_string(),
-                serde_json::to_value(compute_read_capabilities)?,
             ),
             (
                 "txn_read_holds".to_string(),
@@ -3709,7 +3658,6 @@ pub fn serve(
         let (group_commit_tx, group_commit_rx) = appends::notifier();
         let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
             mpsc::unbounded_channel();
-        let (dropped_read_holds_tx, dropped_read_holds_rx) = mpsc::unbounded_channel();
 
         // Validate and process availability zones.
         if !availability_zones.iter().all_unique() {
@@ -3927,12 +3875,9 @@ pub fn serve(
                     internal_cmd_tx,
                     group_commit_tx,
                     strict_serializable_reads_tx,
-                    dropped_read_holds_tx,
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
-                    storage_read_capabilities: Default::default(),
-                    compute_read_capabilities: Default::default(),
                     txn_read_holds: Default::default(),
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
@@ -3995,7 +3940,6 @@ pub fn serve(
                     handle.block_on(coord.serve(
                         internal_cmd_rx,
                         strict_serializable_reads_rx,
-                        dropped_read_holds_rx,
                         cmd_rx,
                         group_commit_rx,
                         storage_usage_retention_period,

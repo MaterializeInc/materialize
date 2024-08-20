@@ -9,7 +9,11 @@
 
 
 from materialize.feature_flag_consistency.feature_flag.feature_flag import (
+    FEATURE_FLAG_FALSE_VALUE,
+    FEATURE_FLAG_TRUE_VALUE,
+    FeatureFlagSystemConfiguration,
     FeatureFlagSystemConfigurationPair,
+    FeatureFlagValue,
     create_boolean_feature_flag_configuration_pair,
 )
 
@@ -36,8 +40,52 @@ append_config(
     )
 )
 
-# TODO: #19825 (output consistency: support joins): configure
-# * enable_outer_join_null_filter
-# * enable_variadic_left_join_lowering
-# * enable_eager_delta_joins
-# * enable_variadic_left_join_lowering && enable_eager_delta_joins
+append_config(
+    create_boolean_feature_flag_configuration_pair(
+        "enable_outer_join_null_filter", "outer_join_null_f"
+    )
+)
+
+append_config(
+    create_boolean_feature_flag_configuration_pair(
+        "enable_variadic_left_join_lowering", "variadic_left_join"
+    )
+)
+
+append_config(
+    create_boolean_feature_flag_configuration_pair(
+        "enable_eager_delta_joins", "eager_delta_joins"
+    )
+)
+
+append_config(
+    FeatureFlagSystemConfigurationPair(
+        name="multiple_join_flags",
+        config1=FeatureFlagSystemConfiguration(
+            name="default",
+            shortcut="default",
+            flags=[
+                FeatureFlagValue(
+                    "enable_outer_join_null_filter", FEATURE_FLAG_FALSE_VALUE
+                ),
+                FeatureFlagValue(
+                    "enable_variadic_left_join_lowering", FEATURE_FLAG_FALSE_VALUE
+                ),
+                FeatureFlagValue("enable_eager_delta_joins", FEATURE_FLAG_FALSE_VALUE),
+            ],
+        ),
+        config2=FeatureFlagSystemConfiguration(
+            name="w/ join flags",
+            shortcut="join_flags",
+            flags=[
+                FeatureFlagValue(
+                    "enable_outer_join_null_filter", FEATURE_FLAG_TRUE_VALUE
+                ),
+                FeatureFlagValue(
+                    "enable_variadic_left_join_lowering", FEATURE_FLAG_TRUE_VALUE
+                ),
+                FeatureFlagValue("enable_eager_delta_joins", FEATURE_FLAG_TRUE_VALUE),
+            ],
+        ),
+    )
+)

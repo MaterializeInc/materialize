@@ -19,7 +19,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.column_selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
 )
 

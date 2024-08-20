@@ -14,6 +14,7 @@ from materialize.output_consistency.input_data.test_input_types import (
     ConsistencyTestTypesInput,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 
 
 class ConsistencyTestInputData:
@@ -25,6 +26,11 @@ class ConsistencyTestInputData:
         self.types_input = ConsistencyTestTypesInput()
         self.operations_input = ConsistencyTestOperationsInput()
         self.predefined_queries: list[QueryTemplate] = []
+
+    def assign_columns_to_tables(
+        self, vertical_tables: int, randomized_picker: RandomizedPicker
+    ) -> None:
+        self.types_input.assign_columns_to_tables(vertical_tables, randomized_picker)
 
     def get_stats(self) -> str:
         return (

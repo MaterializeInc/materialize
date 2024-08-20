@@ -62,6 +62,7 @@ use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceMana
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent};
 use crate::metrics::ComputeMetrics;
+use crate::metrics::WorkerMetrics;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
@@ -110,6 +111,8 @@ pub struct ComputeState {
     pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
+    /// Metrics for this replica, specific to a worker.
+    pub worker_metrics: WorkerMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
     /// Other configuration for compute
@@ -175,6 +178,8 @@ impl ComputeState {
         // allowed do we switch to doing writes.
         let (read_only_tx, read_only_rx) = watch::channel(true);
 
+        let worker_metrics = WorkerMetrics::from(&metrics, worker_id);
+
         Self {
             collections: Default::default(),
             dropped_collections: Default::default(),
@@ -189,6 +194,7 @@ impl ComputeState {
             max_result_size: u64::MAX,
             linear_join_spec: Default::default(),
             metrics,
+            worker_metrics,
             tracing_handle,
             context,
             worker_config: mz_dyncfgs::all_dyncfgs(),
@@ -324,6 +330,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         self.compute_state.command_history.push(cmd.clone());
 
+        // Record the command duration, per worker and command kind.
+        let timer = self
+            .compute_state
+            .worker_metrics
+            .handle_command_duration_seconds
+            .for_command(&cmd)
+            .start_timer();
+
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(instance_config) => self.handle_create_instance(instance_config),
@@ -344,6 +358,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     .expect("we're holding one other end");
             }
         }
+
+        timer.observe_duration();
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {

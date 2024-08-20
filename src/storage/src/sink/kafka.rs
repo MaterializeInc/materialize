@@ -82,8 +82,9 @@ use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
 use maplit::btreemap;
-use mz_interchange::avro::AvroEncoder;
+use mz_interchange::avro::{AvroEncoder, DiffPair};
 use mz_interchange::encode::Encode;
+use mz_interchange::envelopes::dbz_format;
 use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
 use mz_kafka_util::client::{
@@ -131,10 +132,6 @@ use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
 impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
-    fn uses_keys(&self) -> bool {
-        true
-    }
-
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()
@@ -150,7 +147,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
         sink_id: GlobalId,
-        input: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        input: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
@@ -1235,7 +1232,7 @@ async fn fetch_partition_count_loop<F>(
 /// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
 fn encode_collection<G: Scope>(
     name: String,
-    input: &Collection<G, (Option<Row>, Option<Row>), Diff>,
+    input: &Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1345,11 +1342,24 @@ fn encode_collection<G: Scope>(
             // TODO(petrosagg): Make the fallible async operator safe
             *capset = CapabilitySet::new();
 
+            let mut row_buf = Row::default();
+
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, rows) = event {
                     for ((key, value), time, diff) in rows {
-                        let headers = match (connection.headers_index, &value) {
-                            (Some(i), Some(v)) => encode_headers(v.iter().nth(i).unwrap()),
+
+                        let headers = match connection.headers_index {
+                            Some(i) => {
+                                // Only the upsert envelope makes it unambiguous
+                                // as to whether to use `before` or `after` to
+                                // compute the headers. The rule is simple: use
+                                // `after` if it exists (insertions and
+                                // updates), otherwise fall back to `before`
+                                // (deletions).
+                                assert!(envelope == SinkEnvelope::Upsert);
+                                let row = value.after.as_ref().or(value.before.as_ref()).expect("one of before or after must be set");
+                                encode_headers(row.iter().nth(i).unwrap())
+                            }
                             _ => vec![],
                         };
                         let (hash, key) = match key {
@@ -1361,6 +1371,13 @@ fn encode_collection<G: Scope>(
                                 (hash, Some(key_enc))
                             }
                             None => (0, None)
+                        };
+                        let value = match envelope {
+                            SinkEnvelope::Upsert => value.after,
+                            SinkEnvelope::Debezium => {
+                                dbz_format(&mut row_buf.packer(), value);
+                                Some(row_buf.clone())
+                            }
                         };
                         let value = value.map(|value| value_encoder.encode_unchecked(value));
                         let message = KafkaMessage {

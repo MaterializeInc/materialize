@@ -9,7 +9,6 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,14 +16,13 @@ use std::time::{Duration, Instant};
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
+use mz_interchange::avro::DiffPair;
+use mz_interchange::envelopes::combine_at_timestamp;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_operators::persist_source;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::{
-    MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
-};
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::dataflow::operators::Leave;
 use timely::dataflow::scopes::Child;
@@ -84,7 +82,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     tokens.extend(persist_tokens);
 
     let ok_collection =
-        apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
+        zip_into_diff_pairs(sink_id, sink, &*sink_render, ok_collection.as_collection());
 
     let (health, sink_tokens) = sink_render.render_sink(
         storage_state,
@@ -99,162 +97,98 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     (health.leave(), tokens)
 }
 
-#[allow(clippy::borrowed_box)]
-fn apply_sink_envelope<G>(
+/// Zip the input to a sink so that updates to the same key appear as
+/// `DiffPair`s.
+fn zip_into_diff_pairs<G>(
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-    sink_render: &Box<dyn SinkRender<G>>,
+    sink_render: &dyn SinkRender<G>,
     collection: Collection<G, Row, Diff>,
-) -> Collection<G, (Option<Row>, Option<Row>), Diff>
+) -> Collection<G, (Option<Row>, DiffPair<Row>), Diff>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Some connections support keys - extract them.
-    let (keyed, expect_unique) = if sink_render.uses_keys() {
-        let user_key_indices = sink_render
-            .get_key_indices()
-            .map(|key_indices| key_indices.to_vec());
+    // We need to consolidate the collection and group records by their key.
+    // We'll first attempt to use the explicitly declared key when the sink was
+    // created. If no such key exists, we'll use a key of the sink's underlying
+    // relation, if one exists.
+    //
+    // If no such key exists, we'll generate a synthetic key based on the hash
+    // of the row, just for purposes of distributing work among workers. In this
+    // case the key offers no uniqueness guarantee.
 
-        let relation_key_indices = sink_render
-            .get_relation_key_indices()
-            .map(|key_indices| key_indices.to_vec());
+    let user_key_indices = sink_render.get_key_indices();
+    let relation_key_indices = sink_render.get_relation_key_indices();
+    let key_indices = user_key_indices
+        .or(relation_key_indices)
+        .map(|k| k.to_vec());
+    let key_is_synthetic = key_indices.is_none();
 
-        // We have three cases here, in descending priority:
-        //
-        // 1. if there is a user-specified key, use that to consolidate and
-        //  distribute work
-        // 2. if the sinked relation has a known primary key, use that to
-        //  consolidate and distribute work but don't write to the sink
-        // 3. if none of the above, use the whole row as key to
-        //  consolidate and distribute work but don't write to the sink
-        //
-        // In case 1 and 2 we expect only one value per-key per timestamp
-        // whereas for case 3 we might see more than 1 value per key, so
-        // we return `expect_unique` appropriately.
-
-        let (keyed, expect_unique) = if let Some(key_indices) = user_key_indices {
+    let collection = match key_indices {
+        None => collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row)),
+        Some(key_indices) => {
             let mut datum_vec = mz_repr::DatumVec::new();
-            (
-                collection.map(move |row| {
-                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                    // Does it matter?
-                    let key = {
-                        let datums = datum_vec.borrow_with(&row);
-                        Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
-                    };
-                    (Some(key), row)
-                }),
-                true,
-            )
-        } else if let Some(relation_key_indices) = relation_key_indices {
-            let mut datum_vec = mz_repr::DatumVec::new();
-            (
-                collection.map(move |row| {
-                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                    // Does it matter?
-                    let key = {
-                        let datums = datum_vec.borrow_with(&row);
-                        Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()))
-                    };
-                    (Some(key), row)
-                }),
-                true,
-            )
-        } else {
-            (
-                collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row)),
-                false,
-            )
-        };
-        (keyed, expect_unique)
-    } else {
-        (collection.map(|row| (None, row)), false)
+            collection.map(move |row| {
+                // TODO[perf] (btv) - is there a way to avoid unpacking and
+                // repacking every row and cloning the datums? Does it matter?
+                let key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
+                };
+                (Some(key), row)
+            })
+        }
     };
 
-    // Rate limit how often we emit this warning to avoid flooding logs.
-    let mut last_warning = Instant::now();
+    // Group messages by key at each timestamp.
+    //
+    // Allow access to `arrange_named` because we cannot access Mz's wrapper
+    // from here. TODO(#17413): Revisit with cluster unification.
+    #[allow(clippy::disallowed_methods)]
+    let mut collection =
+        combine_at_timestamp(collection.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Sink"));
 
-    fn warn_on_dups<T>(v: &[T], sink_id: GlobalId, from_id: GlobalId, last_warning: &mut Instant) {
-        if v.len() > 1 {
-            let now = Instant::now();
-            if now.duration_since(*last_warning) >= Duration::from_secs(10) {
-                *last_warning = now;
-                warn!(
-                    sink_id =? sink_id,
-                    from_id =? from_id,
-                    "primary key error: expected at most one update per key and timestamp \
-                    This can happen when the configured sink key is not a primary key of \
-                    the sinked relation."
-                )
-            }
-        }
+    // If there is no user-specified key, remove the synthetic key.
+    //
+    // We don't want the synthetic key to appear in the sink's actual output; we
+    // just needed a value to use to distribute work.
+    if user_key_indices.is_none() {
+        collection = collection.map(|(_key, value)| (None, value))
     }
 
-    // Apply the envelope.
-    // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
-    //   It then renders those as Avro.
-    // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
-    //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
-    let collection = match sink.envelope {
-        SinkEnvelope::Debezium => {
-            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
-            // TODO(#17413): Revisit with cluster unification.
-            #[allow(clippy::disallowed_methods)]
-            let combined = combine_at_timestamp(
-                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
-            );
-
-            // if there is no user-specified key, remove the synthetic
-            // distribution key again
-            let user_key_indices = sink_render.get_key_indices();
-            let combined = if user_key_indices.is_some() {
-                combined
-            } else {
-                combined.map(|(_key, value)| (None, value))
-            };
-
-            // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
-            let row_buf = Rc::new(RefCell::new(Row::default()));
-            let from_id = sink.from;
-            let collection = combined.flat_map(move |(mut k, v)| {
-                if expect_unique {
-                    warn_on_dups(&v, sink_id, from_id, &mut last_warning);
+    collection.flat_map({
+        let mut last_warning = Instant::now();
+        let from_id = sink.from;
+        move |(mut k, vs)| {
+            // If the key is not synthetic, emit a warning to internal logs if
+            // we discover a primary key violation.
+            //
+            // TODO: put the sink in a user-visible errored state instead of
+            // only logging internally. See:
+            // https://github.com/MaterializeInc/materialize/issues/17549.
+            if !key_is_synthetic && vs.len() > 1 {
+                // We rate limit how often we emit this warning to avoid
+                // flooding logs.
+                let now = Instant::now();
+                if now.duration_since(last_warning) >= Duration::from_secs(10) {
+                    last_warning = now;
+                    warn!(
+                        ?sink_id,
+                        ?from_id,
+                        "primary key error: expected at most one update per key and timestamp; \
+                            this can happen when the configured sink key is not a primary key of \
+                            the sinked relation"
+                    )
                 }
-                let max_idx = v.len() - 1;
-                let row_buf = Rc::clone(&row_buf);
-                v.into_iter().enumerate().map(move |(idx, dp)| {
-                    let k = if idx == max_idx { k.take() } else { k.clone() };
-                    let mut row_buf = row_buf.borrow_mut();
-                    dbz_format(&mut row_buf.packer(), dp);
-                    (k, Some(row_buf.clone()))
-                })
-            });
-            collection
-        }
-        SinkEnvelope::Upsert => {
-            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
-            // TODO(#17413): Revisit with cluster unification.
-            #[allow(clippy::disallowed_methods)]
-            let combined = combine_at_timestamp(
-                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Upsert"),
-            );
+            }
 
-            let from_id = sink.from;
-            let collection = combined.flat_map(move |(mut k, v)| {
-                if expect_unique {
-                    warn_on_dups(&v, sink_id, from_id, &mut last_warning);
-                }
-                let max_idx = v.len() - 1;
-                v.into_iter().enumerate().map(move |(idx, dp)| {
-                    let k = if idx == max_idx { k.take() } else { k.clone() };
-                    (k, dp.after)
-                })
-            });
-            collection
+            let max_idx = vs.len() - 1;
+            vs.into_iter().enumerate().map(move |(idx, dp)| {
+                let k = if idx == max_idx { k.take() } else { k.clone() };
+                (k, dp)
+            })
         }
-    };
-
-    collection
+    })
 }
 
 /// A type that can be rendered as a dataflow sink.
@@ -262,19 +196,21 @@ pub(crate) trait SinkRender<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// TODO
-    fn uses_keys(&self) -> bool;
-    /// TODO
+    /// Gets the indexes of the columns that form the key that the user
+    /// specified when creating the sink, if any.
     fn get_key_indices(&self) -> Option<&[usize]>;
-    /// TODO
+
+    /// Gets the indexes of the columns that form a key of the sink's underlying
+    /// relation, if such a key exists.
     fn get_relation_key_indices(&self) -> Option<&[usize]>;
-    /// TODO
+
+    /// Renders the sink's dataflow.
     fn render_sink(
         &self,
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
         sink_id: GlobalId,
-        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>);
 }

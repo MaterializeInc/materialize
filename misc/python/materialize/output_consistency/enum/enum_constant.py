@@ -25,7 +25,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.row_selection import DataRowSelection
 from materialize.util import stable_int_hash
 
 ENUM_RETURN_TYPE_SPEC = ReturnTypeSpec(DataTypeCategory.ENUM)
@@ -73,7 +73,9 @@ class EnumConstant(Expression):
     def __str__(self) -> str:
         return f"EnumConstant (value={self.value})"
 
-    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
+    ) -> str:
         sql_value = self.data_type.value_to_sql(self.value, sql_adjuster)
         if self.add_quotes:
             return f"'{sql_value}'"
@@ -82,6 +84,9 @@ class EnumConstant(Expression):
 
     def collect_leaves(self) -> list[LeafExpression]:
         return []
+
+    def collect_vertical_table_indices(self) -> set[int]:
+        return set()
 
     def is_tagged(self, tag: str) -> bool:
         if self.tags is None:

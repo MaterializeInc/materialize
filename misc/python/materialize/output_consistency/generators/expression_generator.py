@@ -245,7 +245,7 @@ class ExpressionGenerator:
         )
 
         if storage_layout == ValueStorageLayout.VERTICAL:
-            return type_with_values.create_vertical_storage_column()
+            return type_with_values.create_unassigned_vertical_storage_column()
         elif storage_layout == ValueStorageLayout.HORIZONTAL:
             if len(type_with_values.raw_values) == 0:
                 raise NoSuitableExpressionFound("No value in type")
@@ -339,7 +339,9 @@ class ExpressionGenerator:
             return self._pick_enum_constant(param)
 
         if isinstance(param, SameOperationParam):
-            return arg_context.args[param.index_of_previous_param]
+            expression_to_use = arg_context.args[param.index_of_previous_param]
+            expression_to_use.recursively_mark_as_shared()
+            return expression_to_use
 
         create_complex_arg = (
             arg_context.requires_aggregation()

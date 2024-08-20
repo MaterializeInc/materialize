@@ -43,7 +43,7 @@ from materialize.output_consistency.operation.operation import (
     match_function_by_name,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.selection import (
+from materialize.output_consistency.selection.row_selection import (
     ALL_ROWS_SELECTION,
     DataRowSelection,
 )

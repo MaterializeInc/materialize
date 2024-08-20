@@ -6,11 +6,10 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from dataclasses import dataclass
 
-SECTION_COLLAPSED_PREFIX = "--- "
-SECTION_EXPANDED_PREFIX = "+++ "
 
-OUTPUT_LINE_SEPARATOR = "---------------" * 12
-
-COMMENT_PREFIX = "-- "
-LI_PREFIX = "* "
+@dataclass(unsafe_hash=True)
+class SourceColumnIdentifier:
+    data_source_alias: str
+    column_name: str

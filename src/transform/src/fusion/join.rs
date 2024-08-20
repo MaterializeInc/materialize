@@ -90,11 +90,15 @@ impl Join {
             // Local non-fusion tidying.
             inputs.retain(|e| !e.is_constant_singleton());
             if inputs.len() == 0 {
-                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty());
+                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty())
+                    .filter(unpack_equivalences(equivalences));
                 return Ok(false);
             }
-            if inputs.len() == 1 && equivalences.is_empty() {
-                *relation = inputs.pop().unwrap();
+            if inputs.len() == 1 {
+                *relation = inputs
+                    .pop()
+                    .unwrap()
+                    .filter(unpack_equivalences(equivalences));
                 return Ok(false);
             }
 
@@ -240,7 +244,11 @@ impl Join {
     }
 }
 
-/// Unpacks multiple equivalence classes into conjuncts that should be equivalent.
+/// Unpacks multiple equivalence classes into conjuncts that should all be true, essentially
+/// turning join equivalences to a Filter.
+///
+/// Note that a join equivalence treats null equal to null, while an `=` in a Filter does not.
+/// This function is mindful of this.
 fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarExpr> {
     let mut result = Vec::new();
     for class in equivalences.iter() {
