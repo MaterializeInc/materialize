@@ -199,7 +199,7 @@ class Identifiers(Check):
         {dq_print(self.ident["sink1"])} kafka identifiers ""
         {dq_print(self.ident["sink2"])} kafka identifiers ""
 
-        >[version<11400] SHOW SINKS FROM {dq(self.ident["schema"])};
+        >[version<11300] SHOW SINKS FROM {dq(self.ident["schema"])};
         {dq_print(self.ident["sink0"])} kafka 4 identifiers
         {dq_print(self.ident["sink1"])} kafka 4 identifiers
         {dq_print(self.ident["sink2"])} kafka 4 identifiers

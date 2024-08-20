@@ -48,7 +48,11 @@ class CheckDatabaseCreate(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW DATABASES LIKE 'to_be_created%';
+                >[version<11400] SHOW DATABASES LIKE 'to_be_created%';
+                to_be_created1
+                to_be_created2
+
+                >[version>=11400] SHOW DATABASES LIKE 'to_be_created%';
                 to_be_created1  ""
                 to_be_created2  ""
 
