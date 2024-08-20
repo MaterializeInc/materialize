@@ -70,6 +70,18 @@ SELECT col_description((SELECT oid FROM mz_tables WHERE name = 'a'), 1)
 ----
 NULL
 
+query TT
+SHOW TABLES;
+----
+a foo_table
+
+query TT
+SELECT name, comment FROM (SHOW COLUMNS FROM a);
+----
+x (empty)
+z (empty)
+y load_bearing
+
 statement ok
 CREATE TABLE b ( ts timestamptz );
 
@@ -93,6 +105,12 @@ SELECT objsubid, description FROM pg_description;
 statement ok
 COMMENT ON TABLE b IS 'foo_table';
 
+query TT
+SHOW TABLES;
+----
+a foo_table
+b foo_table
+
 statement ok
 DROP TABLE a;
 
@@ -110,6 +128,11 @@ SELECT objsubid, description FROM pg_description;
 
 statement ok
 COMMENT ON TABLE b IS NULL
+
+query TT
+SHOW TABLES;
+----
+b (empty)
 
 statement ok
 COMMENT ON COLUMN b.ts IS NULL
@@ -133,6 +156,11 @@ CREATE INDEX b_idx ON b (ts);
 
 statement ok
 COMMENT ON INDEX b_idx IS 'speed_up';
+
+query TT
+SELECT name, comment FROM (SHOW INDEXES);
+----
+b_idx speed_up
 
 statement ok
 CREATE VIEW c (col_1, col_2) AS VALUES ('a', 'b');
@@ -163,6 +191,17 @@ DROP TABLE b CASCADE;
 statement ok
 COMMENT ON COLUMN c.col_1 IS 'this_works';
 
+query TT
+SELECT name, comment FROM (SHOW VIEWS);
+----
+c this_is_a_view
+
+query TT
+SELECT name, comment FROM (SHOW COLUMNS FROM c);
+----
+col_2 (empty)
+col_1 this_works
+
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
@@ -183,6 +222,16 @@ COMMENT ON COLUMN mv.x IS 'comment_mat_view_col';
 
 statement ok
 COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
+
+query TT
+SELECT name, comment FROM (SHOW MATERIALIZED VIEWS);
+----
+mv mat_foo
+
+query TT
+SELECT name, comment FROM (SHOW COLUMNS FROM mv);
+----
+x comment_mat_view_col
 
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
@@ -238,6 +287,17 @@ CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
 
 statement ok
 COMMENT ON CLUSTER comment_cluster IS 'careful_now';
+
+query TT
+SELECT name, comment FROM (SHOW CLUSTERS);
+----
+mz_probe  (empty)
+mz_system  (empty)
+mz_support  (empty)
+quickstart  (empty)
+mz_analytics  (empty)
+mz_catalog_server  (empty)
+comment_cluster  careful_now
 
 statement ok
 COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
