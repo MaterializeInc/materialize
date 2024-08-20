@@ -30,6 +30,7 @@ mz-service = { path = "../service" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
+mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-tls-util = { path = "../tls-util" }
 mz-txn-wal = { path = "../txn-wal" }
 once_cell = { version = "1.16.0" }

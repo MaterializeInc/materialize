@@ -249,6 +249,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
+    // TODO: Delete this!
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
@@ -2957,43 +2958,15 @@ impl Coordinator {
             if !self.controller.read_only() {
                 if let Some(retention_period) = storage_usage_retention_period {
                     let id = self.catalog().resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
-                    let read_ts = self.get_local_read_ts().await;
-                    let current_contents_fut = self
+                    self
                         .controller
                         .storage
-                        .snapshot_async(id, read_ts)
-                        .await
-                        .unwrap_or_terminate("cannot fail to fetch snapshot");
-                    let internal_cmd_tx = self.internal_cmd_tx.clone();
-                    spawn(|| "storage usage prune", async move {
-                        let mut current_contents = current_contents_fut.await.expect("sender hung up").unwrap_or_terminate("cannot fail to fetch snapshot");
-                        differential_dataflow::consolidation::consolidate(&mut current_contents);
-
-
-                        let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
-                        let mut expired = Vec::new();
-                        for (row, diff) in current_contents {
-                            assert_eq!(diff, 1,"consolidated contents should not contain retractions: ({row:#?}, {diff:#?})");
-                            // This logic relies on the definition of `mz_storage_usage_by_shard` not changing.
-                            let collection_timestamp = row.unpack()[3].unwrap_timestamptz();
-                            let collection_timestamp = collection_timestamp.timestamp_millis();
-                            let collection_timestamp: u128 = collection_timestamp.try_into().expect("all collections happen after Jan 1 1970");
-                            if collection_timestamp < cutoff_ts {
-                                debug!("pruning storage event {row:?}");
-                                let builtin_update = BuiltinTableUpdate {
-                                    id,
-                                    row,
-                                    diff: -1,
-                                };
-                                expired.push(builtin_update);
-                            }
-                        }
-
-                        // Try to write at exactly the next timestamp, if not read more and try again.
-
-                        // main thread has shut down.
-                        let _ = internal_cmd_tx.send(Message::StorageUsagePrune(expired));
-                    });
+                        .prune_storage_usage_once(
+                            id,
+                            retention_period,
+                            self.write_lock_wait_group.mutex(),
+                            self.get_local_timestamp_oracle()).await
+                        .expect("correct usage");
                 }
             }
 

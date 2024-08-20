@@ -72,6 +72,7 @@ use mz_storage_types::sources::{
     SourceExport, SourceExportDetails,
 };
 use mz_storage_types::AlterCompatible;
+use mz_timestamp_oracle::TimestampOracle;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
@@ -94,6 +95,7 @@ mod instance;
 mod persist_handles;
 mod rtr;
 mod statistics;
+pub mod storage_usage;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -220,6 +222,8 @@ where
         + TimestampManipulation
         + Into<Datum<'a>>
         + Display,
+    // WIP!
+    u128: From<T>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
@@ -2378,6 +2382,33 @@ where
                     Ok::<_, StorageError<Self::Timestamp>>(std::cmp::max(curr, new))
                 })
         }))
+    }
+
+    async fn prune_storage_usage_once(
+        &mut self,
+        id: GlobalId,
+        retention_period: Duration,
+        write_lock: Arc<tokio::sync::Mutex<()>>,
+        timestamp_oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let collection_metadata = self.collection_metadata(id)?;
+
+        let task = storage_usage::PruneStorageUsageTask {
+            collection_id: id,
+            collection_metadata,
+            retention_period,
+            persist: self.persist.clone(),
+            write_lock,
+            persist_table_worker: self.persist_table_worker.clone(),
+            txns_read: self.txns_read.clone(),
+            timestamp_oracle,
+        };
+
+        mz_ore::task::spawn(|| "prune-storage-usage".to_string(), async move {
+            task.run_once().await
+        });
+
+        Ok(())
     }
 }
 

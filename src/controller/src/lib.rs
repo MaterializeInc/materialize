@@ -626,6 +626,8 @@ where
         + TimestampManipulation
         + std::fmt::Display
         + Into<mz_repr::Timestamp>,
+    // WIP!
+    u128: From<T>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     ComputeGrpcClient: ComputeClient<T>,
