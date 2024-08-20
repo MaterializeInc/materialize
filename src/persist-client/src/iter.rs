@@ -14,7 +14,7 @@ use arrow::array::{Array, AsArray};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
@@ -88,7 +88,7 @@ impl<T, D> Default for CodecSort<T, D> {
 }
 
 impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
-    type Updates = Columnar<T, D>;
+    type Updates = BlobTraceUpdates;
     type KV<'a> = (&'a [u8], &'a [u8]);
 
     fn key_lower(data: &FetchData<T>) -> Self::KV<'_> {
@@ -96,29 +96,57 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
     }
 
     fn updates_from_blob(&self, updates: BlobTraceUpdates) -> Self::Updates {
-        Columnar {
-            updates,
-            _phantom: Default::default(),
-        }
+        updates
     }
 
     fn len(updates: &Self::Updates) -> usize {
-        updates.len()
+        updates.records().len()
     }
 
     fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
-        updates.get(index)
+        let ((k, v), t, d) = updates.records().get(index)?;
+        Some(((k, v), T::decode(t), D::decode(d)))
     }
 
     fn interleave_updates<'a>(
         updates: &[&'a Self::Updates],
         elements: impl IntoIterator<Item = (Indices, Self::KV<'a>, T, D)>,
     ) -> Self::Updates {
-        Columnar::interleave(updates, elements)
+        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+        let (indices, timestamps, diffs) = elements
+            .into_iter()
+            .map(|(idx, _kv, t, d)| {
+                (
+                    idx,
+                    i64::from_le_bytes(T::encode(&t)),
+                    i64::from_le_bytes(D::encode(&d)),
+                )
+            })
+            .multiunzip::<(Vec<_>, Vec<_>, Vec<_>)>();
+        let mut interleave = |get_array: fn(&BlobTraceUpdates) -> &dyn Array| {
+            for part in updates {
+                arrays.push(get_array(&part));
+            }
+            let out = ::arrow::compute::interleave(arrays.as_slice(), &indices)
+                .expect("valid references");
+            arrays.clear();
+            out
+        };
+        let keys = interleave(|u| u.records().keys()).as_binary().clone();
+        let vals = interleave(|u| u.records().vals()).as_binary().clone();
+        let records = ColumnarRecords::new(keys, vals, timestamps.into(), diffs.into());
+        let keep_ext = updates.iter().all(|e| e.structured().is_some());
+        if keep_ext {
+            let key = interleave(|u| &u.structured().unwrap().key);
+            let val = interleave(|u| &u.structured().unwrap().val);
+            BlobTraceUpdates::Both(records, ColumnarRecordsStructuredExt { key, val })
+        } else {
+            BlobTraceUpdates::Row(records)
+        }
     }
 
     fn updates_to_blob(&self, updates: Self::Updates) -> BlobTraceUpdates {
-        updates.updates
+        updates
     }
 }
 
@@ -194,70 +222,6 @@ enum ConsolidationPart<T, D, Sort: RowSort<T, D> = CodecSort<T, D>> {
         part: Sort::Updates,
         cursor: PartIndices,
     },
-}
-
-pub(crate) struct Columnar<T, D> {
-    updates: BlobTraceUpdates,
-    _phantom: PhantomData<fn() -> (T, D)>,
-}
-
-impl<T, D> Debug for Columnar<T, D> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.updates.fmt(f)
-    }
-}
-
-impl<T: Codec64, D: Codec64> Columnar<T, D> {
-    fn len(&self) -> usize {
-        self.updates.records().len()
-    }
-
-    fn get(&self, index: usize) -> Option<((&[u8], &[u8]), T, D)> {
-        let ((k, v), t, d) = self.updates.records().get(index)?;
-        Some(((k, v), T::decode(t), D::decode(d)))
-    }
-
-    fn interleave<'a>(
-        parts: &[&'a Columnar<T, D>],
-        indices: impl IntoIterator<Item = (Indices, (&'a [u8], &'a [u8]), T, D)>,
-    ) -> Self {
-        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(parts.len());
-        let (indices, timestamps, diffs) = indices
-            .into_iter()
-            .map(|(idx, _kv, t, d)| {
-                (
-                    idx,
-                    i64::from_le_bytes(T::encode(&t)),
-                    i64::from_le_bytes(D::encode(&d)),
-                )
-            })
-            .multiunzip::<(Vec<_>, Vec<_>, Vec<_>)>();
-        let mut interleave = |get_array: fn(&BlobTraceUpdates) -> &dyn Array| {
-            for part in parts {
-                arrays.push(get_array(&part.updates));
-            }
-            let out = ::arrow::compute::interleave(arrays.as_slice(), &indices)
-                .expect("valid references");
-            arrays.clear();
-            out
-        };
-        let keys = interleave(|u| u.records().keys()).as_binary().clone();
-        let vals = interleave(|u| u.records().vals()).as_binary().clone();
-        let records = ColumnarRecords::new(keys, vals, timestamps.into(), diffs.into());
-        let keep_ext = parts.iter().all(|e| e.updates.structured().is_some());
-        let updates = if keep_ext {
-            let key = interleave(|u| &u.structured().unwrap().key);
-            let val = interleave(|u| &u.structured().unwrap().val);
-            BlobTraceUpdates::Both(records, ColumnarRecordsStructuredExt { key, val })
-        } else {
-            BlobTraceUpdates::Row(records)
-        };
-
-        Columnar {
-            updates,
-            _phantom: Default::default(),
-        }
-    }
 }
 
 impl<T: Timestamp + Codec64 + Lattice, D: Codec64, Sort: RowSort<T, D>>
