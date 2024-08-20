@@ -229,10 +229,16 @@ class QueryGenerator:
             if len(expressions) == 0:
                 continue
 
-            # remove sources that are not used by any (remaining) expression
-            data_source, additional_data_sources = self.minimize_sources(
-                data_source, additional_data_sources, expressions
-            )
+            if self.randomized_picker.random_boolean(
+                probability.NO_SOURCE_MINIMIZATION
+            ):
+                # do not minimize sources to catch errors like #29110
+                pass
+            else:
+                # remove sources that are not used by any (remaining) expression
+                data_source, additional_data_sources = self.minimize_sources(
+                    data_source, additional_data_sources, expressions
+                )
 
             uses_joins = len(additional_data_sources) > 0
 
@@ -299,10 +305,16 @@ class QueryGenerator:
 
             contains_aggregation = expression.is_aggregate
 
-            # remove sources that are not used by the expression
-            data_source, additional_data_sources = self.minimize_sources(
-                data_source, additional_data_sources, all_expressions
-            )
+            if self.randomized_picker.random_boolean(
+                probability.NO_SOURCE_MINIMIZATION
+            ):
+                # do not minimize sources to catch errors like #29110
+                pass
+            else:
+                # remove sources that are not used by the expression
+                data_source, additional_data_sources = self.minimize_sources(
+                    data_source, additional_data_sources, all_expressions
+                )
 
             uses_joins = len(additional_data_sources) > 0
 
