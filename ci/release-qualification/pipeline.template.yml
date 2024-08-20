@@ -55,14 +55,15 @@ steps:
     - id: zippy-dataflows-large
       label: "Large Zippy w/ complex dataflows"
       depends_on: build-aarch64
-      # 48h
-      timeout_in_minutes: 2880
+      # 24h
+      timeout_in_minutes: 1440
       agents:
         queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=DataflowsLarge, --actions=35000]
+            # OoM and out of disk
+            args: [--scenario=DataflowsLarge, --actions=15000]
 
     - id: zippy-pg-cdc-large
       label: "Large Zippy PostgresCdc"
