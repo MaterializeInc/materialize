@@ -81,9 +81,9 @@ use bytes::Bytes;
 use differential_dataflow::AsCollection;
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
+use mz_ore::collections::{HashMap, HashSet};
 use mz_ore::future::InTask;
-use mz_ore::iter::IteratorExt;
+use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
@@ -433,37 +433,54 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             // this transaction and therefore be able to pass the data of the
                             // transaction through as we stream it.
                             upper_cap_set.downgrade([&data_upper]);
-                            while let Some((oid, output_index, event, diff)) = tx.try_next().await?
-                            {
-                                let event = match event {
-                                    Ok(cols) => {
-                                        row_temp.clear();
-                                        for c in cols {
-                                            let c = c.map(|c| {
-                                                let mut col_vec =
-                                                    col_temp.pop().unwrap_or_default();
-                                                col_vec.clear();
-                                                col_vec.extend_from_slice(&c);
-                                                col_vec
-                                            });
-                                            row_temp.push(c);
+                            while let Some((oid, event)) = tx.try_next().await? {
+                                // The converted event from bytes::Bytes based data, which is not
+                                // compatible with `columnation`, to Vec<u8> data that is.
+                                let mut event_cached = None;
+                                for (output_index, output) in &table_info[&oid] {
+                                    let (event, diff) = match &event {
+                                        TxEvent::Update(res, diff) => match event_cached {
+                                            Some(update) => (update, *diff),
+                                            None => match res {
+                                                Ok(cols) => {
+                                                    row_temp.clear();
+                                                    for c in cols {
+                                                        let c = c.as_ref().map(|c| {
+                                                            let mut col_vec =
+                                                                col_temp.pop().unwrap_or_default();
+                                                            col_vec.clear();
+                                                            col_vec.extend_from_slice(c);
+                                                            col_vec
+                                                        });
+                                                        row_temp.push(c);
+                                                    }
+                                                    (Ok(std::mem::take(&mut row_temp)), *diff)
+                                                }
+                                                Err(err) => (Err(err.clone().into()), *diff),
+                                            },
+                                        },
+                                        TxEvent::SchemaChange(desc) => {
+                                            match verify_schema(&output.desc, desc, &output.casts) {
+                                                Ok(()) => continue,
+                                                Err(err) => (Err(err.into()), 1),
+                                            }
                                         }
-                                        Ok(std::mem::take(&mut row_temp))
+                                    };
+                                    let mut data = (oid, *output_index, event);
+                                    if let Some((data_cap, req)) = rewinds.get(output_index) {
+                                        if commit_lsn <= req.snapshot_lsn {
+                                            let update = (data, MzOffset::from(0), -diff);
+                                            data_output.give_fueled(data_cap, &update).await;
+                                            data = update.0;
+                                        }
                                     }
-                                    Err(err) => Err(err.into()),
-                                };
-                                let mut data = (oid, output_index, event);
-                                if let Some((data_cap, req)) = rewinds.get(&output_index) {
-                                    if commit_lsn <= req.snapshot_lsn {
-                                        let update = (data, MzOffset::from(0), -diff);
-                                        data_output.give_fueled(data_cap, &update).await;
-                                        data = update.0;
-                                    }
+                                    let update = (data, commit_lsn, diff);
+                                    data_output.give_fueled(&data_cap_set[0], &update).await;
+                                    // Store udpate for reuse if more outputs need it
+                                    event_cached = Some(update.0 .2);
                                 }
-                                let update = (data, commit_lsn, diff);
-                                data_output.give_fueled(&data_cap_set[0], &update).await;
                                 // Store buffers for reuse
-                                if let Ok(mut row) = update.0 .2 {
+                                if let Some(Ok(mut row)) = event_cached {
                                     col_temp.extend(row.drain(..).flatten());
                                     row_temp = row;
                                 }
@@ -736,6 +753,11 @@ async fn raw_stream<'a>(
     Ok(Ok(stream))
 }
 
+enum TxEvent {
+    Update(Result<Vec<Option<Bytes>>, DefiniteError>, Diff),
+    SchemaChange(PostgresTableDesc),
+}
+
 /// Extracts a single transaction from the replication stream delimited by a BEGIN and COMMIT
 /// message. The BEGIN message must have already been consumed from the stream before calling this
 /// function.
@@ -748,15 +770,14 @@ fn extract_transaction<'a>(
     ssh_tunnel_manager: &'a SshTunnelManager,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
-    errored_outputs: &'a mut HashSet<usize>,
-) -> impl AsyncStream<
-    Item = Result<(u32, usize, Result<Vec<Option<Bytes>>, DefiniteError>, Diff), TransientError>,
-> + 'a {
+    errored_tables: &'a mut HashSet<u32>,
+) -> impl AsyncStream<Item = Result<(u32, TxEvent), TransientError>> + 'a {
     use LogicalReplicationMessage::*;
     async_stream::try_stream!({
         let mut stream = pin!(stream);
         metrics.transactions.inc();
         metrics.lsn.set(commit_lsn.offset);
+
         while let Some(event) = stream.try_next().await? {
             // We can ignore keepalive messages while processing a transaction because the
             // commit_lsn will drive progress.
@@ -774,16 +795,7 @@ fn extract_transaction<'a>(
                 Insert(body) => {
                     metrics.inserts.inc();
                     let row = unpack_tuple(body.tuple().tuple_data());
-                    let rel = body.rel_id();
-                    for ((output, _), row) in table_info
-                        .get(&rel)
-                        .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                        .into_iter()
-                        .flatten()
-                        .repeat_clone(row)
-                    {
-                        yield (rel, *output, row, 1);
-                    }
+                    yield (body.rel_id(), TxEvent::Update(row, 1));
                 }
                 Update(body) => match body.old_tuple() {
                     Some(old_tuple) => {
@@ -796,101 +808,57 @@ fn extract_transaction<'a>(
                                     _ => new,
                                 });
                         let old_row = unpack_tuple(old_tuple.tuple_data());
+                        yield (body.rel_id(), TxEvent::Update(old_row, -1));
                         let new_row = unpack_tuple(new_tuple);
-                        let rel = body.rel_id();
-                        for ((output, _), (old_row, new_row)) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                            .repeat_clone((old_row, new_row))
-                        {
-                            yield (rel, *output, old_row, -1);
-                            yield (rel, *output, new_row, 1);
-                        }
+                        yield (body.rel_id(), TxEvent::Update(new_row, 1));
                     }
                     None => {
-                        let rel = body.rel_id();
-                        for (output, _) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                        {
-                            yield (rel, *output, Err(DefiniteError::DefaultReplicaIdentity), 1);
-                        }
+                        yield (
+                            body.rel_id(),
+                            TxEvent::Update(Err(DefiniteError::DefaultReplicaIdentity), 1),
+                        );
                     }
                 },
                 Delete(body) => match body.old_tuple() {
                     Some(old_tuple) => {
                         metrics.deletes.inc();
                         let row = unpack_tuple(old_tuple.tuple_data());
-                        let rel = body.rel_id();
-                        for ((output, _), row) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                            .repeat_clone(row)
-                        {
-                            yield (rel, *output, row, -1);
-                        }
+                        yield (body.rel_id(), TxEvent::Update(row, -1));
                     }
                     None => {
-                        let rel = body.rel_id();
-                        for (output, _) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                        {
-                            yield (rel, *output, Err(DefiniteError::DefaultReplicaIdentity), 1);
-                        }
+                        yield (
+                            body.rel_id(),
+                            TxEvent::Update(Err(DefiniteError::DefaultReplicaIdentity), 1),
+                        );
                     }
                 },
-                Relation(body) => {
-                    let rel_id = body.rel_id();
-                    let valid_outputs = table_info
-                        .get(&rel_id)
-                        .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>();
-                    if valid_outputs.len() > 0 {
-                        // Because the replication stream doesn't include columns' attnums, we need
-                        // to check the current local schema against the current remote schema to
-                        // ensure e.g. we haven't received a schema update with the same terminal
-                        // column name which is actually a different column.
-                        let client = connection_config
-                            .connect("replication schema verification", ssh_tunnel_manager)
-                            .await?;
-                        let upstream_info =
-                            mz_postgres_util::publication_info(&client, publication).await?;
-                        let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
+                Relation(_) => {
+                    // Because the replication stream doesn't include columns' attnums, we need
+                    // to check the current local schema against the current remote schema to
+                    // ensure e.g. we haven't received a schema update with the same terminal
+                    // column name which is actually a different column.
+                    let client = connection_config
+                        .connect("replication schema verification", ssh_tunnel_manager)
+                        .await?;
+                    let upstream_info =
+                        mz_postgres_util::publication_info(&client, publication).await?;
+                    let mut upstream_info: HashMap<_, _> =
+                        upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
-                        for (output_index, output) in valid_outputs {
-                            if let Err(err) =
-                                verify_schema(rel_id, &output.desc, &upstream_info, &output.casts)
-                            {
-                                errored_outputs.insert(*output_index);
-                                yield (rel_id, *output_index, Err(err), 1);
+                    // Error any dropped tables.
+                    for oid in table_info.keys() {
+                        match upstream_info.remove(oid) {
+                            Some(desc) => {
+                                yield (*oid, TxEvent::SchemaChange(desc));
                             }
-
-                            // Error any dropped tables.
-                            for (oid, outputs) in table_info {
-                                if !upstream_info.contains_key(oid) {
-                                    for output in outputs.keys() {
-                                        if errored_outputs.insert(*output) {
-                                            // Minimize the number of excessive errors
-                                            // this will generate.
-                                            yield (
-                                                *oid,
-                                                *output,
-                                                Err(DefiniteError::TableDropped),
-                                                1,
-                                            );
-                                        }
-                                    }
+                            None => {
+                                if errored_tables.insert(*oid) {
+                                    // Minimize the number of excessive errors
+                                    // this will generate.
+                                    yield (
+                                        *oid,
+                                        TxEvent::Update(Err(DefiniteError::TableDropped), 1),
+                                    );
                                 }
                             }
                         }
@@ -898,12 +866,11 @@ fn extract_transaction<'a>(
                 }
                 Truncate(body) => {
                     for &rel_id in body.rel_ids() {
-                        if let Some(outputs) = table_info.get(&rel_id) {
-                            for (output, _) in outputs {
-                                if errored_outputs.insert(*output) {
-                                    yield (rel_id, *output, Err(DefiniteError::TableTruncated), 1);
-                                }
-                            }
+                        if errored_tables.insert(rel_id) {
+                            yield (
+                                rel_id,
+                                TxEvent::Update(Err(DefiniteError::TableTruncated), 1),
+                            );
                         }
                     }
                 }
