@@ -28,7 +28,8 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount, WeightedPodAffinityTerm,
+    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
+    WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -944,7 +945,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                                 storage_class_name: Some(
                                     ephemeral_volume_storage_class.to_string(),
                                 ),
-                                resources: Some(ResourceRequirements {
+                                resources: Some(VolumeResourceRequirements {
                                     requests: Some(BTreeMap::from([(
                                         "storage".to_string(),
                                         Quantity(
@@ -982,7 +983,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 },
                 spec: Some(PersistentVolumeClaimSpec {
                     access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                    resources: Some(ResourceRequirements {
+                    resources: Some(VolumeResourceRequirements {
                         requests: Some(BTreeMap::from([(
                             "storage".to_string(),
                             Quantity("10Gi".to_string()),
