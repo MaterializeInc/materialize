@@ -417,8 +417,11 @@ async fn handle_post_auth_api_token(
     }
 
     let user_api_tokens = context.user_api_tokens.lock().unwrap();
-    let access_token = match user_api_tokens.get(&request) {
-        Some(email) => {
+    let access_token = match user_api_tokens
+        .iter()
+        .find(|(token, _)| token.client_id == request.client_id && token.secret == request.secret)
+    {
+        Some((_, email)) => {
             let users = context.users.lock().unwrap();
             let user = users
                 .get(email)
@@ -436,8 +439,10 @@ async fn handle_post_auth_api_token(
         }
         None => {
             let tenant_api_tokens = context.tenant_api_tokens.lock().unwrap();
-            match tenant_api_tokens.get(&request) {
-                Some(config) => generate_access_token(
+            match tenant_api_tokens.iter().find(|(token, _)| {
+                token.client_id == request.client_id && token.secret == request.secret
+            }) {
+                Some((_, config)) => generate_access_token(
                     &context,
                     ClaimTokenType::TenantApiToken,
                     request.client_id,
@@ -542,7 +547,8 @@ async fn handle_get_user_profile<'a>(
 async fn handle_post_user_api_token<'a>(
     State(context): State<Arc<Context>>,
     TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
-) -> Result<(StatusCode, Json<ApiToken>), StatusCode> {
+    Json(request): Json<UserApiTokenRequest>,
+) -> Result<(StatusCode, Json<UserApiTokenResponse>), StatusCode> {
     let claims: Claims = match decode_access_token(&context, authorization.token()) {
         Ok(TokenData { claims, .. }) => claims,
         Err(_) => return Err(StatusCode::UNAUTHORIZED),
@@ -551,9 +557,19 @@ async fn handle_post_user_api_token<'a>(
     let new_token = ApiToken {
         client_id: Uuid::new_v4(),
         secret: Uuid::new_v4(),
+        description: Some(request.description.clone()),
+        created_at: Utc::now(),
     };
     tokens.insert(new_token.clone(), claims.email.unwrap());
-    Ok((StatusCode::CREATED, Json(new_token)))
+
+    let response = UserApiTokenResponse {
+        client_id: new_token.client_id.to_string(),
+        description: new_token.description.unwrap(),
+        created_at: new_token.created_at,
+        secret: new_token.secret.to_string(),
+    };
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 // https://docs.frontegg.com/reference/userapitokensv1controller_getapitokens
@@ -572,8 +588,8 @@ async fn handle_list_user_api_tokens(
         .filter(|(_, email)| *email == claims.email.as_ref().unwrap())
         .map(|(token, _)| UserApiTokenResponse {
             client_id: token.client_id.to_string(),
-            description: "User API Token".to_string(),
-            created_at: Utc::now(),
+            description: token.description.clone().unwrap_or_default(),
+            created_at: token.created_at,
             secret: token.secret.to_string(),
         })
         .collect();
@@ -624,14 +640,11 @@ async fn handle_list_tenant_api_tokens(
         .iter()
         .map(|(api_token, config)| TenantApiTokenResponse {
             client_id: api_token.client_id,
-            description: "".to_string(),
+            description: config.description.clone(),
             secret: api_token.secret,
-            created_by_user_id: Uuid::nil(),
-            metadata: config
-                .metadata
-                .as_ref()
-                .and_then(|m| m.user.clone().map(serde_json::Value::String)),
-            created_at: Utc::now(),
+            created_by_user_id: config.created_by_user_id,
+            metadata: config.metadata.clone(),
+            created_at: config.created_at,
             role_ids: config.roles.clone(),
         })
         .collect();
@@ -653,33 +666,41 @@ async fn handle_create_tenant_api_token(
     let new_token = ApiToken {
         client_id: Uuid::new_v4(),
         secret: Uuid::new_v4(),
+        description: Some(request.description.clone()),
+        created_at: Utc::now(),
     };
 
     let config = TenantApiTokenConfig {
         tenant_id: claims.tenant_id,
-        metadata: request.metadata.as_ref().and_then(|m| {
-            if let serde_json::Value::String(s) = m {
-                Some(ClaimMetadata {
-                    user: Some(s.clone()),
-                })
-            } else {
-                None
-            }
-        }),
+        metadata: request.metadata.clone(),
         roles: request.role_ids.clone(),
+        description: request.description.clone(),
+        created_by_user_id: claims.sub,
+        created_at: new_token.created_at,
     };
 
     let mut tenant_api_tokens = context.tenant_api_tokens.lock().unwrap();
-    tenant_api_tokens.insert(new_token.clone(), config);
+    tenant_api_tokens.insert(new_token.clone(), config.clone());
+
+    let _access_token = generate_access_token(
+        &context,
+        ClaimTokenType::TenantApiToken,
+        new_token.client_id,
+        None,
+        None,
+        config.tenant_id,
+        config.roles.clone(),
+        config.metadata.clone(),
+    );
 
     let response = TenantApiTokenResponse {
         client_id: new_token.client_id,
-        description: request.description,
+        description: new_token.description.unwrap(),
         secret: new_token.secret,
-        created_by_user_id: claims.sub,
-        metadata: request.metadata,
-        created_at: Utc::now(),
-        role_ids: request.role_ids,
+        created_by_user_id: config.created_by_user_id,
+        metadata: config.metadata,
+        created_at: new_token.created_at,
+        role_ids: config.roles,
     };
 
     Ok((StatusCode::CREATED, Json(response)))
@@ -697,13 +718,14 @@ async fn handle_delete_tenant_api_token(
     };
 
     let mut tenant_api_tokens = context.tenant_api_tokens.lock().unwrap();
-    if tenant_api_tokens
-        .remove(&ApiToken {
-            client_id: token_id,
-            secret: Uuid::nil(),
-        })
-        .is_some()
-    {
+
+    let token_to_remove = tenant_api_tokens
+        .keys()
+        .find(|token| token.client_id == token_id)
+        .cloned();
+
+    if let Some(token) = token_to_remove {
+        tenant_api_tokens.remove(&token);
         StatusCode::OK
     } else {
         StatusCode::NOT_FOUND
@@ -1594,6 +1616,10 @@ pub struct ApiToken {
     #[serde(alias = "client_id")]
     pub client_id: Uuid,
     pub secret: Uuid,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(alias = "created_at", skip_deserializing)]
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1611,13 +1637,22 @@ pub struct UserApiTokenRequest {
     pub description: String,
 }
 
-
 #[derive(Serialize, Deserialize)]
 struct CreateTenantApiTokenRequest {
     description: String,
-    metadata: Option<serde_json::Value>,
+    metadata: Option<ClaimMetadata>,
     #[serde(rename = "roleIds")]
     role_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TenantApiTokenConfig {
+    pub tenant_id: Uuid,
+    pub metadata: Option<ClaimMetadata>,
+    pub roles: Vec<String>,
+    pub description: String,
+    pub created_by_user_id: Uuid,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1628,17 +1663,11 @@ struct TenantApiTokenResponse {
     secret: Uuid,
     #[serde(rename = "createdByUserId")]
     created_by_user_id: Uuid,
-    metadata: Option<serde_json::Value>,
+    metadata: Option<ClaimMetadata>,
     #[serde(rename = "createdAt")]
     created_at: DateTime<Utc>,
     #[serde(rename = "roleIds")]
     role_ids: Vec<String>,
-}
-
-pub struct TenantApiTokenConfig {
-    pub tenant_id: Uuid,
-    pub metadata: Option<ClaimMetadata>,
-    pub roles: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Serialize)]
@@ -1664,6 +1693,8 @@ impl UserConfig {
             initial_api_tokens: vec![ApiToken {
                 client_id: Uuid::new_v4(),
                 secret: Uuid::new_v4(),
+                description: Some("Initial API Token".to_string()),
+                created_at: Utc::now(),
             }],
             roles,
             auth_provider: None,
