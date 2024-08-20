@@ -128,6 +128,11 @@ where
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
         scope.feedback(T::Summary::default());
 
+    // Sniff out if this is on behalf of a transient dataflow. This doesn't
+    // affect the fetch behavior, it just causes us to use a different set of
+    // metrics.
+    let is_transient = !until.is_empty();
+
     let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
         &scope.parent,
         name,
@@ -158,8 +163,15 @@ where
         None => descs,
     };
 
-    let (parts, completed_fetches_stream, fetch_token) =
-        shard_source_fetch(&descs, name, client(), shard_id, key_schema, val_schema);
+    let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
+        &descs,
+        name,
+        client(),
+        shard_id,
+        key_schema,
+        val_schema,
+        is_transient,
+    );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
     tokens.push(fetch_token);
 
@@ -518,6 +530,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     shard_id: ShardId,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
+    is_transient: bool,
 ) -> (
     Stream<G, FetchedBlob<K, V, T, D>>,
     Stream<G, Infallible>,
@@ -551,6 +564,7 @@ where
                     shard_id,
                     key_schema,
                     val_schema,
+                    is_transient,
                     Diagnostics {
                         shard_name: name_owned.clone(),
                         handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),

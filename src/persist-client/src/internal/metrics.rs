@@ -538,6 +538,7 @@ impl MetricsVecs {
             snapshot: self.read_metrics("snapshot"),
             batch_fetcher: self.read_metrics("batch_fetcher"),
             compaction: self.read_metrics("compaction"),
+            unindexed: self.read_metrics("unindexed"),
         }
     }
 
@@ -677,6 +678,7 @@ pub struct BatchPartReadMetrics {
     pub(crate) snapshot: ReadMetrics,
     pub(crate) batch_fetcher: ReadMetrics,
     pub(crate) compaction: ReadMetrics,
+    pub(crate) unindexed: ReadMetrics,
 }
 
 #[derive(Debug, Clone)]

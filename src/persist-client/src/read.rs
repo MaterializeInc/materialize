@@ -1363,6 +1363,7 @@ mod tests {
                 shard_id,
                 Default::default(),
                 Default::default(),
+                false,
                 Diagnostics::for_tests(),
             )
             .await;
