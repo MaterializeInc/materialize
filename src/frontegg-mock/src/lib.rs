@@ -640,7 +640,7 @@ async fn handle_list_tenant_api_tokens(
         .iter()
         .map(|(api_token, config)| TenantApiTokenResponse {
             client_id: api_token.client_id,
-            description: config.description.clone(),
+            description: api_token.description.clone().unwrap(),
             secret: api_token.secret,
             created_by_user_id: config.created_by_user_id,
             metadata: config.metadata.clone(),
@@ -674,7 +674,7 @@ async fn handle_create_tenant_api_token(
         tenant_id: claims.tenant_id,
         metadata: request.metadata.clone(),
         roles: request.role_ids.clone(),
-        description: request.description.clone(),
+        description: Some(request.description.clone()),
         created_by_user_id: claims.sub,
         created_at: new_token.created_at,
     };
@@ -1650,7 +1650,7 @@ pub struct TenantApiTokenConfig {
     pub tenant_id: Uuid,
     pub metadata: Option<ClaimMetadata>,
     pub roles: Vec<String>,
-    pub description: String,
+    pub description: Option<String>,
     pub created_by_user_id: Uuid,
     pub created_at: DateTime<Utc>,
 }
