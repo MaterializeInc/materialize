@@ -1010,9 +1010,9 @@ where
         self.schemas.insert(
             id,
             EncodedSchemas {
-                key: K::encode_schema(&key_schema),
+                key: K::encode_schema(key_schema),
                 key_data_type: prost::Message::encode_to_vec(&key_dt.into_proto()).into(),
-                val: V::encode_schema(&val_schema),
+                val: V::encode_schema(val_schema),
                 val_data_type: prost::Message::encode_to_vec(&val_dt.into_proto()).into(),
             },
         );
