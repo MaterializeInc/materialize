@@ -2188,7 +2188,7 @@ mod tests {
         // Verify that the RelationDesc is backward compatible with itself (this
         // mostly checks for `unimplemented!` type panics).
         let migration =
-            mz_persist_types::schema::backward_compatible(&col.data_type(), &col.data_type());
+            mz_persist_types::schema::backward_compatible(col.data_type(), col.data_type());
         let migration = migration.expect("should be backward compatible with self");
         // Also verify that the Fn doesn't do anything wonky.
         let migrated = migration.migrate(Arc::new(col.clone()));
