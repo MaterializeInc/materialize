@@ -948,7 +948,11 @@ fn add_new_remove_old_builtin_items_migration(
         match system_object_mappings.remove(&desc) {
             Some(system_object_mapping) => {
                 if system_object_mapping.unique_identifier.fingerprint != fingerprint {
-                    assert_ne!(*MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, system_object_mapping.description, "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated");
+                    assert_ne!(
+                        *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
+                        system_object_mapping.description,
+                        "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
+                    );
                     assert_ne!(
                         builtin.catalog_item_type(),
                         CatalogItemType::Type,
