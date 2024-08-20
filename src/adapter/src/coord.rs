@@ -3524,7 +3524,11 @@ impl Coordinator {
                 "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
             );
             // This logic relies on the definition of `mz_storage_usage_by_shard` not changing.
-            let collection_timestamp = row.unpack()[3].unwrap_timestamptz();
+            let collection_timestamp = row
+                .unpack()
+                .get(3)
+                .expect("definition of mz_storage_by_shard changed")
+                .unwrap_timestamptz();
             let collection_timestamp = collection_timestamp.timestamp_millis();
             let collection_timestamp: u128 = collection_timestamp
                 .try_into()
