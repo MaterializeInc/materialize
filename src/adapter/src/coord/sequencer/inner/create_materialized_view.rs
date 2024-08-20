@@ -382,7 +382,7 @@ impl Coordinator {
                 let ids = self
                     .index_oracle(*cluster_id)
                     .sufficient_collections(resolved_ids.0.iter());
-                if !ids.difference(&read_holds.inner.id_bundle()).is_empty() {
+                if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
                          materialized view"

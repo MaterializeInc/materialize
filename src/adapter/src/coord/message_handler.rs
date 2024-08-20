@@ -108,10 +108,6 @@ impl Coordinator {
                 Message::AdvanceTimelines => {
                     self.advance_timelines().await;
                 }
-                Message::DropReadHolds(dropped_read_holds) => {
-                    tracing::debug!(?dropped_read_holds, "releasing dropped read holds!");
-                    self.release_read_holds(dropped_read_holds);
-                }
                 Message::ClusterEvent(event) => self.message_cluster_event(event).await,
                 Message::CancelPendingPeeks { conn_id } => {
                     self.cancel_pending_peeks(&conn_id);

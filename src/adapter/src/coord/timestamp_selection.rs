@@ -544,8 +544,7 @@ impl Coordinator {
     /// Determines the timestamp for a query, acquires read holds that ensure the
     /// query remains executable at that time, and returns those.
     ///
-    /// The caller is responsible for eventually dropping those read holds using
-    /// [Coordinator::release_read_holds]!
+    /// The caller is responsible for eventually dropping those read holds.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn determine_timestamp(
         &mut self,

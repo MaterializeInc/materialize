@@ -38,7 +38,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::read_policy::TimelineReadHolds;
+use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -77,12 +77,12 @@ impl TimelineContext {
 /// For each timeline we maintain a timestamp oracle, which is responsible for
 /// providing read (and sometimes write) timestamps, and a set of read holds which
 /// guarantee that those read timestamps are valid.
-pub(crate) struct TimelineState<T> {
+pub(crate) struct TimelineState<T: TimelyTimestamp> {
     pub(crate) oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
-    pub(crate) read_holds: TimelineReadHolds<T>,
+    pub(crate) read_holds: ReadHolds<T>,
 }
 
-impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
+impl<T: TimelyTimestamp> fmt::Debug for TimelineState<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimelineState")
             .field("read_holds", &self.read_holds)
@@ -243,7 +243,7 @@ impl Coordinator {
                 timeline.clone(),
                 TimelineState {
                     oracle,
-                    read_holds: TimelineReadHolds::new(),
+                    read_holds: ReadHolds::new(),
                 },
             );
         }
@@ -267,12 +267,11 @@ impl Coordinator {
         // Collect all GlobalIds associated with a compute instance ID.
         let cluster_set: BTreeSet<_> = clusters.into_iter().collect();
         for (_timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
-            let holds = read_holds
+            let compute_ids = read_holds
                 .compute_ids()
                 .filter(|(instance_id, _id)| cluster_set.contains(instance_id));
-            for (instance_id, ids) in holds {
-                let ids = ids.map(|(_antichain, id)| id);
-                compute.entry(*instance_id).or_default().extend(ids);
+            for (instance_id, id) in compute_ids {
+                compute.entry(instance_id).or_default().insert(id);
             }
         }
 
@@ -296,11 +295,11 @@ impl Coordinator {
 
         // Remove all of the underlying resources.
         for id in ids.storage_ids {
-            read_holds.remove_storage_id(&id);
+            read_holds.remove_storage_collection(id);
         }
         for (compute_id, ids) in ids.compute_ids {
             for id in ids {
-                read_holds.remove_compute_id(&compute_id, &id);
+                read_holds.remove_compute_collection(compute_id, id);
             }
         }
         let became_empty = read_holds.is_empty();
@@ -315,7 +314,7 @@ impl Coordinator {
         let mut empty_timelines = BTreeSet::new();
         for (compute_instance, id) in ids {
             for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-                read_holds.remove_compute_id(&compute_instance, &id);
+                read_holds.remove_compute_collection(compute_instance, id);
                 if read_holds.is_empty() {
                     empty_timelines.insert(timeline.clone());
                 }
@@ -637,9 +636,7 @@ impl Coordinator {
                 }
             };
             let read_ts = oracle.read_ts().await;
-            if read_holds.times().any(|time| time.less_than(&read_ts)) {
-                self.update_timeline_read_holds(&mut read_holds, read_ts);
-            }
+            read_holds.downgrade(read_ts);
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
