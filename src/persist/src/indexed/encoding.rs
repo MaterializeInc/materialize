@@ -21,8 +21,9 @@ use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
+use mz_persist_types::columnar::codec_to_schema2;
 use mz_persist_types::parquet::EncodingConfig;
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec, Codec64};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
@@ -209,6 +210,28 @@ impl BlobTraceUpdates {
         match self {
             BlobTraceUpdates::Row(_) => None,
             BlobTraceUpdates::Both(_, structured) => Some(structured),
+        }
+    }
+
+    /// Return the [`ColumnarRecordsStructuredExt`] of the blob.
+    pub fn get_or_make_structured<K: Codec, V: Codec>(
+        &mut self,
+        key_schema: &K::Schema,
+        value_schema: &V::Schema,
+    ) -> &ColumnarRecordsStructuredExt {
+        match self {
+            BlobTraceUpdates::Row(records) => {
+                let key = codec_to_schema2::<K>(key_schema, records.keys()).expect("valid keys");
+                let val =
+                    codec_to_schema2::<V>(value_schema, records.vals()).expect("valid values");
+                *self = BlobTraceUpdates::Both(
+                    records.clone(),
+                    ColumnarRecordsStructuredExt { key, val },
+                );
+                // Recurse at most once, since this data is now structured.
+                self.get_or_make_structured::<K, V>(key_schema, value_schema)
+            }
+            BlobTraceUpdates::Both(_, structured) => structured,
         }
     }
 }

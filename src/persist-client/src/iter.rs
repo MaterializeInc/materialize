@@ -31,12 +31,14 @@ use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredEx
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::Codec64;
+use mz_persist_types::arrow::{ArrayIdx, ArrayOrd};
+use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
 
 use crate::fetch::{EncodedPart, FetchBatchFilter};
+use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
 use crate::internal::state::BatchPart;
@@ -63,7 +65,7 @@ pub(crate) trait RowSort<T, D> {
 
     fn desired_sort(data: &FetchData<T>) -> bool;
 
-    fn key_lower(part: &FetchData<T>) -> Self::KV<'_>;
+    fn kv_lower(part: &FetchData<T>) -> Option<Self::KV<'_>>;
 
     fn updates_from_blob(&self, updates: BlobTraceUpdates) -> Self::Updates;
 
@@ -77,6 +79,43 @@ pub(crate) trait RowSort<T, D> {
     ) -> Self::Updates;
 
     fn updates_to_blob(&self, updates: Self::Updates) -> BlobTraceUpdates;
+}
+
+fn interleave_updates<T: Codec64, D: Codec64>(
+    updates: &[&BlobTraceUpdates],
+    elements: impl IntoIterator<Item = (Indices, T, D)>,
+) -> BlobTraceUpdates {
+    let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+    let (indices, timestamps, diffs) = elements
+        .into_iter()
+        .map(|(idx, t, d)| {
+            (
+                idx,
+                i64::from_le_bytes(T::encode(&t)),
+                i64::from_le_bytes(D::encode(&d)),
+            )
+        })
+        .multiunzip::<(Vec<_>, Vec<_>, Vec<_>)>();
+    let mut interleave = |get_array: fn(&BlobTraceUpdates) -> &dyn Array| {
+        for part in updates {
+            arrays.push(get_array(part));
+        }
+        let out =
+            ::arrow::compute::interleave(arrays.as_slice(), &indices).expect("valid references");
+        arrays.clear();
+        out
+    };
+    let keys = interleave(|u| u.records().keys()).as_binary().clone();
+    let vals = interleave(|u| u.records().vals()).as_binary().clone();
+    let records = ColumnarRecords::new(keys, vals, timestamps.into(), diffs.into());
+    let keep_ext = updates.iter().all(|e| e.structured().is_some());
+    if keep_ext {
+        let key = interleave(|u| &u.structured().unwrap().key);
+        let val = interleave(|u| &u.structured().unwrap().val);
+        BlobTraceUpdates::Both(records, ColumnarRecordsStructuredExt { key, val })
+    } else {
+        BlobTraceUpdates::Row(records)
+    }
 }
 
 /// Sort parts ordered by the codec-encoded key and value columns.
@@ -104,8 +143,8 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
         }
     }
 
-    fn key_lower(data: &FetchData<T>) -> Self::KV<'_> {
-        (data.part.key_lower(), &[])
+    fn kv_lower(data: &FetchData<T>) -> Option<Self::KV<'_>> {
+        Some((data.part.key_lower(), &[]))
     }
 
     fn updates_from_blob(&self, updates: BlobTraceUpdates) -> Self::Updates {
@@ -125,41 +164,105 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
         updates: &[&'a Self::Updates],
         elements: impl IntoIterator<Item = (Indices, Self::KV<'a>, T, D)>,
     ) -> Self::Updates {
-        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
-        let (indices, timestamps, diffs) = elements
-            .into_iter()
-            .map(|(idx, _kv, t, d)| {
-                (
-                    idx,
-                    i64::from_le_bytes(T::encode(&t)),
-                    i64::from_le_bytes(D::encode(&d)),
-                )
-            })
-            .multiunzip::<(Vec<_>, Vec<_>, Vec<_>)>();
-        let mut interleave = |get_array: fn(&BlobTraceUpdates) -> &dyn Array| {
-            for part in updates {
-                arrays.push(get_array(&part));
-            }
-            let out = ::arrow::compute::interleave(arrays.as_slice(), &indices)
-                .expect("valid references");
-            arrays.clear();
-            out
-        };
-        let keys = interleave(|u| u.records().keys()).as_binary().clone();
-        let vals = interleave(|u| u.records().vals()).as_binary().clone();
-        let records = ColumnarRecords::new(keys, vals, timestamps.into(), diffs.into());
-        let keep_ext = updates.iter().all(|e| e.structured().is_some());
-        if keep_ext {
-            let key = interleave(|u| &u.structured().unwrap().key);
-            let val = interleave(|u| &u.structured().unwrap().val);
-            BlobTraceUpdates::Both(records, ColumnarRecordsStructuredExt { key, val })
-        } else {
-            BlobTraceUpdates::Row(records)
-        }
+        interleave_updates(
+            updates,
+            elements.into_iter().map(|(idx, _kv, t, d)| (idx, t, d)),
+        )
     }
 
     fn updates_to_blob(&self, updates: Self::Updates) -> BlobTraceUpdates {
         updates
+    }
+}
+
+/// An opaque update set for use by StructuredSort.
+#[derive(Clone, Debug)]
+pub struct StructuredUpdates {
+    key_ord: ArrayOrd,
+    val_ord: ArrayOrd,
+    /// Invariant: the structured data is always present.
+    data: BlobTraceUpdates,
+}
+
+/// Sort parts ordered by the codec-encoded key and value columns.
+#[derive(Debug)]
+pub struct StructuredSort<K: Codec, V: Codec, T, D> {
+    schemas: Schemas<K, V>,
+    _time_diff: PhantomData<fn(T, D)>,
+}
+
+impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
+    /// A sort for structured data with the given schema.
+    pub fn new(schemas: Schemas<K, V>) -> Self {
+        Self {
+            schemas,
+            _time_diff: Default::default(),
+        }
+    }
+}
+
+impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSort<K, V, T, D> {
+    type Updates = StructuredUpdates;
+    type KV<'a> = (ArrayIdx<'a>, ArrayIdx<'a>);
+
+    fn desired_sort(_data: &FetchData<T>) -> bool {
+        // TODO: add blob metadata that specifies the actual sort.
+        false
+    }
+
+    fn kv_lower(_data: &FetchData<T>) -> Option<Self::KV<'_>> {
+        // TODO: add structured lower to blob metadata.
+        None
+    }
+
+    fn updates_from_blob(&self, mut updates: BlobTraceUpdates) -> Self::Updates {
+        let structured = updates
+            .get_or_make_structured::<K, V>(self.schemas.key.as_ref(), self.schemas.val.as_ref());
+        let key_ord = ArrayOrd::new(structured.key.as_ref());
+        let val_ord = ArrayOrd::new(structured.val.as_ref());
+        StructuredUpdates {
+            key_ord,
+            val_ord,
+            data: updates,
+        }
+    }
+
+    fn len(updates: &Self::Updates) -> usize {
+        updates.data.records().len()
+    }
+
+    fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
+        let (_, t, d) = updates.data.records().get(index)?;
+        Some((
+            (updates.key_ord.at(index), updates.val_ord.at(index)),
+            T::decode(t),
+            D::decode(d),
+        ))
+    }
+
+    fn interleave_updates<'a>(
+        updates: &[&'a Self::Updates],
+        elements: impl IntoIterator<Item = (Indices, Self::KV<'a>, T, D)>,
+    ) -> Self::Updates {
+        let updates: Vec<_> = updates.iter().map(|u| &u.data).collect();
+        let interleaved = interleave_updates(
+            &updates,
+            elements.into_iter().map(|(idx, _, t, d)| (idx, t, d)),
+        );
+        let structured = interleaved
+            .structured()
+            .expect("structured data is always present on StructuredUpdates");
+        let key_ord = ArrayOrd::new(structured.key.as_ref());
+        let val_ord = ArrayOrd::new(structured.val.as_ref());
+        StructuredUpdates {
+            key_ord,
+            val_ord,
+            data: interleaved,
+        }
+    }
+
+    fn updates_to_blob(&self, updates: Self::Updates) -> BlobTraceUpdates {
+        updates.data
     }
 }
 
@@ -256,7 +359,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64, Sort: RowSort<T, D>>
 
     fn kvt_lower(&self) -> Option<(Sort::KV<'_>, T)> {
         match self {
-            ConsolidationPart::Queued { data, .. } => Some((Sort::key_lower(data), T::minimum())),
+            ConsolidationPart::Queued { data, .. } => Some((Sort::kv_lower(data)?, T::minimum())),
             ConsolidationPart::Encoded { part, cursor } => {
                 let (kv, t, _d) = Sort::get(part, cursor.index())?;
                 Some((kv, t))
@@ -315,10 +418,11 @@ pub(crate) const SPLIT_OLD_RUNS: Config<bool> = Config::new(
     "If set, split up runs that were written by older versions of Materialize and may not truly be consolidated."
 );
 
-impl<T, D> Consolidator<T, D>
+impl<T, D, Sort> Consolidator<T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice,
     D: Codec64 + Semigroup + Ord,
+    Sort: RowSort<T, D>,
 {
     /// Create a new [Self] instance with the given prefetch budget. This budget is a "soft limit"
     /// on the size of the parts that the consolidator will fetch... we'll try and stay below the
@@ -326,6 +430,7 @@ where
     pub fn new(
         context: String,
         shard_id: ShardId,
+        sort: Sort,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -338,7 +443,7 @@ where
             context,
             metrics,
             shard_id,
-            sort: CodecSort::default(),
+            sort,
             blob,
             read_metrics: Arc::new(read_metrics),
             shard_metrics,
@@ -1059,6 +1164,7 @@ mod tests {
             let mut consolidator: Consolidator<u64, i64> = Consolidator::new(
                 "test".to_string(),
                 shard_id,
+                CodecSort::default(),
                 blob,
                 Arc::clone(&metrics),
                 shard_metrics,

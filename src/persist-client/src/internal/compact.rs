@@ -39,7 +39,7 @@ use crate::internal::machine::Machine;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{BatchPart, HollowBatch, RunMeta};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
+use crate::iter::{CodecSort, Consolidator, SPLIT_OLD_RUNS};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -711,6 +711,7 @@ where
                 desc.upper().elements()
             ),
             *shard_id,
+            CodecSort::default(),
             blob,
             Arc::clone(&metrics),
             shard_metrics,

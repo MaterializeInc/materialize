@@ -42,7 +42,7 @@ use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
+use crate::iter::{CodecSort, Consolidator, SPLIT_OLD_RUNS};
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
@@ -991,6 +991,7 @@ where
         let mut consolidator = Consolidator::new(
             format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
             self.shard_id(),
+            CodecSort::default(),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
