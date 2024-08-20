@@ -15,7 +15,20 @@ cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).
 
 {{< diagram "alter-cluster-reset.svg" >}}
 
+### `with_options`
+
+{{< private-preview />}}
+
+{{< diagram "with-options-alter-cluster-set.svg" >}}
+
 {{% cluster-options %}}
+
+
+### `WITH (WAIT UNTIL READY)` options
+Field                         | Value                 | Description
+------------------------------|-----------------------|-------------------------------------
+**TIMEOUT**                   | `duration`            | The maximum duration to wait for the new replicas to be ready.
+**ON TIMEOUT**                | [`COMMIT`,`ROLLBACK`] | The action to take on timeout. `COMMIT` will cutover to the new replicas regardless of their hydration status, which may lead to downtime.  `ROLLBACK` will remove any pending replicas and return a timeout error.
 
 ## Examples
 
@@ -46,6 +59,28 @@ ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 See the reference documentation for [`CREATE CLUSTER`](../create-cluster/#scheduling)
 or [`CREATE MATERIALIZED VIEW`](../create-materialized-view/#refresh-strategies)
 for more details on scheduled clusters.
+
+### No-downtime reconfiguration
+
+{{< private-preview />}}
+Changing the configuration of a cluster using the `ALTER CLUSTER` command
+requires the cluster to restart, which incurs **downtime**. For clusters that
+don't contain sources or sinks, you can use the `WAIT UNTIL READY` option to
+perform a graceful reconfiguration, which spins up an additional cluster
+replica under the covers with the desired new configuration, waits for the
+replica to be hydrated, and then replaces the original replica. This allows you
+to perform operations like cluster resizing with **no downtime**.
+
+```sql
+ALTER CLUSTER c1 SET (SIZE '100CC') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'))
+````
+
+The `ALTER` statement will block while the new replica becomes ready, which
+could take as long as the specified timeout. During this operation, any other
+reconfiguration command will block, and any connection interruption or
+statement cancelation will cause a rollback — no configuration changes will
+take effect in that case.
+
 
 ## Converting unmanaged to managed clusters
 
