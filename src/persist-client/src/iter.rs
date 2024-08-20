@@ -61,6 +61,8 @@ pub(crate) trait RowSort<T, D> {
 
     type KV<'a>: Ord + Copy + Debug;
 
+    fn desired_sort(data: &FetchData<T>) -> bool;
+
     fn key_lower(part: &FetchData<T>) -> Self::KV<'_>;
 
     fn updates_from_blob(&self, updates: BlobTraceUpdates) -> Self::Updates;
@@ -90,6 +92,17 @@ impl<T, D> Default for CodecSort<T, D> {
 impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
     type Updates = BlobTraceUpdates;
     type KV<'a> = (&'a [u8], &'a [u8]);
+
+    fn desired_sort(data: &FetchData<T>) -> bool {
+        let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
+        match data.part.writer_key() {
+            // Old hollow parts may have used a different sort
+            Some(key) => key >= min_version,
+            // Inline parts are all recent enough to have been sorted using the latest ordering,
+            // if they're sorted at all.
+            None => true,
+        }
+    }
 
     fn key_lower(data: &FetchData<T>) -> Self::KV<'_> {
         (data.part.key_lower(), &[])
@@ -151,20 +164,6 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
 }
 
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
-    /// Returns true iff we were using a different ordering for data or timestamps
-    /// when the part was created. This means parts or runs may not be ordered according to
-    /// our modern definition, even if the metadata indicates they've been compacted before.
-    fn wrong_sort(&self) -> bool {
-        let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
-        match self.part.writer_key() {
-            // Old hollow parts may have used a different sort
-            Some(key) => key < min_version,
-            // Inline parts are all recent enough to have been sorted using the latest ordering,
-            // if they're sorted at all.
-            None => false,
-        }
-    }
-
     async fn fetch(
         self,
         shard_id: ShardId,
@@ -412,7 +411,7 @@ where
         // runs if we change our sort order or have bugs, for example. Defend against this by
         // splitting up a run if it contains possibly-unconsolidated parts.
         let wrong_sort = run.iter().any(|(p, _)| match p {
-            ConsolidationPart::Queued { data, .. } => data.wrong_sort(),
+            ConsolidationPart::Queued { data, .. } => !Sort::desired_sort(data),
             ConsolidationPart::Encoded { .. } => false,
         });
 
@@ -522,7 +521,7 @@ where
                     }
                     self.metrics.consolidation.parts_fetched.inc();
 
-                    let wrong_sort = data.wrong_sort();
+                    let wrong_sort = !Sort::desired_sort(&data);
 
                     *part = match task.take() {
                         Some(handle) => ConsolidationPart::from_encoded(
