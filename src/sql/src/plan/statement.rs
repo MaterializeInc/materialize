@@ -814,13 +814,13 @@ impl<'a> StatementContext<'a> {
 
     /// Returns an error if the named `FeatureFlag` is not set to `on`.
     pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
-        flag.enabled(self.catalog.system_vars())?;
+        flag.require(self.catalog.system_vars())?;
         Ok(())
     }
 
     /// Returns true if the named [`FeatureFlag`] is set to `on`, returns false otherwise.
     pub fn is_feature_flag_enabled(&self, flag: &FeatureFlag) -> bool {
-        flag.enabled(self.catalog.system_vars()).is_ok()
+        self.require_feature_flag(flag).is_ok()
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {

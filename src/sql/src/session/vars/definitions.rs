@@ -64,8 +64,9 @@ pub struct VarDefinition {
     pub value: VarDefaultValue,
     /// Constraint that must be upheld for this variable to be valid.
     pub constraint: Option<ValueConstraint>,
-    /// Optionally hides this variable if it's related to a feature flag being enabled.
-    pub feature_flag: Option<&'static FeatureFlag>,
+    /// When set, prevents getting or setting the variable unless the specified
+    /// feature flag is enabled.
+    pub require_feature_flag: Option<&'static FeatureFlag>,
 
     /// Method to parse [`VarInput`] into a type that implements [`Value`].
     ///
@@ -106,7 +107,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -125,7 +126,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -144,7 +145,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -169,7 +170,7 @@ impl VarDefinition {
     }
 
     pub const fn with_feature_flag(mut self, feature_flag: &'static FeatureFlag) -> Self {
-        self.feature_flag = Some(feature_flag);
+        self.require_feature_flag = Some(feature_flag);
         self
     }
 
@@ -205,8 +206,8 @@ impl Var for VarDefinition {
         } else if self.name().starts_with("unsafe") && !system_vars.allow_unsafe() {
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
-            if let Some(flag) = self.feature_flag {
-                flag.enabled(system_vars)?;
+            if let Some(flag) = self.require_feature_flag {
+                flag.require(system_vars)?;
             }
 
             Ok(())

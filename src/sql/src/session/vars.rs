@@ -2349,7 +2349,9 @@ pub struct FeatureFlag {
 }
 
 impl FeatureFlag {
-    pub fn enabled(&self, system_vars: &SystemVars) -> Result<(), VarError> {
+    /// Returns an error unless the feature flag is enabled in the provided
+    /// `system_vars`.
+    pub fn require(&self, system_vars: &SystemVars) -> Result<(), VarError> {
         match *system_vars.expect_value::<bool>(self.flag) {
             true => Ok(()),
             false => Err(VarError::RequiresFeatureFlag {
