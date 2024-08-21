@@ -704,7 +704,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, parts, self.num_updates, self.runs),
+            HollowBatch::new(desc, parts, self.num_updates, self.runs, vec![]),
         );
 
         Ok(batch)

@@ -532,7 +532,7 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
             if b.is_empty() {
                 empty_batches += 1;
             }
-            for run in b.runs() {
+            for (_meta, run) in b.runs() {
                 let largest_part = run
                     .iter()
                     .map(|p| p.encoded_size_bytes())

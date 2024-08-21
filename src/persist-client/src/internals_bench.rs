@@ -46,6 +46,7 @@ pub fn trace_push_batch_one_iter(num_batches: usize) {
             vec![],
             len,
             vec![],
+            vec![],
         ));
     }
     black_box(trace);

@@ -1800,7 +1800,7 @@ pub mod datadriven {
             }
         }
         if !s.is_empty() {
-            for (idx, run) in batch.runs().enumerate() {
+            for (idx, (_meta, run)) in batch.runs().enumerate() {
                 write!(s, "<run {idx}>\n");
                 for part in run {
                     let part_idx = batch
@@ -2024,7 +2024,7 @@ pub mod datadriven {
                 batch.desc.lower().elements(),
                 batch.desc.upper().elements()
             );
-            for (run, parts) in batch.runs().enumerate() {
+            for (run, (_meta, parts)) in batch.runs().enumerate() {
                 writeln!(result, "<run {run}>");
                 for (part_id, part) in parts.into_iter().enumerate() {
                     writeln!(result, "<part {part_id}>");

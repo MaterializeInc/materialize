@@ -488,19 +488,25 @@
       "part_runs": [
         [
           {
-            "type": "Inline",
-            "updates": {
-              "desc": null,
-              "index": 0,
-              "updates[len]": 0
-            },
-            "ts_rewrite": {
-              "elements": [
-                245054358183071630
-              ]
-            },
-            "schema_id": "h9875232680843580888"
-          }
+            "order": null,
+            "schema": null
+          },
+          [
+            {
+              "type": "Inline",
+              "updates": {
+                "desc": null,
+                "index": 0,
+                "updates[len]": 0
+              },
+              "ts_rewrite": {
+                "elements": [
+                  245054358183071630
+                ]
+              },
+              "schema_id": "h9875232680843580888"
+            }
+          ]
         ]
       ]
     },
@@ -531,29 +537,35 @@
       "part_runs": [
         [
           {
-            "type": "Inline",
-            "updates": {
-              "desc": null,
-              "index": 0,
-              "updates[len]": 0
-            },
-            "ts_rewrite": null,
-            "schema_id": "h9518259874590116324"
+            "order": null,
+            "schema": null
           },
-          {
-            "type": "Inline",
-            "updates": {
-              "desc": null,
-              "index": 0,
-              "updates[len]": 0
+          [
+            {
+              "type": "Inline",
+              "updates": {
+                "desc": null,
+                "index": 0,
+                "updates[len]": 0
+              },
+              "ts_rewrite": null,
+              "schema_id": "h9518259874590116324"
             },
-            "ts_rewrite": {
-              "elements": [
-                17071391453325819086
-              ]
-            },
-            "schema_id": null
-          }
+            {
+              "type": "Inline",
+              "updates": {
+                "desc": null,
+                "index": 0,
+                "updates[len]": 0
+              },
+              "ts_rewrite": {
+                "elements": [
+                  17071391453325819086
+                ]
+              },
+              "schema_id": null
+            }
+          ]
         ]
       ]
     },
@@ -571,29 +583,35 @@
       "part_runs": [
         [
           {
-            "type": "Inline",
-            "updates": {
-              "desc": null,
-              "index": 0,
-              "updates[len]": 0
-            },
-            "ts_rewrite": {
-              "elements": [
-                15961028640594888816
-              ]
-            },
-            "schema_id": null
+            "order": null,
+            "schema": null
           },
-          {
-            "type": "Inline",
-            "updates": {
-              "desc": null,
-              "index": 0,
-              "updates[len]": 0
+          [
+            {
+              "type": "Inline",
+              "updates": {
+                "desc": null,
+                "index": 0,
+                "updates[len]": 0
+              },
+              "ts_rewrite": {
+                "elements": [
+                  15961028640594888816
+                ]
+              },
+              "schema_id": null
             },
-            "ts_rewrite": null,
-            "schema_id": null
-          }
+            {
+              "type": "Inline",
+              "updates": {
+                "desc": null,
+                "index": 0,
+                "updates[len]": 0
+              },
+              "ts_rewrite": null,
+              "schema_id": null
+            }
+          ]
         ]
       ]
     },
@@ -611,64 +629,70 @@
       "part_runs": [
         [
           {
-            "type": "Inline",
-            "updates": {
-              "desc": null,
-              "index": 0,
-              "updates[len]": 0
-            },
-            "ts_rewrite": {
-              "elements": [
-                1990182459289640688
-              ]
-            },
-            "schema_id": null
+            "order": null,
+            "schema": null
           },
-          {
-            "type": "Hollow",
-            "key": "?%ꞰOↁὖௗ𐨕-Ο{Ѩ%🕴{ßȺ:f🂱𑜾2f",
-            "encoded_size_bytes": 12336862283325747769,
-            "key_lower": "1b015efdf7021bcdb7d7b3094da7cca0278bb399cfa9ee82a0eea6c90cfa20a7bcbfd9b60b4c87d65cf28bbb51d48dec",
-            "stats": {
-              "len": 9216362869167982641,
-              "cols": {
-                "*=<.~\\d+": {
-                  "len": 5879932233594401360,
-                  "ଁ)𖾛🕴$𝔻n`nય:⼖୴ဂ|ꧠA%🩩ോ勺[𝼧𑍧`": {
-                    "lower": false,
-                    "upper": true
-                  },
-                  "🕴ዅ/໖": {
-                    "len": 17168192427257351185,
-                    "<`�/୕𐾃=🡐Ѩ¥𑊊qᦆ\"k𲀭¥ନ{ȺW<u": {
-                      "G𑊅\"૾𐽺ࢼ𐓹h:": {
-                        "len": 1,
-                        "stats": {
-                          "lower": false,
-                          "upper": true
+          [
+            {
+              "type": "Inline",
+              "updates": {
+                "desc": null,
+                "index": 0,
+                "updates[len]": 0
+              },
+              "ts_rewrite": {
+                "elements": [
+                  1990182459289640688
+                ]
+              },
+              "schema_id": null
+            },
+            {
+              "type": "Hollow",
+              "key": "?%ꞰOↁὖௗ𐨕-Ο{Ѩ%🕴{ßȺ:f🂱𑜾2f",
+              "encoded_size_bytes": 12336862283325747769,
+              "key_lower": "1b015efdf7021bcdb7d7b3094da7cca0278bb399cfa9ee82a0eea6c90cfa20a7bcbfd9b60b4c87d65cf28bbb51d48dec",
+              "stats": {
+                "len": 9216362869167982641,
+                "cols": {
+                  "*=<.~\\d+": {
+                    "len": 5879932233594401360,
+                    "ଁ)𖾛🕴$𝔻n`nય:⼖୴ဂ|ꧠA%🩩ോ勺[𝼧𑍧`": {
+                      "lower": false,
+                      "upper": true
+                    },
+                    "🕴ዅ/໖": {
+                      "len": 17168192427257351185,
+                      "<`�/୕𐾃=🡐Ѩ¥𑊊qᦆ\"k𲀭¥ନ{ȺW<u": {
+                        "G𑊅\"૾𐽺ࢼ𐓹h:": {
+                          "len": 1,
+                          "stats": {
+                            "lower": false,
+                            "upper": true
+                          }
+                        },
+                        "h/Ò?'Ã🝘5¯\\𐆠/𝒢==%𑙤Ѩ\\ᬑ": {
+                          "len": 1,
+                          "stats": "json_mixed"
                         }
-                      },
-                      "h/Ò?'Ã🝘5¯\\𐆠/𝒢==%𑙤Ѩ\\ᬑ": {
-                        "len": 1,
-                        "stats": "json_mixed"
                       }
                     }
-                  }
-                },
-                "Ⱥ૪b0": {
-                  "len": 5197454066737604612,
-                  "$G್𞺧:$᳒\\o\"🕴3\"Lꠊ๚𐬪¼:?ச?ᝥ&𐾽)Î𖿰>?𑊤𔖘": {
-                    "lower": "'xlㄑ🕴 D𐦇Ul",
-                    "upper": "ቄȺû"
+                  },
+                  "Ⱥ૪b0": {
+                    "len": 5197454066737604612,
+                    "$G್𞺧:$᳒\\o\"🕴3\"Lꠊ๚𐬪¼:?ச?ᝥ&𐾽)Î𖿰>?𑊤𔖘": {
+                      "lower": "'xlㄑ🕴 D𐦇Ul",
+                      "upper": "ቄȺû"
+                    }
                   }
                 }
-              }
-            },
-            "ts_rewrite": null,
-            "diffs_sum": -946081707879001155,
-            "format": null,
-            "schema_id": "h2260404778546976278"
-          }
+              },
+              "ts_rewrite": null,
+              "diffs_sum": -946081707879001155,
+              "format": null,
+              "schema_id": "h2260404778546976278"
+            }
+          ]
         ]
       ]
     }

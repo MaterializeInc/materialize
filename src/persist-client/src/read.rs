@@ -1004,7 +1004,7 @@ where
 
         let lease = self.lease_seqno();
         for batch in batches {
-            for run in batch.runs() {
+            for (_meta, run) in batch.runs() {
                 consolidator.enqueue_run(
                     &batch.desc,
                     run.into_iter()

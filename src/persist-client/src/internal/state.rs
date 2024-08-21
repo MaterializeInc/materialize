@@ -18,6 +18,7 @@ use std::time::Duration;
 use arrow::array::Array;
 use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
@@ -34,7 +35,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use tracing::info;
 use uuid::Uuid;
 
@@ -503,18 +504,26 @@ impl<T> HollowBatch<T> {
         parts: Vec<BatchPart<T>>,
         len: usize,
         runs: Vec<usize>,
+        mut run_meta: Vec<RunMeta>,
     ) -> Self {
         debug_assert!(runs.is_sorted(), "run indices should be sorted");
         debug_assert!(
             runs.last().iter().all(|i| **i <= parts.len()),
             "run indices should be a valid indices into parts"
         );
+
+        // Don't store the trailing default run meta for backward-compatibility reasons.
+        while run_meta.last() == Some(&RunMeta::default()) {
+            run_meta.pop();
+        }
+        run_meta.shrink_to_fit();
+
         Self {
             desc,
             len,
             parts,
             runs,
-            run_meta: vec![],
+            run_meta,
         }
     }
 
@@ -529,20 +538,26 @@ impl<T> HollowBatch<T> {
         }
     }
 
-    pub(crate) fn runs(&self) -> impl Iterator<Item = &[BatchPart<T>]> {
+    pub(crate) fn runs(&self) -> impl Iterator<Item = (RunMeta, &[BatchPart<T>])> {
         let run_ends = self
             .runs
             .iter()
             .copied()
             .chain(std::iter::once(self.parts.len()));
-        run_ends
+        let run_metas = self
+            .run_meta
+            .iter()
+            .cloned()
+            .chain(std::iter::repeat(RunMeta::default()));
+        let run_parts = run_ends
             .scan(0, |start, end| {
                 let range = *start..end;
                 *start = end;
                 Some(range)
             })
             .filter(|range| !range.is_empty())
-            .map(|range| &self.parts[range])
+            .map(|range| &self.parts[range]);
+        run_metas.zip(run_parts)
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {
@@ -2317,6 +2332,7 @@ pub(crate) mod tests {
                 })
                 .collect(),
             len,
+            vec![],
             vec![],
         )
     }

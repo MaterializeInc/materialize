@@ -1744,6 +1744,7 @@ mod tests {
             })],
             4,
             vec![],
+            vec![],
         );
         let mut old = x.into_proto();
         // Old ProtoHollowBatch had keys instead of parts.

@@ -1343,7 +1343,7 @@ mod tests {
                                 .into_iter()
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
-                            let output = HollowBatch::new(req.desc, parts, len, vec![]);
+                            let output = HollowBatch::new(req.desc, parts, len, vec![], vec![]);
                             leader
                                 .collections
                                 .trace
@@ -1392,6 +1392,7 @@ mod tests {
                 ),
                 Vec::new(),
                 len,
+                Vec::new(),
                 Vec::new(),
             )
         }
@@ -1493,7 +1494,7 @@ mod tests {
                     Antichain::from_elem(*upper),
                     Antichain::from_elem(*since),
                 );
-                HollowBatch::new(desc, Vec::new(), *len, Vec::new())
+                HollowBatch::new(desc, Vec::new(), *len, Vec::new(), Vec::new())
             }
             let replacement = batch(&replacement);
             let batches = spine.iter().map(batch).collect::<Vec<_>>();

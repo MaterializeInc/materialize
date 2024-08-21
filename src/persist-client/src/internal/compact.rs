@@ -37,7 +37,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::state::{BatchPart, HollowBatch};
+use crate::internal::state::{BatchPart, HollowBatch, RunMeta};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
@@ -568,19 +568,17 @@ where
         let mut chunks = vec![];
         let mut current_chunk = vec![];
         let mut current_chunk_max_memory_usage = 0;
-        while let Some(run) = ordered_runs.next() {
+        while let Some((desc, _meta, run)) = ordered_runs.next() {
             let run_greatest_part_size = run
-                .1
                 .iter()
                 .map(|x| x.encoded_size_bytes())
                 .max()
                 .unwrap_or(cfg.batch.blob_target_size);
-            current_chunk.push(*run);
+            current_chunk.push((*desc, *run));
             current_chunk_max_memory_usage += run_greatest_part_size;
 
-            if let Some(next_run) = ordered_runs.peek() {
+            if let Some((_next_desc, _next_meta, next_run)) = ordered_runs.peek() {
                 let next_run_greatest_part_size = next_run
-                    .1
                     .iter()
                     .map(|x| x.encoded_size_bytes())
                     .max()
@@ -633,7 +631,7 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[BatchPart<T>])> {
+    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, RunMeta, &[BatchPart<T>])> {
         let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
 
         let mut batch_runs: VecDeque<_> = req
@@ -645,8 +643,8 @@ where
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
 
         while let Some((desc, mut runs)) = batch_runs.pop_front() {
-            if let Some(run) = runs.next() {
-                ordered_runs.push((desc, run));
+            if let Some((meta, run)) = runs.next() {
+                ordered_runs.push((desc, meta, run));
                 batch_runs.push_back((desc, runs));
             }
         }
