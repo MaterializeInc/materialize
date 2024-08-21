@@ -11,16 +11,16 @@
 
 use std::borrow::Borrow;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricsRegistry,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec,
+    HistogramVec, IntCounterVec, MetricVecExt, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -30,6 +30,7 @@ use prometheus::core::{AtomicF64, AtomicU64};
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
+type Counter = DeleteOnDropCounter<'static, AtomicF64, Vec<String>>;
 type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
 /// TODO(#25239): Add documentation.
@@ -66,9 +67,9 @@ pub struct ComputeControllerMetrics {
 
     // dataflows
     dataflow_initial_output_duration_seconds: GaugeVec,
-    dataflow_wallclock_lag_max_seconds: GaugeVec,
-    dataflow_wallclock_lag_min_seconds: GaugeVec,
-    dataflow_wallclock_lag_avg_seconds: GaugeVec,
+    dataflow_wallclock_lag_seconds: GaugeVec,
+    dataflow_wallclock_lag_seconds_sum: CounterVec,
+    dataflow_wallclock_lag_seconds_count: IntCounterVec,
 }
 
 impl ComputeControllerMetrics {
@@ -166,22 +167,24 @@ impl ComputeControllerMetrics {
                 help: "The time from dataflow creation up to when the first output was produced.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
-            dataflow_wallclock_lag_max_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_wallclock_lag_max_seconds",
-                help: "The per-minute maximum of the second-by-second lag of the dataflow \
-                       frontier relative to wallclock time.",
+
+            // The next three metrics immitate a summary metric type. The `prometheus` crate lacks
+            // support for summaries, so we roll our own. Note that we also only expose the 0- and
+            // the 1-quantile, i.e., minimum and maximum lag values.
+            dataflow_wallclock_lag_seconds: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_seconds",
+                help: "A summary of the second-by-second lag of the dataflow frontier relative \
+                       to wallclock time, aggregated over the last minute.",
+                var_labels: ["instance_id", "replica_id", "collection_id", "quantile"],
+            )),
+            dataflow_wallclock_lag_seconds_sum: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_seconds_sum",
+                help: "The total sum of dataflow wallclock lag measurements.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
-            dataflow_wallclock_lag_min_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_wallclock_lag_min_seconds",
-                help: "The per-minute minimum of the second-by-second lag of the dataflow \
-                       frontier relative to wallclock time.",
-                var_labels: ["instance_id", "replica_id", "collection_id"],
-            )),
-            dataflow_wallclock_lag_avg_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_wallclock_lag_avg_seconds",
-                help: "The per-minute average of the second-by-second lag of the dataflow \
-                       frontier relative to wallclock time.",
+            dataflow_wallclock_lag_seconds_count: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_seconds_count",
+                help: "The total count of dataflow wallclock lag measurements.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
         }
@@ -403,29 +406,45 @@ impl ReplicaMetrics {
             self.replica_id.to_string(),
             collection_id.to_string(),
         ];
+
+        let labels_with_quantile = |quantile: &str| {
+            labels
+                .iter()
+                .cloned()
+                .chain([quantile.to_string()])
+                .collect()
+        };
+
         let initial_output_duration_seconds = self
             .metrics
             .dataflow_initial_output_duration_seconds
             .get_delete_on_drop_metric(labels.clone());
-        let wallclock_lag_max_seconds = self
+
+        let wallclock_lag_seconds_min = self
             .metrics
-            .dataflow_wallclock_lag_max_seconds
+            .dataflow_wallclock_lag_seconds
+            .get_delete_on_drop_metric(labels_with_quantile("0"));
+        let wallclock_lag_seconds_max = self
+            .metrics
+            .dataflow_wallclock_lag_seconds
+            .get_delete_on_drop_metric(labels_with_quantile("1"));
+        let wallclock_lag_seconds_sum = self
+            .metrics
+            .dataflow_wallclock_lag_seconds_sum
             .get_delete_on_drop_metric(labels.clone());
-        let wallclock_lag_min_seconds = self
+        let wallclock_lag_seconds_count = self
             .metrics
-            .dataflow_wallclock_lag_min_seconds
-            .get_delete_on_drop_metric(labels.clone());
-        let wallclock_lag_avg_seconds = self
-            .metrics
-            .dataflow_wallclock_lag_avg_seconds
+            .dataflow_wallclock_lag_seconds_count
             .get_delete_on_drop_metric(labels);
+        let wallclock_lag_minmax = MinMax::new(60);
 
         Some(ReplicaCollectionMetrics {
             initial_output_duration_seconds,
-            wallclock_lag_max_seconds,
-            wallclock_lag_min_seconds,
-            wallclock_lag_avg_seconds,
-            wallclock_lag: WallclockLag::new(),
+            wallclock_lag_seconds_min,
+            wallclock_lag_seconds_max,
+            wallclock_lag_seconds_sum,
+            wallclock_lag_seconds_count,
+            wallclock_lag_minmax,
         })
     }
 }
@@ -454,70 +473,157 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 pub(crate) struct ReplicaCollectionMetrics {
     /// Gauge tracking dataflow hydration time.
     pub initial_output_duration_seconds: Gauge,
-    /// Gauge tracking maximum dataflow wallclock lag.
-    wallclock_lag_max_seconds: Gauge,
     /// Gauge tracking minimum dataflow wallclock lag.
-    wallclock_lag_min_seconds: Gauge,
-    /// Gauge tracking average dataflow wallclock lag.
-    wallclock_lag_avg_seconds: Gauge,
+    wallclock_lag_seconds_min: Gauge,
+    /// Gauge tracking maximum dataflow wallclock lag.
+    wallclock_lag_seconds_max: Gauge,
+    /// Counter tracking the total sum of dataflow wallclock lag.
+    wallclock_lag_seconds_sum: Counter,
+    /// Counter tracking the total count of dataflow wallclock lag measurements.
+    wallclock_lag_seconds_count: IntCounter,
 
-    /// State for aggregating wallclock lag.
-    wallclock_lag: WallclockLag,
+    /// State maintaining minimum and maximum wallclock lag.
+    wallclock_lag_minmax: MinMax<f32>,
 }
 
 impl ReplicaCollectionMetrics {
     pub fn observe_wallclock_lag(&mut self, lag: Duration) {
-        const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+        let lag_secs = lag.as_secs_f32();
 
-        self.wallclock_lag.add(lag);
+        self.wallclock_lag_minmax.add_sample(lag_secs);
 
-        if self.wallclock_lag.last_reset.elapsed() >= REFRESH_INTERVAL {
-            self.wallclock_lag_max_seconds
-                .set(self.wallclock_lag.max.as_secs_f64());
-            self.wallclock_lag_min_seconds
-                .set(self.wallclock_lag.min.as_secs_f64());
-            self.wallclock_lag_avg_seconds
-                .set(self.wallclock_lag.avg_secs());
+        let (&min, &max) = self
+            .wallclock_lag_minmax
+            .get()
+            .expect("just added a sample");
 
-            self.wallclock_lag.reset();
-        }
+        self.wallclock_lag_seconds_min.set(min.into());
+        self.wallclock_lag_seconds_max.set(max.into());
+        self.wallclock_lag_seconds_sum.inc_by(lag_secs.into());
+        self.wallclock_lag_seconds_count.inc();
     }
 }
 
-/// Helper for producing per-minute min/max/avg aggregates of observed wallclock lag.
+/// Keeps track of a the minimum and maximum value over a fixed-size sliding window of samples.
+///
+/// Inspired by the [`movning_min_max`](https://crates.io/crates/moving_min_max) crate, but
+/// adapted to provide:
+///
+///  * both minimum and maximum at the same time
+///  * a fixed window size, rather than manual popping of samples
+///  * lower memory usage, due to merged push and pop stacks
 #[derive(Debug)]
-struct WallclockLag {
-    count: usize,
-    sum: Duration,
-    max: Duration,
-    min: Duration,
-    last_reset: Instant,
+struct MinMax<T> {
+    /// The push stack and the pop stack, merged into one allocation.
+    ///
+    /// The push stack is the first `push_stack_len` items, the pop stack is the rest.
+    /// The push stack grows to the left, the pop stack grows to the right.
+    ///
+    /// +--------------------------------+
+    /// | push stack --> | <-- pop stack |
+    /// +----------------^---------------^
+    ///           push_stack_len
+    ///
+    /// We keep both the push stack and the pop stack in the same `Vec`, to guarantee that we only
+    /// allocate `size_of::<T>() * 3 * window_size` bytes. If we kept two `Vec`s we'd need twice
+    /// that much.
+    stacks: Vec<(T, T, T)>,
+    /// The length of the push stack.
+    push_stack_len: usize,
 }
 
-impl WallclockLag {
-    fn new() -> Self {
+impl<T> MinMax<T>
+where
+    T: Clone + PartialOrd,
+{
+    /// Creates a new `MinMax` for the given sample window size.
+    fn new(window_size: usize) -> Self {
         Self {
-            count: 0,
-            sum: Duration::ZERO,
-            max: Duration::ZERO,
-            min: Duration::ZERO,
-            last_reset: Instant::now(),
+            stacks: Vec::with_capacity(window_size),
+            push_stack_len: 0,
         }
     }
 
-    fn reset(&mut self) {
-        *self = Self::new();
+    /// Returns a reference to the item at the top of the push stack.
+    fn top_of_push_stack(&self) -> Option<&(T, T, T)> {
+        self.push_stack_len.checked_sub(1).map(|i| &self.stacks[i])
     }
 
-    fn add(&mut self, lag: Duration) {
-        self.count += 1;
-        self.sum += lag;
-        self.max = std::cmp::max(self.max, lag);
-        self.min = std::cmp::max(self.max, lag);
+    /// Returns a reference to the item at the top of the pop stack.
+    fn top_of_pop_stack(&self) -> Option<&(T, T, T)> {
+        self.stacks.get(self.push_stack_len)
     }
 
-    fn avg_secs(&self) -> f64 {
-        self.sum.as_secs_f64() / f64::cast_lossy(self.count)
+    /// Adds the given sample.
+    fn add_sample(&mut self, sample: T) {
+        if self.push_stack_len == self.stacks.capacity() {
+            self.flip_stacks();
+        }
+
+        let (min, max) = match self.top_of_push_stack() {
+            Some((_, min, max)) => {
+                let min = po_min(min, &sample).clone();
+                let max = po_max(max, &sample).clone();
+                (min, max)
+            }
+            None => (sample.clone(), sample.clone()),
+        };
+
+        if self.stacks.len() <= self.push_stack_len {
+            self.stacks.push((sample, min, max));
+        } else {
+            self.stacks[self.push_stack_len] = (sample, min, max);
+        }
+        self.push_stack_len += 1;
+    }
+
+    /// Drains the push stack into the pop stack.
+    fn flip_stacks(&mut self) {
+        let Some((sample, _, _)) = self.top_of_push_stack().cloned() else {
+            return;
+        };
+
+        self.push_stack_len -= 1;
+        self.stacks[self.push_stack_len] = (sample.clone(), sample.clone(), sample);
+
+        while let Some((sample, _, _)) = self.top_of_push_stack() {
+            let (_, min, max) = self.top_of_pop_stack().expect("pop stack not empty");
+            let sample = sample.clone();
+            let min = po_min(min, &sample).clone();
+            let max = po_max(max, &sample).clone();
+
+            self.push_stack_len -= 1;
+            self.stacks[self.push_stack_len] = (sample, min, max);
+        }
+    }
+
+    /// Returns the current minimum and maximum values.
+    fn get(&self) -> Option<(&T, &T)> {
+        match (self.top_of_push_stack(), self.top_of_pop_stack()) {
+            (None, None) => None,
+            (None, Some((_, min, max))) | (Some((_, min, max)), None) => Some((min, max)),
+            (Some((_, min1, max1)), Some((_, min2, max2))) => {
+                Some((po_min(min1, min2), po_max(max1, max2)))
+            }
+        }
+    }
+}
+
+/// Like `std::cmp::min`, but works with `PartialOrd` values.
+fn po_min<T: PartialOrd>(a: T, b: T) -> T {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Like `std::cmp::max`, but works with `PartialOrd` values.
+fn po_max<T: PartialOrd>(a: T, b: T) -> T {
+    if a > b {
+        a
+    } else {
+        b
     }
 }
 
@@ -702,5 +808,36 @@ impl<M> PeekMetrics<M> {
             Error(_) => &self.error,
             Canceled => &self.canceled,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn minmax() {
+        let mut minmax = MinMax::new(5);
+
+        assert_eq!(minmax.get(), None);
+
+        let mut push_and_check = |x, expected| {
+            minmax.add_sample(x);
+            let actual = minmax.get().map(|(min, max)| (*min, *max));
+            assert_eq!(actual, Some(expected), "{minmax:?}");
+        };
+
+        push_and_check(5, (5, 5));
+        push_and_check(1, (1, 5));
+        push_and_check(10, (1, 10));
+        push_and_check(2, (1, 10));
+        push_and_check(9, (1, 10));
+        push_and_check(3, (1, 10));
+        push_and_check(8, (2, 10));
+        push_and_check(5, (2, 9));
+        push_and_check(5, (3, 9));
+        push_and_check(5, (3, 8));
+        push_and_check(5, (5, 8));
+        push_and_check(5, (5, 5));
     }
 }
