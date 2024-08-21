@@ -14,7 +14,6 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::strategy::{Just, Strategy, Union};
 use serde::Serialize;
 
-use crate::columnar::Data;
 use crate::dyn_struct::ValidityRef;
 use crate::stats::json::{any_json_stats, JsonStats};
 use crate::stats::primitive::{any_primitive_vec_u8_stats, PrimitiveStats};
@@ -185,8 +184,10 @@ impl DynStats for BytesStats {
     }
 }
 
-impl ColumnStats<Vec<u8>> for BytesStats {
-    fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
+impl ColumnStats for BytesStats {
+    type Ref<'a> = &'a [u8];
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         match self {
             BytesStats::Primitive(x) => Some(x.lower.as_slice()),
             BytesStats::Json(_) => None,
@@ -194,7 +195,7 @@ impl ColumnStats<Vec<u8>> for BytesStats {
             BytesStats::FixedSize(x) => Some(&x.lower),
         }
     }
-    fn upper<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         match self {
             BytesStats::Primitive(x) => Some(x.upper.as_slice()),
             BytesStats::Json(_) => None,
@@ -216,11 +217,13 @@ impl ColumnStats<Vec<u8>> for BytesStats {
     }
 }
 
-impl ColumnStats<Option<Vec<u8>>> for OptionStats<BytesStats> {
-    fn lower<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
+impl ColumnStats for OptionStats<BytesStats> {
+    type Ref<'a> = Option<&'a [u8]>;
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.lower().map(Some)
     }
-    fn upper<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.upper().map(Some)
     }
     fn none_count(&self) -> usize {

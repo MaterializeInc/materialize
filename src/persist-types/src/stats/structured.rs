@@ -16,8 +16,7 @@ use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::ser::{SerializeMap, SerializeStruct};
 
-use crate::columnar::Data;
-use crate::dyn_struct::{DynStruct, DynStructCol, ValidityRef};
+use crate::dyn_struct::{DynStructCol, ValidityRef};
 use crate::stats::{
     any_columnar_stats, proto_dyn_stats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
     OptionStats, ProtoStructStats, StatsFrom, TrimStats,
@@ -71,31 +70,23 @@ impl DynStats for StructStats {
 }
 
 impl StructStats {
-    /// Returns the statistics for the given column in the struct.
+    /// Returns the statistics for the specified column in the struct, if they exist.
     ///
     /// This will often be all of the columns, but it's not guaranteed. Persist
     /// reserves the right to prune statistics about some or all of the columns.
-    pub fn col<T: Data>(&self, name: &str) -> Result<Option<T::Stats>, String> {
-        let Some(stats) = self.cols.get(name) else {
-            return Ok(None);
-        };
-        match stats.downcast::<T>() {
-            Some(x) => Ok(Some(x)),
-            None => Err(format!(
-                "expected stats type {} got {}",
-                std::any::type_name::<T::Stats>(),
-                stats.type_name()
-            )),
-        }
+    pub fn col(&self, name: &str) -> Option<&ColumnarStats> {
+        self.cols.get(name)
     }
 }
 
-impl ColumnStats<DynStruct> for StructStats {
-    fn lower<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
+impl ColumnStats for StructStats {
+    type Ref<'a> = ();
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         // Not meaningful for structs
         None
     }
-    fn upper<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         // Not meaningful for structs
         None
     }
@@ -113,11 +104,13 @@ impl ColumnStats<DynStruct> for StructStats {
     }
 }
 
-impl ColumnStats<Option<DynStruct>> for OptionStats<StructStats> {
-    fn lower<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
+impl ColumnStats for OptionStats<StructStats> {
+    type Ref<'a> = Option<()>;
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.lower().map(Some)
     }
-    fn upper<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         self.some.upper().map(Some)
     }
     fn none_count(&self) -> usize {
