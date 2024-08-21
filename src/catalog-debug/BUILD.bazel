@@ -17,7 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "mz_catalog_debug",
-	version = "0.114.0-dev",
+	version = "0.114.0-dev.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [],
 	aliases = aliases(
@@ -46,7 +46,7 @@ rust_library(
 
 rust_test(
 	name = "mz_catalog_debug_lib_tests",
-	version = "0.114.0-dev",
+	version = "0.114.0-dev.0",
 	crate = ":mz_catalog_debug",
 	aliases = aliases(
 		normal = True,
@@ -105,7 +105,7 @@ rust_doc_test(
 
 rust_binary(
 	name = "mz_catalog_debug",
-	version = "0.114.0-dev",
+	version = "0.114.0-dev.0",
 	crate_root = "src/main.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

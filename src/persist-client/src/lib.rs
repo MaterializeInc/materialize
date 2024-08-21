@@ -393,6 +393,7 @@ impl PersistClient {
         shard_id: ShardId,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        is_transient: bool,
         diagnostics: Diagnostics,
     ) -> BatchFetcher<K, V, T, D>
     where
@@ -432,6 +433,7 @@ impl PersistClient {
             shard_metrics,
             shard_id,
             schemas,
+            is_transient,
             _phantom: PhantomData,
         };
 
@@ -1092,6 +1094,7 @@ mod tests {
                     shard_id1,
                     Default::default(),
                     Default::default(),
+                    false,
                     Diagnostics::for_tests(),
                 )
                 .await;

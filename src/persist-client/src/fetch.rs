@@ -116,6 +116,7 @@ where
     pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) shard_id: ShardId,
     pub(crate) schemas: Schemas<K, V>,
+    pub(crate) is_transient: bool,
 
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
     // derived from.
@@ -157,12 +158,17 @@ where
                     .semaphore
                     .acquire_fetch_permits(x.encoded_size_bytes)
                     .await;
+                let read_metrics = if self.is_transient {
+                    &self.metrics.read.unindexed
+                } else {
+                    &self.metrics.read.batch_fetcher
+                };
                 let buf = fetch_batch_part_blob(
                     &part.shard_id,
                     self.blob.as_ref(),
                     &self.metrics,
                     &self.shard_metrics,
-                    &self.metrics.read.batch_fetcher,
+                    read_metrics,
                     x,
                 )
                 .await
