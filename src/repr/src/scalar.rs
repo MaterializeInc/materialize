@@ -3265,7 +3265,13 @@ impl ScalarType {
         static JSONB: Lazy<Row> = Lazy::new(|| {
             let mut datums = vec![Datum::True, Datum::False, Datum::JsonNull];
             datums.extend(STRING.iter());
-            datums.extend(NUMERIC.iter());
+            datums.extend(NUMERIC.iter().filter(|n| {
+                let Datum::Numeric(n) = n else {
+                    panic!("expected Numeric, found {n:?}");
+                };
+                // JSON doesn't support NaN or Infinite numbers.
+                !(n.0.is_nan() || n.0.is_infinite())
+            }));
             // TODO: Add List, Map.
             Row::pack_slice(&datums)
         });
