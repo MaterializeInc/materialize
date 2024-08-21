@@ -809,6 +809,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 "Different evaluation order of join clause and where filter"
             )
 
+        if (
+            "invalid input syntax for type jsonb" in mz_error_msg
+            and "is out of range" in mz_error_msg
+        ):
+            return YesIgnore("value out of range")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
