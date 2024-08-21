@@ -15,10 +15,11 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 
+use anyhow::Context;
 use arrow::array::{BinaryArray, FixedSizeBinaryArray};
 use chrono::{NaiveDateTime, NaiveTime};
 use dec::OrderedDecimal;
-use mz_persist_types::columnar::{Data, FixedSizeCodec};
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_persist_types::stats::bytes::{BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 use mz_persist_types::stats::json::{JsonMapElementStats, JsonStats};
 use mz_persist_types::stats::primitive::PrimitiveStats;
@@ -51,11 +52,10 @@ pub fn col_values<'a>(
     use PrimitiveStatsVariants::*;
 
     /// Helper method to map the lower and upper bounds of some stats to Datums.
-    fn map_stats<'a, T, S, F>(stats: &'a T, f: F) -> (Option<Datum<'a>>, Option<Datum<'a>>)
+    fn map_stats<'a, T, F>(stats: &'a T, f: F) -> (Option<Datum<'a>>, Option<Datum<'a>>)
     where
-        S: Data,
-        T: ColumnStats<S>,
-        F: Fn(S::Ref<'a>) -> Datum<'a>,
+        T: ColumnStats,
+        F: Fn(T::Ref<'a>) -> Datum<'a>,
     {
         (stats.lower().map(&f), stats.upper().map(&f))
     }
@@ -232,6 +232,28 @@ pub fn col_values<'a>(
             (None, None)
         }
     }
+}
+
+/// Decodes the lower and upper bound from [`PrimitiveStats<Vec<u8>>`] as [`Numeric`]s.
+pub fn decode_numeric<'a>(
+    stats: &PrimitiveStats<Vec<u8>>,
+    arena: &'a RowArena,
+) -> Result<(Datum<'a>, Datum<'a>), anyhow::Error> {
+    fn decode<'a>(bytes: &[u8], arena: &'a RowArena) -> Result<Datum<'a>, anyhow::Error> {
+        let proto = ProtoDatum::decode(bytes)?;
+        let datum = arena.make_datum(|r| {
+            r.try_push_proto(&proto)
+                .expect("ProtoDatum should be valid Datum")
+        });
+        let Datum::Numeric(_) = &datum else {
+            anyhow::bail!("expected Numeric found {datum:?}");
+        };
+        Ok(datum)
+    }
+    let lower = decode(&stats.lower, arena).context("lower")?;
+    let upper = decode(&stats.upper, arena).context("upper")?;
+
+    Ok((lower, upper))
 }
 
 /// Incrementally collects statistics for a column of `decimal`.
