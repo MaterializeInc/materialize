@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from materialize.docker import (
     get_mz_version_from_image_tag,
-    is_image_tag_of_version,
+    is_image_tag_of_release_version,
 )
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.test_result import TestFailureDetails
@@ -111,9 +111,9 @@ class RegressionAssessment:
 
     def _endpoint_references_release_version(self, endpoint: Endpoint) -> bool:
         target = endpoint.resolved_target()
-        return is_image_tag_of_version(target) and MzVersion.is_valid_version_string(
+        return is_image_tag_of_release_version(
             target
-        )
+        ) and MzVersion.is_valid_version_string(target)
 
     def to_failure_details(self) -> list[TestFailureDetails]:
         failure_details = []

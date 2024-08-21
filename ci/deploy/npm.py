@@ -43,12 +43,16 @@ def generate_version(
 ) -> NpmPackageVersion:
     node_version = str(crate_version)
     is_development = False
-    if crate_version.prerelease == "dev":
+    if crate_version.prerelease:
         if build_identifier is None:
             raise ValueError(
                 "a build identifier must be provided for prerelease builds"
             )
-        node_version = str(crate_version.replace(prerelease=f"dev.{build_identifier}"))
+        node_version = str(
+            crate_version.replace(
+                prerelease=f"{crate_version.prerelease}.{build_identifier}"
+            )
+        )
         is_development = True
     else:
         buildkite_tag = os.environ.get("BUILDKITE_TAG")

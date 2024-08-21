@@ -15,7 +15,7 @@ import uuid
 from textwrap import dedent
 
 from materialize import buildkite
-from materialize.docker import is_image_tag_of_version
+from materialize.docker import is_image_tag_of_release_version
 from materialize.feature_benchmark.benchmark_versioning import (
     FEATURE_BENCHMARK_FRAMEWORK_VERSION,
 )
@@ -675,9 +675,9 @@ def _is_regression_justified(
 def _tag_references_release_version(image_tag: str | None) -> bool:
     if image_tag is None:
         return False
-    return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
+    return is_image_tag_of_release_version(
         image_tag
-    )
+    ) and MzVersion.is_valid_version_string(image_tag)
 
 
 def _regressions_to_failure_details(

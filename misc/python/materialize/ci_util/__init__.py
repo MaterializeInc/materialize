@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from semver.version import VersionInfo
 
-from materialize import buildkite, ui
+from materialize import MZ_ROOT, buildkite, cargo, ui
 
 
 def junit_report_filename(suite: str) -> Path:
@@ -109,3 +110,11 @@ def get_artifacts() -> Any:
         return []
 
     return res.json()
+
+
+def get_mz_version(workspace: cargo.Workspace | None = None) -> VersionInfo:
+    """Get the current Materialize version from Cargo.toml."""
+
+    if not workspace:
+        workspace = cargo.Workspace(MZ_ROOT)
+    return VersionInfo.parse(workspace.crates["mz-environmentd"].version_string)

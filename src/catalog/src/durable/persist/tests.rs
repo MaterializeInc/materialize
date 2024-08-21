@@ -25,6 +25,8 @@ use crate::durable::{
 async fn test_upgrade_shard() {
     let first_version = semver::Version::parse("0.10.0").expect("failed to parse version");
     let second_version = semver::Version::parse("0.11.0").expect("failed to parse version");
+    let second_dev_version =
+        semver::Version::parse("0.11.0-dev.0").expect("failed to parse version");
     let third_version = semver::Version::parse("0.12.0").expect("failed to parse version");
     let organization_id = Uuid::new_v4();
     let deploy_generation = 0;
@@ -83,6 +85,19 @@ async fn test_upgrade_shard() {
         ),
         "Unexpected error: {err:?}"
     );
+
+    persist_cache.cfg.build_version = second_dev_version.clone();
+    let persist_client = persist_cache
+        .open(PersistLocation::new_in_mem())
+        .await
+        .expect("in-mem location is valid");
+    test_persist_backed_catalog_state_with_version(
+        persist_client.clone(),
+        organization_id.clone(),
+        second_dev_version.clone(),
+    )
+    .await
+    .expect("failed to create persist catalog");
 
     persist_cache.cfg.build_version = second_version.clone();
     let persist_client = persist_cache
