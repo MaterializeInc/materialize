@@ -22,7 +22,7 @@ Explained Query (fast path):
   ReadIndex on=mz_internal.mz_show_databases mz_show_databases_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_catalog.mz_show_databases_ind (*** full scan ***)
+  - mz_internal.mz_show_databases_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -37,7 +37,7 @@ Explained Query (fast path):
       ReadIndex on=mz_internal.mz_show_schemas mz_show_schemas_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_catalog.mz_show_schemas_ind (*** full scan ***)
+  - mz_internal.mz_show_schemas_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -51,7 +51,7 @@ Explained Query (fast path):
     ReadIndex on=mz_internal.mz_show_connections mz_show_connections_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_connections_ind (lookup)
+  - mz_internal.mz_show_connections_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -65,7 +65,7 @@ Explained Query (fast path):
     ReadIndex on=mz_internal.mz_show_tables mz_show_tables_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_tables_ind (lookup)
+  - mz_internal.mz_show_tables_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -93,7 +93,7 @@ Explained Query (fast path):
     ReadIndex on=mz_internal.mz_show_views mz_show_views_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_views_ind (lookup)
+  - mz_internal.mz_show_views_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -180,7 +180,7 @@ Explained Query (fast path):
     ReadIndex on=mz_internal.mz_show_types mz_show_types_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_types_ind (lookup)
+  - mz_internal.mz_show_types_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -194,7 +194,7 @@ Explained Query (fast path):
     ReadIndex on=mz_internal.mz_show_all_objects mz_show_all_objects_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_all_objects_ind (lookup)
+  - mz_internal.mz_show_all_objects_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -211,7 +211,7 @@ Explained Query (fast path):
     ReadIndex on=mz_internal.mz_show_columns mz_show_columns_ind=[lookup value=("u1")]
 
 Used Indexes:
-  - mz_catalog.mz_show_columns_ind (lookup)
+  - mz_internal.mz_show_columns_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -276,7 +276,7 @@ Explained Query (fast path):
     ReadIndex on=mz_internal.mz_show_secrets mz_show_secrets_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_catalog.mz_show_secrets_ind (lookup)
+  - mz_internal.mz_show_secrets_ind (lookup)
 
 Target cluster: mz_catalog_server
 

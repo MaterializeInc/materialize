@@ -26,6 +26,11 @@ SELECT obj_description((SELECT oid FROM mz_tables WHERE name = 'a'), 'pg_class')
 ----
 NULL
 
+query TTT
+SHOW OBJECTS
+----
+a  table  (empty)
+
 statement ok
 COMMENT ON TABLE a IS 'foo_table';
 
@@ -38,6 +43,11 @@ query IT
 SELECT objsubid, description FROM pg_description;
 ----
 0  foo_table
+
+query TTT
+SHOW OBJECTS
+----
+a  table  foo_table
 
 query TT
 SELECT obj_description((SELECT oid FROM mz_tables WHERE name = 'a'), 'pg_class'),
@@ -249,6 +259,12 @@ SELECT objsubid, description FROM pg_description;
 0  this_is_a_view
 1  comment_mat_view_col
 
+query TTT
+SHOW OBJECTS
+----
+c  view  this_is_a_view
+mv  materialized-view  mat_foo
+
 query T
 SELECT obj_description((SELECT oid FROM mz_views WHERE name = 'c'), 'pg_class')
 ----
@@ -348,6 +364,11 @@ SELECT name, comment FROM (SHOW SOURCES);
 ----
 my_webhook  all_the_data
 
+query TTT
+SHOW OBJECTS
+----
+my_webhook  source  all_the_data
+
 statement ok
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
@@ -399,6 +420,15 @@ type     NULL   custom_type_comment
 type     NULL   custom_map_type_comment
 type     NULL   custom_list_type_comment
 
+query TTT
+SHOW OBJECTS
+----
+custom_list_type  type  custom_list_type_comment
+custom_map_type  type  custom_map_type_comment
+custom_type  type  custom_type_comment
+int4_list  type  supercool_list
+my_webhook  source  all_the_data
+
 statement ok
 DROP TYPE custom_map_type;
 
@@ -431,6 +461,13 @@ SELECT objsubid, description FROM pg_description;
 0 custom_type_comment
 1 custom_type_x_comment
 2 custom_type_y_comment
+
+query TTT
+SHOW OBJECTS
+----
+custom_type  type  custom_type_comment
+int4_list  type  supercool_list
+my_webhook  source  all_the_data
 
 query TT
 SELECT obj_description((SELECT oid FROM mz_types WHERE name = 'custom_type'), 'pg_type'),
@@ -480,6 +517,13 @@ COMMENT ON DATABASE comment_on_db IS 'this_is_my_db';
 
 statement ok
 COMMENT ON SCHEMA comment_on_schema IS 'this_is_my_schema';
+
+query TTT
+SHOW OBJECTS
+----
+custom_type  type  custom_type_comment
+int4_list  type  supercool_list
+my_secret  secret  supersecret
 
 statement ok
 DROP SECRET my_secret;
