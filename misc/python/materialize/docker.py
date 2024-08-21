@@ -191,8 +191,8 @@ def _select_image_name_from_candidates(
         raise RuntimeError(f"No image found for commit hash {commit_hash}")
 
     if len(image_name_candidates) > 1:
-        raise RuntimeError(
-            f"Multiple images found for commit hash {commit_hash}: {image_name_candidates}"
+        print(
+            f"Multiple images found for commit hash {commit_hash}: {image_name_candidates}, picking first"
         )
 
     return image_name_candidates[0]
