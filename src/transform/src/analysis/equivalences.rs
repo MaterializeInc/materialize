@@ -297,30 +297,39 @@ pub struct EquivalenceClasses {
 }
 
 impl EquivalenceClasses {
+    /// Comparator function for the complexity of scalar expressions. Simpler expressions are
+    /// smaller. Can be used when we need to decide which of several equivalent expressions to use.
+    pub fn mir_scalar_expr_complexity(
+        e1: &MirScalarExpr,
+        e2: &MirScalarExpr,
+    ) -> std::cmp::Ordering {
+        use std::cmp::Ordering::*;
+        use MirScalarExpr::*;
+        match (e1, e2) {
+            (Literal(_, _), Literal(_, _)) => e1.cmp(e2),
+            (Literal(_, _), _) => Less,
+            (_, Literal(_, _)) => Greater,
+            (Column(_), Column(_)) => e1.cmp(e2),
+            (Column(_), _) => Less,
+            (_, Column(_)) => Greater,
+            (x, y) => {
+                // General expressions should be ordered by their size,
+                // to ensure we only simplify expressions by substitution.
+                // If same size, then fall back to the expressions' Ord.
+                match x.size().cmp(&y.size()) {
+                    Equal => x.cmp(y),
+                    other => other,
+                }
+            }
+        }
+    }
+
     /// Sorts and deduplicates each class, and the classes themselves.
     fn tidy(&mut self) {
         for class in self.classes.iter_mut() {
             // Remove all literal errors, as they cannot be equated to other things.
             class.retain(|e| !e.is_literal_err());
-            class.sort_by(|e1, e2| match (e1, e2) {
-                (MirScalarExpr::Literal(_, _), MirScalarExpr::Literal(_, _)) => e1.cmp(e2),
-                (MirScalarExpr::Literal(_, _), _) => std::cmp::Ordering::Less,
-                (_, MirScalarExpr::Literal(_, _)) => std::cmp::Ordering::Greater,
-                (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => e1.cmp(e2),
-                (MirScalarExpr::Column(_), _) => std::cmp::Ordering::Less,
-                (_, MirScalarExpr::Column(_)) => std::cmp::Ordering::Greater,
-                (x, y) => {
-                    // General expressions should be ordered by their size,
-                    // to ensure we only simplify expressions by substitution.
-                    let x_size = x.size();
-                    let y_size = y.size();
-                    if x_size == y_size {
-                        x.cmp(y)
-                    } else {
-                        x_size.cmp(&y_size)
-                    }
-                }
-            });
+            class.sort_by(Self::mir_scalar_expr_complexity);
             class.dedup();
         }
         self.classes.retain(|c| c.len() > 1);
