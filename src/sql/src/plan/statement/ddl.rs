@@ -86,9 +86,7 @@ use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
     RegexEncoding, SourceDataEncoding,
 };
-use mz_storage_types::sources::envelope::{
-    KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
-};
+use mz_storage_types::sources::envelope::{KeyEnvelope, UnplannedSourceEnvelope, UpsertStyle};
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
@@ -443,7 +441,6 @@ pub fn describe_create_subsource(
 
 generate_extracted_config!(
     CreateSourceOption,
-    (Timeline, String),
     (TimestampInterval, Duration),
     (RetainHistory, OptionalDuration)
 );
@@ -906,7 +903,6 @@ pub fn plan_create_source(
     };
 
     let CreateSourceOptionExtracted {
-        timeline,
         timestamp_interval,
         retain_history,
         seen: _,
@@ -1184,24 +1180,6 @@ pub fn plan_create_source(
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
-    // Allow users to specify a timeline. If they do not, determine a default
-    // timeline for the source.
-    let timeline = match timeline {
-        None => match envelope {
-            SourceEnvelope::CdcV2 => {
-                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
-            }
-            _ => Timeline::EpochMilliseconds,
-        },
-        // TODO(benesch): if we stabilize this, can we find a better name than
-        // `mz_epoch_ms`? Maybe just `mz_system`?
-        Some(timeline) if timeline == "mz_epoch_ms" => Timeline::EpochMilliseconds,
-        Some(timeline) if timeline.starts_with("mz_") => {
-            return Err(PlanError::UnacceptableTimelineName(timeline));
-        }
-        Some(timeline) => Timeline::User(timeline),
-    };
-
     let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let source = Source {
         create_sql,
@@ -1217,7 +1195,7 @@ pub fn plan_create_source(
         name,
         source,
         if_not_exists,
-        timeline,
+        timeline: Timeline::EpochMilliseconds,
         in_cluster: Some(in_cluster),
     }))
 }

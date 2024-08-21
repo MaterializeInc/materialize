@@ -1324,23 +1324,23 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found identifier "property"
+error: Expected one of TIMESTAMP or RETAIN, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
 parse-statement
-ALTER SOURCE name SET (SIZE LARGE)
+ALTER SOURCE name SET (TIMESTAMP INTERVAL = 2)
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
-ALTER SOURCE name SET (SIZE LARGE)
-                       ^
+ALTER SOURCE name SET (TIMESTAMP INTERVAL = 2)
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: SetOptions([CreateSourceOption { name: TimestampInterval, value: Some(Value(Number("2"))) }]) })
 
 parse-statement
-ALTER SOURCE name RESET (SIZE)
+ALTER SOURCE name RESET (TIMESTAMP INTERVAL)
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
-ALTER SOURCE name RESET (SIZE)
-                         ^
+ALTER SOURCE name RESET (TIMESTAMP INTERVAL)
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: ResetOptions([TimestampInterval]) })
 
 parse-statement
 ALTER SOURCE n DROP SUBSOURCE x, y, z
@@ -2361,19 +2361,19 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (
 
 # Note that this will error in planning, as you cannot specify START OFFSET and START TIMESTAMP at the same time
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=2, TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=2, TOPIC 'baz') ENVELOPE DEBEZIUM
 ----
-error: Expected end of statement, found left parenthesis
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=2, TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
-                                                                                                                  ^
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET = 1, START TIMESTAMP = 2, TOPIC = 'baz') ENVELOPE DEBEZIUM
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: StartOffset, value: Some(Value(Number("1"))) }, KafkaSourceConfigOption { name: StartTimestamp, value: Some(Value(Number("2"))) }, KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: None, envelope: Some(Debezium), if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 # Note that this will error in planning, as START OFFSET must be an array of nums
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found START
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
-                                                     ^
+error: Expected end of statement, found TOPIC
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM
+                                                                    ^
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING SCHEMA 'schema'
@@ -2586,11 +2586,11 @@ CREATE SOURCE lg FROM LOAD GENERATOR TPCH
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Tpch, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') WITH (TIMESTAMP INTERVAL 'interval')
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (TIMESTAMP INTERVAL = 'interval')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], external_references: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], external_references: None, progress_subsource: None })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical
