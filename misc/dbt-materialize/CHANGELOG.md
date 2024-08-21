@@ -16,6 +16,13 @@
   which is not supported in the adapter. This configuration will be supported in
   the future (see [#20244](https://github.com/MaterializeInc/materialize/issues/20244)).
 
+* Stop hardcoding `quickstart` as the default cluster to fall back to when no
+  cluster is specified. When no cluster is specified, either in `profiles.yml`
+  or as a configuration, we should default to the default cluster configured
+  for the connected dbt user (or, the active cluster for the connection). This
+  will still fail if the defalt cluster for the connected user is invalid or
+  set to `mz_catalog_server` (which cannot be modified).
+
 ## 1.8.4 - 2024-08-07
 
 * Include the dbt version in the `application_name` connection parameter [#28813](https://github.com/MaterializeInc/materialize/pull/28813).
