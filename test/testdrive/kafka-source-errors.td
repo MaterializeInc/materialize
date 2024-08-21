@@ -13,9 +13,6 @@ $ set-arg-default single-replica-cluster=quickstart
 
 $ kafka-create-topic topic=thetopic partitions=1
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE CONNECTION no_broker TO KAFKA (BROKER '');

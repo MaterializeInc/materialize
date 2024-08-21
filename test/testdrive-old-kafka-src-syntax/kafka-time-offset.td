@@ -11,7 +11,6 @@ $ set-arg-default default-storage-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 ALTER SYSTEM SET max_clusters = 20
 
 # Tests for `START TIMESTAMP` configuration which resolves a start offset

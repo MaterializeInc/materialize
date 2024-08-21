@@ -21,10 +21,8 @@ exact:`WITH (DISK)` for cluster replicas is not supported
 
 > DROP CLUSTER no;
 
-# Test that with `enable_create_source_denylist_with_options` off, if
-# `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
+# Test that if `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = false
 ALTER SYSTEM SET enable_disk_cluster_replicas = true
 
 > DROP CLUSTER IF EXISTS c;

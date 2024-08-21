@@ -91,7 +91,6 @@ pub enum VarError {
     #[error("{} is not supported", .feature)]
     RequiresFeatureFlag {
         feature: String,
-        detail: Option<String>,
         /// If we're running in unsafe mode and hit this error, we should surface the flag name that
         /// needs to be set to make the feature work.
         name_hint: Option<&'static UncasedStr>,
@@ -101,11 +100,8 @@ pub enum VarError {
 impl VarError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::RequiresFeatureFlag { detail, .. } => {
-                match detail {
-                    None => Some("The requested feature is typically meant only for internal development and testing of Materialize.".into()),
-                    o => o.clone()
-                }
+            Self::RequiresFeatureFlag { .. } => {
+                Some("The requested feature is typically meant only for internal development and testing of Materialize.".into())
             }
             _ => None,
         }
