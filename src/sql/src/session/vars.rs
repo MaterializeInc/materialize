@@ -2333,28 +2333,6 @@ pub struct FeatureFlag {
     pub feature_desc: &'static str,
 }
 
-impl Var for FeatureFlag {
-    fn name(&self) -> &'static str {
-        self.flag.name()
-    }
-
-    fn value(&self) -> String {
-        self.flag.value()
-    }
-
-    fn description(&self) -> &'static str {
-        self.flag.description()
-    }
-
-    fn type_name(&self) -> Cow<'static, str> {
-        self.flag.type_name()
-    }
-
-    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
-        self.flag.visible(user, system_vars)
-    }
-}
-
 impl FeatureFlag {
     pub fn enabled(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
         match system_vars {
