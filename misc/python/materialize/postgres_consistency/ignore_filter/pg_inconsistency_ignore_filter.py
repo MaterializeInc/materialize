@@ -1050,6 +1050,22 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             # comparator. However, this is not sufficient when a LIMIT or OFFSET clause is present.
             return YesIgnore("Different sort order")
 
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(matches_fun_by_name, function_name_in_lower_case="unnest"),
+            True,
+        ) and query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(
+                involves_data_type_categories,
+                data_type_categories={
+                    DataTypeCategory.ARRAY,
+                },
+            ),
+            True,
+        ):
+            return YesIgnore("#29143: unnest on array uses wrong order")
+
         return NoIgnore()
 
     def _shall_ignore_pg_typeof_content_mismatch(
