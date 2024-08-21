@@ -47,6 +47,7 @@ use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSi
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExportDetails,
 };
+use mz_timestamp_oracle::TimestampOracle;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
@@ -599,12 +600,30 @@ pub trait StorageController: Debug {
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>;
 
+    /// Returns a future that returns the snapshot of the contents of the local input named `id` at
+    /// `as_of`.
+    async fn snapshot_async(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<
+        oneshot::Receiver<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    >;
+
     /// Returns the snapshot of the contents of the local input named `id` at
     /// the largest readable `as_of`.
     async fn snapshot_latest(
         &mut self,
         id: GlobalId,
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>>;
+
+    /// Returns a future that returns the snapshot of the contents of the local input named `id` at
+    /// the largest readable `as_of`.
+    async fn snapshot_latest_async(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<oneshot::Receiver<Vec<Row>>, StorageError<Self::Timestamp>>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot_cursor(
@@ -779,6 +798,17 @@ pub trait StorageController: Debug {
         BoxFuture<Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,
     >;
+
+    /// Starts a one-off background task that prunes outdated storage usage
+    /// updates from the collection identified by the given [GlobalId]. The
+    /// collection behind the given id MUST be `mz_storage_usage_by_shard`.
+    async fn prune_storage_usage_once(
+        &mut self,
+        id: GlobalId,
+        retention_period: Duration,
+        write_lock: Arc<tokio::sync::Mutex<()>>,
+        timestamp_oracle: Arc<dyn TimestampOracle<Self::Timestamp> + Send + Sync>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_audit_log::{EventType, FullNameV1, ObjectType};
+use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTINS, BUILTIN_PREFIXES,
@@ -560,40 +560,35 @@ impl Catalog {
             storage_collections_to_drop: _,
             migrated_storage_collections_0dt: _,
             builtin_table_updates: _,
-        } = Catalog::open(
-            Config {
-                storage,
-                metrics_registry,
-                // when debugging, no reaping
-                storage_usage_retention_period: None,
-                state: StateConfig {
-                    unsafe_mode: true,
-                    all_features: false,
-                    build_info: &DUMMY_BUILD_INFO,
-                    environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-                    now,
-                    boot_ts: previous_ts,
-                    skip_migrations: true,
-                    cluster_replica_sizes: Default::default(),
-                    builtin_system_cluster_replica_size: "1".into(),
-                    builtin_catalog_server_cluster_replica_size: "1".into(),
-                    builtin_probe_cluster_replica_size: "1".into(),
-                    builtin_support_cluster_replica_size: "1".into(),
-                    builtin_analytics_cluster_replica_size: "1".into(),
-                    system_parameter_defaults,
-                    remote_system_parameters: None,
-                    availability_zones: vec![],
-                    egress_ips: vec![],
-                    aws_principal_context: None,
-                    aws_privatelink_availability_zones: None,
-                    http_host_name: None,
-                    connection_context: ConnectionContext::for_tests(secrets_reader),
-                    active_connection_count,
-                    builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
-                },
+        } = Catalog::open(Config {
+            storage,
+            metrics_registry,
+            state: StateConfig {
+                unsafe_mode: true,
+                all_features: false,
+                build_info: &DUMMY_BUILD_INFO,
+                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                now,
+                boot_ts: previous_ts,
+                skip_migrations: true,
+                cluster_replica_sizes: Default::default(),
+                builtin_system_cluster_replica_size: "1".into(),
+                builtin_catalog_server_cluster_replica_size: "1".into(),
+                builtin_probe_cluster_replica_size: "1".into(),
+                builtin_support_cluster_replica_size: "1".into(),
+                builtin_analytics_cluster_replica_size: "1".into(),
+                system_parameter_defaults,
+                remote_system_parameters: None,
+                availability_zones: vec![],
+                egress_ips: vec![],
+                aws_principal_context: None,
+                aws_privatelink_availability_zones: None,
+                http_host_name: None,
+                connection_context: ConnectionContext::for_tests(secrets_reader),
+                active_connection_count,
+                builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
             },
-            previous_ts,
-        )
+        })
         .await?;
         Ok(catalog)
     }
@@ -691,6 +686,15 @@ impl Catalog {
             .err_into()
     }
 
+    pub async fn allocate_storage_usage_id(&self) -> Result<u64, Error> {
+        self.storage()
+            .await
+            .allocate_storage_usage_id()
+            .await
+            .maybe_terminate("allocating storage usage id")
+            .err_into()
+    }
+
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         self.state.resolve_database(database_name)
     }
@@ -714,6 +718,10 @@ impl Catalog {
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
+    }
+
+    pub fn resolve_system_schema(&self, name: &'static str) -> SchemaId {
+        self.state.resolve_system_schema(name)
     }
 
     pub fn resolve_search_path(
@@ -1156,6 +1164,15 @@ impl Catalog {
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         self.state
             .resolve_builtin_table_updates(self.state.pack_item_update(id, diff))
+    }
+
+    pub fn pack_storage_usage_update(
+        &self,
+        event: VersionedStorageUsage,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        self.state
+            .resolve_builtin_table_update(self.state.pack_storage_usage_update(event, diff))
     }
 
     pub fn system_config(&self) -> &SystemVars {

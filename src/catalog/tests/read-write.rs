@@ -7,14 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
-use mz_audit_log::{
-    EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1, VersionedEvent,
-    VersionedStorageUsage,
-};
+use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
@@ -22,7 +17,7 @@ use mz_catalog::durable::{
     Item, OpenableDurableCatalogState, USER_ITEM_ALLOC_KEY,
 };
 use mz_ore::assert_ok;
-use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::collections::HashSet;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
@@ -87,85 +82,6 @@ async fn test_confirm_leadership(
     ));
     Box::new(state1).expire().await;
     Box::new(state2).expire().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_get_and_prune_storage_usage() {
-    let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    test_get_and_prune_storage_usage(openable_state).await;
-}
-
-async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurableCatalogState>) {
-    let old_event = StorageUsageV1 {
-        id: 1,
-        shard_id: Some("recent".to_string()),
-        size_bytes: 42,
-        collection_timestamp: 10,
-    };
-    let recent_event = StorageUsageV1 {
-        id: 2,
-        shard_id: Some("recent".to_string()),
-        size_bytes: 42,
-        collection_timestamp: 20,
-    };
-    let deploy_generation = 0;
-    let boot_ts = mz_repr::Timestamp::new(23);
-
-    let mut state = openable_state
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
-        .await
-        .unwrap();
-    // Drain initial updates.
-    let _ = state
-        .sync_to_current_updates()
-        .await
-        .expect("unable to sync");
-    let mut txn = state.transaction().await.unwrap();
-    txn.insert_storage_usage_event(
-        old_event.shard_id.clone(),
-        old_event.size_bytes.clone(),
-        old_event.collection_timestamp.clone(),
-    )
-    .unwrap();
-    txn.insert_storage_usage_event(
-        recent_event.shard_id.clone(),
-        recent_event.size_bytes.clone(),
-        recent_event.collection_timestamp.clone(),
-    )
-    .unwrap();
-    // Drain txn updates.
-    let _ = txn.get_and_commit_op_updates();
-    txn.commit().await.unwrap();
-
-    let old_event = VersionedStorageUsage::V1(old_event);
-    let recent_event = VersionedStorageUsage::V1(recent_event);
-
-    // Test with no retention period.
-    let events = state
-        .get_and_prune_storage_usage(None, boot_ts)
-        .await
-        .unwrap();
-    assert_eq!(events.len(), 2, "unexpected events len: {events:?}");
-    assert!(events.contains(&old_event));
-    assert!(events.contains(&recent_event));
-
-    // Test with some retention period.
-    let events = state
-        .get_and_prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
-        .await
-        .unwrap();
-    assert_eq!(events.len(), 1, "unexpected events len: {events:?}");
-    assert_eq!(events.into_element(), recent_event);
-    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

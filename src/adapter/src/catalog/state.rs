@@ -1426,7 +1426,7 @@ impl CatalogState {
     /// Optimized lookup for a system schema.
     ///
     /// Panics if the system schema doesn't exist in the catalog.
-    pub fn resolve_system_schema(&self, name: &str) -> SchemaId {
+    pub fn resolve_system_schema(&self, name: &'static str) -> SchemaId {
         self.ambient_schemas_by_name[name]
     }
 

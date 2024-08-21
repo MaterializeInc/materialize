@@ -997,7 +997,7 @@ where
                     // Pull as many queued updates off the channel as possible.
                     cmd = rx.mz_recv_many(CHANNEL_CAPACITY) => {
                         if let Some(batch) = cmd {
-                            // To rate limit appends to persist we add artifical latency, and will
+                            // To rate limit appends to persist we add artificial latency, and will
                             // finish no sooner than this instant.
                             let batch_duration_ms = match id {
                                 GlobalId::User(_) => Duration::from_millis(user_batch_duration_ms.load(Ordering::Relaxed)),

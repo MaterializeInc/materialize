@@ -2464,7 +2464,6 @@ pub enum StateUpdateKind {
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
-    StorageUsage(durable::objects::StorageUsage),
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
@@ -2537,7 +2536,6 @@ pub enum BootstrapStateUpdateKind {
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
-    StorageUsage(durable::objects::StorageUsage),
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
@@ -2569,7 +2567,6 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             BootstrapStateUpdateKind::Item(kind) => StateUpdateKind::Item(kind),
             BootstrapStateUpdateKind::Comment(kind) => StateUpdateKind::Comment(kind),
             BootstrapStateUpdateKind::AuditLog(kind) => StateUpdateKind::AuditLog(kind),
-            BootstrapStateUpdateKind::StorageUsage(kind) => StateUpdateKind::StorageUsage(kind),
             BootstrapStateUpdateKind::StorageCollectionMetadata(kind) => {
                 StateUpdateKind::StorageCollectionMetadata(kind)
             }
@@ -2611,7 +2608,6 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             StateUpdateKind::Item(kind) => Ok(BootstrapStateUpdateKind::Item(kind)),
             StateUpdateKind::Comment(kind) => Ok(BootstrapStateUpdateKind::Comment(kind)),
             StateUpdateKind::AuditLog(kind) => Ok(BootstrapStateUpdateKind::AuditLog(kind)),
-            StateUpdateKind::StorageUsage(kind) => Ok(BootstrapStateUpdateKind::StorageUsage(kind)),
             StateUpdateKind::StorageCollectionMetadata(kind) => {
                 Ok(BootstrapStateUpdateKind::StorageCollectionMetadata(kind))
             }

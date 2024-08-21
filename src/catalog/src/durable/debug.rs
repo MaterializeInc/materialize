@@ -66,7 +66,6 @@ pub enum CollectionType {
     Role,
     Schema,
     Setting,
-    StorageUsage,
     SystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
@@ -223,14 +222,6 @@ collection_impl!({
     update: StateUpdateKind::Setting,
 });
 collection_impl!({
-    name: StorageUsageCollection,
-    key: proto::StorageUsageKey,
-    value: (),
-    collection_type: CollectionType::StorageUsage,
-    trace_field: storage_usage,
-    update: StateUpdateKind::StorageUsage,
-});
-collection_impl!({
     name: SystemConfigurationCollection,
     key: proto::ServerConfigurationKey,
     value: proto::ServerConfigurationValue,
@@ -311,7 +302,6 @@ pub struct Trace {
     pub roles: CollectionTrace<RoleCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
     pub settings: CollectionTrace<SettingCollection>,
-    pub storage_usage: CollectionTrace<StorageUsageCollection>,
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
@@ -336,7 +326,6 @@ impl Trace {
             roles: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
             settings: CollectionTrace::new(),
-            storage_usage: CollectionTrace::new(),
             system_object_mappings: CollectionTrace::new(),
             system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),

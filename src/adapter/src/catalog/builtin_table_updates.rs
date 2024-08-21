@@ -1707,7 +1707,7 @@ impl CatalogState {
 
     pub fn pack_storage_usage_update(
         &self,
-        VersionedStorageUsage::V1(event): &VersionedStorageUsage,
+        VersionedStorageUsage::V1(event): VersionedStorageUsage,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let id = &MZ_STORAGE_USAGE_BY_SHARD;

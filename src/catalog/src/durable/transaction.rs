@@ -14,11 +14,10 @@ use std::time::Duration;
 use anyhow::anyhow;
 use derivative::Derivative;
 use itertools::Itertools;
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::VersionedEvent;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::now::EpochMillis;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_persist_types::ShardId;
@@ -49,15 +48,15 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue, StorageUsageKey,
+    SettingValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
     SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
     TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -94,7 +93,6 @@ pub struct Transaction<'a> {
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(AuditLogKey, Diff, Timestamp)>,
-    storage_usage_updates: Vec<(StorageUsageKey, Diff, Timestamp)>,
     /// The timestamp to commit this transaction at.
     commit_ts: mz_repr::Timestamp,
     /// The ID of the current operation of this transaction.
@@ -166,7 +164,6 @@ impl<'a> Transaction<'a> {
             // value).
             txn_wal_shard: TableTransaction::new(txn_wal_shard, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
-            storage_usage_updates: Vec::new(),
             commit_ts,
             op_id: 0,
         })
@@ -197,28 +194,6 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|event| (AuditLogKey { event }, 1, self.op_id));
         self.audit_log_updates.extend(events);
-    }
-
-    pub fn insert_storage_usage_event(
-        &mut self,
-        shard_id: Option<String>,
-        size_bytes: u64,
-        collection_timestamp: EpochMillis,
-    ) -> Result<(), CatalogError> {
-        let id = self.get_and_increment_id(STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
-        let metric = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
-        self.insert_storage_usage_events([metric]);
-        Ok(())
-    }
-
-    pub fn insert_storage_usage_events(
-        &mut self,
-        metrics: impl IntoIterator<Item = VersionedStorageUsage>,
-    ) {
-        let metrics = metrics
-            .into_iter()
-            .map(|metric| (StorageUsageKey { metric }, 1, self.op_id));
-        self.storage_usage_updates.extend(metrics);
     }
 
     pub fn insert_user_database(
@@ -1055,14 +1030,6 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Removes all storage usage events in `events` from the transaction.
-    pub(crate) fn remove_storage_usage_events(&mut self, events: Vec<VersionedStorageUsage>) {
-        let events = events
-            .into_iter()
-            .map(|event| (StorageUsageKey { metric: event }, -1, self.op_id));
-        self.storage_usage_updates.extend(events);
-    }
-
     /// Removes item `id` from the transaction.
     ///
     /// Returns an error if `id` is not found.
@@ -1865,7 +1832,6 @@ impl<'a> Transaction<'a> {
             default_privileges,
             system_privileges,
             audit_log_updates,
-            storage_usage_updates,
             storage_collection_metadata,
             unfinalized_shards,
             // Not representable as a `StateUpdate`.
@@ -1953,11 +1919,6 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::AuditLog,
                 self.op_id,
             ))
-            .chain(get_large_collection_op_updates(
-                storage_usage_updates,
-                StateUpdateKind::StorageUsage,
-                self.op_id,
-            ))
             .map(|(kind, diff)| StateUpdate {
                 kind,
                 ts: commit_ts.clone(),
@@ -1990,11 +1951,6 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|(k, diff, _op)| (k.into_proto(), (), diff))
             .collect();
-        let storage_usage_updates = self
-            .storage_usage_updates
-            .into_iter()
-            .map(|(k, diff, _op)| (k.into_proto(), (), diff))
-            .collect();
 
         let txn_batch = TransactionBatch {
             databases: self.databases.pending(),
@@ -2016,7 +1972,6 @@ impl<'a> Transaction<'a> {
             unfinalized_shards: self.unfinalized_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
-            storage_usage_updates,
             commit_ts: self.commit_ts,
         };
         (txn_batch, self.durable_catalog)
@@ -2053,7 +2008,6 @@ impl<'a> Transaction<'a> {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            storage_usage_updates,
             commit_ts: _,
         } = &mut txn_batch;
         // Consolidate in memory because it will likely be faster than consolidating after the
@@ -2077,7 +2031,6 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
-        differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
 
         let upper = durable_catalog.commit_transaction(txn_batch).await?;
         Ok((durable_catalog, upper))
@@ -2274,7 +2227,6 @@ pub struct TransactionBatch {
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
     pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
-    pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
     /// The timestamp to commit this transaction at.
     pub(crate) commit_ts: mz_repr::Timestamp,
 }
@@ -2301,7 +2253,6 @@ impl TransactionBatch {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            storage_usage_updates,
             commit_ts: _,
         } = self;
         databases.is_empty()
@@ -2323,7 +2274,6 @@ impl TransactionBatch {
             && unfinalized_shards.is_empty()
             && txn_wal_shard.is_empty()
             && audit_log_updates.is_empty()
-            && storage_usage_updates.is_empty()
     }
 }
 

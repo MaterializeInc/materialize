@@ -73,7 +73,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
 };
 use mz_ore::channel::trigger;
-use mz_sql::names::ResolvedIds;
+use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -96,7 +96,9 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_CLUSTER_REPLICA_FRONTIERS};
+use mz_catalog::builtin::{
+    BUILTINS, BUILTINS_STATIC, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_STORAGE_USAGE_BY_SHARD,
+};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
@@ -245,7 +247,8 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
-
+    // TODO: Delete this!
+    StorageUsagePrune(Vec<BuiltinTableUpdate>),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -347,6 +350,7 @@ impl Message {
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
+            Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -2315,10 +2319,17 @@ impl Coordinator {
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
-        for system_table in entries
-            .iter()
-            .filter(|entry| entry.is_table() && entry.id().is_system())
-        {
+        let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
+            .catalog()
+            .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
+            .into();
+        let is_storage_usage_by_shard = |entry: &CatalogEntry| -> bool {
+            entry.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
+                && entry.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
+        };
+        for system_table in entries.iter().filter(|entry| {
+            entry.is_table() && entry.id().is_system() && !is_storage_usage_by_shard(entry)
+        }) {
             debug!(
                 "coordinator init: resetting system table {} ({})",
                 self.catalog().resolve_full_name(system_table.name(), None),
@@ -2896,6 +2907,7 @@ impl Coordinator {
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
+        storage_usage_retention_period: Option<Duration>,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
             // Watcher that listens for and reports cluster service status changes.
@@ -2908,6 +2920,22 @@ impl Coordinator {
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
             let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
             let last_message_watchdog = Arc::clone(&last_message);
+
+            // TODO(jkosh44) Consider doing this periodically instead of only on startup.
+            if !self.controller.read_only() {
+                if let Some(retention_period) = storage_usage_retention_period {
+                    let id = self.catalog().resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
+                    self
+                        .controller
+                        .storage
+                        .prune_storage_usage_once(
+                            id,
+                            retention_period,
+                            self.write_lock_wait_group.mutex(),
+                            self.get_local_timestamp_oracle()).await
+                        .expect("correct usage");
+                }
+            }
 
             spawn(|| "coord watchdog", async move {
                 // Every 5 seconds, attempt to measure how long it takes for the
@@ -3685,39 +3713,35 @@ pub fn serve(
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
             builtin_table_updates,
-        } = Catalog::open(
-            mz_catalog::config::Config {
-                storage,
-                metrics_registry: &metrics_registry,
-                storage_usage_retention_period,
-                state: mz_catalog::config::StateConfig {
-                    unsafe_mode,
-                    all_features,
-                    build_info,
-                    environment_id: environment_id.clone(),
-                    now: now.clone(),
-                    boot_ts: boot_ts.clone(),
-                    skip_migrations: false,
-                    cluster_replica_sizes,
-                    builtin_system_cluster_replica_size,
-                    builtin_catalog_server_cluster_replica_size,
-                    builtin_probe_cluster_replica_size,
-                    builtin_support_cluster_replica_size,
-                    builtin_analytics_cluster_replica_size,
-                    system_parameter_defaults,
-                    remote_system_parameters,
-                    availability_zones,
-                    egress_ips,
-                    aws_principal_context,
-                    aws_privatelink_availability_zones,
-                    connection_context,
-                    active_connection_count,
-                    http_host_name,
-                    builtin_item_migration_config,
-                },
+        } = Catalog::open(mz_catalog::config::Config {
+            storage,
+            metrics_registry: &metrics_registry,
+            state: mz_catalog::config::StateConfig {
+                unsafe_mode,
+                all_features,
+                build_info,
+                environment_id: environment_id.clone(),
+                now: now.clone(),
+                boot_ts: boot_ts.clone(),
+                skip_migrations: false,
+                cluster_replica_sizes,
+                builtin_system_cluster_replica_size,
+                builtin_catalog_server_cluster_replica_size,
+                builtin_probe_cluster_replica_size,
+                builtin_support_cluster_replica_size,
+                builtin_analytics_cluster_replica_size,
+                system_parameter_defaults,
+                remote_system_parameters,
+                availability_zones,
+                egress_ips,
+                aws_principal_context,
+                aws_privatelink_availability_zones,
+                connection_context,
+                active_connection_count,
+                http_host_name,
+                builtin_item_migration_config,
             },
-            boot_ts,
-        )
+        })
         .await?;
 
         if !read_only_controllers {
@@ -3879,6 +3903,7 @@ pub fn serve(
                         strict_serializable_reads_rx,
                         cmd_rx,
                         group_commit_rx,
+                        storage_usage_retention_period,
                     ));
                 }
             })

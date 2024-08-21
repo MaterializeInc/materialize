@@ -30,7 +30,6 @@ use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLoca
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
-use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, GlobalId};
@@ -176,11 +175,6 @@ pub enum Op {
         id: GlobalId,
         name: QualifiedItemName,
         to_item: CatalogItem,
-    },
-    UpdateStorageUsage {
-        shard_id: Option<String>,
-        size_bytes: u64,
-        collection_timestamp: EpochMillis,
     },
     UpdateSystemConfiguration {
         name: String,
@@ -1964,13 +1958,6 @@ impl Catalog {
                 }
 
                 Self::log_update(state, &id);
-            }
-            Op::UpdateStorageUsage {
-                shard_id,
-                size_bytes,
-                collection_timestamp,
-            } => {
-                tx.insert_storage_usage_event(shard_id, size_bytes, collection_timestamp)?;
             }
             Op::UpdateSystemConfiguration { name, value } => {
                 let parsed_value = state.parse_system_configuration(&name, value.borrow())?;
