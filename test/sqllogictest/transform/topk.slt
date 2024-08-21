@@ -12,7 +12,7 @@
 # and interaction of transforms with the TopK operator.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 

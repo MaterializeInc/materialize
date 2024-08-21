@@ -10,7 +10,7 @@
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_refresh_every_mvs = true
 ALTER SYSTEM SET enable_cluster_schedule_refresh = true
-ALTER SYSTEM SET enable_unstable_dependencies = true
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 
 > CREATE DATABASE materialized_view_refresh_options;

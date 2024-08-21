@@ -1323,7 +1323,7 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
     c.up("mz_old")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         service="mz_old",
         port=6877,
         user="mz_system",

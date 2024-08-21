@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
 > DROP CLUSTER IF EXISTS prod CASCADE
 > DROP CLUSTER IF EXISTS prod_deploy CASCADE

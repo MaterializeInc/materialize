@@ -1223,7 +1223,7 @@ def run_scenario(
         c.up("redpanda", "materialized", "postgres", "mysql", "clusterd")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )

@@ -10,7 +10,7 @@
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ALTER SYSTEM SET enable_primary_key_not_enforced = true
 
 #

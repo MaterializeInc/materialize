@@ -184,7 +184,12 @@ def run_one_scenario(
         c.up("testdrive", persistent=True)
 
         additional_system_parameter_defaults = (
-            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {"max_clusters": "15"}
+            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
+            | {
+                "max_clusters": "15",
+                "enable_unorchestrated_cluster_replicas": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            }
         )
 
         if params is not None:
@@ -225,9 +230,6 @@ def run_one_scenario(
             c.testdrive(
                 dedent(
                     """
-                    $[version>=9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                    ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
-
                     $[version<9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 

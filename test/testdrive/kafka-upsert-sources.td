@@ -680,7 +680,7 @@ val2:[1,2,
   KEY FORMAT TEXT
   VALUE FORMAT JSON
   ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
-contains:The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT is not supported
+contains:The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT is not available
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true

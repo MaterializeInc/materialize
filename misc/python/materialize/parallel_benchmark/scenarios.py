@@ -350,7 +350,7 @@ class FlagUpdate(Scenario):
                     actions=[
                         OpenLoop(
                             action=ReuseConnQuery(
-                                "ALTER SYSTEM SET enable_table_keys = true",
+                                "ALTER SYSTEM SET unsafe_enable_table_keys = true",
                                 conn_info=conn_infos["mz_system"],
                             ),
                             dist=Periodic(per_second=1),

@@ -210,8 +210,6 @@ class SinkTables(Check):
             schemas()
             + dedent(
                 """
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_table_keys = true;
                 > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
                 > CREATE DEFAULT INDEX ON sink_large_transaction_table;
 
@@ -1126,8 +1124,6 @@ class SinkPartitionByDebezium(Check):
             schemas()
             + dedent(
                 """
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_table_keys = true;
                 > CREATE TABLE sink_partition_by_debezium_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
                 > CREATE DEFAULT INDEX ON sink_partition_by_debezium_table;
 

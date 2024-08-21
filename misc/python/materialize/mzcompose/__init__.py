@@ -66,6 +66,7 @@ def get_default_system_parameters(
         # -----
         # Unsafe functions
         "enable_unsafe_functions": "true",
+        "unsafe_enable_unsafe_functions": "true",
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
         "persist_next_listen_batch_retryer_clamp": "16s",
@@ -115,6 +116,7 @@ def get_default_system_parameters(
         "enable_cluster_schedule_refresh": "true",
         "enable_statement_lifecycle_logging": "true",
         "enable_table_keys": "true",
+        "unsafe_enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "persist_record_schema_id": (

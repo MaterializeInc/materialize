@@ -31,8 +31,7 @@ ALTER SYSTEM SET enable_statement_lifecycle_logging = true
 # Later, we need to ignore everything
 # that happened before the real test started. Sleep here,
 # so we can be sure that their `began_at` is different.
-> SELECT mz_unsafe.mz_sleep(1)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
 # Make it so we can query the tables later
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

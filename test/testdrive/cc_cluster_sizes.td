@@ -20,7 +20,7 @@ contains:unknown cluster replica size 512C
 
 # Nor can we create an unmanaged replica directly
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 ! CREATE CLUSTER c REPLICAS (r1 (SIZE '1cc'))
 contains:unknown cluster replica size 1cc

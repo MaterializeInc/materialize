@@ -250,7 +250,7 @@ query error db error: ERROR: materialized view objects cannot depend on log sour
 CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_introspection.mz_scheduling_elapsed_raw WHERE FALSE);
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -1010,7 +1010,7 @@ NULL  -1  -2
 # choosing a timestamp for mz_now.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unstable_dependencies = true
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 ----
 COMPLETE 0
 

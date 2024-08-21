@@ -234,7 +234,7 @@ def restart_environmentd(c: Composition) -> None:
 def drop_create_replica(c: Composition) -> None:
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -255,7 +255,7 @@ def drop_create_replica(c: Composition) -> None:
 
 def create_invalid_replica(c: Composition) -> None:
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -441,7 +441,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.up("materialized", "clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )

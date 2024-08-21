@@ -43,6 +43,7 @@ use rand::Rng;
 use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
+use semver::Version;
 use tracing::info;
 use url::Url;
 
@@ -436,14 +437,28 @@ impl State {
             .context("getting version of materialize")
             .map(|row| row.get::<_, i32>(0))?;
 
+        let semver = inner_client
+            .query_one("SELECT right(split_part(mz_version(), ' ', 1), -1)", &[])
+            .await
+            .context("getting semver of materialize")
+            .map(|row| row.get::<_, String>(0))?
+            .parse::<semver::Version>()
+            .context("parsing semver of materialize")?;
+
         inner_client
             .batch_execute("ALTER SYSTEM RESET ALL")
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.
+        let unsafe_version = Version::parse("0.128.0-dev.1").expect("known to be valid");
+        let enable_unsafe_functions = if semver >= unsafe_version {
+            "unsafe_enable_unsafe_functions"
+        } else {
+            "enable_unsafe_functions"
+        };
         inner_client
-            .batch_execute("ALTER SYSTEM SET enable_unsafe_functions = on")
+            .batch_execute(&format!("ALTER SYSTEM SET {enable_unsafe_functions} = on"))
             .await
             .context("enabling dangerous functions")?;
 

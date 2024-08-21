@@ -72,7 +72,7 @@ struct Args {
     /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
     #[clap(long)]
     auto_transactions: bool,
-    /// Inject `ALTER SYSTEM SET enable_table_keys = true` before running the SLT file.
+    /// Inject `ALTER SYSTEM SET unsafe_enable_table_keys = true` before running the SLT file.
     #[clap(long)]
     enable_table_keys: bool,
     /// Divide the test files into shards and run only the test files in this shard.

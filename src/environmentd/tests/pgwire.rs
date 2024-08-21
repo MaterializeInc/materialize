@@ -580,10 +580,10 @@ fn test_pgtest_mz() {
     pg_test_inner(
         dir,
         &[
-            "enable_raise_statement",
-            "enable_unorchestrated_cluster_replicas",
-            "enable_unsafe_functions",
             "enable_copy_to_expr",
+            "enable_raise_statement",
+            "unsafe_enable_unorchestrated_cluster_replicas",
+            "unsafe_enable_unsafe_functions",
         ],
     );
 }

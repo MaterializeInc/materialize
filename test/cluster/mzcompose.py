@@ -64,6 +64,10 @@ SERVICES = [
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
         external_metadata_store=True,
+        additional_system_parameter_defaults={
+            "unsafe_enable_unsafe_functions": "true",
+            "unsafe_enable_unorchestrated_cluster_replicas": "true",
+        },
     ),
     CockroachOrPostgresMetadata(),
     Postgres(),
@@ -116,7 +120,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     # between testdrive runs.
     c.sql(
         """
-        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
 
@@ -144,7 +148,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.sql(
         """
-        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
         CREATE CLUSTER REPLICA cluster1.replica2
             STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
@@ -180,7 +184,7 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -317,7 +321,7 @@ def workflow_test_github_4443(c: Composition) -> None:
         )
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -439,7 +443,7 @@ def workflow_test_github_4444(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -501,7 +505,7 @@ def workflow_test_github_4545(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -555,7 +559,7 @@ def workflow_test_github_4587(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -659,7 +663,7 @@ def workflow_test_github_4433(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -732,7 +736,7 @@ def workflow_test_github_4966(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -811,7 +815,7 @@ def workflow_test_github_5087(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -985,7 +989,7 @@ def workflow_test_github_5086(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1079,7 +1083,7 @@ def workflow_test_github_5831(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1187,7 +1191,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1542,7 +1546,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1637,7 +1641,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1761,7 +1765,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1912,7 +1916,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -2002,7 +2006,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -2088,7 +2092,8 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "enable_unorchestrated_cluster_replicas": "true",
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
         ),
         Clusterd(
@@ -2195,7 +2200,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     c.up("materialized", "clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -2294,7 +2299,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -2376,7 +2381,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
             input=dedent(
                 """
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+                ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
                 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
                 {
@@ -2417,8 +2422,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                     COMPUTE ADDRESSES ['toxiproxy:2102'],
                     WORKERS 2));
 
-                > SELECT mz_unsafe.mz_sleep(1);
-                <null>
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
                 $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
                 {
@@ -2571,7 +2575,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         return Metrics(resp)
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -3011,7 +3015,7 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
 
     c.sql(
         """
-        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
         CREATE CLUSTER test REPLICAS (r1 (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
             STORAGE ADDRESSES ['clusterd1:2103'],
@@ -3470,7 +3474,12 @@ def workflow_blue_green_deployment(
         ),  # pending dataflows can take a while
         Clusterd(name="clusterd1"),
         Clusterd(name="clusterd2"),
-        Materialized(),
+        Materialized(
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+        ),
     ):
         c.up("materialized")
         c.up("clusterd1")
@@ -3666,20 +3675,15 @@ def workflow_test_refresh_mv_warmup(
                 """
                 ## 1. We shouldn't have a dataflow for mv1.
                 > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
-                > SELECT mz_unsafe.mz_sleep(0.5);
-                <null>
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="500ms"
                 > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
-                > SELECT mz_unsafe.mz_sleep(0.5);
-                <null>
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="500ms"
                 > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
-                > SELECT mz_unsafe.mz_sleep(0.5);
-                <null>
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="500ms"
                 > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
-                > SELECT mz_unsafe.mz_sleep(0.5);
-                <null>
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="500ms"
                 > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
-                > SELECT mz_unsafe.mz_sleep(0.5);
-                <null>
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="500ms"
                 > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
 
                 > SELECT * FROM mv1;
@@ -4225,7 +4229,8 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "enable_unorchestrated_cluster_replicas": "true",
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
         ),
         Testdrive(
@@ -4488,13 +4493,13 @@ def workflow_test_adhoc_system_indexes(
 
     # The system user should be able to create a new index on an unstable
     # catalog object in the mz_catalog_server cluster if
-    # `enable_unstable_dependencies` is set.
+    # `unsafe_enable_unstable_dependencies` is set.
     c.sql(
         """
-        ALTER SYSTEM SET enable_unstable_dependencies = on;
+        ALTER SYSTEM SET unsafe_enable_unstable_dependencies = on;
         SET cluster = mz_catalog_server;
         CREATE INDEX mz_test_idx2 ON mz_internal.mz_hydration_statuses (hydrated);
-        ALTER SYSTEM SET enable_unstable_dependencies = off;
+        ALTER SYSTEM SET unsafe_enable_unstable_dependencies = off;
         """,
         port=6877,
         user="mz_system",
@@ -4671,7 +4676,8 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "enable_unorchestrated_cluster_replicas": "true",
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
         ),
         Testdrive(
@@ -4914,7 +4920,7 @@ def workflow_crash_on_replica_expiration_mv(
         c.up("clusterd1")
         c.sql(
             f"""
-            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
             ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
 
             DROP CLUSTER IF EXISTS test CASCADE;
@@ -4934,11 +4940,12 @@ def workflow_crash_on_replica_expiration_mv(
             CREATE TABLE t (x int);
             INSERT INTO t VALUES (42);
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 84;
-            SELECT mz_unsafe.mz_sleep({offset + 10});
             """,
             port=6877,
             user="mz_system",
         )
+
+        c.sleep(offset + 10)
 
         results = c.sql_query(
             """
@@ -4978,7 +4985,7 @@ def workflow_crash_on_replica_expiration_index(
         c.up("clusterd1")
         c.sql(
             f"""
-            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
             ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
 
             DROP CLUSTER IF EXISTS test CASCADE;
@@ -4999,11 +5006,12 @@ def workflow_crash_on_replica_expiration_index(
             INSERT INTO t VALUES (42);
             CREATE VIEW mv AS SELECT * FROM t WHERE x < 84;
             CREATE DEFAULT INDEX ON mv;
-            SELECT mz_unsafe.mz_sleep({offset + 10});
             """,
             port=6877,
             user="mz_system",
         )
+
+        c.sleep(offset + 10)
 
         results = c.sql_query(
             """
@@ -5066,7 +5074,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
             ALTER SYSTEM SET compute_replica_expiration_offset = '50s';
 
             > DROP CLUSTER IF EXISTS test CASCADE;
@@ -5102,8 +5110,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
               WHERE name LIKE '%events_view_primary_idx';
             1000
             # Sleep until the replica expires
-            > SELECT mz_unsafe.mz_sleep(60);
-            <null>
+            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="60s"
             # Retraction diffs are now within the expiration time and should be generated
             > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
               WHERE name LIKE '%events_view_primary_idx';

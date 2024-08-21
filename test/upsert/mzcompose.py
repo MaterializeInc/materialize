@@ -39,7 +39,7 @@ SERVICES = [
         ],
         additional_system_parameter_defaults={
             "disk_cluster_replicas_default": "true",
-            "enable_unorchestrated_cluster_replicas": "true",
+            "unsafe_enable_unorchestrated_cluster_replicas": "true",
             "storage_dataflow_delay_sources_past_rehydration": "true",
             "upsert_rocksdb_auto_spill_to_disk": "false",
         },
@@ -172,7 +172,7 @@ def workflow_rehydration(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "storage_statistics_collection_interval": "1000",
                     "storage_statistics_interval": "2000",
-                    "enable_unorchestrated_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
@@ -203,7 +203,7 @@ def workflow_rehydration(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "storage_statistics_collection_interval": "1000",
                     "storage_statistics_interval": "2000",
-                    "enable_unorchestrated_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
@@ -236,7 +236,7 @@ def workflow_rehydration(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "storage_statistics_collection_interval": "1000",
                     "storage_statistics_interval": "2000",
-                    "enable_unorchestrated_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
@@ -491,7 +491,7 @@ def workflow_autospill(c: Composition) -> None:
                     "disk_cluster_replicas_default": "true",
                     "upsert_rocksdb_auto_spill_to_disk": "true",
                     "upsert_rocksdb_auto_spill_threshold_bytes": "290",
-                    "enable_unorchestrated_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
             ),
@@ -506,7 +506,7 @@ def workflow_autospill(c: Composition) -> None:
                     "disk_cluster_replicas_default": "true",
                     "upsert_rocksdb_auto_spill_to_disk": "true",
                     "upsert_rocksdb_auto_spill_threshold_bytes": "290",
-                    "enable_unorchestrated_cluster_replicas": "true",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                     # Enable the RocksDB merge operator
                     "storage_rocksdb_use_merge_operator": "true",

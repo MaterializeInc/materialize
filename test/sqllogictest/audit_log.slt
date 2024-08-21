@@ -155,7 +155,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 16  grant  system  {"grantee_id":"s1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
 17  grant  system  {"grantee_id":"u1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
 18  alter  system  {"name":"enable_reduce_mfp_fusion","value":"on"}  mz_system
-19  alter  system  {"name":"enable_unsafe_functions","value":"on"}  mz_system
+19  alter  system  {"name":"unsafe_enable_unsafe_functions","value":"on"}  mz_system
 20  create  database  {"id":"u2","name":"test"}  materialize
 21  create  schema  {"database_name":"test","id":"u9","name":"public"}  materialize
 22  create  schema  {"database_name":"test","id":"u10","name":"sc1"}  materialize
