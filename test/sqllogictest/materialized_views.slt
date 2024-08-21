@@ -643,7 +643,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: REFRESH EVERY and REFRESH AT materialized views is not supported
+query error db error: ERROR: REFRESH EVERY and REFRESH AT materialized views is not available
 CREATE MATERIALIZED VIEW mv_bad WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
 
 simple conn=mz_system,user=mz_system
@@ -1273,7 +1273,7 @@ ALTER SYSTEM SET enable_cluster_schedule_refresh = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not supported
+query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not available
 CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH);
 
 simple conn=mz_system,user=mz_system

@@ -62,13 +62,13 @@ d   kafka   (empty)
 statement ok
 CREATE CLUSTER other_cluster SIZE '1', REPLICATION FACTOR 0
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER MATERIALIZED VIEW does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SOURCE does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SINK does_not_exist SET CLUSTER quickstart
 
 simple conn=mz_system,user=mz_system

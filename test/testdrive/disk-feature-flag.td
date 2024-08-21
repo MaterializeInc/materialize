@@ -12,12 +12,12 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = false
 ALTER SYSTEM SET disk_cluster_replicas_default = false
 
 ! CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0, DISK;
-exact:`WITH (DISK)` for cluster replicas is not supported
+exact:`WITH (DISK)` for cluster replicas is not available
 
 > CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0;
 
 ! ALTER CLUSTER no SET (REPLICATION FACTOR 1, DISK);
-exact:`WITH (DISK)` for cluster replicas is not supported
+exact:`WITH (DISK)` for cluster replicas is not available
 
 > DROP CLUSTER no;
 
@@ -65,7 +65,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_disk_cluster_replicas = false
 
 ! CREATE CLUSTER c REPLICAS (dff_3 (size '1', disk))
-contains:`WITH (DISK)` for cluster replicas is not supported
+contains:`WITH (DISK)` for cluster replicas is not available
 
 # Cannot set DISK on unmanaged clusters (the option is per replica)
 ! CREATE CLUSTER c REPLICAS (dff_3 (size '1')), DISK;
