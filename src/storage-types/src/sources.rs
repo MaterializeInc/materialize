@@ -17,9 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{
-    build_compare, Array, ArrayRef, BinaryArray, BinaryBuilder, NullArray, StructArray,
-};
+use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
 use bytes::{BufMut, Bytes};
 use columnation::Columnation;
@@ -2044,7 +2042,7 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::ArrayData;
+    use arrow::array::{build_compare, ArrayData};
     use bytes::Bytes;
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;

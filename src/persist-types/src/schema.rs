@@ -112,15 +112,6 @@ impl StructArrayMigration {
         }
     }
 
-    fn name(&self) -> &String {
-        match self {
-            StructArrayMigration::AddFieldNullable { name, .. } => name,
-            StructArrayMigration::DropField { name } => name,
-            StructArrayMigration::AlterFieldNullable { name } => name,
-            StructArrayMigration::Recurse { name, .. } => name,
-        }
-    }
-
     fn migrate(&self, len: usize, fields: &mut Fields, arrays: &mut Vec<Arc<dyn Array>>) {
         use StructArrayMigration::*;
         match self {
@@ -206,32 +197,21 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
 }
 
 fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigration> {
-    use itertools::EitherOrBoth::*;
     use ArrayMigration::*;
     use StructArrayMigration::*;
 
-    // The common case is that fields will be in the same order, so start by
-    // assuming that and match them up pairwise. If this assumption is
-    // incorrect, then later there will be an add and drop for the same field
-    // name and we'll detect it then.
-    let old_new_fields = old
-        .iter()
-        .merge_join_by(new.iter(), |o, n| o.name().cmp(n.name()));
-
     let mut field_migrations = Vec::new();
-    for x in old_new_fields {
-        let (o, n) = match x {
-            Both(o, n) => (o, n),
-            Left(o) => {
-                // Allowed to drop a field regardless of nullability.
-                field_migrations.push(DropField {
-                    name: o.name().to_owned(),
-                });
-                continue;
-            }
+    for n in new.iter() {
+        // This find (and the below) make the overall runtime of this O(n^2). We
+        // could get it down to O(n log n) by indexing fields in old and new by
+        // name, but the number of fields is expected to be small, so for now
+        // avoid the allocation.
+        let o = old.find(n.name());
+        let o = match o {
+            Some((_, o)) => o,
             // Allowed to add a new field but it must be nullable.
-            Right(n) if !n.is_nullable() => return None,
-            Right(n) => {
+            None if !n.is_nullable() => return None,
+            None => {
                 field_migrations.push(AddFieldNullable {
                     name: n.name().to_owned(),
                     typ: n.data_type().clone(),
@@ -266,12 +246,24 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
         }
     }
 
-    // Now detect if any re-ordering happened.
-    field_migrations.sort_by(|x, y| x.name().cmp(y.name()));
-    for (a, b) in field_migrations.iter().tuple_windows() {
-        if a.name() == b.name() {
-            return None;
+    for o in old.iter() {
+        let n = new.find(o.name());
+        if n.is_none() {
+            // Allowed to drop a field regardless of nullability.
+            field_migrations.push(DropField {
+                name: o.name().to_owned(),
+            });
         }
+    }
+
+    // Now detect if any re-ordering happened.
+    let same_order = new
+        .iter()
+        .flat_map(|n| old.find(n.name()))
+        .tuple_windows()
+        .all(|((i, _), (j, _))| i <= j);
+    if !same_order {
+        return None;
     }
 
     if field_migrations.is_empty() {
@@ -403,6 +395,14 @@ mod tests {
             struct_([("a", Boolean, false), ("b", Utf8, false)]),
             struct_([("b", Utf8, false), ("a", Boolean, false)]),
             None,
+        );
+
+        // Regression test for a bug in the (fundamentally flawed) original
+        // impl.
+        testcase(
+            struct_([("2", Boolean, false), ("10", Utf8, false)]),
+            struct_([("10", Utf8, false)]),
+            Some(true),
         );
     }
 }
