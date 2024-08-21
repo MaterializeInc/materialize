@@ -468,7 +468,6 @@ pub fn describe_create_subsource(
 
 generate_extracted_config!(
     CreateSourceOption,
-    (Timeline, String),
     (TimestampInterval, Duration),
     (RetainHistory, OptionalDuration)
 );
@@ -683,15 +682,6 @@ pub fn plan_create_source(
         if envelope.is_some() || format.is_some() || !include_metadata.is_empty() {
             Err(PlanError::UseTablesForSources(
                 "CREATE SOURCE (ENVELOPE|FORMAT|INCLUDE)".to_string(),
-            ))?;
-        }
-        if with_options
-            .iter()
-            .find(|op| op.name == CreateSourceOptionName::Timeline)
-            .is_some()
-        {
-            Err(PlanError::UseTablesForSources(
-                "CREATE SOURCE WITH (TIMELINE)".to_string(),
             ))?;
         }
     }
@@ -978,7 +968,6 @@ pub fn plan_create_source(
     };
 
     let CreateSourceOptionExtracted {
-        timeline,
         timestamp_interval,
         retain_history,
         seen: _,
@@ -1122,22 +1111,12 @@ pub fn plan_create_source(
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
-    // Allow users to specify a timeline. If they do not, determine a default
-    // timeline for the source.
-    let timeline = match timeline {
-        None => match envelope {
-            SourceEnvelope::CdcV2 => {
-                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
-            }
-            _ => Timeline::EpochMilliseconds,
-        },
-        // TODO(benesch): if we stabilize this, can we find a better name than
-        // `mz_epoch_ms`? Maybe just `mz_system`?
-        Some(timeline) if timeline == "mz_epoch_ms" => Timeline::EpochMilliseconds,
-        Some(timeline) if timeline.starts_with("mz_") => {
-            return Err(PlanError::UnacceptableTimelineName(timeline));
+    // Determine a default timeline for the source.
+    let timeline = match envelope {
+        SourceEnvelope::CdcV2 => {
+            Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
         }
-        Some(timeline) => Timeline::User(timeline),
+        _ => Timeline::EpochMilliseconds,
     };
 
     let compaction_window = plan_retain_history_option(scx, retain_history)?;
@@ -1590,7 +1569,6 @@ generate_extracted_config!(
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (PartitionBy, Vec<Ident>),
-    (Timeline, String),
     (Details, String)
 );
 
@@ -1622,7 +1600,6 @@ pub fn plan_create_table_from_source(
         exclude_columns,
         partition_by,
         details,
-        timeline,
         seen: _,
     } = with_options.clone().try_into()?;
 
@@ -1799,20 +1776,11 @@ pub fn plan_create_table_from_source(
 
     // Allow users to specify a timeline. If they do not, determine a default
     // timeline for the source.
-    let timeline = match timeline {
-        None => match envelope {
-            SourceEnvelope::CdcV2 => {
-                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
-            }
-            _ => Timeline::EpochMilliseconds,
-        },
-        // TODO(benesch): if we stabilize this, can we find a better name than
-        // `mz_epoch_ms`? Maybe just `mz_system`?
-        Some(timeline) if timeline == "mz_epoch_ms" => Timeline::EpochMilliseconds,
-        Some(timeline) if timeline.starts_with("mz_") => {
-            return Err(PlanError::UnacceptableTimelineName(timeline));
+    let timeline = match envelope {
+        SourceEnvelope::CdcV2 => {
+            Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
         }
-        Some(timeline) => Timeline::User(timeline),
+        _ => Timeline::EpochMilliseconds,
     };
 
     if let Some(partition_by) = partition_by {

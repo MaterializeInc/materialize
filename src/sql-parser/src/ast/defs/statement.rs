@@ -1640,8 +1640,6 @@ pub enum TableFromSourceOptionName {
     TextColumns,
     /// Columns you want to exclude when ingesting data
     ExcludeColumns,
-    /// The timeline to use for this table
-    Timeline,
     /// Hex-encoded protobuf of a `ProtoSourceExportStatementDetails`
     /// message, which includes details necessary for planning this
     /// table as a Source Export
@@ -1655,7 +1653,6 @@ impl AstDisplay for TableFromSourceOptionName {
         f.write_str(match self {
             TableFromSourceOptionName::TextColumns => "TEXT COLUMNS",
             TableFromSourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
-            TableFromSourceOptionName::Timeline => "TIMELINE",
             TableFromSourceOptionName::Details => "DETAILS",
             TableFromSourceOptionName::PartitionBy => "PARTITION BY",
         })
@@ -1674,7 +1671,6 @@ impl WithOptionName for TableFromSourceOptionName {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
-            | TableFromSourceOptionName::Timeline
             | TableFromSourceOptionName::PartitionBy => false,
         }
     }
