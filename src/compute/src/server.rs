@@ -445,12 +445,20 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             return;
         }
 
+        let mut step = 0;
+
+        let mut last_maintenance = Instant::now();
+        let maintenance_interval = std::time::Duration::from_millis(50);
+        let mut maintenance = true;
+
         // Commence normal operation.
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
-            if let Some(compute_state) = &mut self.compute_state {
-                compute_state.traces.maintenance();
+            if maintenance {
+                if let Some(compute_state) = &mut self.compute_state {
+                    compute_state.traces.maintenance();
+                }
             }
 
             let start = Instant::now();
@@ -459,11 +467,20 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 .timely_step_duration_seconds
                 .observe(start.elapsed().as_secs_f64());
 
-            // Report frontier information back the coordinator.
-            if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
-                compute_state.report_frontiers();
-                compute_state.report_dropped_collections();
-                compute_state.report_operator_hydration();
+            if last_maintenance.elapsed() > maintenance_interval {
+                maintenance = true;
+                last_maintenance = Instant::now();
+            } else {
+                maintenance = false;
+            }
+
+            if maintenance {
+                // Report frontier information back the coordinator.
+                if let Some(mut compute_state) = self.activate_compute(&mut response_tx, step) {
+                    compute_state.report_frontiers();
+                    compute_state.report_dropped_collections();
+                    compute_state.report_operator_hydration();
+                }
             }
 
             // Handle any received commands.
@@ -480,10 +497,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 }
             }
             for cmd in cmds {
-                self.handle_command(&mut response_tx, cmd);
+                self.handle_command(&mut response_tx, cmd, step);
             }
 
-            if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
+            if let Some(mut compute_state) = self.activate_compute(&mut response_tx, step) {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
@@ -491,10 +508,16 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
             self.metrics
                 .record_shared_row_metrics(self.timely_worker.index());
+            step += 1;
         }
     }
 
-    fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
+    fn handle_command(
+        &mut self,
+        response_tx: &mut ResponseSender,
+        cmd: ComputeCommand,
+        step: usize,
+    ) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
@@ -508,7 +531,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             }
             _ => (),
         }
-        self.activate_compute(response_tx)
+        self.activate_compute(response_tx, step)
             .unwrap()
             .handle_compute_command(cmd);
     }
@@ -516,12 +539,14 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     fn activate_compute<'a>(
         &'a mut self,
         response_tx: &'a mut ResponseSender,
+        step: usize,
     ) -> Option<ActiveComputeState<'a, A>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
                 response_tx,
+                step,
             })
         } else {
             None
@@ -803,7 +828,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
         // Execute the commands to bring us to `new_commands`.
         for command in todo_commands.into_iter() {
-            self.handle_command(response_tx, command);
+            self.handle_command(response_tx, command, 0);
         }
 
         // Overwrite `self.command_history` to reflect `new_commands`.

@@ -310,6 +310,8 @@ pub(crate) struct ActiveComputeState<'a, A: Allocate> {
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut ResponseSender,
+    /// The current step counter.
+    pub step: usize,
 }
 
 /// A token that keeps a sink alive.
@@ -502,7 +504,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
-                PendingPeek::index(peek, trace_bundle)
+                PendingPeek::index(peek, trace_bundle, self.step)
             }
             PeekTarget::Persist { metadata, .. } => {
                 let metadata = metadata.clone();
@@ -752,21 +754,30 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     /// Either complete the peek (and send the response) or put it in the pending set.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
-        let response = match &mut peek {
+        let (response, step) = match &mut peek {
             PendingPeek::Index(peek) => {
-                peek.seek_fulfillment(upper, self.compute_state.max_result_size)
+                let step = peek.step;
+                (
+                    peek.seek_fulfillment(upper, self.compute_state.max_result_size),
+                    step,
+                )
             }
-            PendingPeek::Persist(peek) => peek.result.try_recv().ok().map(|(result, duration)| {
-                self.compute_state
-                    .metrics
-                    .persist_peek_seconds
-                    .observe(duration.as_secs_f64());
-                result
-            }),
+            PendingPeek::Persist(peek) => (
+                peek.result.try_recv().ok().map(|(result, duration)| {
+                    self.compute_state
+                        .metrics
+                        .persist_peek_seconds
+                        .observe(duration.as_secs_f64());
+                    result
+                }),
+                self.step,
+            ),
         };
 
         if let Some(response) = response {
-            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek").entered();
+            let steps = self.step - step;
+            let _span =
+                span!(parent: peek.span(), Level::DEBUG, "process_peek", steps = steps).entered();
             self.send_peek_response(peek, response)
         } else {
             let uuid = peek.peek().uuid;
@@ -886,7 +897,7 @@ impl PendingPeek {
         }
     }
 
-    fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
+    fn index(peek: Peek, mut trace_bundle: TraceBundle, step: usize) -> Self {
         let empty_frontier = Antichain::new();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
         trace_bundle
@@ -906,6 +917,7 @@ impl PendingPeek {
             peek,
             trace_bundle,
             span: tracing::Span::current(),
+            step,
         })
     }
 
@@ -1112,6 +1124,8 @@ pub struct IndexPeek {
     trace_bundle: TraceBundle,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
+    /// The step counter when the peek was created.
+    pub step: usize,
 }
 
 impl IndexPeek {
