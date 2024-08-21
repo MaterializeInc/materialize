@@ -19,7 +19,7 @@ and maintain the appropriate indexes if they do not otherwise exist.
 
 ### Usage patterns
 
-#### Indexes on views vs. Materialized views
+#### Indexes on views vs. materialized views
 
 {{% views-indexes/table-usage-pattern %}}
 
