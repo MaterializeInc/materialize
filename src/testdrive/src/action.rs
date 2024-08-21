@@ -433,7 +433,7 @@ impl State {
 
         // Dangerous functions are useful for tests so we enable it for all tests.
         inner_client
-            .batch_execute("ALTER SYSTEM SET enable_unsafe_functions = on")
+            .batch_execute("ALTER SYSTEM SET unsafe_enable_unsafe_functions = on")
             .await
             .context("enabling dangerous functions")?;
 

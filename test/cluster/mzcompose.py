@@ -4358,10 +4358,10 @@ def workflow_test_adhoc_system_indexes(
     # `enable_unstable_dependencies` is set.
     c.sql(
         """
-        ALTER SYSTEM SET enable_unstable_dependencies = on;
+        ALTER SYSTEM SET unsafe_enable_unstable_dependencies = on;
         SET cluster = mz_catalog_server;
         CREATE INDEX mz_test_idx2 ON mz_internal.mz_hydration_statuses (hydrated);
-        ALTER SYSTEM SET enable_unstable_dependencies = off;
+        ALTER SYSTEM SET unsafe_enable_unstable_dependencies = off;
         """,
         port=6877,
         user="mz_system",

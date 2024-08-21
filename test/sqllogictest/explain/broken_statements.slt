@@ -22,7 +22,7 @@
 # Enable feature flags required for this test
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_functions = true
+ALTER SYSTEM SET unsafe_enable_unsafe_functions = true
 ----
 COMPLETE 0
 

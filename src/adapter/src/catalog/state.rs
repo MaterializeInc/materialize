@@ -519,7 +519,7 @@ impl CatalogState {
     }
 
     pub(super) fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), Error> {
-        if self.system_config().enable_unstable_dependencies() {
+        if self.system_config().unsafe_enable_unstable_dependencies() {
             return Ok(());
         }
 

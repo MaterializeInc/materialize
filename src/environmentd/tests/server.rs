@@ -3055,7 +3055,7 @@ fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
-    server.enable_feature_flags(&["enable_unsafe_functions"]);
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -3365,7 +3365,10 @@ fn webhook_concurrency_limit() {
     let server = test_util::TestHarness::default().start_blocking();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_unsafe_functions"]);
+    server.enable_feature_flags(&[
+        "unsafe_enable_unstable_dependencies",
+        "unsafe_enable_unsafe_functions",
+    ]);
 
     // Reduce the webhook concurrency limit;
     let mut mz_client = server

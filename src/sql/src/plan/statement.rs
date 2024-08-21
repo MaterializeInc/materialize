@@ -303,7 +303,7 @@ pub fn plan(
                     == SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id())
         })
     {
-        scx.require_feature_flag(&vars::ENABLE_UNSAFE_FUNCTIONS)?;
+        scx.require_feature_flag(&vars::UNSAFE_ENABLE_UNSAFE_FUNCTIONS)?;
     }
 
     let plan = match stmt {

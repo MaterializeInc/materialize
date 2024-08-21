@@ -1008,7 +1008,7 @@ NULL  -1  -2
 # choosing a timestamp for mz_now.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unstable_dependencies = true
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 ----
 COMPLETE 0
 

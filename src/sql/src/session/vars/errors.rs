@@ -87,17 +87,30 @@ pub enum VarError {
     /// The specified session parameter is read only unless in unsafe mode.
     #[error("parameter {} can only be set in unsafe mode", .0.quoted())]
     RequiresUnsafeMode(&'static str),
-    #[error("{} is not available", .feature_flag.feature_desc)]
+    #[error(
+        "{} is not {}",
+        .feature_flag.feature_desc,
+        if .feature_flag.flag.is_unsafe() { "supported" } else { "available" }
+    )]
     RequiresFeatureFlag { feature_flag: &'static FeatureFlag },
 }
 
 impl VarError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::RequiresFeatureFlag { feature_flag } => Some(format!(
-                "The requested feature ({}) is in private preview.",
-                feature_flag.flag.name(),
-            )),
+            Self::RequiresFeatureFlag { feature_flag } => {
+                if feature_flag.flag.is_unsafe() {
+                    Some(format!(
+                        "The requested feature ({}) is unsafe and is meant only for internal development and testing of Materialize.",
+                        feature_flag.flag.name(),
+                    ))
+                } else {
+                    Some(format!(
+                        "The requested feature ({}) is in private preview.",
+                        feature_flag.flag.name(),
+                    ))
+                }
+            }
             _ => None,
         }
     }
@@ -108,10 +121,12 @@ impl VarError {
                 valid_values: Some(valid_values),
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
-            VarError::RequiresFeatureFlag { .. } => Some(
-                "Contact support to discuss enabling the feature in your Materialize region."
-                    .into(),
-            ),
+            VarError::RequiresFeatureFlag { feature_flag } if !feature_flag.flag.is_unsafe() => {
+                Some(
+                    "Contact support to discuss enabling the feature in your Materialize region."
+                        .into(),
+                )
+            }
             _ => None,
         }
     }

@@ -1176,7 +1176,7 @@ impl<'a> RunnerInner<'a> {
 
         // Dangerous functions are useful for tests so we enable it for all tests.
         self.system_client
-            .execute("ALTER SYSTEM SET enable_unsafe_functions = on", &[])
+            .execute("ALTER SYSTEM SET unsafe_enable_unsafe_functions = on", &[])
             .await?;
         Ok(())
     }

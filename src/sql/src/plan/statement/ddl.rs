@@ -335,12 +335,12 @@ pub fn plan_create_table(
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
                 // them with feature flags for sqllogictest's sake.
-                scx.require_feature_flag(&vars::ENABLE_TABLE_FOREIGN_KEY)?
+                scx.require_feature_flag(&vars::UNSAFE_ENABLE_TABLE_FOREIGN_KEY)?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
                 // with feature flags for sqllogictest's sake.
-                scx.require_feature_flag(&vars::ENABLE_TABLE_CHECK_CONSTRAINT)?
+                scx.require_feature_flag(&vars::UNSAFE_ENABLE_TABLE_CHECK_CONSTRAINT)?
             }
         }
     }
@@ -348,7 +348,7 @@ pub fn plan_create_table(
     if !keys.is_empty() {
         // Unique constraints are not presently enforced. We allow them with feature flags for
         // sqllogictest's sake.
-        scx.require_feature_flag(&vars::ENABLE_TABLE_KEYS)?
+        scx.require_feature_flag(&vars::UNSAFE_ENABLE_TABLE_KEYS)?
     }
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -3816,7 +3816,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_feature_flag(&vars::ENABLE_UNORCHESTRATED_CLUSTER_REPLICAS)?;
+            scx.require_feature_flag(&vars::UNSAFE_ENABLE_UNORCHESTRATED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
