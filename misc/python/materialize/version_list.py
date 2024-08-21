@@ -20,7 +20,7 @@ from materialize import build_context, buildkite, docker, git
 from materialize.docker import (
     commit_to_image_tag,
     image_of_commit_exists,
-    version_to_image_tag,
+    release_version_to_image_tag,
 )
 from materialize.git import get_version_tags
 from materialize.mz_version import MzVersion
@@ -88,7 +88,7 @@ def _create_ancestor_image_resolution(
 
 def _manual_ancestor_specification_to_image_tag(ancestor_spec: str) -> str:
     if MzVersion.is_valid_version_string(ancestor_spec):
-        return version_to_image_tag(MzVersion.parse_mz(ancestor_spec))
+        return release_version_to_image_tag(MzVersion.parse_mz(ancestor_spec))
     else:
         return commit_to_image_tag(ancestor_spec)
 
@@ -144,7 +144,7 @@ class AncestorImageResolutionBase:
             )
 
         return (
-            version_to_image_tag(previous_release_version),
+            release_version_to_image_tag(previous_release_version),
             f"{context_prefix} {tagged_release_version}",
         )
 
@@ -170,7 +170,7 @@ class AncestorImageResolutionBase:
             )
 
         return (
-            version_to_image_tag(previous_published_version),
+            release_version_to_image_tag(previous_published_version),
             context,
         )
 
@@ -187,7 +187,7 @@ class AncestorImageResolutionBase:
             )
         else:
             return (
-                version_to_image_tag(get_latest_published_version()),
+                release_version_to_image_tag(get_latest_published_version()),
                 context_when_falling_back_to_latest,
             )
 

@@ -87,7 +87,7 @@ class QueryTemplate:
         if include_select_expressions:
             all_expressions.extend(self.select_expressions)
 
-        if self.where_expression is not None:
+        if self.has_where_condition():
             all_expressions.append(self.where_expression)
 
         if self.custom_order_expressions is not None:
@@ -146,6 +146,18 @@ class QueryTemplate:
 
     def uses_join(self) -> bool:
         return len(self.additional_data_sources) > 0
+
+    def has_where_condition(self) -> bool:
+        return self.where_expression is not None
+
+    def has_row_selection(self) -> bool:
+        return self.row_selection.has_selection()
+
+    def has_offset(self) -> bool:
+        return self.limit is not None
+
+    def has_limit(self) -> bool:
+        return self.limit is not None
 
     def _get_space_separator(self, output_format: QueryOutputFormat) -> str:
         return "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "

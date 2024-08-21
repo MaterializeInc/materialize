@@ -62,3 +62,11 @@ class MaterializeRelation(PostgresRelation):
             MaterializeRelationType.MaterializedView,
             MaterializeRelationType.MaterializedViewLegacy,
         ]
+
+    @property
+    def is_source(self) -> bool:
+        return self.type == MaterializeRelationType.Source
+
+    @property
+    def is_sink(self) -> bool:
+        return self.type == MaterializeRelationType.Sink

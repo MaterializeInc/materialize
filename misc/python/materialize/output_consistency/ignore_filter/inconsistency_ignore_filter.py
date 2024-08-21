@@ -215,7 +215,8 @@ class PostExecutionInconsistencyIgnoreFilterBase:
             col_index
         ].recursively_collect_involved_characteristics(query_template.row_selection)
 
-        if query_template.where_expression is not None:
+        if query_template.has_where_condition():
+            assert query_template.where_expression is not None
             all_involved_characteristics = (
                 all_involved_characteristics
                 | query_template.where_expression.recursively_collect_involved_characteristics(

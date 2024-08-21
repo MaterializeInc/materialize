@@ -92,7 +92,7 @@ class Executor:
         try:
             cur.execute(query)
         except InterfaceError:
-            # Can happen after Mz disruptions if we running queries against Mz
+            # Can happen after Mz disruptions if we are running queries against Mz
             print("Network error, retrying")
             time.sleep(0.01)
             self.reconnect()
@@ -237,7 +237,6 @@ class KafkaExecutor(Executor):
 
         self.producer = confluent_kafka.Producer(kafka_conf)
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute_with_retry_on_error(
                 cur,
@@ -251,7 +250,6 @@ class KafkaExecutor(Executor):
                     "Topic does not exist",
                 ],
             )
-        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -351,7 +349,6 @@ class MySqlExecutor(Executor):
             )
         self.mysql_conn.autocommit(False)
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute(
                 cur,
@@ -371,7 +368,6 @@ class MySqlExecutor(Executor):
                     FROM MYSQL CONNECTION mysql{self.num}
                     FOR TABLES (mysql.{identifier(self.table)} AS {identifier(self.table)})""",
             )
-        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -478,7 +474,6 @@ class PgExecutor(Executor):
             )
         self.pg_conn.autocommit = False
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute(cur, f"CREATE SECRET pgpass{self.num} AS 'postgres'")
             self.execute(
@@ -496,7 +491,6 @@ class PgExecutor(Executor):
                     FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION '{self.source}')
                     FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
             )
-        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -583,7 +577,6 @@ class KafkaRoundtripExecutor(Executor):
         ]
         keys = [field.name for field in self.fields if field.is_key]
 
-        self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
             self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table_original)}")
             self.execute(
@@ -617,7 +610,6 @@ class KafkaRoundtripExecutor(Executor):
                     "Topic does not exist",
                 ],
             )
-        self.mz_conn.autocommit = False
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
@@ -658,7 +650,6 @@ class KafkaRoundtripExecutor(Executor):
                                     f"{identifier(field.name)} = {formatted_value(value)}"
                                     for field, value in non_key_values
                                 )
-                                self.mz_conn.autocommit = True
                                 self.execute(
                                     cur,
                                     f"""UPDATE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
@@ -666,7 +657,6 @@ class KafkaRoundtripExecutor(Executor):
                                         WHERE {cond_str}
                                     """,
                                 )
-                                self.mz_conn.autocommit = False
                         else:
                             values_str = ", ".join(
                                 str(formatted_value(value)) for value in row.values
@@ -684,15 +674,12 @@ class KafkaRoundtripExecutor(Executor):
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
-                        self.mz_conn.autocommit = True
                         self.execute(
                             cur,
                             f"""DELETE FROM {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                 WHERE {cond_str}
                             """,
                         )
-                        self.mz_conn.autocommit = False
                         self.known_keys.discard(key_values)
                     else:
                         raise ValueError(f"Unexpected operation {row.operation}")
-        self.mz_conn.commit()

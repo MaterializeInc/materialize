@@ -271,6 +271,19 @@ class TestPermissionValidation:
 
 class TestRunWithDeploy:
     @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "quickstart",
+        }
+
+    @pytest.fixture(scope="class")
     def project_config_update(self):
         return {
             "vars": {
@@ -660,6 +673,19 @@ class TestLagTolerance:
 
 
 class TestEndToEndDeployment:
+    @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "quickstart",
+        }
+
     @pytest.fixture(scope="class")
     def models(self):
         return {

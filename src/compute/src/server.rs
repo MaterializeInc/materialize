@@ -97,7 +97,7 @@ pub fn serve(
     Ok((timely_container, client_builder))
 }
 
-type ActivatorSender = crossbeam_channel::Sender<SyncActivator>;
+type ActivatorSender = mpsc::UnboundedSender<SyncActivator>;
 
 /// Endpoint used by workers to receive compute commands.
 struct CommandReceiver {

@@ -802,12 +802,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
 
         if (
-            query_template.where_expression is not None
-            or query_template.row_selection.has_selection()
+            query_template.has_where_condition() or query_template.has_row_selection()
         ) and query_template.uses_join():
             return YesIgnore(
                 "Different evaluation order of join clause and where filter"
             )
+
+        if (
+            "invalid input syntax for type jsonb" in mz_error_msg
+            and "is out of range" in mz_error_msg
+        ):
+            return YesIgnore("value out of range")
 
         return NoIgnore()
 
@@ -1040,10 +1045,26 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             col_index,
             is_table_function,
             True,
-        ) and (query_template.offset is not None or query_template.limit is not None):
+        ) and (query_template.has_offset() or query_template.has_limit()):
             # When table functions are used, a row-order insensitive comparison will be conducted in the result
             # comparator. However, this is not sufficient when a LIMIT or OFFSET clause is present.
             return YesIgnore("Different sort order")
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(matches_fun_by_name, function_name_in_lower_case="unnest"),
+            True,
+        ) and query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(
+                involves_data_type_categories,
+                data_type_categories={
+                    DataTypeCategory.ARRAY,
+                },
+            ),
+            True,
+        ):
+            return YesIgnore("#29143: unnest on array uses wrong order")
 
         return NoIgnore()
 

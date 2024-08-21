@@ -15,6 +15,7 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
@@ -54,6 +55,8 @@ async fn test_balancer() {
     let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let roles = Vec::new();
     let users = BTreeMap::from([(

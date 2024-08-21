@@ -72,7 +72,17 @@ psycopg2.connect = connect
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
-    cluster: Optional[str] = "quickstart"
+    # NOTE(morsapaes) The cluster parameter defined in `profiles.yml` is not
+    # picked up in the connection string, but is picked up wherever we fall
+    # back to `target.cluster`. When no cluster is specified, either in
+    # `profiles.yml` or as a configuration, we should default to the default
+    # cluster configured for the connected dbt user (or, the active cluster for
+    # the connection). This is strictly better than hardcoding `quickstart` as
+    # the `target.cluster`, which might not exist and leads to all sorts of
+    # annoying errors. This will still fail if the defalt cluster for the
+    # connected user is invalid or set to `mz_catalog_server` (which cannot be
+    # modified).
+    cluster: Optional[str] = None
     application_name: Optional[str] = f"dbt-materialize v{__version__}"
 
     @property

@@ -10,6 +10,7 @@
 
 from enum import Enum
 
+from materialize import docker
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
@@ -96,8 +97,10 @@ class Materialized(Service):
         image_version = None
         if not image:
             image_version = MzVersion.parse_cargo()
-        elif "latest" not in image and "devel" not in image and "unstable" not in image:
-            image_version = MzVersion.parse_mz(image.split(":")[1])
+        elif ":" in image:
+            image_version_str = image.split(":")[1]
+            if docker.is_image_tag_of_release_version(image_version_str):
+                image_version = MzVersion.parse_mz(image_version_str)
 
         if system_parameter_defaults is None:
             system_parameter_defaults = get_default_system_parameters(

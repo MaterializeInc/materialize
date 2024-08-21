@@ -14,11 +14,14 @@ from typing import Any
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    is_operation_tagged,
     is_table_function,
-    matches_fun_by_name,
 )
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
+)
+from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
+    TAG_JSONB_OBJECT_GENERATION,
 )
 from materialize.output_consistency.query.query_result import QueryExecution
 from materialize.output_consistency.validation.result_comparator import ResultComparator
@@ -188,9 +191,7 @@ class PostgresResultComparator(ResultComparator):
 
     def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
         if expression.matches(
-            partial(
-                matches_fun_by_name, function_name_in_lower_case="jsonb_object_agg"
-            ),
+            partial(is_operation_tagged, tag=TAG_JSONB_OBJECT_GENERATION),
             True,
         ):
             # this is because of #28192

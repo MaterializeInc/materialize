@@ -8,26 +8,40 @@
 # by the Apache License, Version 2.0.
 
 """Docker utilities."""
+import re
 import subprocess
+import time
 
 import requests
 
 from materialize.mz_version import MzVersion
 
+CACHED_IMAGE_NAME_BY_COMMIT_HASH: dict[str, str] = dict()
 EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
-IMAGE_TAG_OF_VERSION_PREFIX = "v"
-IMAGE_TAG_OF_COMMIT_PREFIX = "devel-"
+
+IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "--"
+LATEST_IMAGE_TAG = "latest"
+LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
+
+# Examples:
+# * v0.114.0
+# * v0.114.0-dev
+# * v0.114.0-dev.0--pr.g3d565dd11ba1224a41beb6a584215d99e6b3c576
+VERSION_IN_IMAGE_TAG_PATTERN = re.compile(r"^(v\d+\.\d+\.\d+(-dev)?)")
 
 
 def image_of_release_version_exists(version: MzVersion) -> bool:
-    return mz_image_tag_exists(version_to_image_tag(version))
+    if version.is_dev_version():
+        raise ValueError(f"Version {version} is a dev version, not a release version")
+
+    return _mz_image_tag_exists(release_version_to_image_tag(version))
 
 
 def image_of_commit_exists(commit_hash: str) -> bool:
-    return mz_image_tag_exists(commit_to_image_tag(commit_hash))
+    return _mz_image_tag_exists(commit_to_image_tag(commit_hash))
 
 
-def mz_image_tag_exists(image_tag: str) -> bool:
+def _mz_image_tag_exists(image_tag: str) -> bool:
     image_name = f"materialize/materialized:{image_tag}"
 
     if image_name in EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK:
@@ -88,31 +102,97 @@ def mz_image_tag_exists(image_tag: str) -> bool:
 
 
 def commit_to_image_tag(commit_hash: str) -> str:
-    return f"{IMAGE_TAG_OF_COMMIT_PREFIX}{commit_hash}"
+    return _resolve_image_name_by_commit_hash(commit_hash)
 
 
-def version_to_image_tag(version: MzVersion) -> str:
+def release_version_to_image_tag(version: MzVersion) -> str:
     return str(version)
 
 
-def is_image_tag_of_version(image_tag: str) -> bool:
-    return image_tag.startswith(IMAGE_TAG_OF_VERSION_PREFIX)
+def is_image_tag_of_release_version(image_tag: str) -> bool:
+    return (
+        IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR not in image_tag
+        and not image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
+        and image_tag != LATEST_IMAGE_TAG
+    )
 
 
 def is_image_tag_of_commit(image_tag: str) -> bool:
-    return image_tag.startswith(IMAGE_TAG_OF_COMMIT_PREFIX)
+    return (
+        IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR in image_tag
+        or image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
+    )
 
 
 def get_version_from_image_tag(image_tag: str) -> str:
-    assert image_tag.startswith(IMAGE_TAG_OF_VERSION_PREFIX)
-    # image tag is equal to the version
-    return image_tag
+    match = VERSION_IN_IMAGE_TAG_PATTERN.match(image_tag)
+    assert match is not None, f"Invalid image tag: {image_tag}"
+
+    return match.group(1)
 
 
 def get_mz_version_from_image_tag(image_tag: str) -> MzVersion:
     return MzVersion.parse_mz(get_version_from_image_tag(image_tag))
 
 
-def get_commit_from_image_tag(image_tag: str) -> str:
-    assert image_tag.startswith(IMAGE_TAG_OF_COMMIT_PREFIX)
-    return image_tag.removeprefix(IMAGE_TAG_OF_COMMIT_PREFIX)
+def _resolve_image_name_by_commit_hash(commit_hash: str) -> str:
+    if commit_hash in CACHED_IMAGE_NAME_BY_COMMIT_HASH.keys():
+        return CACHED_IMAGE_NAME_BY_COMMIT_HASH[commit_hash]
+
+    image_name_candidates = _search_docker_hub_for_image_name(search_value=commit_hash)
+    image_name = _select_image_name_from_candidates(image_name_candidates, commit_hash)
+
+    CACHED_IMAGE_NAME_BY_COMMIT_HASH[commit_hash] = image_name
+    EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
+
+    return image_name
+
+
+def _search_docker_hub_for_image_name(
+    search_value: str, remaining_retries: int = 1
+) -> list[str]:
+    try:
+        json_response = requests.get(
+            f"https://hub.docker.com/v2/repositories/materialize/materialized/tags?name={search_value}"
+        ).json()
+    except (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.JSONDecodeError,
+    ) as _:
+        print("Searching Docker Hub for image name failed, retrying in 5 seconds")
+        time.sleep(5)
+        if remaining_retries > 0:
+            return _search_docker_hub_for_image_name(
+                search_value, remaining_retries - 1
+            )
+
+        raise
+
+    json_results = json_response.get("results")
+
+    image_names = []
+
+    for entry in json_results:
+        image_name = entry.get("name")
+
+        if image_name.startswith("unstable-"):
+            # for images with the old version scheme favor "devel-" over "unstable-"
+            continue
+
+        image_names.append(image_name)
+
+    return image_names
+
+
+def _select_image_name_from_candidates(
+    image_name_candidates: list[str], commit_hash: str
+) -> str:
+    if len(image_name_candidates) == 0:
+        raise RuntimeError(f"No image found for commit hash {commit_hash}")
+
+    if len(image_name_candidates) > 1:
+        raise RuntimeError(
+            f"Multiple images found for commit hash {commit_hash}: {image_name_candidates}"
+        )
+
+    return image_name_candidates[0]
