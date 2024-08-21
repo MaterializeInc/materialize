@@ -22,20 +22,35 @@ _role_name_         | A name for the role.
 
 ## Details
 
-Unlike PostgreSQL, Materialize derives the `LOGIN` and `SUPERUSER`
-attributes for a role during authentication, every time that role tries
-to connect. Therefore, you cannot specify either
-attribute when creating a new role. Additionally, we do not support the
-`CREATE USER` command, because it implies a `LOGIN` attribute for the role.
+Materialize's support for `CREATE ROLE` is similar to that of PostgreSQL, with
+the following options exceptions:
 
-Unlike PostgreSQL, Materialize does not currently support `NOINHERIT`.
+| Option   | Description                                                                                                                                                                                            |
+|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `INHERIT`   | Materialize implicitly uses `INHERIT` for the `CREATE ROLE` command. That is, `CREATE ROLE <name>` and `CREATE ROLE <name> WITH INHERIT` are equivalent.                                                   |
+| `NOINHERIT` | Materialize does not support the `NOINHERIT` option for `CREATE ROLE`.                                                                                                                                  |
+| `LOGIN`     | Materialize does not support the `LOGIN` option for `CREATE ROLE`.<ul><li>Instead, Materialize derives the `LOGIN` option for a role during authentication every time that role tries to connect.</li><li>Materialize does not support the `CREATE USER` command as the command implies a `LOGIN` attribute for the role.</li></ul>|
+| `SUPERUSER` | Materialize does not support the `SUPERUSER` option for `CREATE ROLE`.<ul><li>Instead, Materialize derives the `SUPERUSER` option for a role during authentication every time that role tries to connect.</li></ul>|
+
+{{< note >}}
+
+Materialize does not use role attributes to determine a role's ability to create
+top level objects such as databases and other roles. Instead, Materialize uses
+system level privileges. See [GRANT PRIVILEGE](../grant-privilege) for more
+details.
+
+{{</ note >}}
+
+### Restrictions
 
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
 
-Unlike PostgreSQL, Materialize does not use role attributes to determine a role's ability to create
-top level objects such as databases and other roles. Instead, Materialize uses system level
-privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
 
 ## Examples
 
@@ -50,12 +65,6 @@ SELECT name FROM mz_roles;
  mz_system
  mz_support
 ```
-
-## Privileges
-
-The privileges required to execute this statement are:
-
-- `CREATEROLE` privileges on the system.
 
 ## Related pages
 
