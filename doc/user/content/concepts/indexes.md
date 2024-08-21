@@ -57,9 +57,9 @@ views, see [Usage patterns](#usage-patterns).
 In Materialize, materialized views already maintain the up-to-date results in
 durable storage. Indexing a [materialized
 view](/concepts/views/#materialized-views) loads the already up-to-date results
-into memory; that is, the indexes on materialized views serve up-to-date results
-without themselves performing the incremental updates. However, unlike
-materialized views, indexes are accessible only within a
+into memory; that is, the indexes on materialized views are able to serve
+up-to-date results without themselves performing the incremental updates.
+However, unlike materialized views, indexes are accessible only within a
 [cluster](/concepts/clusters/).
 
 For considerations on using indexes as well as using indexes vs. materialized
