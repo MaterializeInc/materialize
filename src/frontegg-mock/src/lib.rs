@@ -557,7 +557,7 @@ async fn handle_post_user_api_token<'a>(
     let new_token = ApiToken {
         client_id: Uuid::new_v4(),
         secret: Uuid::new_v4(),
-        description: Some(request.description.clone()),
+        description: request.description.clone(),
         created_at: Utc::now(),
     };
     tokens.insert(new_token.clone(), claims.email.unwrap());
@@ -640,7 +640,7 @@ async fn handle_list_tenant_api_tokens(
         .iter()
         .map(|(api_token, config)| TenantApiTokenResponse {
             client_id: api_token.client_id,
-            description: api_token.description.clone().unwrap(),
+            description: api_token.description.clone().unwrap_or_default(),
             secret: api_token.secret,
             created_by_user_id: config.created_by_user_id,
             metadata: config.metadata.clone(),
@@ -1634,7 +1634,7 @@ pub struct UserApiTokenResponse {
 
 #[derive(Deserialize)]
 pub struct UserApiTokenRequest {
-    pub description: String,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
