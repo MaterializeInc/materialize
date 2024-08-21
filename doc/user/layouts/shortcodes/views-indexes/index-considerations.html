@@ -1,14 +1,4 @@
-Specific instances where indexes can be useful to improve performance include:
-
-- When used in ad-hoc queries.
-
-- When used by multiple queries within the same cluster.
-
-- When used to enable delta joins.
-
-For more information, see [Optimization](/transform-data/optimization).
-
-**However, before creating an index**, consider the following:
+Before creating an index, consider the following:
 
 - If you have created various views to act as the building blocks for a view
   from which you will serve the results, creating an index **only** on the

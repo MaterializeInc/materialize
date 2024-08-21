@@ -31,6 +31,10 @@ You might want to create indexes when...
     this case, you could create an index on the columns in the join condition.
 -   You want to speed up searches filtering by literal values or expressions.
 
+{{% views-indexes/index-query-optimization-specific-instances %}}
+
+#### General considerations
+
 {{% views-indexes/index-considerations %}}
 
 ## Syntax

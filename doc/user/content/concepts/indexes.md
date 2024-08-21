@@ -102,6 +102,10 @@ can help [optimize query performance](/transform-data/optimization/), such as:
 - Provide fast random access for lookup queries (i.e., selecting individual
   keys).
 
+{{% views-indexes/index-query-optimization-specific-instances %}}
+
+### General considerations
+
 {{% views-indexes/index-considerations %}}
 
 ## Related pages
