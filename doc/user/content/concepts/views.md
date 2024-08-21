@@ -44,7 +44,7 @@ CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 ```
 
 Once indexed, queries within that cluster can use the index to access already
-up-to-date view results from memory; i.e., they comutationally free. See
+up-to-date view results from memory; i.e., they are comutationally free. See
 [Indexes and views](#indexes-and-views) for more information.
 
 See also:
