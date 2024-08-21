@@ -2586,11 +2586,11 @@ CREATE SOURCE lg FROM LOAD GENERATOR TPCH
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Tpch, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (IGNORE KEYS 'true', TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (IGNORE KEYS = 'true', TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }, CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], external_references: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], external_references: None, progress_subsource: None })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical

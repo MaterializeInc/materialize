@@ -218,19 +218,3 @@ a b
 # 1 1
 # 1 1
 # 2 1
-
-# # When ignoring source keys, it should give correct results.
-
-# > CREATE SOURCE data_v4
-#   IN CLUSTER ${arg.single-replica-cluster}
-#   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-#   ENVELOPE DEBEZIUM
-#   WITH (IGNORE KEYS)
-
-# > SELECT a, count(*) FROM data_v4
-#   GROUP BY a
-# a count
-# -------
-# 1 2
-# 2 1

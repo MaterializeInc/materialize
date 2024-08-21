@@ -443,7 +443,6 @@ pub fn describe_create_subsource(
 
 generate_extracted_config!(
     CreateSourceOption,
-    (IgnoreKeys, bool),
     (Timeline, String),
     (TimestampInterval, Duration),
     (RetainHistory, OptionalDuration)
@@ -909,7 +908,6 @@ pub fn plan_create_source(
     let CreateSourceOptionExtracted {
         timeline,
         timestamp_interval,
-        ignore_keys,
         retain_history,
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
@@ -1076,10 +1074,6 @@ pub fn plan_create_source(
     let metadata_columns = external_connection.metadata_columns();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    if ignore_keys.unwrap_or(false) {
-        desc = desc.without_keys();
-    }
 
     plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, col_names)?;
 
