@@ -1322,7 +1322,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 
     // Another storage usage collection should not be scheduled immediately.
     {
-        // Give plenty of time so we don't accidentally do another collection if this test is slow.
+        // Give plenty of time, so we don't accidentally do another collection if this test is slow.
         let server = harness
             .with_storage_usage_collection_interval(Duration::from_secs(60 * 1000))
             .start_blocking();
@@ -1347,7 +1347,10 @@ fn test_storage_usage_doesnt_update_between_restarts() {
                 let expected_collection_interval: f64 =
                     f64::cast_lossy(storage_usage_collection_interval.as_secs());
 
-                assert!(actual_collection_interval >= expected_collection_interval);
+                assert!(
+                    actual_collection_interval >= expected_collection_interval,
+                    "actual_collection_interval={actual_collection_interval}, expected_collection_interval={expected_collection_interval}"
+                );
             }
             _ => unreachable!("query is limited to 2"),
         }
