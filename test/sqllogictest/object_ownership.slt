@@ -2168,9 +2168,9 @@ ALTER TYPE int4 OWNER TO mz_system
 db error: ERROR: cannot alter item pg_catalog.int4 because it is required by the database system
 
 simple conn=mz_system,user=mz_system
-ALTER INDEX mz_catalog.mz_show_databases_ind OWNER TO mz_system
+ALTER INDEX mz_catalog.mz_databases_ind OWNER TO mz_system
 ----
-db error: ERROR: cannot alter item mz_catalog.mz_show_databases_ind because it is required by the database system
+db error: ERROR: cannot alter item mz_catalog.mz_databases_ind because it is required by the database system
 
 # Superusers can alter the owner to a role that they are not a member of
 
