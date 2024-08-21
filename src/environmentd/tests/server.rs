@@ -1349,7 +1349,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 
                 assert!(
                     // Add 1 second grace period to avoid flaky tests.
-                    actual_collection_interval >= expected_collection_interval - 1,
+                    actual_collection_interval >= expected_collection_interval - 1.0,
                     "actual_collection_interval={actual_collection_interval}, expected_collection_interval={expected_collection_interval}"
                 );
             }
