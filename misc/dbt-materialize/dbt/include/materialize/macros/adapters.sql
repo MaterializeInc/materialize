@@ -143,11 +143,30 @@
       drop source if exists {{ relation }} cascade
     {% elif relation.type == 'index' %}
       drop index if exists {{ relation }}
+    -- Tables are not supported as a materialization type in dbt-materialize,
+    -- but seeds are materialized as tables. This is needed to enable full
+    -- refreshes for seeds.
+    -- See: https://github.com/dbt-labs/dbt-adapters/blob/main/dbt/include/global_project/macros/materializations/seeds/helpers.sql
+    {% elif relation.type == 'table' %}
+      drop table if exists {{ relation }}
     {% endif %}
   {%- endcall %}
 {% endmacro %}
 
+{% macro set_cluster(cluster) %}
+  set cluster = {{ cluster }};
+{% endmacro %}
+
 {% macro materialize__truncate_relation(relation) -%}
+  -- Materialize does not support the TRUNCATE command, so we work around that
+  -- by using an unqualified DELETE. DELETE requires a scan of the relation, so
+  -- it needs a valid cluster to run against. This is expected to fail if no
+  -- cluster is specified for the target in `profiles.yml` _and_ the default
+  -- cluster for the user is invalid (or intentionally set to
+  -- mz_catalog_server, which cannot query user data).
+  {% if target.cluster -%}
+    {% do run_query(set_cluster(generate_cluster_name(target.cluster))) -%}
+  {%- endif %}
   {% call statement('truncate_relation') -%}
     delete from {{ relation }}
   {%- endcall %}
@@ -193,6 +212,16 @@
       {% do run_query(materialize__alter_column_comment_single(relation, column_name, quote, comment)) %}
     {% endfor %}
   {% endif %}
+{% endmacro %}
+
+{% macro materialize__apply_grants(relation, grant_config, should_revoke) -%}
+  {{ exceptions.raise_compiler_error(
+        """
+        dbt-materialize does not implement the grants configuration.
+
+        If this feature is important to you, please reach out!
+        """
+    )}}
 {% endmacro %}
 
 {% macro materialize__get_refresh_interval_sql(relation, refresh_interval_dict) -%}
@@ -247,8 +276,8 @@
     join mz_schemas s on o.schema_id = s.id and s.name = '{{ schema_relation.schema }}'
     join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
     where o.type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
-      --Exclude subsources and progress subsources, which aren't relevant in this
-      --context and can bork the adapter (see #20483)
+      -- Exclude subsources and progress subsources, which aren't relevant in this
+      -- context and can bork the adapter (see #20483)
       and coalesce(so.type, '') not in ('subsource', 'progress')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}

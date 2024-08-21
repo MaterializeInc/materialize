@@ -325,7 +325,7 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
     @available
     def generate_final_cluster_name(
         self, cluster_name: str, force_deploy_suffix: bool = False
-    ) -> str:
+    ) -> Optional[str]:
         cluster_name = self.execute_macro(
             "generate_cluster_name",
             kwargs={"custom_cluster_name": cluster_name},
