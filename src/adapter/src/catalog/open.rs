@@ -1058,6 +1058,8 @@ fn add_new_remove_old_builtin_items_migration(
     assert!(
         deleted_system_objects
             .iter()
+            // It's okay if Indexes change because they're inherently ephemeral.
+            .filter(|object| object.object_type != CatalogItemType::Index)
             .all(
                 |deleted_object| is_unstable_schema(&deleted_object.schema_name)
                     || delete_exceptions.contains(deleted_object)
