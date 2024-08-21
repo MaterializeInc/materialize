@@ -59,6 +59,7 @@ JSONB_OPERATION_TYPES: list[DbOperationOrFunction] = []
 TAG_JSONB_TO_TEXT = "jsonb_to_text"
 TAG_JSONB_AGGREGATION = "jsonb_aggregation"
 TAG_JSONB_VALUE_ACCESS = "jsonb_value_access"
+TAG_JSONB_OBJECT_GENERATION = "jsonb_object_generation"
 
 JSONB_OPERATION_TYPES.append(
     DbOperation(
@@ -217,7 +218,7 @@ JSONB_OPERATION_TYPES.append(
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
-        tags={TAG_JSONB_AGGREGATION},
+        tags={TAG_JSONB_AGGREGATION, TAG_JSONB_OBJECT_GENERATION},
         comment="generic variant without record values",
     ),
 )
@@ -233,7 +234,7 @@ JSONB_OPERATION_TYPES.append(
         ],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
-        tags={TAG_JSONB_AGGREGATION},
+        tags={TAG_JSONB_AGGREGATION, TAG_JSONB_OBJECT_GENERATION},
         comment="additional overlapping variant only for records",
     ),
 )
@@ -255,6 +256,7 @@ CREATE_JSON_WITH_GEO_DATA_OP = DbOperation(
         NumericOperationParam(),
     ],
     JsonbReturnTypeSpec(),
+    tags={TAG_JSONB_OBJECT_GENERATION},
     comment="JSONB value with geo data",
 )
 CREATE_JSON_WITH_GEO_DATA_OP.added_characteristics.add(
