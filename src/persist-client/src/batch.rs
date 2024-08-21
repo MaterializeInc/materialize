@@ -944,7 +944,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         };
 
         let handle = if updates.goodbytes() < inline_threshold {
-            let cfg = self.cfg.clone();
             let metrics = Arc::clone(&self.metrics);
             let schemas = schemas.clone();
 
@@ -955,9 +954,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     // Wrap our updates just so the types match.
                     let updates = BlobTraceUpdates::Row(updates);
                     let structured_ext = if part_write_columnar_data {
-                        let result = metrics.columnar.arrow().measure_part_build(|| {
-                            encode_updates(&schemas, &updates, &cfg.batch_columnar_format)
-                        });
+                        let result = metrics
+                            .columnar
+                            .arrow()
+                            .measure_part_build(|| encode_updates(&schemas, &updates));
                         match result {
                             Ok((struct_ext, _stats)) => struct_ext,
                             Err(err) => {
@@ -1059,9 +1059,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 // Only encode our updates in a structured format if required, it's expensive.
                 let stats = 'collect_stats: {
                     if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured() {
-                        let result = metrics_.columnar.arrow().measure_part_build(|| {
-                            encode_updates(&schemas, &updates.updates, &cfg.batch_columnar_format)
-                        });
+                        let result = metrics_
+                            .columnar
+                            .arrow()
+                            .measure_part_build(|| encode_updates(&schemas, &updates.updates));
 
                         // We can't collect stats if we failed to encode in a columnar format.
                         let Ok((extended_cols, stats)) = result else {

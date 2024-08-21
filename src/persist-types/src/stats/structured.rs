@@ -9,17 +9,15 @@
 
 use std::collections::BTreeMap;
 
-use mz_ore::assert_none;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::ser::{SerializeMap, SerializeStruct};
 
-use crate::dyn_struct::{DynStructCol, ValidityRef};
 use crate::stats::{
     any_columnar_stats, proto_dyn_stats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
-    OptionStats, ProtoStructStats, StatsFrom, TrimStats,
+    OptionStats, ProtoStructStats, TrimStats,
 };
 
 /// Statistics about a column of a struct type with a uniform schema (the same
@@ -93,15 +91,6 @@ impl ColumnStats for StructStats {
     fn none_count(&self) -> usize {
         0
     }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        match stats.as_non_null_values()? {
-            ColumnStatKinds::Struct(inner) => Some(inner.clone()),
-            _ => None,
-        }
-    }
 }
 
 impl ColumnStats for OptionStats<StructStats> {
@@ -115,33 +104,6 @@ impl ColumnStats for OptionStats<StructStats> {
     }
     fn none_count(&self) -> usize {
         self.none
-    }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let inner = match &stats.values {
-            ColumnStatKinds::Struct(inner) => inner,
-            _ => return None,
-        };
-        Some(OptionStats {
-            some: inner.clone(),
-            none: stats.nulls.as_ref().map_or(0, |n| n.count),
-        })
-    }
-}
-
-impl StatsFrom<DynStructCol> for StructStats {
-    fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
-        assert_none!(col.validity);
-        col.stats(validity).expect("valid stats").some
-    }
-}
-
-impl StatsFrom<DynStructCol> for OptionStats<StructStats> {
-    fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.validity.as_ref()));
-        col.stats(validity).expect("valid stats")
     }
 }
 

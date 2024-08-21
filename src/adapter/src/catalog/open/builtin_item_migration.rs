@@ -498,11 +498,9 @@ mod persist_schema {
     use arrow::array::{StringArray, StringBuilder};
     use bytes::{BufMut, Bytes};
     use mz_persist_types::codec_impls::{
-        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
-        SimpleEncoder, SimpleSchema,
+        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
     };
-    use mz_persist_types::columnar::{ColumnPush, Schema, Schema2};
-    use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
+    use mz_persist_types::columnar::Schema2;
     use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
 
@@ -593,27 +591,6 @@ mod persist_schema {
     /// An implementation of [Schema] for [TableKey].
     #[derive(Debug, PartialEq)]
     pub(super) struct TableKeySchema;
-
-    impl Schema<TableKey> for TableKeySchema {
-        type Encoder = SimpleEncoder<TableKey, String>;
-        type Decoder = SimpleDecoder<TableKey, String>;
-
-        fn columns(&self) -> DynStructCfg {
-            SimpleSchema::<TableKey, String>::columns(&())
-        }
-
-        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
-            SimpleSchema::<TableKey, String>::decoder(cols, |val, ret| {
-                *ret = val.parse().expect("should be valid TableKey")
-            })
-        }
-
-        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
-            SimpleSchema::<TableKey, String>::push_encoder(cols, |col, val| {
-                ColumnPush::<String>::push(col, &val.to_string())
-            })
-        }
-    }
 
     impl Schema2<TableKey> for TableKeySchema {
         type ArrowColumn = StringArray;

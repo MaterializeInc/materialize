@@ -15,9 +15,8 @@ use criterion::{criterion_group, criterion_main, Bencher, Criterion, Throughput}
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnDecoder, PartDecoder, Schema, Schema2};
-use mz_persist_types::part::{Part, Part2, PartBuilder, PartBuilder2};
-use mz_persist_types::stats::PartStats;
+use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+use mz_persist_types::part::{Part2, PartBuilder2};
 use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
@@ -272,14 +271,6 @@ fn decode_legacy(part: &ColumnarRecords, schema: &RelationDesc) -> Row {
     row
 }
 
-fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
-    let mut builder = PartBuilder::new(schema, &UnitSchema).expect("success");
-    for row in rows.iter() {
-        builder.push(row, &(), 1u64, 1i64);
-    }
-    builder.finish()
-}
-
 fn encode_structured2(schema: &RelationDesc, rows: &[Row]) -> Part2 {
     let mut builder = PartBuilder2::new(schema, &UnitSchema);
     for row in rows.iter() {
@@ -339,15 +330,6 @@ fn bench_roundtrip(c: &mut Criterion) {
     c.bench_function("roundtrip_encode_legacy", |b| {
         b.iter(|| std::hint::black_box(encode_legacy(&rows)));
     });
-    c.bench_function("roundtrip_encode_structured", |b| {
-        let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");
-        b.iter(|| {
-            for row in rows.iter() {
-                builder.push(row, &(), 1u64, 1i64);
-            }
-            std::hint::black_box(&mut builder);
-        });
-    });
     c.bench_function("roundtrip_encode_structured2", |b| {
         let mut builder = PartBuilder2::new(&schema, &UnitSchema);
         b.iter(|| {
@@ -359,23 +341,9 @@ fn bench_roundtrip(c: &mut Criterion) {
     });
 
     let legacy = encode_legacy(&rows);
-    let structured = encode_structured(&schema, &rows);
     let structured2 = encode_structured2(&schema, &rows);
     c.bench_function("roundtrip_decode_legacy", |b| {
         b.iter(|| std::hint::black_box(decode_legacy(&legacy, &schema)));
-    });
-    c.bench_function("roundtrip_decode_structured", |b| {
-        let ((), decoder) = schema.decoder(structured.key_ref()).unwrap();
-        let mut row = Row::default();
-
-        b.iter(|| {
-            for idx in 0..rows.len() {
-                decoder.decode(idx, &mut row);
-                // We create a packer which clears the row.
-                let _ = row.packer();
-            }
-            std::hint::black_box(&mut row);
-        });
     });
     c.bench_function("roundtrip_decode_structured2", |b| {
         let col = structured2
@@ -455,20 +423,6 @@ fn bench_json(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("encode/structured", |b| {
-        let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
-        b.iter(|| {
-            let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
-            for _ in 0..NUM_ROWS {
-                std::hint::black_box(&mut builder).push(&row, &(), 1i64, 1u64);
-            }
-            let part = builder.finish();
-            let stats = PartStats::new(std::hint::black_box(&part)).unwrap();
-            std::hint::black_box((part, stats));
-        });
-    });
-
     group.bench_function("encode/structured2", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
@@ -479,25 +433,6 @@ fn bench_json(c: &mut Criterion) {
             }
             let part = builder.finish();
             std::hint::black_box(part.key);
-        });
-    });
-
-    group.bench_function("decode/structured", |b| {
-        let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
-        let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
-        builder.push(&row, &(), 1i64, 1u64);
-        let part = builder.finish();
-
-        let decoder =
-            <RelationDesc as Schema<Row>>::decoder(&schema, part.key_ref()).expect("success");
-        let mut row = Row::default();
-
-        b.iter(|| {
-            for _ in 0..NUM_ROWS {
-                decoder.decode(0, std::hint::black_box(&mut row));
-                std::hint::black_box(&mut row);
-            }
         });
     });
 
@@ -536,20 +471,6 @@ fn bench_string(c: &mut Criterion) {
         "I am a string that could be in a real row but I'm a fake row!",
     )]);
 
-    group.bench_function("encode/structured", |b| {
-        let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
-        b.iter(|| {
-            let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
-            for _ in 0..NUM_ROWS {
-                std::hint::black_box(&mut builder).push(&row, &(), 1i64, 1u64);
-            }
-            let part = builder.finish();
-            let stats = PartStats::new(std::hint::black_box(&part)).unwrap();
-            std::hint::black_box((part, stats));
-        });
-    });
-
     group.bench_function("encode/structured2", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
@@ -560,25 +481,6 @@ fn bench_string(c: &mut Criterion) {
             }
             let part = builder.finish();
             std::hint::black_box(part.key);
-        });
-    });
-
-    group.bench_function("decode/structured", |b| {
-        let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
-        let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
-        builder.push(&row, &(), 1i64, 1u64);
-        let part = builder.finish();
-
-        let decoder =
-            <RelationDesc as Schema<Row>>::decoder(&schema, part.key_ref()).expect("success");
-        let mut row = Row::default();
-
-        b.iter(|| {
-            for _ in 0..NUM_ROWS {
-                decoder.decode(0, std::hint::black_box(&mut row));
-                std::hint::black_box(&mut row);
-            }
         });
     });
 

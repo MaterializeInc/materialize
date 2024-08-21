@@ -26,23 +26,13 @@ use itertools::Itertools;
 use load_generator::LoadGeneratorSourceExportDetails;
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
-use mz_persist_types::columnar::{
-    ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
-};
-use mz_persist_types::dyn_col::DynColumnMut;
-use mz_persist_types::dyn_struct::{
-    DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
-};
-use mz_persist_types::stats::{
-    ColumnarStats, DynStats, OptionStats, PrimitiveStats, StatsFn, StructStats,
-};
+use mz_persist_types::stats::{ColumnarStats, DynStats, OptionStats, PrimitiveStats, StructStats};
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    arb_row_for_relation, ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId,
-    ProtoRelationDesc, ProtoRow, RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder,
-    RowDecoder, RowEncoder,
+    arb_row_for_relation, ColumnType, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc,
+    Row, RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::collection::vec;
@@ -1379,162 +1369,6 @@ pub fn arb_source_data_for_relation_desc(desc: &RelationDesc) -> impl Strategy<V
     ])
 }
 
-/// An implementation of [PartEncoder] for [SourceData].
-///
-/// This mostly delegates the encoding logic to [RowEncoder], but flatmaps in
-/// an Err column.
-#[derive(Debug)]
-pub struct SourceDataEncoder {
-    len: usize,
-    ok_cfg: DynStructCfg,
-    ok_validity: ValidityMut,
-    ok: RowEncoder,
-    err: Box<<Option<Vec<u8>> as Data>::Mut>,
-}
-
-impl PartEncoder<SourceData> for SourceDataEncoder {
-    fn encode(&mut self, val: &SourceData) {
-        self.len += 1;
-        match val.as_ref() {
-            Ok(row) => {
-                self.ok_validity.push(true);
-                self.ok.inc_len();
-                for (encoder, datum) in self.ok.col_encoders().iter_mut().zip(row.iter()) {
-                    encoder.encode(datum);
-                }
-                ColumnPush::<Option<Vec<u8>>>::push(self.err.as_mut(), None);
-            }
-            Err(err) => {
-                self.ok_validity.push(false);
-                self.ok.inc_len();
-                for encoder in self.ok.col_encoders() {
-                    encoder.encode_default();
-                }
-                let err = err.into_proto().encode_to_vec();
-                ColumnPush::<Option<Vec<u8>>>::push(self.err.as_mut(), Some(err.as_slice()));
-            }
-        }
-    }
-
-    fn finish(self) -> (usize, Vec<DynColumnMut>) {
-        // Collect all of the columns from the inner RowEncoder to a single 'ok' column.
-        let (ok_len_1, ok_validity) = self.ok_validity.into_parts();
-        let (ok_len_2, ok_cols) = self.ok.finish();
-        let ok_col = DynStructMut::from_parts(self.ok_cfg, ok_len_1, ok_validity, ok_cols);
-
-        assert_eq!(ok_len_1, ok_len_2, "mismatched length for 'ok' column");
-
-        let ok_col = DynColumnMut::new::<Option<DynStruct>>(Box::new(ok_col));
-        let err_col = DynColumnMut::new::<Option<Vec<u8>>>(self.err);
-
-        let cols = vec![ok_col, err_col];
-
-        (self.len, cols)
-    }
-}
-
-/// An implementation of [PartDecoder] for [SourceData].
-///
-/// This mostly delegates the encoding logic to [RowDecoder], but flatmaps in
-/// an Err column.
-#[derive(Debug)]
-pub struct SourceDataDecoder {
-    ok_validity: ValidityRef,
-    ok: RowDecoder,
-    err: Arc<<Option<Vec<u8>> as Data>::Col>,
-}
-
-impl PartDecoder<SourceData> for SourceDataDecoder {
-    fn decode(&self, idx: usize, val: &mut SourceData) {
-        let err = ColumnGet::<Option<Vec<u8>>>::get(self.err.as_ref(), idx);
-        match (self.ok_validity.get(idx), err) {
-            (true, None) => {
-                let mut packer = match val.0.as_mut() {
-                    Ok(x) => x.packer(),
-                    Err(_) => {
-                        val.0 = Ok(Row::default());
-                        val.0.as_mut().unwrap().packer()
-                    }
-                };
-                for decoder in self.ok.col_decoders() {
-                    decoder.decode(idx, &mut packer);
-                }
-            }
-            (false, Some(err)) => {
-                let err = ProtoDataflowError::decode(err)
-                    .expect("proto should be valid")
-                    .into_rust()
-                    .expect("error should be valid");
-                val.0 = Err(err);
-            }
-            (true, Some(_)) | (false, None) => {
-                panic!("SourceData should have exactly one of ok or err")
-            }
-        };
-    }
-}
-
-impl Schema<SourceData> for RelationDesc {
-    type Encoder = SourceDataEncoder;
-    type Decoder = SourceDataDecoder;
-
-    fn columns(&self) -> DynStructCfg {
-        let ok_schema = Schema::<Row>::columns(self);
-        let cols = vec![
-            (
-                "ok".to_owned(),
-                DataType {
-                    optional: true,
-                    format: ColumnFormat::Struct(ok_schema),
-                },
-                StatsFn::Default,
-            ),
-            (
-                "err".to_owned(),
-                DataType {
-                    optional: true,
-                    format: ColumnFormat::Bytes,
-                },
-                StatsFn::Default,
-            ),
-        ];
-        DynStructCfg::from(cols)
-    }
-
-    fn decoder(
-        &self,
-        mut cols: mz_persist_types::dyn_struct::ColumnsRef,
-    ) -> Result<Self::Decoder, String> {
-        let ok = cols.col::<Option<DynStruct>>("ok")?;
-        let err = cols.col::<Option<Vec<u8>>>("err")?;
-        let () = cols.finish()?;
-        let (ok_validity, ok) = RelationDesc::decoder(self, ok.as_opt_ref())?;
-        Ok(SourceDataDecoder {
-            ok_validity,
-            ok,
-            err,
-        })
-    }
-
-    fn encoder(
-        &self,
-        mut cols: mz_persist_types::dyn_struct::ColumnsMut,
-    ) -> Result<Self::Encoder, String> {
-        let ok = cols.col::<Option<DynStruct>>("ok")?;
-        let err = cols.col::<Option<Vec<u8>>>("err")?;
-        let (len, ()) = cols.finish()?;
-        let ok_cfg = ok.cfg().clone();
-        let (ok_validity, ok) = RelationDesc::encoder(self, ok.as_opt_mut())?;
-        Ok(SourceDataEncoder {
-            len,
-            ok_cfg,
-            ok_validity,
-            ok,
-            err,
-        })
-    }
-}
-
 /// Describes how external references should be organized in a multi-level
 /// hierarchy.
 ///
@@ -2049,11 +1883,9 @@ mod tests {
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
     use mz_persist_types::schema::backward_compatible;
-    use mz_repr::{arb_datum_for_scalar, ProtoRelationDesc, ScalarType};
+    use mz_repr::ProtoRelationDesc;
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
-
-    use crate::errors::EnvelopeError;
 
     use super::*;
 
@@ -2068,54 +1900,6 @@ mod tests {
         assert_err!("Umike".parse::<Timeline>());
         assert_err!("Dance".parse::<Timeline>());
         assert_err!("".parse::<Timeline>());
-    }
-
-    #[track_caller]
-    fn scalar_type_parquet_roundtrip<'a>(
-        scalar_type: ScalarType,
-        datums: impl IntoIterator<Item = Datum<'a>>,
-    ) {
-        use mz_persist_types::parquet::validate_roundtrip;
-
-        let mut rows = Vec::new();
-        for datum in datums {
-            rows.push(SourceData(Ok(Row::pack_slice(&[datum]))));
-        }
-        rows.push(SourceData(Err(EnvelopeError::Flat("foo".into()).into())));
-
-        // Non-nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
-        assert_eq!(validate_roundtrip(&schema, &rows), Ok(()));
-
-        // Nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
-        rows.push(SourceData(Ok(Row::pack_slice(&[Datum::Null]))));
-        assert_eq!(validate_roundtrip(&schema, &rows), Ok(()));
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn all_scalar_types_parquet_roundtrip() {
-        proptest!(|(scalar_type in any::<ScalarType>())| {
-            // The proptest! macro interferes with rustfmt.
-            let datums = scalar_type.interesting_datums();
-            scalar_type_parquet_roundtrip(scalar_type, datums);
-        });
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn all_datums_parquet_roundtrip() {
-        let datums = any::<ScalarType>().prop_flat_map(|ty| {
-            prop::collection::vec(arb_datum_for_scalar(&ty), 0..8)
-                .prop_map(move |datums| (ty.clone(), datums))
-        });
-
-        proptest!(|((ty, datums) in datums)| {
-            // The proptest! macro interferes with rustfmt.
-            let datums = datums.iter().map(Datum::from);
-            scalar_type_parquet_roundtrip(ty, datums);
-        });
     }
 
     #[track_caller]
