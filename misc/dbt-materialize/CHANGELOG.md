@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.8.5 - 2024-08-21
 
 * Fix a bug in the `materialize__drop_relation` macro that prevented using the
   [`--full-refresh` flag](https://docs.getdbt.com/reference/resource-configs/full_refresh)
