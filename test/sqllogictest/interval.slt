@@ -1489,3 +1489,92 @@ query T
 SELECT MIN(unnest) FROM (SELECT UNNEST(ARRAY[INTERVAL '2' SECOND, INTERVAL '1' SECOND]));
 ----
 00:00:01
+
+query T
+SELECT '01:02:03'::INTERVAL + '07:08:09'::INTERVAL;
+----
+08:10:12
+
+query T
+SELECT '01:02:03'::INTERVAL * 2;
+----
+02:04:06
+
+statement ok
+CREATE TABLE A (f1 INTERVAL);
+
+query T
+SELECT sum(f1) FROM A;
+----
+NULL
+
+statement ok
+INSERT INTO A VALUES ('01:02:03'::INTERVAL);
+
+query T
+SELECT sum(f1) FROM A;
+----
+01:02:03
+
+statement ok
+INSERT INTO A VALUES ('10:20:30'::INTERVAL);
+
+query T
+SELECT sum(f1) FROM A;
+----
+11:22:33
+
+statement ok
+INSERT INTO A VALUES (NULL);
+
+query T
+SELECT sum(f1) FROM A;
+----
+11:22:33
+
+statement ok
+INSERT INTO A VALUES ('01:01:01.1111'::INTERVAL);
+
+query T
+SELECT sum(f1) FROM A;
+----
+12:23:34.1111
+
+statement ok
+INSERT INTO A VALUES ('-01:01:01'::INTERVAL);
+
+query T
+SELECT sum(f1) FROM A;
+----
+11:22:33.1111
+
+query T
+SELECT avg(f1) FROM A;
+----
+02:50:38.277775
+
+query T
+SELECT avg(now() - now());
+----
+00:00:00
+
+# TODO
+# statement ok
+# INSERT INTO A VALUES ('178956970 years 7 months 2147483647 days 2562047788:00:54.775807'::INTERVAL);
+
+query T
+SELECT sum(f1) FROM A;
+----
+11:22:33.1111
+
+query error operator does not exist
+SELECT var_pop(f1) FROM A;
+
+query error operator does not exist
+SELECT var_samp(f1) FROM A;
+
+query error operator does not exist
+SELECT stddev_pop(f1) FROM A;
+
+query error operator does not exist
+SELECT stddev_samp(f1) FROM A;
