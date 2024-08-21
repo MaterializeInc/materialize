@@ -320,13 +320,6 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) FORMAT PROTOBUF USING CONFLUENT
 CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [], include_metadata: [], format: Some(Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } }))), envelope: Some(Upsert { value_decode_err_policy: [] }) })
 
 parse-statement
-CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (IGNORE KEYS 'true')
-----
-CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (IGNORE KEYS = 'true')
-=>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }], include_metadata: [], format: None, envelope: None })
-
-parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (PARTITION BY (a, b))
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (PARTITION BY = (a, b))
@@ -1480,21 +1473,21 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found identifier "property"
+error: Expected one of TIMELINE or TIMESTAMP or RETAIN, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
 parse-statement
 ALTER SOURCE name SET (SIZE LARGE)
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
+error: Expected one of TIMELINE or TIMESTAMP or RETAIN, found SIZE
 ALTER SOURCE name SET (SIZE LARGE)
                        ^
 
 parse-statement
 ALTER SOURCE name RESET (SIZE)
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
+error: Expected one of TIMELINE or TIMESTAMP or RETAIN, found SIZE
 ALTER SOURCE name RESET (SIZE)
                          ^
 
@@ -2527,7 +2520,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
-error: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found START
+error: Expected one of TIMELINE or TIMESTAMP or RETAIN, found START
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
                                                      ^
 
@@ -2763,11 +2756,11 @@ CREATE SOURCE lg FROM LOAD GENERATOR TPCH
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Tpch, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (IGNORE KEYS 'true', TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (IGNORE KEYS = 'true', TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }, CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], external_references: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], external_references: None, progress_subsource: None })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical

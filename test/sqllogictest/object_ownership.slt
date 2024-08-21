@@ -380,7 +380,7 @@ ALTER SOURCE js RENAME TO cool
 statement error must be owner of SOURCE materialize.public.js
 ALTER SOURCE js OWNER TO group_materialize
 
-statement error db error: ERROR: Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
+statement error db error: ERROR: Expected one of TIMELINE or TIMESTAMP or RETAIN, found SIZE
 ALTER SOURCE js SET (SIZE = '4')
 
 ## Views

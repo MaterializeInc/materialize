@@ -468,7 +468,6 @@ pub fn describe_create_subsource(
 
 generate_extracted_config!(
     CreateSourceOption,
-    (IgnoreKeys, bool),
     (Timeline, String),
     (TimestampInterval, Duration),
     (RetainHistory, OptionalDuration)
@@ -684,15 +683,6 @@ pub fn plan_create_source(
         if envelope.is_some() || format.is_some() || !include_metadata.is_empty() {
             Err(PlanError::UseTablesForSources(
                 "CREATE SOURCE (ENVELOPE|FORMAT|INCLUDE)".to_string(),
-            ))?;
-        }
-        if with_options
-            .iter()
-            .find(|op| op.name == CreateSourceOptionName::IgnoreKeys)
-            .is_some()
-        {
-            Err(PlanError::UseTablesForSources(
-                "CREATE SOURCE WITH (IGNORE KEYS)".to_string(),
             ))?;
         }
         if with_options
@@ -990,7 +980,6 @@ pub fn plan_create_source(
     let CreateSourceOptionExtracted {
         timeline,
         timestamp_interval,
-        ignore_keys,
         retain_history,
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
@@ -1010,7 +999,6 @@ pub fn plan_create_source(
         format,
         Some(external_connection.default_key_desc()),
         external_connection.default_value_desc(),
-        ignore_keys,
         include_metadata,
         metadata_columns_desc,
         &external_connection,
@@ -1178,7 +1166,6 @@ fn apply_source_envelope_encoding(
     format: &Option<FormatSpecifier<Aug>>,
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
-    ignore_keys: Option<bool>,
     include_metadata: &[SourceIncludeMetadata],
     metadata_columns_desc: Vec<(&str, ColumnType)>,
     source_connection: &GenericSourceConnection<ReferencedConnection>,
@@ -1347,11 +1334,7 @@ fn apply_source_envelope_encoding(
     };
 
     let metadata_desc = included_column_desc(metadata_columns_desc);
-    let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    if ignore_keys.unwrap_or(false) {
-        desc = desc.without_keys();
-    }
+    let (envelope, desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
     Ok((desc, envelope, encoding))
 }
@@ -1608,7 +1591,6 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (PartitionBy, Vec<Ident>),
     (Timeline, String),
-    (IgnoreKeys, bool),
     (Details, String)
 );
 
@@ -1641,7 +1623,6 @@ pub fn plan_create_table_from_source(
         partition_by,
         details,
         timeline,
-        ignore_keys,
         seen: _,
     } = with_options.clone().try_into()?;
 
@@ -1801,7 +1782,6 @@ pub fn plan_create_table_from_source(
         format,
         key_desc,
         value_desc,
-        ignore_keys,
         include_metadata,
         metadata_columns_desc,
         source_connection,

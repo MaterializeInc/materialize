@@ -29,7 +29,7 @@ contains:CLUSTER "storage" has no replicas available to service request
 > CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 ! ALTER SOURCE loadgen SET (SIZE = '1')
-contains:Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
+contains:Expected one of TIMELINE or TIMESTAMP or RETAIN, found SIZE
 
 # Create indexes and materialized views in a storage cluster is allowed.
 > CREATE INDEX t_idx IN CLUSTER storage ON t (a)

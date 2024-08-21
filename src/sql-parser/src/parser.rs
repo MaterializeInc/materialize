@@ -2943,11 +2943,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, TIMELINE, TIMESTAMP, RETAIN])? {
-            IGNORE => {
-                self.expect_keyword(KEYS)?;
-                CreateSourceOptionName::IgnoreKeys
-            }
+        let name = match self.expect_one_of_keywords(&[TIMELINE, TIMESTAMP, RETAIN])? {
             TIMELINE => CreateSourceOptionName::Timeline,
             TIMESTAMP => {
                 self.expect_keyword(INTERVAL)?;
@@ -4868,28 +4864,20 @@ impl<'a> Parser<'a> {
                 value: self.parse_optional_option_value()?,
             },
             IGNORE => {
-                match self.expect_one_of_keywords(&[COLUMNS, KEYS])? {
-                    COLUMNS => {
-                        let _ = self.consume_token(&Token::Eq);
+                self.expect_keyword(COLUMNS)?;
+                let _ = self.consume_token(&Token::Eq);
 
-                        let value =
-                            self.parse_option_sequence(Parser::parse_identifier)?
-                                .map(|inner| {
-                                    WithOptionValue::Sequence(
-                                        inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
-                                    )
-                                });
-                        TableFromSourceOption {
-                            // IGNORE is historical syntax for this option.
-                            name: TableFromSourceOptionName::ExcludeColumns,
-                            value,
-                        }
-                    }
-                    KEYS => TableFromSourceOption {
-                        name: TableFromSourceOptionName::IgnoreKeys,
-                        value: self.parse_optional_option_value()?,
-                    },
-                    _ => unreachable!(),
+                let value = self
+                    .parse_option_sequence(Parser::parse_identifier)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                        )
+                    });
+                TableFromSourceOption {
+                    // IGNORE is historical syntax for this option.
+                    name: TableFromSourceOptionName::ExcludeColumns,
+                    value,
                 }
             }
             PARTITION => {
