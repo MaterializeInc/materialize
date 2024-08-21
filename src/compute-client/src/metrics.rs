@@ -11,11 +11,11 @@
 
 use std::borrow::Borrow;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
@@ -66,7 +66,9 @@ pub struct ComputeControllerMetrics {
 
     // dataflows
     dataflow_initial_output_duration_seconds: GaugeVec,
-    dataflow_wallclock_lag_seconds: HistogramVec,
+    dataflow_wallclock_lag_max_seconds: GaugeVec,
+    dataflow_wallclock_lag_min_seconds: GaugeVec,
+    dataflow_wallclock_lag_avg_seconds: GaugeVec,
 }
 
 impl ComputeControllerMetrics {
@@ -164,12 +166,23 @@ impl ComputeControllerMetrics {
                 help: "The time from dataflow creation up to when the first output was produced.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
-            dataflow_wallclock_lag_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_wallclock_lag_seconds",
-                help: "A histogram of the second-by-second lag of the dataflow frontier relative to \
-                       wallclock time.",
+            dataflow_wallclock_lag_max_seconds: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_max_seconds",
+                help: "The per-minute maximum of the second-by-second lag of the dataflow \
+                       frontier relative to wallclock time.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
-                buckets: vec![1., 2., 5., 10., 30.],
+            )),
+            dataflow_wallclock_lag_min_seconds: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_min_seconds",
+                help: "The per-minute minimum of the second-by-second lag of the dataflow \
+                       frontier relative to wallclock time.",
+                var_labels: ["instance_id", "replica_id", "collection_id"],
+            )),
+            dataflow_wallclock_lag_avg_seconds: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_avg_seconds",
+                help: "The per-minute average of the second-by-second lag of the dataflow \
+                       frontier relative to wallclock time.",
+                var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
         }
     }
@@ -394,14 +407,25 @@ impl ReplicaMetrics {
             .metrics
             .dataflow_initial_output_duration_seconds
             .get_delete_on_drop_metric(labels.clone());
-        let wallclock_lag_seconds = self
+        let wallclock_lag_max_seconds = self
             .metrics
-            .dataflow_wallclock_lag_seconds
+            .dataflow_wallclock_lag_max_seconds
+            .get_delete_on_drop_metric(labels.clone());
+        let wallclock_lag_min_seconds = self
+            .metrics
+            .dataflow_wallclock_lag_min_seconds
+            .get_delete_on_drop_metric(labels.clone());
+        let wallclock_lag_avg_seconds = self
+            .metrics
+            .dataflow_wallclock_lag_avg_seconds
             .get_delete_on_drop_metric(labels);
 
         Some(ReplicaCollectionMetrics {
             initial_output_duration_seconds,
-            wallclock_lag_seconds,
+            wallclock_lag_max_seconds,
+            wallclock_lag_min_seconds,
+            wallclock_lag_avg_seconds,
+            wallclock_lag: WallclockLag::new(),
         })
     }
 }
@@ -430,8 +454,71 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 pub(crate) struct ReplicaCollectionMetrics {
     /// Gauge tracking dataflow hydration time.
     pub initial_output_duration_seconds: Gauge,
-    /// Histogram tracking dataflow wallclock lag.
-    pub wallclock_lag_seconds: Histogram,
+    /// Gauge tracking maximum dataflow wallclock lag.
+    wallclock_lag_max_seconds: Gauge,
+    /// Gauge tracking minimum dataflow wallclock lag.
+    wallclock_lag_min_seconds: Gauge,
+    /// Gauge tracking average dataflow wallclock lag.
+    wallclock_lag_avg_seconds: Gauge,
+
+    /// State for aggregating wallclock lag.
+    wallclock_lag: WallclockLag,
+}
+
+impl ReplicaCollectionMetrics {
+    pub fn observe_wallclock_lag(&mut self, lag: Duration) {
+        const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+        self.wallclock_lag.add(lag);
+
+        if self.wallclock_lag.last_reset.elapsed() >= REFRESH_INTERVAL {
+            self.wallclock_lag_max_seconds
+                .set(self.wallclock_lag.max.as_secs_f64());
+            self.wallclock_lag_min_seconds
+                .set(self.wallclock_lag.min.as_secs_f64());
+            self.wallclock_lag_avg_seconds
+                .set(self.wallclock_lag.avg_secs());
+
+            self.wallclock_lag.reset();
+        }
+    }
+}
+
+/// Helper for producing per-minute min/max/avg aggregates of observed wallclock lag.
+#[derive(Debug)]
+struct WallclockLag {
+    count: usize,
+    sum: Duration,
+    max: Duration,
+    min: Duration,
+    last_reset: Instant,
+}
+
+impl WallclockLag {
+    fn new() -> Self {
+        Self {
+            count: 0,
+            sum: Duration::ZERO,
+            max: Duration::ZERO,
+            min: Duration::ZERO,
+            last_reset: Instant::now(),
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn add(&mut self, lag: Duration) {
+        self.count += 1;
+        self.sum += lag;
+        self.max = std::cmp::max(self.max, lag);
+        self.min = std::cmp::max(self.max, lag);
+    }
+
+    fn avg_secs(&self) -> f64 {
+        self.sum.as_secs_f64() / f64::cast_lossy(self.count)
+    }
 }
 
 /// Metrics keyed by `ComputeCommand` type.
