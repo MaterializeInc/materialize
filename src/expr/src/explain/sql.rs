@@ -17,7 +17,8 @@ use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{
-    Cte, CteBlock, Ident, Query, Raw, RawItemName, SetExpr, TableAlias, UnresolvedItemName, Values,
+    Cte, CteBlock, Expr, Ident, Query, Raw, RawItemName, Select, SelectItem, SetExpr, TableAlias,
+    TableFactor, TableWithJoins, UnresolvedItemName, Values,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
@@ -91,7 +92,7 @@ impl From<RecursionLimitError> for SqlConversionError {
     }
 }
 struct MirToSql {
-    wmr_counter: u64,
+    fresh_name_counter: u64,
     recursion_guard: RecursionGuard,
 }
 
@@ -104,9 +105,15 @@ impl<'a> CheckedRecursion for MirToSql {
 impl MirToSql {
     fn new() -> Self {
         Self {
-            wmr_counter: 0,
+            fresh_name_counter: 0,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
+    }
+
+    fn fresh_ident(&mut self, s: &str) -> Ident {
+        let n = self.fresh_name_counter;
+        self.fresh_name_counter += 1;
+        Ident::new_unchecked(format!("{s}{n}"))
     }
 
     fn column_info(
@@ -187,9 +194,31 @@ impl MirToSql {
                 let ident =
                     Ident::new(name).map_err(|e| SqlConversionError::BadGlobalName { id: *id })?;
 
+                //
                 Ok(SqlQuery {
                     ctes: CteBlock::Simple(Vec::new()),
-                    body: SetExpr::Table(RawItemName::Name(UnresolvedItemName(vec![ident]))),
+                    body: SetExpr::Select(Box::new(Select {
+                        distinct: None,
+                        projection: sc
+                            .column_info(expr, ctx)
+                            .into_iter()
+                            .map(|i| SelectItem::Expr {
+                                expr: Expr::Identifier(vec![i.clone()]),
+                                alias: Some(i),
+                            })
+                            .collect(),
+                        from: vec![TableWithJoins {
+                            relation: TableFactor::Table {
+                                name: RawItemName::Name(UnresolvedItemName(vec![ident])),
+                                alias: None,
+                            },
+                            joins: vec![],
+                        }],
+                        selection: None,
+                        group_by: vec![],
+                        having: None,
+                        options: vec![],
+                    })),
                     order_by: Vec::new(),
                     limit: None,
                     offset: None,
@@ -215,51 +244,85 @@ impl MirToSql {
                 bindings.insert(*id, name);
 
                 let mut q_body = sc.to_sql_query(body, bindings, ctx)?;
+                let body_columns = sc.column_info(body, ctx);
 
-                // add the CTE to the query
-                match &mut q_body.ctes {
-                    CteBlock::Simple(ctes) => {
-                        ctes.push(cte_value);
-                    }
-                    CteBlock::MutuallyRecursive(..) => {
-                        let n = sc.wmr_counter;
-                        sc.wmr_counter += 1;
-                        let ident = Ident::new_unchecked(format!("wmr{n}"));
-
-                        let columns = sc.column_info(body, ctx);
-
-                        q_body = SqlQuery {
-                            ctes: CteBlock::Simple(vec![
-                                cte_value,
-                                Cte {
-                                    alias: TableAlias {
-                                        name: ident.clone(),
-                                        columns,
-                                        strict: false,
-                                    },
-                                    id: (),
-                                    query: q_body.take(),
-                                },
-                            ]),
-                            body: SetExpr::Table(RawItemName::Name(UnresolvedItemName(vec![
-                                ident,
-                            ]))),
-                            order_by: Vec::new(),
-                            limit: None,
-                            offset: None,
-                        };
-                    }
-                }
+                sc.add_cte_to_query(&mut q_body, body_columns, cte_value);
 
                 Ok(q_body)
             }
             LetRec {
-                ids,
-                values,
-                limits,
-                body,
+                ids: _ids,
+                values: _values,
+                limits: _limits,
+                body: _body,
             } => todo!(),
-            Project { input, outputs } => todo!(),
+            Project { input, outputs } => {
+                let mut q = sc.to_sql_query(input, bindings, ctx)?;
+
+                match &mut q.body {
+                    SetExpr::Select(select) => {
+                        // winnow the existing projection
+                        let mut new_projection = Vec::with_capacity(outputs.len());
+
+                        for col in outputs {
+                            new_projection.push(select.projection[*col].clone());
+                        }
+
+                        select.projection = new_projection;
+                    }
+                    body => {
+                        // extract the body and project in a separate query
+                        let ident = sc.fresh_ident("proj");
+                        let columns = sc.column_info(input, ctx);
+
+                        let cte = Cte::<Raw> {
+                            alias: TableAlias {
+                                name: ident.clone(),
+                                columns: columns.clone(),
+                                strict: false,
+                            },
+                            id: (),
+                            query: SqlQuery {
+                                ctes: CteBlock::Simple(vec![]),
+                                body: body.take(),
+                                order_by: vec![],
+                                limit: None,
+                                offset: None,
+                            },
+                        };
+
+                        sc.add_cte_to_query(&mut q, columns.clone(), cte);
+
+                        let mut projection = Vec::with_capacity(outputs.len());
+                        for col in outputs {
+                            let i = &columns[*col];
+
+                            projection.push(SelectItem::Expr {
+                                expr: Expr::Identifier(vec![i.clone()]),
+                                alias: Some(i.clone()),
+                            });
+                        }
+
+                        q.body = SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection,
+                            from: vec![TableWithJoins {
+                                relation: TableFactor::Table {
+                                    name: RawItemName::Name(UnresolvedItemName(vec![ident])),
+                                    alias: None,
+                                },
+                                joins: vec![],
+                            }],
+                            selection: None,
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        }))
+                    }
+                }
+
+                Ok(q)
+            }
             Map { input, scalars } => todo!(),
             FlatMap { input, func, exprs } => todo!(),
             Filter { input, predicates } => todo!(),
@@ -289,5 +352,55 @@ impl MirToSql {
             Union { base, inputs } => todo!(),
             ArrangeBy { input, keys } => todo!(),
         })
+    }
+
+    fn add_cte_to_query(&mut self, query: &mut Query<Raw>, columns: Vec<Ident>, cte: Cte<Raw>) {
+        match &mut query.ctes {
+            CteBlock::Simple(ctes) => {
+                ctes.push(cte);
+            }
+            CteBlock::MutuallyRecursive(..) => {
+                let ident = self.fresh_ident("wmr");
+
+                *query = SqlQuery {
+                    ctes: CteBlock::Simple(vec![
+                        cte,
+                        Cte {
+                            alias: TableAlias {
+                                name: ident.clone(),
+                                columns: columns.clone(),
+                                strict: false,
+                            },
+                            id: (),
+                            query: query.take(),
+                        },
+                    ]),
+                    body: SetExpr::Select(Box::new(Select {
+                        distinct: None,
+                        projection: columns
+                            .into_iter()
+                            .map(|i| SelectItem::Expr {
+                                expr: Expr::Identifier(vec![i.clone()]),
+                                alias: Some(i),
+                            })
+                            .collect(),
+                        from: vec![TableWithJoins {
+                            relation: TableFactor::Table {
+                                name: RawItemName::Name(UnresolvedItemName(vec![ident])),
+                                alias: None,
+                            },
+                            joins: vec![],
+                        }],
+                        selection: None,
+                        group_by: vec![],
+                        having: None,
+                        options: vec![],
+                    })),
+                    order_by: Vec::new(),
+                    limit: None,
+                    offset: None,
+                };
+            }
+        }
     }
 }
