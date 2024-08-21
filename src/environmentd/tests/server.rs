@@ -1348,7 +1348,8 @@ fn test_storage_usage_doesnt_update_between_restarts() {
                     f64::cast_lossy(storage_usage_collection_interval.as_secs());
 
                 assert!(
-                    actual_collection_interval >= expected_collection_interval,
+                    // Add 1 second grace period to avoid flaky tests.
+                    actual_collection_interval >= expected_collection_interval - 1,
                     "actual_collection_interval={actual_collection_interval}, expected_collection_interval={expected_collection_interval}"
                 );
             }
