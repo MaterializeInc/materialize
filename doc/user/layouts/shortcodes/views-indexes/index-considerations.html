@@ -1,7 +1,3 @@
-In Materialize, you do not need to always create indexes to help optimize
-computations. For queries that have no supporting indexes, Materialize uses the
-same mechanics used by indexes to optimize computations.
-
 Specific instances where indexes can be useful to improve performance include:
 
 - When used in ad-hoc queries.
@@ -11,3 +7,17 @@ Specific instances where indexes can be useful to improve performance include:
 - When used to enable delta joins.
 
 For more information, see [Optimization](/transform-data/optimization).
+
+**However, before creating an index**, consider the following:
+
+- If you have created various views to act as the building blocks for a view
+  from which you will serve the results, creating an index **only** on the
+  serving view may be sufficient depending upon your query patterns and usage.
+
+- In Materialize, underlying data structures that are being maintained for an
+  index (or a materialized view) can be reused by other views/queries. As such,
+  an existing index may be sufficient to support your queries.
+
+- For queries that have no supporting indexes, Materialize uses the same
+  mechanics used by indexes to optimize computations. However, this underlying
+  work is discarded after each query run.
