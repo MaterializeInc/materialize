@@ -15,10 +15,10 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::str::Indent;
 use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
-use mz_repr::GlobalId;
+use mz_repr::{Datum, GlobalId};
 use mz_sql_parser::ast::{
     Cte, CteBlock, Expr, Ident, Query, Raw, RawItemName, Select, SelectItem, SetExpr, TableAlias,
-    TableFactor, TableWithJoins, UnresolvedItemName, Values,
+    TableFactor, TableWithJoins, UnresolvedItemName, Value, Values,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
@@ -79,6 +79,9 @@ enum SqlConversionError {
     BadGlobalName {
         id: GlobalId,
     },
+    UnexpectedWMR,
+    UnexpectedNegation,
+    UnexpectedThreshold,
     /// Recursion depth exceeded
     Recursion {
         /// The error that aborted recursion
@@ -153,7 +156,15 @@ impl MirToSql {
             Constant { rows, typ } => {
                 let rows = match rows {
                     Err(_) => vec![],
-                    Ok(raw_rows) => raw_rows.into_iter().map(|(r, _)| todo!()).collect(),
+                    Ok(raw_rows) => raw_rows
+                        .into_iter()
+                        .map(|(row, _id)| {
+                            row.unpack()
+                                .into_iter()
+                                .map(|datum| sc.to_sql_value(datum))
+                                .collect()
+                        })
+                        .collect(),
                 };
 
                 Ok(SqlQuery {
@@ -250,12 +261,6 @@ impl MirToSql {
 
                 Ok(q_body)
             }
-            LetRec {
-                ids: _ids,
-                values: _values,
-                limits: _limits,
-                body: _body,
-            } => todo!(),
             Project { input, outputs } => {
                 let mut q = sc.to_sql_query(input, bindings, ctx)?;
 
@@ -479,10 +484,17 @@ impl MirToSql {
                 monotonic,
                 expected_group_size,
             } => todo!(),
-            Negate { input } => todo!(),
-            Threshold { input } => todo!(),
             Union { base, inputs } => todo!(),
-            ArrangeBy { input, keys } => todo!(),
+            ArrangeBy { input, keys: _keys } => sc.to_sql_query(input, bindings, ctx),
+            // Negate forms are handled under `Union` but not elsewhere (SQL doesn't have negative cardinalities!)
+            Negate { input: _input } => Err(SqlConversionError::UnexpectedNegation),
+            Threshold { input } => Err(SqlConversionError::UnexpectedThreshold),
+            LetRec {
+                ids: _ids,
+                values: _values,
+                limits: _limits,
+                body: _body,
+            } => Err(SqlConversionError::UnexpectedWMR),
         })
     }
 
@@ -493,6 +505,41 @@ impl MirToSql {
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> Result<Expr<Raw>, SqlConversionError> {
         todo!()
+    }
+
+    fn to_sql_value(&self, datum: Datum) -> Expr<Raw> {
+        match datum {
+            Datum::False => Expr::Value(Value::Boolean(false)),
+            Datum::True => Expr::Value(Value::Boolean(true)),
+            Datum::Int16(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::Int32(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::Int64(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::UInt8(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::UInt16(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::UInt32(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::UInt64(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::Float32(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::Float64(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::Date(_) => todo!(),
+            Datum::Time(_) => todo!(),
+            Datum::Timestamp(_) => todo!(),
+            Datum::TimestampTz(_) => todo!(),
+            Datum::Interval(i) => todo!(),
+            Datum::Bytes(_) => todo!(),
+            Datum::String(s) => Expr::Value(Value::String(s.to_string())),
+            Datum::Array(_) => todo!(),
+            Datum::List(_) => todo!(),
+            Datum::Map(_) => todo!(),
+            Datum::Numeric(n) => Expr::Value(Value::Number(n.to_string())),
+            Datum::JsonNull => todo!(),
+            Datum::Uuid(_) => todo!(),
+            Datum::MzTimestamp(_) => todo!(),
+            Datum::Range(_) => todo!(),
+            Datum::MzAclItem(_) => todo!(),
+            Datum::AclItem(_) => todo!(),
+            Datum::Dummy => Expr::Value(Value::String("!!!DUMMY!!!".to_string())),
+            Datum::Null => Expr::null(),
+        }
     }
 
     fn add_cte_to_query(&mut self, query: &mut Query<Raw>, columns: Vec<Ident>, cte: Cte<Raw>) {
