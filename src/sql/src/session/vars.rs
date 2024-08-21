@@ -2356,17 +2356,11 @@ impl Var for FeatureFlag {
 }
 
 impl FeatureFlag {
-    pub fn enabled(
-        &self,
-        system_vars: Option<&SystemVars>,
-        feature: Option<String>,
-        detail: Option<String>,
-    ) -> Result<(), VarError> {
+    pub fn enabled(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
         match system_vars {
             Some(system_vars) if *system_vars.expect_value::<bool>(self.flag) => Ok(()),
             _ => Err(VarError::RequiresFeatureFlag {
-                feature: feature.unwrap_or(self.feature_desc.to_string()),
-                detail,
+                feature: self.feature_desc.to_string(),
                 name_hint: system_vars
                     .map(|s| {
                         if s.allow_unsafe {

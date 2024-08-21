@@ -215,7 +215,7 @@ impl Var for VarDefinition {
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
             if let Some(flag) = self.feature_flag {
-                flag.enabled(system_vars, None, None)?;
+                flag.enabled(system_vars)?;
             }
 
             Ok(())
@@ -1714,18 +1714,6 @@ feature_flags!(
     {
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_sink_denylist_with_options,
-        desc: "CREATE SINK with unsafe options",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_source_denylist_with_options,
-        desc: "CREATE SOURCE with unsafe options",
         default: false,
         enable_for_item_parsing: true,
     },

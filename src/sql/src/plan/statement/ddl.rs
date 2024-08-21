@@ -39,7 +39,6 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{
     strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
 };
-use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
@@ -641,24 +640,6 @@ pub fn plan_create_source(
     );
 
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
-
-    let allowed_with_options = vec![
-        CreateSourceOptionName::TimestampInterval,
-        CreateSourceOptionName::RetainHistory,
-    ];
-    if let Some(op) = with_options
-        .iter()
-        .find(|op| !allowed_with_options.contains(&op.name))
-    {
-        scx.require_feature_flag_w_dynamic_desc(
-            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
-            format!("CREATE SOURCE...WITH ({}..)", op.name.to_ast_string()),
-            format!(
-                "permitted options are {}",
-                comma_separated(&allowed_with_options)
-            ),
-        )?;
-    }
 
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
@@ -2449,26 +2430,6 @@ fn plan_sink(
         return Err(PlanError::MissingName(CatalogItemType::Sink));
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
-
-    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
-        CreateSinkOptionName::Snapshot,
-        CreateSinkOptionName::Version,
-        CreateSinkOptionName::PartitionStrategy,
-    ];
-
-    if let Some(op) = with_options
-        .iter()
-        .find(|op| !ALLOWED_WITH_OPTIONS.contains(&op.name))
-    {
-        scx.require_feature_flag_w_dynamic_desc(
-            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
-            format!("CREATE SINK...WITH ({}..)", op.name.to_ast_string()),
-            format!(
-                "permitted options are {}",
-                comma_separated(ALLOWED_WITH_OPTIONS)
-            ),
-        )?;
-    }
 
     let envelope = match envelope {
         Some(ast::SinkEnvelope::Upsert) => SinkEnvelope::Upsert,
