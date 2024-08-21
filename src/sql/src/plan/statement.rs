@@ -813,13 +813,13 @@ impl<'a> StatementContext<'a> {
     }
 
     /// Returns an error if the named `FeatureFlag` is not set to `on`.
-    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+    pub fn require_feature_flag(&self, flag: &'static FeatureFlag) -> Result<(), PlanError> {
         flag.require(self.catalog.system_vars())?;
         Ok(())
     }
 
     /// Returns true if the named [`FeatureFlag`] is set to `on`, returns false otherwise.
-    pub fn is_feature_flag_enabled(&self, flag: &FeatureFlag) -> bool {
+    pub fn is_feature_flag_enabled(&self, flag: &'static FeatureFlag) -> bool {
         self.require_feature_flag(flag).is_ok()
     }
 

@@ -203,7 +203,7 @@ impl Var for VarDefinition {
     fn visible(&self, user: &User, system_vars: &super::SystemVars) -> Result<(), VarError> {
         if !self.user_visible && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
             Err(VarError::UnknownParameter(self.name().to_string()))
-        } else if self.name().starts_with("unsafe") && !system_vars.allow_unsafe() {
+        } else if self.is_unsafe() && !system_vars.allow_unsafe() {
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
             if let Some(flag) = self.require_feature_flag {

@@ -179,6 +179,11 @@ pub trait Var: Debug {
     /// Variables marked as `internal` are only visible for the system user.
     fn visible(&self, user: &User, system_vars: &SystemVars) -> Result<(), VarError>;
 
+    /// Reports whether the variable is only visible in unsafe mode.
+    fn is_unsafe(&self) -> bool {
+        self.name().starts_with("unsafe_")
+    }
+
     /// Upcast `self` to a `dyn Var`, useful when working with multiple different implementors of
     /// [`Var`].
     fn as_var(&self) -> &dyn Var
@@ -2351,16 +2356,21 @@ pub struct FeatureFlag {
 impl FeatureFlag {
     /// Returns an error unless the feature flag is enabled in the provided
     /// `system_vars`.
-    pub fn require(&self, system_vars: &SystemVars) -> Result<(), VarError> {
+    pub fn require(&'static self, system_vars: &SystemVars) -> Result<(), VarError> {
         match *system_vars.expect_value::<bool>(self.flag) {
             true => Ok(()),
-            false => Err(VarError::RequiresFeatureFlag {
-                feature: self.feature_desc.to_string(),
-                name_hint: system_vars.allow_unsafe.then_some(self.flag.name),
-            }),
+            false => Err(VarError::RequiresFeatureFlag { feature_flag: self }),
         }
     }
 }
+
+impl PartialEq for FeatureFlag {
+    fn eq(&self, other: &FeatureFlag) -> bool {
+        self.flag.name() == other.flag.name()
+    }
+}
+
+impl Eq for FeatureFlag {}
 
 impl Var for BuildInfo {
     fn name(&self) -> &'static str {
