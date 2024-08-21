@@ -2305,7 +2305,7 @@ mod tests {
         Scope, StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-    use mz_sql::session::vars::VarInput;
+    use mz_sql::session::vars::{SystemVars, VarInput};
 
     use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
@@ -2481,7 +2481,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    None,
+                    &SystemVars::new(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::PG_CATALOG_SCHEMA),
                     false,
@@ -2513,7 +2513,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    None,
+                    &SystemVars::new(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_CATALOG_SCHEMA),
                     false,
@@ -2545,7 +2545,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    None,
+                    &SystemVars::new(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_TEMP_SCHEMA),
                     false,
