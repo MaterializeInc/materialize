@@ -605,7 +605,7 @@ steps:
     agents:
       # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
       # queue: hetzner-aarch64-8cpu-16gb
-      queue: linux-aarch64
+      queue: linux-aarch64-medium
     sanitizer: skip
 
   - id: source-sink-errors
