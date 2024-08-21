@@ -547,6 +547,7 @@ where
                 parts: all_parts,
                 runs: all_runs,
                 len,
+                run_meta: vec![],
             },
         })
     }

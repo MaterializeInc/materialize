@@ -117,6 +117,7 @@ impl<'a> DirectiveArgs<'a> {
                 })
                 .collect(),
             runs: vec![],
+            run_meta: vec![],
         }
     }
 

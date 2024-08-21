@@ -45,10 +45,10 @@ use crate::internal::state::{
     ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState,
     ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge,
     ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
-    ProtoRollup, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, State,
+    StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -1302,6 +1302,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
             parts: self.parts.into_proto(),
             len: self.len.into_proto(),
             runs: self.runs.into_proto(),
+            run_meta: self.run_meta.into_proto(),
             deprecated_keys: vec![],
         }
     }
@@ -1327,6 +1328,35 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
             parts,
             len: proto.len.into_rust()?,
             runs: proto.runs.into_rust()?,
+            run_meta: proto.run_meta.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoRunMeta> for RunMeta {
+    fn into_proto(&self) -> ProtoRunMeta {
+        let order = match self.order {
+            None => ProtoRunOrder::Unknown,
+            Some(RunOrder::Unordered) => ProtoRunOrder::Unordered,
+            Some(RunOrder::Codec) => ProtoRunOrder::Codec,
+            Some(RunOrder::Structured) => ProtoRunOrder::Structured,
+        };
+        ProtoRunMeta {
+            order: order.into(),
+            schema_id: self.schema.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRunMeta) -> Result<Self, TryFromProtoError> {
+        let order = match ProtoRunOrder::try_from(proto.order)? {
+            ProtoRunOrder::Unknown => None,
+            ProtoRunOrder::Unordered => Some(RunOrder::Unordered),
+            ProtoRunOrder::Codec => Some(RunOrder::Codec),
+            ProtoRunOrder::Structured => Some(RunOrder::Structured),
+        };
+        Ok(Self {
+            order,
+            schema: proto.schema_id.into_rust()?,
         })
     }
 }

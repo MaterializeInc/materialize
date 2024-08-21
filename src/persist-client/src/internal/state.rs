@@ -311,6 +311,26 @@ impl<T: Ord> Ord for BatchPart<T> {
     }
 }
 
+/// What order are the parts in this run in?
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub(crate) enum RunOrder {
+    /// They're in no particular order.
+    Unordered,
+    /// They're ordered based on the codec-encoded K/V bytes.
+    Codec,
+    /// They're ordered by the natural ordering of the structured data.
+    Structured,
+}
+
+/// Metadata shared across a run.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub struct RunMeta {
+    /// If none, Persist should infer the order based on the proto metadata.
+    pub(crate) order: Option<RunOrder>,
+    /// All parts in a run should have the same schema.
+    pub(crate) schema: Option<SchemaId>,
+}
+
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HollowBatchPart<T> {
@@ -375,6 +395,9 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
     pub(crate) runs: Vec<usize>,
+    /// Run-level metadata: the first entry has metadata for the first run, and so on.
+    /// If there's no corresponding entry for a particular run, it's assumed to be [RunMeta::default()].
+    pub(crate) run_meta: Vec<RunMeta>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
@@ -384,6 +407,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             parts,
             len,
             runs,
+            run_meta,
         } = self;
         f.debug_struct("HollowBatch")
             .field(
@@ -397,6 +421,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             .field("parts", &parts)
             .field("len", &len)
             .field("runs", &runs)
+            .field("run_meta", &run_meta)
             .finish()
     }
 }
@@ -409,6 +434,7 @@ impl<T: Serialize> serde::Serialize for HollowBatch<T> {
             // Both parts and runs are covered by the self.runs call.
             parts: _,
             runs: _,
+            run_meta: _,
         } = self;
         let mut s = s.serialize_struct("HollowBatch", 5)?;
         let () = s.serialize_field("lower", &desc.lower().elements())?;
@@ -435,12 +461,14 @@ impl<T: Ord> Ord for HollowBatch<T> {
             parts: self_parts,
             len: self_len,
             runs: self_runs,
+            run_meta: self_run_meta,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
             runs: other_runs,
+            run_meta: other_run_meta,
         } = other;
         (
             self_desc.lower().elements(),
@@ -449,6 +477,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_parts,
             self_len,
             self_runs,
+            self_run_meta,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -457,6 +486,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_parts,
                 other_len,
                 other_runs,
+                other_run_meta,
             ))
     }
 }
@@ -484,6 +514,7 @@ impl<T> HollowBatch<T> {
             len,
             parts,
             runs,
+            run_meta: vec![],
         }
     }
 
@@ -494,6 +525,7 @@ impl<T> HollowBatch<T> {
             len: 0,
             parts: vec![],
             runs: vec![],
+            run_meta: vec![],
         }
     }
 
@@ -2047,6 +2079,7 @@ pub(crate) mod tests {
                     parts,
                     len: len % 10,
                     runs,
+                    run_meta: vec![],
                 }
             },
         )
