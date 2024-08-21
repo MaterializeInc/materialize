@@ -125,7 +125,12 @@ pub fn run<T: TimestampManipulation>(
         }
     }
 
-    let ctx = Context::new(dataflows, storage_collections, read_policies, current_time);
+    let mut ctx = Context::new(dataflows, storage_collections, read_policies, current_time);
+
+    // Dataflows that sink into a storage collection that has advanced to the empty frontier don't
+    // need to be installed at all. So we can apply an optimization where we prune them here and
+    // assign them an empty as-of at the end.
+    ctx.prune_sealed_persist_sinks();
 
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
@@ -659,9 +664,27 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// succeeding. Choosing the latest possible as-of also minimizes the amount of work the
     /// dataflow has to spend processing historical data from its sources.
     fn best_as_of(&self, id: GlobalId) -> Antichain<T> {
-        let collection = self.expect_collection(id);
-        let bounds = collection.bounds.borrow();
-        bounds.upper.clone()
+        if let Some(collection) = self.collections.get(&id) {
+            let bounds = collection.bounds.borrow();
+            bounds.upper.clone()
+        } else {
+            Antichain::new()
+        }
+    }
+
+    /// Removes collections that sink into sealed persist shards from the context.
+    ///
+    /// The dataflows of these collections will get an empty default as-of assigned at the end of
+    /// the as-of selection process, ensuring that they won't get installed unnecessarily.
+    ///
+    /// Note that it is valid to remove these collections from consideration because they don't
+    /// impose as-of constraints on other compute collections.
+    fn prune_sealed_persist_sinks(&mut self) {
+        self.collections.retain(|id, _| {
+            self.storage_collections
+                .collection_frontiers(*id)
+                .map_or(true, |f| !f.write_frontier.is_empty())
+        });
     }
 }
 
