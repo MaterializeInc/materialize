@@ -100,7 +100,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<StorageCommand>,
             tokio::sync::mpsc::UnboundedSender<StorageResponse>,
-            crossbeam_channel::Sender<std::thread::Thread>,
+            tokio::sync::mpsc::UnboundedSender<std::thread::Thread>,
         )>,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,

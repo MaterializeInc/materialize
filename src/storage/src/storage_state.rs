@@ -135,7 +135,7 @@ pub struct Worker<'w, A: Allocate> {
     pub client_rx: crossbeam_channel::Receiver<(
         CommandReceiver,
         ResponseSender,
-        crossbeam_channel::Sender<std::thread::Thread>,
+        mpsc::UnboundedSender<std::thread::Thread>,
     )>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
@@ -148,7 +148,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         client_rx: crossbeam_channel::Receiver<(
             CommandReceiver,
             ResponseSender,
-            crossbeam_channel::Sender<std::thread::Thread>,
+            mpsc::UnboundedSender<std::thread::Thread>,
         )>,
         metrics: StorageMetrics,
         now: NowFn,
