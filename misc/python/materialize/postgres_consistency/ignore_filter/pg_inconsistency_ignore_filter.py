@@ -802,8 +802,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
 
         if (
-            query_template.where_expression is not None
-            or query_template.row_selection.has_selection()
+            query_template.has_where_condition() or query_template.has_row_selection()
         ) and query_template.uses_join():
             return YesIgnore(
                 "Different evaluation order of join clause and where filter"
@@ -1040,7 +1039,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             col_index,
             is_table_function,
             True,
-        ) and (query_template.offset is not None or query_template.limit is not None):
+        ) and (query_template.has_offset() or query_template.has_limit()):
             # When table functions are used, a row-order insensitive comparison will be conducted in the result
             # comparator. However, this is not sufficient when a LIMIT or OFFSET clause is present.
             return YesIgnore("Different sort order")

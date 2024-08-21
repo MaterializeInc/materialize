@@ -84,7 +84,9 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         # do not restrict the input to selected rows when a where clause is present;
         # there is no guarantee that the database filters the rows by the specified row indices before evaluating the
         # rest of the where condition such that the where condition evaluation may fail on rows outside the selection
-        apply_row_filter = error.query_execution.query_template.where_expression is None
+        apply_row_filter = (
+            not error.query_execution.query_template.has_where_condition()
+        )
 
         table_column_selection = TableColumnByNameSelection(
             self.__get_involved_column_names(query_template, query_column_selection)
