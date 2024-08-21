@@ -32,7 +32,12 @@ impl Migration {
         self.0.contains_drop()
     }
 
-    // TODO: fn preserves_order(&self) -> bool
+    /// Returns true if the output array will preserve the input's sortedness.
+    pub fn preserves_order(&self) -> bool {
+        // If we add support for reordering fields, then this will also have to
+        // account for that.
+        !self.contains_drop()
+    }
 
     /// For the `old` and `new` schemas used at construction time, migrates data
     /// encoded by `old` to be the same arrow DataType as data encoded by `new`.
@@ -166,38 +171,14 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
     use ArrayMigration::NoOp;
     use DataType::*;
     match (old, new) {
-        (Null, Null) => Some(NoOp),
-        (Null, _) => None,
-        (Boolean, Boolean) => Some(NoOp),
-        (Boolean, _) => None,
-        (Int8, Int8) => Some(NoOp),
-        (Int8, _) => None,
-        (Int16, Int16) => Some(NoOp),
-        (Int16, _) => None,
-        (Int32, Int32) => Some(NoOp),
-        (Int32, _) => None,
-        (Int64, Int64) => Some(NoOp),
-        (Int64, _) => None,
-        (UInt8, UInt8) => Some(NoOp),
-        (UInt8, _) => None,
-        (UInt16, UInt16) => Some(NoOp),
-        (UInt16, _) => None,
-        (UInt32, UInt32) => Some(NoOp),
-        (UInt32, _) => None,
-        (UInt64, UInt64) => Some(NoOp),
-        (UInt64, _) => None,
-        (Float16, Float16) => Some(NoOp),
-        (Float16, _) => None,
-        (Float32, Float32) => Some(NoOp),
-        (Float32, _) => None,
-        (Float64, Float64) => Some(NoOp),
-        (Float64, _) => None,
-        (Binary, Binary) => Some(NoOp),
-        (Binary, _) => None,
+        (
+            Null | Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
+            | Float16 | Float32 | Float64 | Binary | Utf8 | Date32 | Date64 | LargeBinary
+            | BinaryView | LargeUtf8 | Utf8View,
+            _,
+        ) => (old == new).then_some(NoOp),
         (FixedSizeBinary(o), FixedSizeBinary(n)) => (o == n).then_some(NoOp),
         (FixedSizeBinary(_), _) => None,
-        (Utf8, Utf8) => Some(NoOp),
-        (Utf8, _) => None,
         (Struct(o), Struct(n)) => backward_compatible_struct(o, n),
         (Struct(_), _) => None,
         (List(o), List(n)) => (o == n).then_some(NoOp),
@@ -206,16 +187,10 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
         (Map(_, _), _) => None,
         (
             Timestamp(_, _)
-            | Date32
-            | Date64
             | Time32(_)
             | Time64(_)
             | Duration(_)
             | Interval(_)
-            | LargeBinary
-            | BinaryView
-            | LargeUtf8
-            | Utf8View
             | ListView(_)
             | FixedSizeList(_, _)
             | LargeList(_)
@@ -313,6 +288,8 @@ mod tests {
 
     use super::*;
 
+    // NB: We also have proptest coverage of all this, but it works on
+    // RelationDesc+SourceData and so lives in src/storage-types.
     #[mz_ore::test]
     fn backward_compatible() {
         use DataType::*;

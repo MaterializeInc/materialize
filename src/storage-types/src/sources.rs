@@ -17,7 +17,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, NullArray, StructArray};
+use arrow::array::{
+    build_compare, Array, ArrayRef, BinaryArray, BinaryBuilder, NullArray, StructArray,
+};
 use arrow::datatypes::{Field, Fields};
 use bytes::{BufMut, Bytes};
 use columnation::Columnation;
@@ -2222,6 +2224,19 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn backward_compatible_migrate() {
+        fn is_sorted(array: &dyn Array) -> bool {
+            let Ok(cmp) = build_compare(array, array) else {
+                // TODO: arrow v51.0.0 doesn't support comparing structs. When
+                // we migrate to v52+, the `build_compare` function is
+                // deprecated and replaced by `make_comparator`, which does
+                // support structs. At which point, this will work (and we
+                // should switch this early return to an expect, if possible).
+                return false;
+            };
+            (0..array.len())
+                .tuple_windows()
+                .all(|(i, j)| cmp(i, j).is_le())
+        }
         fn testcase(old: &RelationDesc, new: &RelationDesc, datas: &[SourceData]) {
             fn data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
                 use mz_persist_types::columnar::ColumnEncoder;
@@ -2244,6 +2259,11 @@ mod tests {
             let new: Arc<dyn Array> = Arc::new(new);
             let migrated = migration.migrate(Arc::clone(&old));
             assert_eq!(migrated.data_type(), new.data_type());
+
+            // Check the sortedness preservation, if we can.
+            if migration.preserves_order() && is_sorted(&old) {
+                assert!(is_sorted(&new))
+            }
         }
 
         let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
