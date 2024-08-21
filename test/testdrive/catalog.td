@@ -39,26 +39,26 @@ Indexes:
 
 # What schemas do we have by default?
 > SHOW SCHEMAS FROM materialize
-public
-information_schema
-mz_catalog
-mz_catalog_unstable
-mz_unsafe
-mz_internal
-mz_introspection
-pg_catalog
+public ""
+information_schema ""
+mz_catalog ""
+mz_catalog_unstable ""
+mz_unsafe ""
+mz_internal ""
+mz_introspection ""
+pg_catalog ""
 
 > SHOW SCHEMAS
-name
+name  comment
 ------------------
-information_schema
-public
-mz_catalog
-mz_catalog_unstable
-mz_unsafe
-mz_internal
-mz_introspection
-pg_catalog
+information_schema ""
+public ""
+mz_catalog ""
+mz_catalog_unstable ""
+mz_unsafe ""
+mz_internal ""
+mz_introspection ""
+pg_catalog ""
 
 $ psql-execute command=\dn
 \         List of schemas
@@ -91,23 +91,23 @@ $ psql-execute command="\dn mz_*"
 
 # What objects do we have by default?
 > SHOW OBJECTS
-name    type
--------------
+name    type    comment
+-----------------------
 
 # Creating a schema should be reflected in the output of SHOW SCHEMAS.
 > CREATE SCHEMA s
 > SHOW SCHEMAS
-name
-------------------
-public
-s
-information_schema
-mz_catalog
-mz_catalog_unstable
-mz_internal
-mz_introspection
-mz_unsafe
-pg_catalog
+name            comment
+-----------------------
+public ""
+s ""
+information_schema ""
+mz_catalog ""
+mz_catalog_unstable ""
+mz_internal ""
+mz_introspection ""
+mz_unsafe ""
+pg_catalog ""
 
 
 # Creating a schema with a name that already exists should fail.
@@ -128,9 +128,9 @@ contains:schema 'materialize.s' cannot be dropped without CASCADE while it conta
 
 # What databases do we have by default?
 > SHOW DATABASES
-name
+name  comment
 ------------
-materialize
+materialize ""
 
 > SELECT name FROM mz_databases
 name
@@ -140,10 +140,10 @@ materialize
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
 > SHOW DATABASES
-name
+name  comment
 -----------
-d
-materialize
+d ""
+materialize ""
 
 # ...and also in `\l`
 $ psql-execute command="\l"
@@ -172,14 +172,14 @@ d
 # WHERE clause.
 > SHOW DATABASES LIKE 'foo'
 > SHOW DATABASES LIKE 'd'
-d
+d ""
 > SHOW DATABASES LIKE 'mat%'
-materialize
+materialize ""
 > SHOW DATABASES WHERE (SELECT name = name)
-materialize
-d
+materialize ""
+d ""
 > SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
-d
+d ""
 ! SHOW DATABASES WHERE 7
 contains:WHERE clause must have type boolean, not type integer
 
@@ -189,74 +189,74 @@ contains:database 'd' already exists
 
 # The new database should have a default public schema.
 > SHOW SCHEMAS FROM d
-name
-------------------
-public
-information_schema
-mz_catalog
-mz_catalog_unstable
-mz_internal
-mz_introspection
-mz_unsafe
-pg_catalog
+name                comment
+---------------------------
+public ""
+information_schema ""
+mz_catalog ""
+mz_catalog_unstable ""
+mz_internal ""
+mz_introspection ""
+mz_unsafe ""
+pg_catalog ""
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
 > CREATE SCHEMA d.s
 > SHOW SCHEMAS FROM d
-name
+name    comment
 -------------------
-public
-s
-information_schema
-mz_catalog
-mz_catalog_unstable
-mz_internal
-mz_introspection
-mz_unsafe
-pg_catalog
+public ""
+s ""
+information_schema ""
+mz_catalog ""
+mz_catalog_unstable ""
+mz_internal ""
+mz_introspection ""
+mz_unsafe ""
+pg_catalog ""
 
 # SHOW SCHEMAS should filter its output based on the provided LIKE or WHERE
 # clause.
 > SHOW SCHEMAS LIKE 'pub%'
-public
+public ""
 > SHOW SCHEMAS LIKE 'private'
 > SHOW SCHEMAS WHERE name = 'public'
-public
+public ""
 
 # New views in the database should work.
 > CREATE VIEW d.public.v1 AS SELECT 1
 > SHOW VIEWS FROM d.public
-name
-----
-v1
+name    comment
+---------------
+v1      ""
 
 # Setting the session database should update name resolution appropriately.
 > SET DATABASE = d
 > SHOW DATABASE
 d
 > SHOW SCHEMAS
-public
-s
-information_schema
-mz_catalog
-mz_catalog_unstable
-mz_internal
-mz_introspection
-mz_unsafe
-pg_catalog
+public ""
+s ""
+information_schema ""
+mz_catalog ""
+mz_catalog_unstable ""
+mz_internal ""
+mz_introspection ""
+mz_unsafe ""
+pg_catalog ""
 > CREATE VIEW v2 AS SELECT 2
 > SHOW VIEWS
-v1
-v2
+v1 ""
+v2 ""
 > SELECT * FROM v1 UNION ALL SELECT * FROM v2
 1
 2
 
 > SHOW OBJECTS
-name    type
--------------
-v1      view
-v2      view
+name    type    comment
+-----------------------
+v1      view    ""
+v2      view    ""
 
 # Test minimizing name qualification
 
@@ -292,12 +292,12 @@ public.bool
 contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION, found identifier
 
 > SHOW OBJECTS
-name        type
------------------
-bool        type
-int_list    type
-v1          view
-v2          view
+name        type        comment
+-------------------------------
+bool        type        ""
+int_list    type        ""
+v1          view        ""
+v2          view        ""
 
 # Create one of every mz_object type
 $ set schema={
@@ -336,20 +336,20 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   ENVELOPE DEBEZIUM;
 
 > SHOW OBJECTS
-name        type
-----------------
-bool        type
-csr_conn    connection
-int_list    type
-v1          view
-v2          view
-tbl         table
-pass_secret secret
-kafka_conn  connection
-mv          materialized-view
-source_data source
-source_data_progress source
-snk         sink
+name        type              comment
+-------------------------------------
+bool        type              ""
+csr_conn    connection        ""
+int_list    type              ""
+v1          view              ""
+v2          view              ""
+tbl         table             ""
+pass_secret secret            ""
+kafka_conn  connection        ""
+mv          materialized-view ""
+source_data source            ""
+source_data_progress source   ""
+snk         sink              ""
 
 > SELECT DISTINCT(TYPE) FROM mz_objects
 type
@@ -366,18 +366,18 @@ function
 secret
 
 > SELECT * FROM (SHOW OBJECTS) ORDER BY name DESC
-bool        type
-csr_conn    connection
-int_list    type
-kafka_conn  connection
-mv          materialized-view
-pass_secret secret
-snk         sink
-source_data source
-source_data_progress source
-tbl         table
-v1          view
-v2          view
+bool        type        ""
+csr_conn    connection  ""
+int_list    type        ""
+kafka_conn  connection  ""
+mv          materialized-view  ""
+pass_secret secret      ""
+snk         sink        ""
+source_data source      ""
+source_data_progress source  ""
+tbl         table       ""
+v1          view        ""
+v2          view        ""
 
 > SELECT create_sql FROM (SHOW CREATE TABLE tbl)
 "CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"
@@ -402,9 +402,9 @@ contains:database 'd' cannot be dropped with RESTRICT while it contains schemas
 > DROP DATABASE d
 # SHOW DATABASES should work, even if the current database has been dropped.
 > SHOW DATABASES
-name
------------
-materialize
+name        comment
+-------------------
+materialize ""
 
 > SELECT name FROM mz_databases
 name
@@ -480,11 +480,11 @@ contains:unknown database 'noexist_db'
 > CREATE VIEW d2.public.t AS SELECT * FROM d1.public.t;
 > DROP DATABASE d1;
 > SHOW DATABASES
-name
------------
-d
-d2
-materialize
+name        comment
+-------------------
+d           ""
+d2          ""
+materialize ""
 > SELECT name FROM mz_databases
 name
 -----------
@@ -493,62 +493,62 @@ d
 d2
 
 > SHOW VIEWS FROM d2.public;
- name
------
+name    comment
+---------------
 
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-name  type  cluster
--------------------
+name  type  cluster  comment
+----------------------------
 
 > SHOW TABLES FROM mz_catalog
-name
------------------------------
-mz_array_types
-mz_audit_events
-mz_aws_privatelink_connections
-mz_base_types
-mz_clusters
-mz_cluster_replicas
-mz_cluster_replica_sizes
-mz_columns
-mz_connections
-mz_databases
-mz_default_privileges
-mz_egress_ips
-mz_functions
-mz_index_columns
-mz_indexes
-mz_kafka_connections
-mz_kafka_sinks
-mz_list_types
-mz_map_types
-mz_materialized_views
-mz_operators
-mz_pseudo_types
-mz_roles
-mz_role_members
-mz_role_parameters
-mz_schemas
-mz_secrets
-mz_sinks
-mz_sources
-mz_ssh_tunnel_connections
-mz_system_privileges
-mz_tables
-mz_types
-mz_views
+name                           comment
+--------------------------------------
+mz_array_types                 ""
+mz_audit_events                ""
+mz_aws_privatelink_connections ""
+mz_base_types                  ""
+mz_clusters                    ""
+mz_cluster_replicas            ""
+mz_cluster_replica_sizes       ""
+mz_columns                     ""
+mz_connections                 ""
+mz_databases                   ""
+mz_default_privileges          ""
+mz_egress_ips                  ""
+mz_functions                   ""
+mz_index_columns               ""
+mz_indexes                     ""
+mz_kafka_connections           ""
+mz_kafka_sinks                 ""
+mz_list_types                  ""
+mz_map_types                   ""
+mz_materialized_views          ""
+mz_operators                   ""
+mz_pseudo_types                ""
+mz_roles                       ""
+mz_role_members                ""
+mz_role_parameters             ""
+mz_schemas                     ""
+mz_secrets                     ""
+mz_sinks                       ""
+mz_sources                     ""
+mz_ssh_tunnel_connections      ""
+mz_system_privileges           ""
+mz_tables                      ""
+mz_types                       ""
+mz_views                       ""
 
 > SHOW VIEWS FROM mz_catalog
-name
+name                       comment
 -----------------------------------
-mz_objects
-mz_relations
-mz_recent_storage_usage
-mz_storage_usage
-mz_timezone_abbreviations
-mz_timezone_names
+mz_objects                 ""
+mz_relations               ""
+mz_recent_storage_usage    ""
+mz_storage_usage           ""
+mz_timezone_abbreviations  ""
+mz_timezone_names          ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -561,189 +561,200 @@ mz_timezone_names
 # Check default sources, tables, and views in mz_internal.
 
 > SHOW SOURCES FROM mz_internal
-name                                           type  cluster
-------------------------------------------------------------------
-mz_aws_privatelink_connection_status_history source  <null>
-mz_cluster_replica_frontiers                 source  <null>
-mz_compute_dependencies                      source  <null>
-mz_compute_error_counts_raw_unified          source  <null>
-mz_compute_hydration_times                   source  <null>
-mz_compute_operator_hydration_statuses_per_worker source <null>
-mz_frontiers                                 source  <null>
-mz_materialized_view_refreshes               source  <null>
-mz_prepared_statement_history                source  <null>
-mz_session_history                           source  <null>
-mz_sink_statistics_raw                       source  <null>
-mz_sink_status_history                       source  <null>
-mz_source_statistics_raw                     source  <null>
-mz_source_status_history                     source  <null>
-mz_sql_text                                  source  <null>
-mz_statement_execution_history               source  <null>
-mz_statement_lifecycle_history               source  <null>
-mz_storage_shards                            source  <null>
+name                                         type    cluster    comment
+-----------------------------------------------------------------------
+mz_aws_privatelink_connection_status_history source  <null>     ""
+mz_cluster_replica_frontiers                 source  <null>     ""
+mz_compute_dependencies                      source  <null>     ""
+mz_compute_error_counts_raw_unified          source  <null>     ""
+mz_compute_hydration_times                   source  <null>     ""
+mz_compute_operator_hydration_statuses_per_worker source <null> ""
+mz_frontiers                                 source  <null>     ""
+mz_materialized_view_refreshes               source  <null>     ""
+mz_prepared_statement_history                source  <null>     ""
+mz_session_history                           source  <null>     ""
+mz_sink_statistics_raw                       source  <null>     ""
+mz_sink_status_history                       source  <null>     ""
+mz_source_statistics_raw                     source  <null>     ""
+mz_source_status_history                     source  <null>     ""
+mz_sql_text                                  source  <null>     ""
+mz_statement_execution_history               source  <null>     ""
+mz_statement_lifecycle_history               source  <null>     ""
+mz_storage_shards                            source  <null>     ""
 
 > SHOW TABLES FROM mz_internal
-name
-----
-mz_aggregates
-mz_aws_connections
-mz_cluster_replica_metrics
-mz_cluster_replica_statuses
-mz_cluster_schedules
-mz_cluster_workload_classes
-mz_comments
-mz_history_retention_strategies
-mz_internal_cluster_replicas
-mz_pending_cluster_replicas
-mz_kafka_sources
-mz_materialized_view_refresh_strategies
-mz_mysql_source_tables
-mz_object_dependencies
-mz_optimizer_notices
-mz_postgres_sources
-mz_postgres_source_tables
-mz_sessions
-mz_storage_usage_by_shard
-mz_subscriptions
-mz_type_pg_metadata
-mz_webhook_sources
+name                                     comment
+------------------------------------------------
+mz_aggregates                            ""
+mz_aws_connections                       ""
+mz_cluster_replica_metrics               ""
+mz_cluster_replica_statuses              ""
+mz_cluster_schedules                     ""
+mz_cluster_workload_classes              ""
+mz_comments                              ""
+mz_history_retention_strategies          ""
+mz_internal_cluster_replicas             ""
+mz_pending_cluster_replicas              ""
+mz_kafka_sources                         ""
+mz_materialized_view_refresh_strategies  ""
+mz_mysql_source_tables                   ""
+mz_object_dependencies                   ""
+mz_optimizer_notices                     ""
+mz_postgres_sources                      ""
+mz_postgres_source_tables                ""
+mz_sessions                              ""
+mz_storage_usage_by_shard                ""
+mz_subscriptions                         ""
+mz_type_pg_metadata                      ""
+mz_webhook_sources                       ""
 
 > SHOW VIEWS FROM mz_internal
-name
--------------------------------------
-mz_activity_log_thinned
-mz_cluster_replica_history
-mz_cluster_replica_utilization
-mz_compute_hydration_statuses
-mz_compute_operator_hydration_statuses
-mz_global_frontiers
-mz_hydration_statuses
-mz_materialization_dependencies
-mz_materialization_lag
-mz_notices
-mz_notices_redacted
-mz_object_fully_qualified_names
-mz_object_lifetimes
-mz_object_oid_alias
-mz_object_transitive_dependencies
-mz_recent_activity_log
-mz_recent_activity_log_thinned
-mz_recent_activity_log_redacted
-mz_recent_sql_text
-mz_recent_sql_text_redacted
-mz_show_all_my_privileges
-mz_show_all_privileges
-mz_show_cluster_privileges
-mz_show_cluster_replicas
-mz_show_database_privileges
-mz_show_default_privileges
-mz_show_indexes
-mz_show_materialized_views
-mz_show_my_cluster_privileges
-mz_show_my_database_privileges
-mz_show_my_default_privileges
-mz_show_my_object_privileges
-mz_show_my_role_members
-mz_show_my_schema_privileges
-mz_show_my_system_privileges
-mz_show_object_privileges
-mz_show_role_members
-mz_show_schema_privileges
-mz_show_sinks
-mz_show_sources
-mz_show_system_privileges
-mz_sink_statistics
-mz_sink_statuses
-mz_source_statistics
-mz_source_statistics_with_history
-mz_source_statuses
-mz_sql_text_redacted
-mz_aws_privatelink_connection_statuses
-mz_statement_execution_history_redacted
-pg_class_all_databases
-pg_type_all_databases
-pg_namespace_all_databases
-pg_description_all_databases
-pg_attrdef_all_databases
-pg_attribute_all_databases
+name                                     comment
+------------------------------------------------
+mz_activity_log_thinned                  ""
+mz_cluster_replica_history               ""
+mz_cluster_replica_utilization           ""
+mz_compute_hydration_statuses            ""
+mz_compute_operator_hydration_statuses   ""
+mz_global_frontiers                      ""
+mz_hydration_statuses                    ""
+mz_materialization_dependencies          ""
+mz_materialization_lag                   ""
+mz_notices                               ""
+mz_notices_redacted                      ""
+mz_object_fully_qualified_names          ""
+mz_object_lifetimes                      ""
+mz_object_oid_alias                      ""
+mz_object_transitive_dependencies        ""
+mz_recent_activity_log                   ""
+mz_recent_activity_log_thinned           ""
+mz_recent_activity_log_redacted          ""
+mz_recent_sql_text                       ""
+mz_recent_sql_text_redacted              ""
+mz_show_all_my_privileges                ""
+mz_show_all_objects                      ""
+mz_show_all_privileges                   ""
+mz_show_cluster_privileges               ""
+mz_show_cluster_replicas                 ""
+mz_show_clusters                         ""
+mz_show_columns                          ""
+mz_show_connections                      ""
+mz_show_database_privileges              ""
+mz_show_databases                        ""
+mz_show_default_privileges               ""
+mz_show_indexes                          ""
+mz_show_materialized_views               ""
+mz_show_my_cluster_privileges            ""
+mz_show_my_database_privileges           ""
+mz_show_my_default_privileges            ""
+mz_show_my_object_privileges             ""
+mz_show_my_role_members                  ""
+mz_show_my_schema_privileges             ""
+mz_show_my_system_privileges             ""
+mz_show_object_privileges                ""
+mz_show_role_members                     ""
+mz_show_roles                            ""
+mz_show_schema_privileges                ""
+mz_show_schemas                          ""
+mz_show_secrets                          ""
+mz_show_sinks                            ""
+mz_show_sources                          ""
+mz_show_system_privileges                ""
+mz_show_tables                           ""
+mz_show_types                            ""
+mz_show_views                            ""
+mz_sink_statistics                       ""
+mz_sink_statuses                         ""
+mz_source_statistics                     ""
+mz_source_statistics_with_history        ""
+mz_source_statuses                       ""
+mz_sql_text_redacted                     ""
+mz_aws_privatelink_connection_statuses   ""
+mz_statement_execution_history_redacted  ""
+pg_class_all_databases                   ""
+pg_type_all_databases                    ""
+pg_namespace_all_databases               ""
+pg_description_all_databases             ""
+pg_attrdef_all_databases                 ""
+pg_attribute_all_databases               ""
 
 # Check default sources, tables, and views in mz_introspection.
 
 > SHOW SOURCES FROM mz_introspection
-mz_active_peeks_per_worker                   log   <null>
-mz_arrangement_batcher_allocations_raw       log   <null>
-mz_arrangement_batcher_capacity_raw          log   <null>
-mz_arrangement_batcher_records_raw           log   <null>
-mz_arrangement_batcher_size_raw              log   <null>
-mz_arrangement_batches_raw                   log   <null>
-mz_arrangement_heap_allocations_raw          log   <null>
-mz_arrangement_heap_capacity_raw             log   <null>
-mz_arrangement_heap_size_raw                 log   <null>
-mz_arrangement_records_raw                   log   <null>
-mz_arrangement_sharing_raw                   log   <null>
-mz_compute_error_counts_raw                  log   <null>
-mz_compute_exports_per_worker                log   <null>
-mz_compute_frontiers_per_worker              log   <null>
-mz_compute_hydration_times_per_worker        log   <null>
-mz_compute_import_frontiers_per_worker       log   <null>
-mz_compute_operator_durations_histogram_raw  log   <null>
-mz_dataflow_addresses_per_worker             log   <null>
-mz_dataflow_channels_per_worker              log   <null>
-mz_dataflow_operator_reachability_raw        log   <null>
-mz_dataflow_operators_per_worker             log   <null>
-mz_dataflow_shutdown_durations_histogram_raw log   <null>
-mz_message_counts_received_raw               log   <null>
-mz_message_counts_sent_raw                   log   <null>
-mz_message_batch_counts_received_raw         log   <null>
-mz_message_batch_counts_sent_raw             log   <null>
-mz_peek_durations_histogram_raw              log   <null>
-mz_scheduling_elapsed_raw                    log   <null>
-mz_scheduling_parks_histogram_raw            log   <null>
+mz_active_peeks_per_worker                   log   <null>    ""
+mz_arrangement_batcher_allocations_raw       log   <null>    ""
+mz_arrangement_batcher_capacity_raw          log   <null>    ""
+mz_arrangement_batcher_records_raw           log   <null>    ""
+mz_arrangement_batcher_size_raw              log   <null>    ""
+mz_arrangement_batches_raw                   log   <null>    ""
+mz_arrangement_heap_allocations_raw          log   <null>    ""
+mz_arrangement_heap_capacity_raw             log   <null>    ""
+mz_arrangement_heap_size_raw                 log   <null>    ""
+mz_arrangement_records_raw                   log   <null>    ""
+mz_arrangement_sharing_raw                   log   <null>    ""
+mz_compute_error_counts_raw                  log   <null>    ""
+mz_compute_exports_per_worker                log   <null>    ""
+mz_compute_frontiers_per_worker              log   <null>    ""
+mz_compute_hydration_times_per_worker        log   <null>    ""
+mz_compute_import_frontiers_per_worker       log   <null>    ""
+mz_compute_operator_durations_histogram_raw  log   <null>    ""
+mz_dataflow_addresses_per_worker             log   <null>    ""
+mz_dataflow_channels_per_worker              log   <null>    ""
+mz_dataflow_operator_reachability_raw        log   <null>    ""
+mz_dataflow_operators_per_worker             log   <null>    ""
+mz_dataflow_shutdown_durations_histogram_raw log   <null>    ""
+mz_message_counts_received_raw               log   <null>    ""
+mz_message_counts_sent_raw                   log   <null>    ""
+mz_message_batch_counts_received_raw         log   <null>    ""
+mz_message_batch_counts_sent_raw             log   <null>    ""
+mz_peek_durations_histogram_raw              log   <null>    ""
+mz_scheduling_elapsed_raw                    log   <null>    ""
+mz_scheduling_parks_histogram_raw            log   <null>    ""
 
 > SHOW TABLES FROM mz_introspection
 
 > SHOW VIEWS FROM mz_introspection
-mz_active_peeks
-mz_arrangement_sharing
-mz_arrangement_sharing_per_worker
-mz_arrangement_sizes
-mz_arrangement_sizes_per_worker
-mz_compute_error_counts
-mz_compute_error_counts_per_worker
-mz_compute_exports
-mz_compute_frontiers
-mz_compute_import_frontiers
-mz_compute_operator_durations_histogram
-mz_compute_operator_durations_histogram_per_worker
-mz_dataflow_addresses
-mz_dataflow_arrangement_sizes
-mz_dataflow_channel_operators
-mz_dataflow_channel_operators_per_worker
-mz_dataflow_channels
-mz_dataflow_operator_dataflows
-mz_dataflow_operator_dataflows_per_worker
-mz_dataflow_operator_parents
-mz_dataflow_operator_parents_per_worker
-mz_dataflow_operator_reachability
-mz_dataflow_operator_reachability_per_worker
-mz_dataflow_operators
-mz_dataflow_shutdown_durations_histogram
-mz_dataflow_shutdown_durations_histogram_per_worker
-mz_dataflows
-mz_dataflows_per_worker
-mz_expected_group_size_advice
-mz_message_counts
-mz_message_counts_per_worker
-mz_peek_durations_histogram
-mz_peek_durations_histogram_per_worker
-mz_records_per_dataflow
-mz_records_per_dataflow_operator
-mz_records_per_dataflow_operator_per_worker
-mz_records_per_dataflow_per_worker
-mz_scheduling_elapsed
-mz_scheduling_elapsed_per_worker
-mz_scheduling_parks_histogram
-mz_scheduling_parks_histogram_per_worker
+mz_active_peeks ""
+mz_arrangement_sharing ""
+mz_arrangement_sharing_per_worker ""
+mz_arrangement_sizes ""
+mz_arrangement_sizes_per_worker ""
+mz_compute_error_counts ""
+mz_compute_error_counts_per_worker ""
+mz_compute_exports ""
+mz_compute_frontiers ""
+mz_compute_import_frontiers ""
+mz_compute_operator_durations_histogram ""
+mz_compute_operator_durations_histogram_per_worker ""
+mz_dataflow_addresses ""
+mz_dataflow_arrangement_sizes ""
+mz_dataflow_channel_operators ""
+mz_dataflow_channel_operators_per_worker ""
+mz_dataflow_channels ""
+mz_dataflow_operator_dataflows ""
+mz_dataflow_operator_dataflows_per_worker ""
+mz_dataflow_operator_parents ""
+mz_dataflow_operator_parents_per_worker ""
+mz_dataflow_operator_reachability ""
+mz_dataflow_operator_reachability_per_worker ""
+mz_dataflow_operators ""
+mz_dataflow_shutdown_durations_histogram ""
+mz_dataflow_shutdown_durations_histogram_per_worker ""
+mz_dataflows ""
+mz_dataflows_per_worker ""
+mz_expected_group_size_advice ""
+mz_message_counts ""
+mz_message_counts_per_worker ""
+mz_peek_durations_histogram ""
+mz_peek_durations_histogram_per_worker ""
+mz_records_per_dataflow ""
+mz_records_per_dataflow_operator ""
+mz_records_per_dataflow_operator_per_worker ""
+mz_records_per_dataflow_per_worker ""
+mz_scheduling_elapsed ""
+mz_scheduling_elapsed_per_worker ""
+mz_scheduling_parks_histogram ""
+mz_scheduling_parks_histogram_per_worker ""
 
 > SET database = materialize
 
@@ -754,7 +765,7 @@ mz_scheduling_parks_histogram_per_worker
 > CREATE TABLE tester.test_table (a int)
 
 > SHOW TABLES FROM tester
-test_table
+test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
@@ -762,7 +773,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-224
+235
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
@@ -791,7 +802,7 @@ $ psql-execute command="\dt *.test_table"
 > CREATE TYPE type1 AS LIST (ELEMENT TYPE = text)
 
 > SHOW TYPES
-type1
+type1  ""
 
 $ psql-execute command="\dT"
 \              List of data types

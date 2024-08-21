@@ -27,10 +27,10 @@ u1  u3  s1_progress  progress  NULL  NULL
 u3  u3  s2_progress  progress  NULL  NULL
 
 # clusters.
-query TTT
+query TTTT
 SHOW SOURCES
 ----
-s1  load-generator  quickstart
-s1_progress  progress  NULL
-s2  load-generator  quickstart
-s2_progress  progress  NULL
+s1  load-generator  quickstart (empty)
+s1_progress  progress  NULL (empty)
+s2  load-generator  quickstart (empty)
+s2_progress  progress  NULL (empty)

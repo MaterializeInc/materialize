@@ -33,18 +33,18 @@ contains: unsupported scale factor -1
   FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
 
 > SHOW SOURCES
-name           type            cluster
--------------------------------------------------------
- customer      subsource       ${arg.single-replica-cluster}
- gen           load-generator  ${arg.single-replica-cluster}
- gen_progress  progress        <null>
- lineitem      subsource       ${arg.single-replica-cluster}
- nation        subsource       ${arg.single-replica-cluster}
- orders        subsource       ${arg.single-replica-cluster}
- part          subsource       ${arg.single-replica-cluster}
- partsupp      subsource       ${arg.single-replica-cluster}
- region        subsource       ${arg.single-replica-cluster}
- supplier      subsource       ${arg.single-replica-cluster}
+name           type            cluster                          comment
+-----------------------------------------------------------------------
+ customer      subsource       ${arg.single-replica-cluster}    ""
+ gen           load-generator  ${arg.single-replica-cluster}    ""
+ gen_progress  progress        <null>                           ""
+ lineitem      subsource       ${arg.single-replica-cluster}    ""
+ nation        subsource       ${arg.single-replica-cluster}    ""
+ orders        subsource       ${arg.single-replica-cluster}    ""
+ part          subsource       ${arg.single-replica-cluster}    ""
+ partsupp      subsource       ${arg.single-replica-cluster}    ""
+ region        subsource       ${arg.single-replica-cluster}    ""
+ supplier      subsource       ${arg.single-replica-cluster}    ""
 
 # SF * 150,000
 > SELECT count(*) FROM customer

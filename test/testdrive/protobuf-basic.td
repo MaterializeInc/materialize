@@ -78,25 +78,25 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
   FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA '${basic-schema}'
 
 > SHOW COLUMNS FROM basic
-name       nullable  type
----------------------------------------
-bool       false     boolean
-int32      false     integer
-int64      false     bigint
-sint32     false     integer
-sint64     false     bigint
-sfixed32   false     integer
-sfixed64   false     bigint
-uint32     false     uint4
-uint64     false     uint8
-fixed32    false     uint4
-fixed64    false     uint8
-float      false     real
-double     false     "double precision"
-bytes      false     bytea
-string     false     text
-enum       false     text
-message    true      record
+name       nullable  type                comment
+------------------------------------------------
+bool       false     boolean             ""
+int32      false     integer             ""
+int64      false     bigint              ""
+sint32     false     integer             ""
+sint64     false     bigint              ""
+sfixed32   false     integer             ""
+sfixed64   false     bigint              ""
+uint32     false     uint4               ""
+uint64     false     uint8               ""
+fixed32    false     uint4               ""
+fixed64    false     uint8               ""
+float      false     real                ""
+double     false     "double precision"  ""
+bytes      false     bytea               ""
+string     false     text                ""
+enum       false     text                ""
+message    true      record              ""
 
 > SELECT bool, int32, int64, sint32, sint64, sfixed32, sfixed64, uint32, uint64, fixed32, fixed64, float, double, bytes, string, enum, message::text FROM basic
 bool  int32  int64  sint32  sint64  sfixed32  sfixed64  uint32  uint64  fixed32  fixed64  float  double  bytes  string enum  message

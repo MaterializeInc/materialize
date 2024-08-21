@@ -56,7 +56,12 @@ class RenameSchema(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW SCHEMAS LIKE 'rename%';
+                >[version>=11400] SHOW SCHEMAS LIKE 'rename%';
+                renamed1 ""
+                renamed2 ""
+                renamed3 ""
+
+                >[version<11400] SHOW SCHEMAS LIKE 'rename%';
                 renamed1
                 renamed2
                 renamed3

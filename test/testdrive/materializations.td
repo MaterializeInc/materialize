@@ -46,14 +46,14 @@ $ kafka-create-topic topic=data
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW VIEWS
-name
----------
-data_view
+name       comment
+------------------
+data_view  ""
 
 > SHOW MATERIALIZED VIEWS
-name    cluster
----------------
-test1   quickstart
+name    cluster     comment
+---------------------------
+test1   quickstart  ""
 
 > SELECT * FROM test1
 b  sum
@@ -72,13 +72,13 @@ b  sum
 2  1
 
 > SHOW COLUMNS FROM test1
-name nullable type
--------------------
-b     false   bigint
-sum   false   numeric
+name nullable type     comment
+------------------------------
+b     false   bigint   ""
+sum   false   numeric  ""
 
 > SHOW VIEWS LIKE '%data%'
-data_view
+data_view  ""
 
 > SHOW CREATE MATERIALIZED VIEW test1
 name                      create_sql
@@ -357,12 +357,12 @@ a  b
 1  2
 
 > SHOW SOURCES
-name              type    cluster
---------------------------------
-data              kafka     ${arg.single-replica-cluster}
-data_progress     progress  <null>
-mat_data          kafka     ${arg.single-replica-cluster}
-mat_data_progress progress  <null>
+name              type    cluster                          comment
+-------------------------------------------------------------------
+data              kafka     ${arg.single-replica-cluster}  ""
+data_progress     progress  <null>                         ""
+mat_data          kafka     ${arg.single-replica-cluster}  ""
+mat_data_progress progress  <null>                         ""
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

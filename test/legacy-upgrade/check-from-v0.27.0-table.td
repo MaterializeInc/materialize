@@ -30,8 +30,11 @@
 > SELECT * FROM default_value
 123 "default value"
 
-> SHOW COLUMNS IN not_null
+>[version<11400] SHOW COLUMNS IN not_null
 f1 false integer
+
+>[version>=11400] SHOW COLUMNS IN not_null
+f1 false integer ""
 
 ! INSERT INTO not_null VALUES (null)
 contains:null value in column "f1" violates not-null constraint

@@ -431,20 +431,20 @@ Explained Query:
           %0:mz_schemas[#0]UK » %1[#0]Kef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#0, #3) // { arity: 2 }
-            ReadIndex on=mz_schemas mz_show_schemas_ind=[*** full scan ***] // { arity: 6 }
+            ReadIndex on=mz_schemas mz_schemas_ind=[*** full scan ***] // { arity: 6 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           Union // { arity: 3 }
             Project (#2, #3, #9) // { arity: 3 }
               Map ("view") // { arity: 10 }
-                ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***] // { arity: 9 }
+                ReadIndex on=mz_views mz_views_ind=[*** full scan ***] // { arity: 9 }
             Project (#2, #3, #10) // { arity: 3 }
               Map ("materialized-view") // { arity: 11 }
                 ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 10 }
 
 Used Indexes:
-  - mz_catalog.mz_show_schemas_ind (*** full scan ***)
-  - mz_catalog.mz_show_views_ind (*** full scan ***)
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
+  - mz_catalog.mz_schemas_ind (*** full scan ***)
+  - mz_catalog.mz_views_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 

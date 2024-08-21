@@ -31,6 +31,6 @@ $ kafka-ingest format=avro topic=avro-decode-no-record schema=${no-record} times
   ENVELOPE NONE
 
 > SHOW COLUMNS FROM avro_decode_no_record
-name       nullable  type
-----------------------------
-\?column?  false     integer
+name       nullable  type     comment
+-------------------------------------
+\?column?  false     integer  ""

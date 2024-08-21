@@ -57,7 +57,11 @@ class RenameIndex(Check):
         return Testdrive(
             dedent(
                 f"""
-                > SHOW INDEXES ON rename_index_table;
+                >[version>=11400] SHOW INDEXES ON rename_index_table;
+                rename_index_index2 rename_index_table {self._default_cluster()} {{f2}} ""
+                rename_index_index3 rename_index_table {self._default_cluster()} {{f2}} ""
+
+                >[version<11400] SHOW INDEXES ON rename_index_table;
                 rename_index_index2 rename_index_table {self._default_cluster()} {{f2}}
                 rename_index_index3 rename_index_table {self._default_cluster()} {{f2}}
 

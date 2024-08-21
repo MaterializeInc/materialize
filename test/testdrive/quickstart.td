@@ -21,15 +21,15 @@
   FOR ALL TABLES
 
 > SHOW SOURCES
-name                   type            cluster
+name                   type            cluster                comment
 --------------------------------------------------------------------------
-accounts               subsource       quickstart_tutorial
-bids                   subsource       quickstart_tutorial
-auction_house          load-generator  quickstart_tutorial
-auction_house_progress progress        <null>
-auctions               subsource       quickstart_tutorial
-organizations          subsource       quickstart_tutorial
-users                  subsource       quickstart_tutorial
+accounts               subsource       quickstart_tutorial    ""
+bids                   subsource       quickstart_tutorial    ""
+auction_house          load-generator  quickstart_tutorial    ""
+auction_house_progress progress        <null>                 ""
+auctions               subsource       quickstart_tutorial    ""
+organizations          subsource       quickstart_tutorial    ""
+users                  subsource       quickstart_tutorial    ""
 
 > SELECT id, seller, item FROM auctions WHERE id = 1
 1 1824 "Best Pizza in Town"

@@ -57,7 +57,13 @@ class SwapSchema(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW SCHEMAS LIKE 'swap_me%';
+                >[version>=11400] SHOW SCHEMAS LIKE 'swap_me%';
+                swap_me1 ""
+                swap_me2 ""
+                swap_me3 ""
+                swap_me4 ""
+
+                >[version<11400] SHOW SCHEMAS LIKE 'swap_me%';
                 swap_me1
                 swap_me2
                 swap_me3

@@ -26,14 +26,14 @@ $ kafka-ingest topic=request-log format=bytes
   FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -'
 
 > SHOW COLUMNS FROM regex_source
-name               nullable  type
----------------------------------
-ip                 true      text
-ts                 true      text
-path               true      text
-search_kw          true      text
-product_detail_id  true      text
-code               true      text
+name               nullable  type  comment
+------------------------------------------
+ip                 true      text  ""
+ts                 true      text  ""
+path               true      text  ""
+search_kw          true      text  ""
+product_detail_id  true      text  ""
+code               true      text  ""
 
 > SELECT * FROM regex_source
 ip            ts                      path                                           search_kw           product_detail_id  code
@@ -54,14 +54,14 @@ helper+ins+hennaed
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
 
 > SHOW COLUMNS FROM regex_source_named_cols
-name               nullable  type
----------------------------------
-ip                 true      text
-ts                 true      text
-path               true      text
-search_kw          true      text
-product_detail_id  true      text
-code               true      text
+name               nullable  type  comment
+------------------------------------------
+ip                 true      text  ""
+ts                 true      text  ""
+path               true      text  ""
+search_kw          true      text  ""
+product_detail_id  true      text  ""
+code               true      text  ""
 
 # verify metadata column renaming
 > CREATE CLUSTER regex_source_renamed_cols_cluster SIZE '${arg.default-storage-size}';
@@ -71,14 +71,14 @@ code               true      text
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
 
 > SHOW COLUMNS FROM regex_source_renamed_cols
-name               nullable  type
----------------------------------
-ip                 true      text
-ts                 true      text
-path               true      text
-search_kw          true      text
-product_detail_id  true      text
-code               true      text
+name               nullable  type  comment
+------------------------------------------
+ip                 true      text  ""
+ts                 true      text  ""
+path               true      text  ""
+search_kw          true      text  ""
+product_detail_id  true      text  ""
+code               true      text  ""
 
 > SELECT * FROM regex_source_named_cols
 ip            ts                      path                                           search_kw           product_detail_id  code

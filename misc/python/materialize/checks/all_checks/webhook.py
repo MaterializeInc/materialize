@@ -96,15 +96,25 @@ class Webhook(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW COLUMNS FROM webhook_text
+                >[version<11400] SHOW COLUMNS FROM webhook_text
                 body false text
 
-                > SHOW COLUMNS FROM webhook_json
+                >[version>=11400] SHOW COLUMNS FROM webhook_text
+                body false text ""
+
+                >[version<11400] SHOW COLUMNS FROM webhook_json
                 body false jsonb
                 headers false map
 
-                > SHOW COLUMNS FROM webhook_bytes
+                >[version>=11400] SHOW COLUMNS FROM webhook_json
+                body false jsonb ""
+                headers false map ""
+
+                >[version<11400] SHOW COLUMNS FROM webhook_bytes
                 body false bytea
+
+                >[version>=11400] SHOW COLUMNS FROM webhook_bytes
+                body false bytea ""
 
                 > SELECT * FROM webhook_text
                 fooä

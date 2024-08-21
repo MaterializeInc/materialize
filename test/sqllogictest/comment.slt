@@ -26,6 +26,11 @@ SELECT obj_description((SELECT oid FROM mz_tables WHERE name = 'a'), 'pg_class')
 ----
 NULL
 
+query TTT
+SHOW OBJECTS
+----
+a  table  (empty)
+
 statement ok
 COMMENT ON TABLE a IS 'foo_table';
 
@@ -38,6 +43,11 @@ query IT
 SELECT objsubid, description FROM pg_description;
 ----
 0  foo_table
+
+query TTT
+SHOW OBJECTS
+----
+a  table  foo_table
 
 query TT
 SELECT obj_description((SELECT oid FROM mz_tables WHERE name = 'a'), 'pg_class'),
@@ -70,6 +80,18 @@ SELECT col_description((SELECT oid FROM mz_tables WHERE name = 'a'), 1)
 ----
 NULL
 
+query TT
+SHOW TABLES;
+----
+a foo_table
+
+query TT
+SELECT name, comment FROM (SHOW COLUMNS FROM a);
+----
+x (empty)
+z (empty)
+y load_bearing
+
 statement ok
 CREATE TABLE b ( ts timestamptz );
 
@@ -93,6 +115,12 @@ SELECT objsubid, description FROM pg_description;
 statement ok
 COMMENT ON TABLE b IS 'foo_table';
 
+query TT
+SHOW TABLES;
+----
+a foo_table
+b foo_table
+
 statement ok
 DROP TABLE a;
 
@@ -110,6 +138,11 @@ SELECT objsubid, description FROM pg_description;
 
 statement ok
 COMMENT ON TABLE b IS NULL
+
+query TT
+SHOW TABLES;
+----
+b (empty)
 
 statement ok
 COMMENT ON COLUMN b.ts IS NULL
@@ -133,6 +166,11 @@ CREATE INDEX b_idx ON b (ts);
 
 statement ok
 COMMENT ON INDEX b_idx IS 'speed_up';
+
+query TT
+SELECT name, comment FROM (SHOW INDEXES);
+----
+b_idx speed_up
 
 statement ok
 CREATE VIEW c (col_1, col_2) AS VALUES ('a', 'b');
@@ -163,6 +201,17 @@ DROP TABLE b CASCADE;
 statement ok
 COMMENT ON COLUMN c.col_1 IS 'this_works';
 
+query TT
+SELECT name, comment FROM (SHOW VIEWS);
+----
+c this_is_a_view
+
+query TT
+SELECT name, comment FROM (SHOW COLUMNS FROM c);
+----
+col_2 (empty)
+col_1 this_works
+
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
@@ -184,6 +233,16 @@ COMMENT ON COLUMN mv.x IS 'comment_mat_view_col';
 statement ok
 COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
 
+query TT
+SELECT name, comment FROM (SHOW MATERIALIZED VIEWS);
+----
+mv mat_foo
+
+query TT
+SELECT name, comment FROM (SHOW COLUMNS FROM mv);
+----
+x comment_mat_view_col
+
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
@@ -199,6 +258,12 @@ SELECT objsubid, description FROM pg_description;
 1  this_works
 0  this_is_a_view
 1  comment_mat_view_col
+
+query TTT
+SHOW OBJECTS
+----
+c  view  this_is_a_view
+mv  materialized-view  mat_foo
 
 query T
 SELECT obj_description((SELECT oid FROM mz_views WHERE name = 'c'), 'pg_class')
@@ -238,6 +303,17 @@ CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
 
 statement ok
 COMMENT ON CLUSTER comment_cluster IS 'careful_now';
+
+query TT
+SELECT name, comment FROM (SHOW CLUSTERS);
+----
+mz_probe  (empty)
+mz_system  (empty)
+mz_support  (empty)
+quickstart  (empty)
+mz_analytics  (empty)
+mz_catalog_server  (empty)
+comment_cluster  careful_now
 
 statement ok
 COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
@@ -283,6 +359,16 @@ SELECT objsubid, description FROM pg_description;
 1  json_blob
 0  all_the_data
 
+query TT
+SELECT name, comment FROM (SHOW SOURCES);
+----
+my_webhook  all_the_data
+
+query TTT
+SHOW OBJECTS
+----
+my_webhook  source  all_the_data
+
 statement ok
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
@@ -300,6 +386,13 @@ COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
 
 statement error cannot be depended upon
 COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
+
+query TT
+SHOW TYPES;
+----
+custom_map_type  custom_map_type_comment
+custom_type  (empty)
+int4_list  supercool_list
 
 statement ok
 CREATE TYPE custom_list_type AS LIST (ELEMENT TYPE = custom_type)
@@ -326,6 +419,15 @@ cluster  NULL   careful_now
 type     NULL   custom_type_comment
 type     NULL   custom_map_type_comment
 type     NULL   custom_list_type_comment
+
+query TTT
+SHOW OBJECTS
+----
+custom_list_type  type  custom_list_type_comment
+custom_map_type  type  custom_map_type_comment
+custom_type  type  custom_type_comment
+int4_list  type  supercool_list
+my_webhook  source  all_the_data
 
 statement ok
 DROP TYPE custom_map_type;
@@ -359,6 +461,13 @@ SELECT objsubid, description FROM pg_description;
 0 custom_type_comment
 1 custom_type_x_comment
 2 custom_type_y_comment
+
+query TTT
+SHOW OBJECTS
+----
+custom_type  type  custom_type_comment
+int4_list  type  supercool_list
+my_webhook  source  all_the_data
 
 query TT
 SELECT obj_description((SELECT oid FROM mz_types WHERE name = 'custom_type'), 'pg_type'),
@@ -408,6 +517,13 @@ COMMENT ON DATABASE comment_on_db IS 'this_is_my_db';
 
 statement ok
 COMMENT ON SCHEMA comment_on_schema IS 'this_is_my_schema';
+
+query TTT
+SHOW OBJECTS
+----
+custom_type  type  custom_type_comment
+int4_list  type  supercool_list
+my_secret  secret  supersecret
 
 statement ok
 DROP SECRET my_secret;

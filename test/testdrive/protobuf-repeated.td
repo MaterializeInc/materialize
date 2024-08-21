@@ -53,17 +53,17 @@ $ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb messag
   FORMAT PROTOBUF MESSAGE '.Repeated' USING SCHEMA '${repeated-schema}'
 
 > SHOW COLUMNS FROM repeated
-name       nullable  type
-----------------------------
-bool       false     list
-int32      false     list
-int64      false     list
-float      false     list
-double     false     list
-bytes      false     list
-string     false     list
-enum       false     list
-message    false     list
+name       nullable  type  comment
+----------------------------------
+bool       false     list  ""
+int32      false     list  ""
+int64      false     list  ""
+float      false     list  ""
+double     false     list  ""
+bytes      false     list  ""
+string     false     list  ""
+enum       false     list  ""
+message    false     list  ""
 
 > SELECT bool::text, int32::text, int64::text, float::text, double::text, string::text, bytes::text, enum::text, message::text FROM repeated
 bool    int32  int64  float   double   string     bytes                enum           message

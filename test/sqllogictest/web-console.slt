@@ -230,16 +230,16 @@ DROP CLUSTER foo CASCADE;
 
 # ---- Schema.tsx
 
-query T
+query TT
 SHOW VIEWS;
 ----
 
-query T
+query TT
 SHOW SOURCES;
 ----
 
 
-query T
+query TT
 SHOW TABLES;
 ----
 

@@ -15,84 +15,84 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 > SHOW TYPES
 
 > SHOW TYPES FROM pg_catalog
-name
----------------------
-_aclitem
-_bool
-_bpchar
-_bytea
-_char
-_date
-_daterange
-_float4
-_float8
-_int2
-_int2vector
-_int4
-_int4range
-_int8
-_int8range
-_interval
-_jsonb
-_name
-_numeric
-_numrange
-_oid
-_record
-_regclass
-_regproc
-_regtype
-_text
-_time
-_timestamp
-_timestamptz
-_tsrange
-_tstzrange
-_uuid
-_varchar
-aclitem
-any
-anyarray
-anycompatible
-anycompatiblearray
-anycompatiblenonarray
-anycompatiblerange
-anyelement
-anynonarray
-anyrange
-bool
-bpchar
-bytea
-char
-date
-daterange
-float4
-float8
-int2
-int2vector
-int4
-int4range
-int8
-int8range
-internal
-interval
-jsonb
-name
-numeric
-numrange
-oid
-regclass
-regproc
-regtype
-record
-text
-time
-timestamp
-timestamptz
-tsrange
-tstzrange
-uuid
-varchar
+name                   comment
+------------------------------
+_aclitem               ""
+_bool                  ""
+_bpchar                ""
+_bytea                 ""
+_char                  ""
+_date                  ""
+_daterange             ""
+_float4                ""
+_float8                ""
+_int2                  ""
+_int2vector            ""
+_int4                  ""
+_int4range             ""
+_int8                  ""
+_int8range             ""
+_interval              ""
+_jsonb                 ""
+_name                  ""
+_numeric               ""
+_numrange              ""
+_oid                   ""
+_record                ""
+_regclass              ""
+_regproc               ""
+_regtype               ""
+_text                  ""
+_time                  ""
+_timestamp             ""
+_timestamptz           ""
+_tsrange               ""
+_tstzrange             ""
+_uuid                  ""
+_varchar               ""
+aclitem                ""
+any                    ""
+anyarray               ""
+anycompatible          ""
+anycompatiblearray     ""
+anycompatiblenonarray  ""
+anycompatiblerange     ""
+anyelement             ""
+anynonarray            ""
+anyrange               ""
+bool                   ""
+bpchar                 ""
+bytea                  ""
+char                   ""
+date                   ""
+daterange              ""
+float4                 ""
+float8                 ""
+int2                   ""
+int2vector             ""
+int4                   ""
+int4range              ""
+int8                   ""
+int8range              ""
+internal               ""
+interval               ""
+jsonb                  ""
+name                   ""
+numeric                ""
+numrange               ""
+oid                    ""
+regclass               ""
+regproc                ""
+regtype                ""
+record                 ""
+text                   ""
+time                   ""
+timestamp              ""
+timestamptz            ""
+tsrange                ""
+tstzrange              ""
+uuid                   ""
+varchar                ""
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_tables = 10000
@@ -166,13 +166,13 @@ ALTER SYSTEM SET max_tables = 10000
 > CREATE TYPE int_record_record_c AS (j1 int, j2 int_record_c);
 
 > SHOW TYPES
-name
--------------------
-int_list_c
-int_map_c
-int_list_list_c
-int_record_c
-int_record_record_c
+name                 comment
+----------------------------
+int_list_c           ""
+int_map_c            ""
+int_list_list_c      ""
+int_record_c         ""
+int_record_record_c  ""
 
 # Allow creating tables using custom types
 > CREATE TABLE custom_types (a int_list_c, b int_map_c);
@@ -197,11 +197,11 @@ int_record_record_c
 > CREATE TYPE other.other_record_c AS (a int, b text);
 
 > SHOW TYPES FROM other;
-name
-----------------
-other_int_list_c
-other_int_map_c
-other_record_c
+name              comment
+-------------------------
+other_int_list_c  ""
+other_int_map_c   ""
+other_record_c    ""
 
 > CREATE TABLE custom_types_4 (a other.other_int_list_c, b other.other_int_map_c);
 

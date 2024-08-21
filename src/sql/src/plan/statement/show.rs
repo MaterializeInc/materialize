@@ -237,8 +237,8 @@ pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    let query = "SELECT name, comment FROM mz_internal.mz_show_databases".to_string();
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_schemas<'a>(
@@ -257,20 +257,19 @@ pub fn show_schemas<'a>(
         }
     };
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_schemas
+        "SELECT name, comment
+        FROM mz_internal.mz_show_schemas
         WHERE database_id IS NULL OR database_id = '{database_id}'",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_roles<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT name FROM mz_catalog.mz_roles WHERE id NOT LIKE 's%' AND id NOT LIKE 'g%'"
-        .to_string();
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    let query = "SELECT name, comment FROM mz_internal.mz_show_roles".to_string();
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_objects<'a>(
@@ -340,11 +339,11 @@ fn show_connections<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name, type
-        FROM mz_catalog.mz_connections
+        "SELECT name, type, comment
+        FROM mz_internal.mz_show_connections connections
         WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "comment"]))
 }
 
 fn show_tables<'a>(
@@ -354,11 +353,11 @@ fn show_tables<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_tables
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, comment
+        FROM mz_internal.mz_show_tables tables
+        WHERE tables.schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 fn show_sources<'a>(
@@ -376,11 +375,17 @@ fn show_sources<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, cluster
+        "SELECT name, type, cluster, comment
         FROM mz_internal.mz_show_sources
         WHERE {where_clause}"
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "type", "cluster", "comment"]),
+    )
 }
 
 fn show_subsources<'a>(
@@ -437,11 +442,11 @@ fn show_views<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_views
+        "SELECT name, comment
+        FROM mz_internal.mz_show_views
         WHERE schema_id = '{schema_spec}'"
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 fn show_materialized_views<'a>(
@@ -459,12 +464,18 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT name, cluster
-         FROM mz_internal.mz_show_materialized_views
-         WHERE {where_clause}"
+        "SELECT name, cluster, comment
+        FROM mz_internal.mz_show_materialized_views
+        WHERE {where_clause}"
     );
 
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "cluster", "comment"]),
+    )
 }
 
 fn show_sinks<'a>(
@@ -487,11 +498,17 @@ fn show_sinks<'a>(
     }
 
     let query = format!(
-        "SELECT name, type, cluster
-        FROM mz_internal.mz_show_sinks
+        "SELECT name, type, cluster, comment
+        FROM mz_internal.mz_show_sinks sinks
         WHERE {where_clause}"
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "cluster"]))
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "type", "cluster", "comment"]),
+    )
 }
 
 fn show_types<'a>(
@@ -501,11 +518,11 @@ fn show_types<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_types
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, comment
+        FROM mz_internal.mz_show_types
+        WHERE schema_id = '{schema_spec}'"
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 fn show_all_objects<'a>(
@@ -515,11 +532,11 @@ fn show_all_objects<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name, type
-        FROM mz_catalog.mz_objects
-        WHERE schema_id = '{schema_spec}'",
+        "SELECT name, type, comment
+         FROM mz_internal.mz_show_all_objects
+         WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "type"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "comment"]))
 }
 
 pub fn show_indexes<'a>(
@@ -563,7 +580,7 @@ pub fn show_indexes<'a>(
     };
 
     let query = format!(
-        "SELECT name, on, cluster, key
+        "SELECT name, on, cluster, key, comment
         FROM mz_internal.mz_show_indexes
         WHERE {}",
         itertools::join(query_filter.iter(), " AND ")
@@ -574,7 +591,7 @@ pub fn show_indexes<'a>(
         query,
         filter,
         None,
-        Some(&["name", "on", "cluster", "key"]),
+        Some(&["name", "on", "cluster", "key", "comment"]),
     )
 }
 
@@ -601,13 +618,9 @@ pub fn show_columns<'a>(
     }
 
     let query = format!(
-        "SELECT
-            mz_columns.name,
-            mz_columns.nullable,
-            mz_columns.type,
-            mz_columns.position
-         FROM mz_catalog.mz_columns
-         WHERE mz_columns.id = '{}'",
+        "SELECT name, nullable, type, position, comment
+         FROM mz_internal.mz_show_columns columns
+         WHERE columns.id = '{}'",
         entry.id(),
     );
     let (show_select, new_resolved_ids) = ShowSelect::new_with_resolved_ids(
@@ -615,7 +628,7 @@ pub fn show_columns<'a>(
         query,
         filter,
         Some("position"),
-        Some(&["name", "nullable", "type"]),
+        Some(&["name", "nullable", "type", "comment"]),
     )?;
     Ok(ShowColumnsSelect {
         id: entry.id(),
@@ -631,32 +644,32 @@ pub fn show_clusters<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "
-SELECT
-    mc.name,
-    pg_catalog.string_agg(mcr.name || ' (' || mcr.size || ')', ', ' ORDER BY mcr.name)
-        AS replicas
-FROM
-    mz_catalog.mz_clusters mc
-        LEFT JOIN mz_catalog.mz_cluster_replicas mcr ON mc.id = mcr.cluster_id
-GROUP BY mc.name"
-        .to_string();
-    ShowSelect::new(scx, query, filter, None, Some(&["name", "replicas"]))
+    let query = "SELECT name, replicas, comment FROM mz_internal.mz_show_clusters".to_string();
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "replicas", "comment"]),
+    )
 }
 
 pub fn show_cluster_replicas<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT cluster, replica, size, ready FROM mz_internal.mz_show_cluster_replicas"
-        .to_string();
+    let query = "
+    SELECT cluster, replica, size, ready, comment
+    FROM mz_internal.mz_show_cluster_replicas
+    "
+    .to_string();
 
     ShowSelect::new(
         scx,
         query,
         filter,
         None,
-        Some(&["cluster", "replica", "size", "ready"]),
+        Some(&["cluster", "replica", "size", "ready", "comment"]),
     )
 }
 
@@ -668,12 +681,12 @@ pub fn show_secrets<'a>(
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(
-        "SELECT name
-        FROM mz_catalog.mz_secrets
+        "SELECT name, comment
+        FROM mz_internal.mz_show_secrets
         WHERE schema_id = '{schema_spec}'",
     );
 
-    ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
 pub fn show_privileges<'a>(

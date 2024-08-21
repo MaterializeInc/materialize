@@ -46,18 +46,18 @@ ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
 statement ok
 CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
-query TT
+query TTT
 SHOW CONNECTIONS
 ----
-c   kafka
+c   kafka   (empty)
 
 statement ok
 ALTER CONNECTION c RENAME TO d;
 
-query TT
+query TTT
 SHOW CONNECTIONS
 ----
-d   kafka
+d   kafka   (empty)
 
 statement ok
 CREATE CLUSTER other_cluster SIZE '1', REPLICATION FACTOR 0

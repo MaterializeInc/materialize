@@ -76,10 +76,10 @@ EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS TEXT FOR
 SELECT * FROM mz_views;
 ----
 Explained Query:
-  ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+  ReadIndex on=mz_views mz_views_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_catalog.mz_show_views_ind (*** full scan ***)
+  - mz_catalog.mz_views_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 

@@ -37,8 +37,9 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > SHOW INDEXES ON data
 
 > SHOW INDEXES ON data
-name    on  cluster key
+name    on  cluster  key  comment
 --------------------------------------------------------------------------
+
 > SET CLUSTER TO quickstart
 
 # Sources can have default indexes added
@@ -46,9 +47,10 @@ name    on  cluster key
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data
-name                on      cluster             key
+name                on      cluster             key    comment
 -------------------------------------------------------------------------------------------
-data_primary_idx    data    <VARIABLE_OUTPUT>   {a,b}
+data_primary_idx    data    <VARIABLE_OUTPUT>   {a,b}  ""
+
 > SET CLUSTER TO quickstart
 
 > SELECT index_position FROM mz_index_columns WHERE index_id LIKE '%u%'
@@ -70,8 +72,9 @@ position         name
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name    on  cluster key
+name    on  cluster  key  comment
 --------------------------------------------------------------------------
+
 > SET CLUSTER TO quickstart
 
 # Views can have default indexes added
@@ -79,9 +82,9 @@ name    on  cluster key
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name                    on          cluster             key
+name                    on          cluster             key     comment
 ---------------------------------------------------------------------------------------------------
-data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
+data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}   ""
 > SET CLUSTER TO quickstart
 
 # Materialized views do not have indexes automatically created
@@ -90,8 +93,9 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON matv
-name    on  cluster key
+name    on  cluster  key  comment
 --------------------------------------------------------------------------
+
 > SET CLUSTER TO quickstart
 
 # Materialized views can have default indexes added
@@ -99,9 +103,10 @@ name    on  cluster key
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON matv
-name                on      cluster             key
+name                on      cluster             key    comment
 --------------------------------------------------------------------------------------------
-matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}
+matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}    ""
+
 > SET CLUSTER TO quickstart
 
 # IF NOT EXISTS prevents adding multiple default indexes
@@ -109,9 +114,10 @@ matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name                    on          cluster             key
+name                    on          cluster             key    comment
 -------------------------------------------------------------------------------------------------
-data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
+data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}  ""
+
 > SET CLUSTER TO quickstart
 
 # Additional default indexes have the same structure as the first
@@ -119,10 +125,11 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON matv
-name                on      cluster             key
+name                on      cluster             key    comment
 ------------------------------------------------------------------------------------------------
-matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}
-matv_primary_idx1   matv    <VARIABLE_OUTPUT>   {b}
+matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}    ""
+matv_primary_idx1   matv    <VARIABLE_OUTPUT>   {b}    ""
+
 > SET CLUSTER TO quickstart
 
 # Default indexes can be named
@@ -130,10 +137,11 @@ matv_primary_idx1   matv    <VARIABLE_OUTPUT>   {b}
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name                    on          cluster             key
+name                    on          cluster             key      comment
 -----------------------------------------------------------------------------------------------
-data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
-named_idx               data_view   <VARIABLE_OUTPUT>   {a,b}
+data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}    ""
+named_idx               data_view   <VARIABLE_OUTPUT>   {a,b}    ""
+
 > SET CLUSTER TO quickstart
 
 > DROP INDEX data_view_primary_idx
@@ -144,9 +152,10 @@ named_idx               data_view   <VARIABLE_OUTPUT>   {a,b}
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name            on          cluster             key
+name            on          cluster             key    comment
 -------------------------------------------------------------------------------------------
-data_view_a_idx data_view   <VARIABLE_OUTPUT>   {a}
+data_view_a_idx data_view   <VARIABLE_OUTPUT>   {a}    ""
+
 > SET CLUSTER TO quickstart
 
 > DROP INDEX data_view_a_idx
@@ -157,10 +166,10 @@ data_view_a_idx data_view   <VARIABLE_OUTPUT>   {a}
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name                    on          cluster             key
+name                    on          cluster             key          comment
 -----------------------------------------------------------------------------------------------
-data_view_b_a_idx       data_view   <VARIABLE_OUTPUT>   {b,a}
-data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
+data_view_b_a_idx       data_view   <VARIABLE_OUTPUT>   {b,a}        ""
+data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"  ""
 > SET CLUSTER TO quickstart
 
 > DROP INDEX data_view_b_a_idx
@@ -171,9 +180,10 @@ data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name        on          cluster             key
+name        on          cluster             key          comment
 ---------------------------------------------------------------------------------------------
-named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
+named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"  ""
+
 > SET CLUSTER TO quickstart
 
 > DROP INDEX named_idx
@@ -184,9 +194,10 @@ named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
-name                    on          cluster             key
+name                    on          cluster             key          comment
 ------------------------------------------------------------------------------------------------------
-data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
+data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"  ""
+
 > SET CLUSTER TO quickstart
 
 > SHOW CREATE INDEX data_view_primary_idx
@@ -204,15 +215,15 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
 > CREATE INDEX ON foo (substr(z, 3))
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON foo
-foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
-foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
-foo_expr_idx1   foo <VARIABLE_OUTPUT>   "{pg_catalog.substr(z, 3)}"
+foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}                      ""
+foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"                    ""
+foo_expr_idx1   foo <VARIABLE_OUTPUT>   "{pg_catalog.substr(z, 3)}"  ""
 > SHOW INDEXES ON foo WHERE name = 'noexist'
 > SHOW INDEXES ON foo WHERE name = 'foo_expr_idx'
-foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
+foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"    ""
 
 > SHOW INDEXES ON foo LIKE 'foo_primary%'
-foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
+foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}    ""
 
 ! SHOW INDEXES ON nonexistent
 contains:unknown catalog item 'nonexistent'
@@ -226,10 +237,10 @@ contains:cannot show indexes on materialize.public.foo_primary_idx because it is
 > CREATE DEFAULT INDEX IN CLUSTER clstr ON foo;
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES IN CLUSTER clstr WHERE on = 'foo'
-foo_primary_idx1    foo clstr   {a,b,z}
+foo_primary_idx1    foo clstr   {a,b,z}    ""
 
 > SHOW INDEXES FROM public WHERE name = 'foo_primary_idx1'
-foo_primary_idx1    foo clstr   {a,b,z}
+foo_primary_idx1    foo clstr   {a,b,z}    ""
 
 > SET CLUSTER TO quickstart
 > DROP TABLE foo CASCADE
@@ -250,7 +261,7 @@ contains:unknown schema 'nonexistent'
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES
-bar_ind bar <VARIABLE_OUTPUT> {}
+bar_ind bar <VARIABLE_OUTPUT> {}  ""
 > SET CLUSTER TO quickstart
 
 > DROP TABLE bar CASCADE
@@ -260,7 +271,7 @@ bar_ind bar <VARIABLE_OUTPUT> {}
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON foo.bar
-bar_ind bar <VARIABLE_OUTPUT> {a}
+bar_ind bar <VARIABLE_OUTPUT> {a}  ""
 > SET CLUSTER TO quickstart
 
 > DROP CLUSTER clstr CASCADE;
@@ -269,82 +280,93 @@ $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-inter
 ALTER SYSTEM SET enable_rbac_checks TO true
 
 > SHOW INDEXES IN CLUSTER mz_catalog_server
-mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_worker                   mz_catalog_server    {id,worker_id}
-mz_arrangement_batches_raw_s2_primary_idx                   mz_arrangement_batches_raw                   mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_records_raw_s2_primary_idx                   mz_arrangement_records_raw                   mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_sharing_raw_s2_primary_idx                   mz_arrangement_sharing_raw                   mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_heap_capacity_raw_s2_primary_idx             mz_arrangement_heap_capacity_raw             mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_heap_allocations_raw_s2_primary_idx          mz_arrangement_heap_allocations_raw          mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_heap_size_raw_s2_primary_idx                 mz_arrangement_heap_size_raw                 mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_batcher_allocations_raw_s2_primary_idx       mz_arrangement_batcher_allocations_raw       mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_batcher_capacity_raw_s2_primary_idx          mz_arrangement_batcher_capacity_raw          mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_batcher_records_raw_s2_primary_idx           mz_arrangement_batcher_records_raw           mz_catalog_server    {operator_id,worker_id}
-mz_arrangement_batcher_size_raw_s2_primary_idx              mz_arrangement_batcher_size_raw              mz_catalog_server    {operator_id,worker_id}
-mz_cluster_replica_history_ind                              mz_cluster_replica_history                   mz_catalog_server    {dropped_at}
-mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_catalog_server    {replica_id}
-mz_cluster_replica_sizes_ind                                mz_cluster_replica_sizes                     mz_catalog_server    {size}
-mz_cluster_replica_statuses_ind                             mz_cluster_replica_statuses                  mz_catalog_server    {replica_id}
-mz_cluster_replicas_ind                                     mz_cluster_replicas                          mz_catalog_server    {id}
-mz_clusters_ind                                             mz_clusters                                  mz_catalog_server    {id}
-mz_compute_dependencies_ind                                 mz_compute_dependencies                      mz_catalog_server    {dependency_id}
-mz_compute_error_counts_raw_s2_primary_idx                  mz_compute_error_counts_raw                  mz_catalog_server    {export_id,worker_id}
-mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_catalog_server    {export_id,worker_id}
-mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_catalog_server    {export_id,worker_id}
-mz_compute_hydration_times_per_worker_s2_primary_idx        mz_compute_hydration_times_per_worker        mz_catalog_server    {export_id,worker_id}
-mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_catalog_server    {export_id,import_id,worker_id}
-mz_compute_operator_durations_histogram_raw_s2_primary_idx  mz_compute_operator_durations_histogram_raw  mz_catalog_server    {id,worker_id,duration_ns}
-mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}
-mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_catalog_server    {id,worker_id}
-mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_catalog_server    {address,port,worker_id,update_type,time}
-mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_catalog_server    {id,worker_id}
-mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_catalog_server    {worker_id,duration_ns}
-mz_frontiers_ind                                            mz_frontiers                                 mz_catalog_server    {object_id}
-mz_indexes_ind                                              mz_indexes                                   mz_catalog_server    {id}
-mz_kafka_sources_ind                                        mz_kafka_sources                             mz_catalog_server    {id}
-mz_materialized_views_ind                                   mz_materialized_views                        mz_catalog_server    {id}
-mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_catalog_server    {channel_id,from_worker_id,to_worker_id}
-mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_catalog_server    {channel_id,from_worker_id,to_worker_id}
-mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_catalog_server    {channel_id,from_worker_id,to_worker_id}
-mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_catalog_server    {channel_id,from_worker_id,to_worker_id}
-mz_object_dependencies_ind                                  mz_object_dependencies                       mz_catalog_server    {object_id}
-mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_catalog_server    {id}
-mz_object_transitive_dependencies_ind                       mz_object_transitive_dependencies            mz_catalog_server    {object_id}
-mz_notices_ind                                              mz_notices                                   mz_catalog_server    {id}
-mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_catalog_server    {worker_id,type,duration_ns}
-mz_recent_activity_log_thinned_ind                          mz_recent_activity_log_thinned               mz_catalog_server    {sql_hash}
-mz_recent_storage_usage_ind                                 mz_recent_storage_usage                      mz_catalog_server    {object_id}
-mz_roles_ind                                                mz_roles                                     mz_catalog_server    {id}
-mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_catalog_server    {id,worker_id}
-mz_scheduling_parks_histogram_raw_s2_primary_idx            mz_scheduling_parks_histogram_raw            mz_catalog_server    {worker_id,slept_for_ns,requested_ns}
-mz_show_all_objects_ind                                     mz_objects                                   mz_catalog_server    {schema_id}
-mz_show_cluster_replicas_ind                                mz_show_cluster_replicas                     mz_catalog_server    {cluster}
-mz_show_clusters_ind                                        mz_clusters                                  mz_catalog_server    {name}
-mz_show_columns_ind                                         mz_columns                                   mz_catalog_server    {id}
-mz_show_connections_ind                                     mz_connections                               mz_catalog_server    {schema_id}
-mz_show_databases_ind                                       mz_databases                                 mz_catalog_server    {name}
-mz_show_indexes_ind                                         mz_show_indexes                              mz_catalog_server    {schema_id}
-mz_show_materialized_views_ind                              mz_show_materialized_views                   mz_catalog_server    {schema_id}
-mz_show_schemas_ind                                         mz_schemas                                   mz_catalog_server    {database_id}
-mz_show_secrets_ind                                         mz_secrets                                   mz_catalog_server    {schema_id}
-mz_show_sinks_ind                                           mz_show_sinks                                mz_catalog_server    {schema_id}
-mz_show_sources_ind                                         mz_show_sources                              mz_catalog_server    {schema_id}
-mz_show_tables_ind                                          mz_tables                                    mz_catalog_server    {schema_id}
-mz_show_types_ind                                           mz_types                                     mz_catalog_server    {schema_id}
-mz_show_views_ind                                           mz_views                                     mz_catalog_server    {schema_id}
-mz_sink_statistics_ind                                      mz_sink_statistics                           mz_catalog_server    {id}
-mz_sink_status_history_ind                                  mz_sink_status_history                       mz_catalog_server    {sink_id}
-mz_source_statistics_with_history_ind                       mz_source_statistics_with_history            mz_catalog_server    {id}
-mz_sink_statuses_ind                                        mz_sink_statuses                             mz_catalog_server    {id}
-mz_sinks_ind                                                mz_sinks                                     mz_catalog_server    {id}
-mz_source_statistics_ind                                    mz_source_statistics                         mz_catalog_server    {id}
-mz_source_status_history_ind                                mz_source_status_history                     mz_catalog_server    {source_id}
-mz_source_statuses_ind                                      mz_source_statuses                           mz_catalog_server    {id}
-mz_sources_ind                                              mz_sources                                   mz_catalog_server    {id}
-mz_recent_sql_text_ind                                      mz_recent_sql_text                           mz_catalog_server    {sql_hash}
-mz_webhook_sources_ind                                      mz_webhook_sources                           mz_catalog_server    {id}
-pg_attrdef_all_databases_ind                                pg_attrdef_all_databases                     mz_catalog_server    {oid,adrelid,adnum,adbin,adsrc}
-pg_attribute_all_databases_ind                              pg_attribute_all_databases                   mz_catalog_server    {attrelid,attname,atttypid,attlen,attnum,atttypmod,attnotnull,atthasdef,attidentity,attgenerated,attisdropped,attcollation,database_name,pg_type_database_name}
-pg_class_all_databases_ind                                  pg_class_all_databases                       mz_catalog_server    {relname}
-pg_description_all_databases_ind                            pg_description_all_databases                 mz_catalog_server    {objoid,classoid,objsubid,description,oid_database_name,class_database_name}
-pg_namespace_all_databases_ind                              pg_namespace_all_databases                   mz_catalog_server    {nspname}
-pg_type_all_databases_ind                                   pg_type_all_databases                        mz_catalog_server    {oid}
+mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_worker                   mz_catalog_server    {id,worker_id}                              ""
+mz_arrangement_batches_raw_s2_primary_idx                   mz_arrangement_batches_raw                   mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_records_raw_s2_primary_idx                   mz_arrangement_records_raw                   mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_sharing_raw_s2_primary_idx                   mz_arrangement_sharing_raw                   mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_heap_capacity_raw_s2_primary_idx             mz_arrangement_heap_capacity_raw             mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_heap_allocations_raw_s2_primary_idx          mz_arrangement_heap_allocations_raw          mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_heap_size_raw_s2_primary_idx                 mz_arrangement_heap_size_raw                 mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_batcher_allocations_raw_s2_primary_idx       mz_arrangement_batcher_allocations_raw       mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_batcher_capacity_raw_s2_primary_idx          mz_arrangement_batcher_capacity_raw          mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_batcher_records_raw_s2_primary_idx           mz_arrangement_batcher_records_raw           mz_catalog_server    {operator_id,worker_id}                     ""
+mz_arrangement_batcher_size_raw_s2_primary_idx              mz_arrangement_batcher_size_raw              mz_catalog_server    {operator_id,worker_id}                     ""
+mz_cluster_replica_history_ind                              mz_cluster_replica_history                   mz_catalog_server    {dropped_at}                                ""
+mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_catalog_server    {replica_id}                                ""
+mz_cluster_replica_sizes_ind                                mz_cluster_replica_sizes                     mz_catalog_server    {size}                                      ""
+mz_cluster_replica_statuses_ind                             mz_cluster_replica_statuses                  mz_catalog_server    {replica_id}                                ""
+mz_cluster_replicas_ind                                     mz_cluster_replicas                          mz_catalog_server    {id}                                        ""
+mz_clusters_ind                                             mz_clusters                                  mz_catalog_server    {id}                                        ""
+mz_columns_ind                                              mz_columns                                   mz_catalog_server    {name}                                      ""
+mz_comments_ind                                             mz_comments                                  mz_catalog_server    {id}                                        ""
+mz_compute_dependencies_ind                                 mz_compute_dependencies                      mz_catalog_server    {dependency_id}                             ""
+mz_compute_error_counts_raw_s2_primary_idx                  mz_compute_error_counts_raw                  mz_catalog_server    {export_id,worker_id}                       ""
+mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_catalog_server    {export_id,worker_id}                       ""
+mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_catalog_server    {export_id,worker_id}                       ""
+mz_compute_hydration_times_per_worker_s2_primary_idx        mz_compute_hydration_times_per_worker        mz_catalog_server    {export_id,worker_id}                       ""
+mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_catalog_server    {export_id,import_id,worker_id}             ""
+mz_compute_operator_durations_histogram_raw_s2_primary_idx  mz_compute_operator_durations_histogram_raw  mz_catalog_server    {id,worker_id,duration_ns}                  ""
+mz_connections_ind                                          mz_connections                               mz_catalog_server    {schema_id}                                 ""
+mz_databases_ind                                            mz_databases                                 mz_catalog_server    {name}                                      ""
+mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}                              ""
+mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_catalog_server    {id,worker_id}                              ""
+mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_catalog_server    {address,port,worker_id,update_type,time}   ""
+mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_catalog_server    {id,worker_id}                              ""
+mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_catalog_server    {worker_id,duration_ns}                     ""
+mz_frontiers_ind                                            mz_frontiers                                 mz_catalog_server    {object_id}                                 ""
+mz_indexes_ind                                              mz_indexes                                   mz_catalog_server    {id}                                        ""
+mz_kafka_sources_ind                                        mz_kafka_sources                             mz_catalog_server    {id}                                        ""
+mz_materialized_views_ind                                   mz_materialized_views                        mz_catalog_server    {id}                                        ""
+mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
+mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
+mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
+mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
+mz_object_dependencies_ind                                  mz_object_dependencies                       mz_catalog_server    {object_id}                                 ""
+mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_catalog_server    {id}                                        ""
+mz_object_transitive_dependencies_ind                       mz_object_transitive_dependencies            mz_catalog_server    {object_id}                                 ""
+mz_objects_ind                                              mz_objects                                   mz_catalog_server    {schema_id}                                 ""
+mz_notices_ind                                              mz_notices                                   mz_catalog_server    {id}                                        ""
+mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_catalog_server    {worker_id,type,duration_ns}                ""
+mz_recent_activity_log_thinned_ind                          mz_recent_activity_log_thinned               mz_catalog_server    {sql_hash}                                  ""
+mz_recent_storage_usage_ind                                 mz_recent_storage_usage                      mz_catalog_server    {object_id}                                 ""
+mz_roles_ind                                                mz_roles                                     mz_catalog_server    {id}                                        ""
+mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_catalog_server    {id,worker_id}                              ""
+mz_scheduling_parks_histogram_raw_s2_primary_idx            mz_scheduling_parks_histogram_raw            mz_catalog_server    {worker_id,slept_for_ns,requested_ns}       ""
+mz_schemas_ind                                              mz_schemas                                   mz_catalog_server    {database_id}                               ""
+mz_secrets_ind                                              mz_secrets                                   mz_catalog_server    {name}                                      ""
+mz_show_all_objects_ind                                     mz_show_all_objects                          mz_catalog_server    {schema_id}                                 ""
+mz_show_cluster_replicas_ind                                mz_show_cluster_replicas                     mz_catalog_server    {cluster}                                   ""
+mz_show_clusters_ind                                        mz_show_clusters                             mz_catalog_server    {name}                                      ""
+mz_show_columns_ind                                         mz_show_columns                              mz_catalog_server    {id}                                        ""
+mz_show_connections_ind                                     mz_show_connections                          mz_catalog_server    {schema_id}                                 ""
+mz_show_databases_ind                                       mz_show_databases                            mz_catalog_server    {name}                                      ""
+mz_show_indexes_ind                                         mz_show_indexes                              mz_catalog_server    {schema_id}                                 ""
+mz_show_materialized_views_ind                              mz_show_materialized_views                   mz_catalog_server    {schema_id}                                 ""
+mz_show_roles_ind                                           mz_show_roles                                mz_catalog_server    {name}                                      ""
+mz_show_schemas_ind                                         mz_show_schemas                              mz_catalog_server    {database_id}                               ""
+mz_show_secrets_ind                                         mz_show_secrets                              mz_catalog_server    {schema_id}                                 ""
+mz_show_sinks_ind                                           mz_show_sinks                                mz_catalog_server    {schema_id}                                 ""
+mz_show_sources_ind                                         mz_show_sources                              mz_catalog_server    {schema_id}                                 ""
+mz_show_tables_ind                                          mz_show_tables                               mz_catalog_server    {schema_id}                                 ""
+mz_show_types_ind                                           mz_show_types                                mz_catalog_server    {schema_id}                                 ""
+mz_show_views_ind                                           mz_show_views                                mz_catalog_server    {schema_id}                                 ""
+mz_sink_statistics_ind                                      mz_sink_statistics                           mz_catalog_server    {id}                                        ""
+mz_sink_status_history_ind                                  mz_sink_status_history                       mz_catalog_server    {sink_id}                                   ""
+mz_source_statistics_with_history_ind                       mz_source_statistics_with_history            mz_catalog_server    {id}                                        ""
+mz_sink_statuses_ind                                        mz_sink_statuses                             mz_catalog_server    {id}                                        ""
+mz_sinks_ind                                                mz_sinks                                     mz_catalog_server    {id}                                        ""
+mz_source_statistics_ind                                    mz_source_statistics                         mz_catalog_server    {id}                                        ""
+mz_source_status_history_ind                                mz_source_status_history                     mz_catalog_server    {source_id}                                 ""
+mz_source_statuses_ind                                      mz_source_statuses                           mz_catalog_server    {id}                                        ""
+mz_sources_ind                                              mz_sources                                   mz_catalog_server    {id}                                        ""
+mz_tables_ind                                               mz_tables                                    mz_catalog_server    {schema_id}                                 ""
+mz_types_ind                                                mz_types                                     mz_catalog_server    {schema_id}                                 ""
+mz_recent_sql_text_ind                                      mz_recent_sql_text                           mz_catalog_server    {sql_hash}                                  ""
+mz_views_ind                                                mz_views                                     mz_catalog_server    {schema_id}                                 ""
+mz_webhook_sources_ind                                      mz_webhook_sources                           mz_catalog_server    {id}                                        ""
+pg_attrdef_all_databases_ind                                pg_attrdef_all_databases                     mz_catalog_server    {oid,adrelid,adnum,adbin,adsrc}             ""
+pg_attribute_all_databases_ind                              pg_attribute_all_databases                   mz_catalog_server    {attrelid,attname,atttypid,attlen,attnum,atttypmod,attnotnull,atthasdef,attidentity,attgenerated,attisdropped,attcollation,database_name,pg_type_database_name}    ""
+pg_class_all_databases_ind                                  pg_class_all_databases                       mz_catalog_server    {relname}                                   ""
+pg_description_all_databases_ind                            pg_description_all_databases                 mz_catalog_server    {objoid,classoid,objsubid,description,oid_database_name,class_database_name}    ""
+pg_namespace_all_databases_ind                              pg_namespace_all_databases                   mz_catalog_server    {nspname}                                   ""
+pg_type_all_databases_ind                                   pg_type_all_databases                        mz_catalog_server    {oid}                                       ""

@@ -38,14 +38,14 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > SHOW COLUMNS FROM unions
-name       nullable  type
--------------------------
-a          false     bigint
-b          true      bigint
-c1         true      bigint
-c2         true      text
-d1         true      bigint
-d2         true      text
+name       nullable  type    comment
+------------------------------------
+a          false     bigint  ""
+b          true      bigint  ""
+c1         true      bigint  ""
+c2         true      text    ""
+d1         true      bigint  ""
+d2         true      text    ""
 
 > SELECT * FROM unions
 a   b       c1      c2     d1      d2

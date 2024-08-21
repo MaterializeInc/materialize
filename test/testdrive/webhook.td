@@ -19,9 +19,9 @@ $ set-arg-default replicas=1
   BODY FORMAT TEXT;
 
 > SHOW COLUMNS FROM webhook_text;
-name   nullable  type
----------------------
-body   false     text
+name   nullable  type  comment
+------------------------------
+body   false     text  ""
 
 $ webhook-append database=materialize schema=public name=webhook_text
 a
@@ -73,10 +73,10 @@ d
   INCLUDE HEADERS;
 
 > SHOW COLUMNS FROM webhook_json_with_headers;
-name     nullable  type
-------------------------
-body     false     jsonb
-headers  false     map
+name     nullable  type   comment
+----------------------------------
+body     false     jsonb  ""
+headers  false     map    ""
 
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=test_drive
 {
@@ -137,9 +137,9 @@ d
   BODY FORMAT BYTES;
 
 > SHOW COLUMNS FROM webhook_bytes;
-name   nullable  type
----------------------
-body   false     bytea
+name   nullable  type   comment
+-------------------------------
+body   false     bytea  ""
 
 $ webhook-append database=materialize schema=public name=webhook_bytes
 和製漢語

@@ -42,7 +42,7 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestam
 {"f1": "E1" }
 
 > SHOW COLUMNS FROM resolution_enums
-f1 false text
+f1 false text ""
 
 > SELECT f1 FROM resolution_enums
 E1

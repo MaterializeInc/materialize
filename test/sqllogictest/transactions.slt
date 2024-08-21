@@ -160,10 +160,10 @@ BEGIN
 ----
 COMPLETE 0
 
-query T rowsort
+query TT rowsort
 SHOW TABLES
 ----
-t
+t (empty)
 
 simple
 COMMIT
@@ -753,7 +753,7 @@ COMMIT
 simple conn=c1
 SHOW tables
 ----
-t
+t,
 COMPLETE 1
 
 statement ok
@@ -792,8 +792,8 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,quickstart
-s_progress,progress,NULL
+s,load-generator,quickstart,
+s_progress,progress,NULL,
 COMPLETE 2
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.
@@ -919,7 +919,7 @@ EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
-      ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+      ReadIndex on=mz_views mz_views_ind=[*** full scan ***]
     ArrangeBy keys=[[]]
       Constant
         total_rows (diffs absed): 100
@@ -946,7 +946,7 @@ Explained Query:
           - (20)
 
 Used Indexes:
-  - mz_catalog.mz_show_views_ind (*** full scan ***)
+  - mz_catalog.mz_views_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -975,12 +975,45 @@ query T multiline
 EXPLAIN SHOW VIEWS
 ----
 Explained Query:
-  Project (#3)
-    Filter (#2 = "u3")
-      ReadStorage mz_catalog.mz_views
+  Return
+    Project (#0, #2)
+      Map (coalesce(#1, ""))
+        Union
+          Map (null)
+            Union
+              Negate
+                Project (#1)
+                  Join on=(#0 = #2) type=differential
+                    ArrangeBy keys=[[#0]]
+                      Project (#0, #3)
+                        Get l1
+                    ArrangeBy keys=[[#0]]
+                      Distinct project=[#0]
+                        Project (#0)
+                          Get l0
+              Project (#3)
+                Get l1
+          Project (#2, #3)
+            Filter (#1 = "u3")
+              Get l0
+  With
+    cte l1 =
+      Filter (#2 = "u3")
+        ReadStorage mz_catalog.mz_views
+    cte l0 =
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0, #2, #3)
+              ReadStorage mz_catalog.mz_views
+          ArrangeBy keys=[[#0]]
+            Project (#0, #3)
+              Filter (#2) IS NULL AND (#1 = "view")
+                ReadStorage mz_internal.mz_comments
 
 Source mz_catalog.mz_views
-  filter=((#2 = "u3"))
+Source mz_internal.mz_comments
+  filter=((#1 = "view") AND (#2) IS NULL)
 
 Target cluster: quickstart
 
@@ -1249,17 +1282,17 @@ query T
 SELECT name FROM mz_columns WHERE name = 'foobar';
 ----
 
-query TTT
+query TTTT
 SHOW COLUMNS IN mz_columns
 ----
-id  false  text
-name  false  text
-position  false  uint8
-nullable  false  boolean
-type  false  text
-default  true  text
-type_oid  false  oid
-type_mod  false  integer
+id  false  text  (empty)
+name  false  text  (empty)
+position  false  uint8  (empty)
+nullable  false  boolean  (empty)
+type  false  text  (empty)
+default  true  text  (empty)
+type_oid  false  oid  (empty)
+type_mod  false  integer  (empty)
 
 statement ok
 COMMIT;

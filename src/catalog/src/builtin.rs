@@ -6156,22 +6156,220 @@ WHERE false
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_SHOW_ALL_OBJECTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_all_objects",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_ALL_OBJECTS_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, object_type, comment
+        FROM mz_internal.mz_comments
+        WHERE object_sub_id IS NULL
+    )
+    SELECT schema_id, name, type, COALESCE(comment, '') AS comment
+    FROM mz_catalog.mz_objects AS objs
+    LEFT JOIN comments ON objs.id = comments.id
+    WHERE (comments.object_type = objs.type OR comments.object_type IS NULL)",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_CLUSTERS: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
+    name: "mz_show_clusters",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_CLUSTERS_OID,
+    column_defs: None,
+    sql: "
+    WITH clusters AS (
+        SELECT
+            mc.id,
+            mc.name,
+            pg_catalog.string_agg(mcr.name || ' (' || mcr.size || ')', ', ' ORDER BY mcr.name) AS replicas
+        FROM mz_catalog.mz_clusters mc
+        LEFT JOIN mz_catalog.mz_cluster_replicas mcr
+        ON mc.id = mcr.cluster_id
+        GROUP BY mc.id, mc.name
+    ),
+    comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'cluster' AND object_sub_id IS NULL
+    )
+    SELECT name, replicas, COALESCE(comment, '') as comment
+    FROM clusters
+    LEFT JOIN comments ON clusters.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+}
+});
+
+pub static MZ_SHOW_SECRETS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_secrets",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_SECRETS_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'secret' AND object_sub_id IS NULL
+    )
+    SELECT schema_id, name, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_secrets secrets
+    LEFT JOIN comments ON secrets.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_COLUMNS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_columns",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_COLUMNS_OID,
+    column_defs: None,
+    sql: "
+    SELECT columns.id, name, nullable, type, position, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_columns columns
+    LEFT JOIN mz_internal.mz_comments comments
+    ON columns.id = comments.id AND columns.position = comments.object_sub_id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_DATABASES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_databases",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_DATABASES_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'database' AND object_sub_id IS NULL
+    )
+    SELECT name, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_databases databases
+    LEFT JOIN comments ON databases.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_SCHEMAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_schemas",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_SCHEMAS_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'schema' AND object_sub_id IS NULL
+    )
+    SELECT database_id, name, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_schemas schemas
+    LEFT JOIN comments ON schemas.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_ROLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_roles",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_ROLES_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'role' AND object_sub_id IS NULL
+    )
+    SELECT name, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_roles roles
+    LEFT JOIN comments ON roles.id = comments.id
+    WHERE roles.id NOT LIKE 's%'
+      AND roles.id NOT LIKE 'g%'",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_TABLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_tables",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_TABLES_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'table' AND object_sub_id IS NULL
+    )
+    SELECT schema_id, name, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_tables tables
+    LEFT JOIN comments ON tables.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_views",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_VIEWS_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'view' AND object_sub_id IS NULL
+    )
+    SELECT schema_id, name, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_views views
+    LEFT JOIN comments ON views.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_TYPES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_types",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_TYPES_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'type' AND object_sub_id IS NULL
+    )
+    SELECT schema_id, name, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_types types
+    LEFT JOIN comments ON types.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_SHOW_CONNECTIONS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_show_connections",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_CONNECTIONS_OID,
+    column_defs: None,
+    sql: "WITH comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'connection' AND object_sub_id IS NULL
+    )
+    SELECT schema_id, name, type, COALESCE(comment, '') as comment
+    FROM mz_catalog.mz_connections connections
+    LEFT JOIN comments ON connections.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_SHOW_SOURCES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_sources",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SOURCES_OID,
     column_defs: None,
-    sql: "SELECT
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'source' AND object_sub_id IS NULL
+)
+SELECT
+    sources.id,
     sources.name,
     sources.type,
     clusters.name AS cluster,
     schema_id,
-    cluster_id
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
 FROM
     mz_catalog.mz_sources AS sources
         LEFT JOIN
             mz_catalog.mz_clusters AS clusters
-            ON clusters.id = sources.cluster_id;",
+            ON clusters.id = sources.cluster_id
+        LEFT JOIN comments ON sources.id = comments.id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6180,17 +6378,26 @@ pub static MZ_SHOW_SINKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_SINKS_OID,
     column_defs: None,
-    sql: "SELECT
-        sinks.name,
-        sinks.type,
-        clusters.name AS cluster,
-        schema_id,
-        cluster_id
-    FROM
-        mz_catalog.mz_sinks AS sinks
-            JOIN
-                mz_catalog.mz_clusters AS clusters
-                ON clusters.id = sinks.cluster_id;",
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'sink' AND object_sub_id IS NULL
+)
+SELECT
+    sinks.id,
+    sinks.name,
+    sinks.type,
+    clusters.name AS cluster,
+    schema_id,
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
+FROM
+    mz_catalog.mz_sinks AS sinks
+    JOIN
+        mz_catalog.mz_clusters AS clusters
+        ON clusters.id = sinks.cluster_id
+    LEFT JOIN comments ON sinks.id = comments.id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6199,9 +6406,23 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
-    sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
-FROM mz_catalog.mz_materialized_views AS mviews
-JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'materialized-view' AND object_sub_id IS NULL
+)
+SELECT
+    mviews.id as id,
+    mviews.name,
+    clusters.name AS cluster,
+    schema_id,
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
+FROM
+    mz_catalog.mz_materialized_views AS mviews
+    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
+    LEFT JOIN comments ON mviews.id = comments.id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6210,14 +6431,22 @@ pub static MZ_SHOW_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_INDEXES_OID,
     column_defs: None,
-    sql: "SELECT
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'index' AND object_sub_id IS NULL
+)
+SELECT
+    idxs.id AS id,
     idxs.name AS name,
     objs.name AS on,
     clusters.name AS cluster,
     COALESCE(keys.key, '{}'::_text) AS key,
     idxs.on_id AS on_id,
     objs.schema_id AS schema_id,
-    clusters.id AS cluster_id
+    clusters.id AS cluster_id,
+    COALESCE(comments.comment, '') as comment
 FROM
     mz_catalog.mz_indexes AS idxs
     JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
@@ -6238,7 +6467,8 @@ FROM
             LEFT JOIN mz_catalog.mz_columns obj_cols ON
                 idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         GROUP BY idxs.id) AS keys
-    ON idxs.id = keys.id",
+    ON idxs.id = keys.id
+    LEFT JOIN comments ON idxs.id = comments.id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6250,8 +6480,10 @@ pub static MZ_SHOW_CLUSTER_REPLICAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinVie
     sql: r#"SELECT
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
+    mz_catalog.mz_cluster_replicas.id as replica_id,
     mz_catalog.mz_cluster_replicas.size AS size,
-    coalesce(statuses.ready, FALSE) AS ready
+    coalesce(statuses.ready, FALSE) AS ready,
+    coalesce(comments.comment, '') as comment
 FROM
     mz_catalog.mz_cluster_replicas
         JOIN mz_catalog.mz_clusters
@@ -6266,6 +6498,9 @@ FROM
                 GROUP BY replica_id
             ) AS statuses
             ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
+        LEFT JOIN mz_internal.mz_comments comments
+            ON mz_catalog.mz_cluster_replicas.id = comments.id
+WHERE (comments.object_type = 'cluster-replica' OR comments.object_type IS NULL)
 ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
 });
@@ -6805,37 +7040,37 @@ JOIN root_times r USING (id)",
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_DATABASES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_databases (name)",
+ON mz_internal.mz_show_databases (name)",
     is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_schemas_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SCHEMAS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_schemas (database_id)",
+ON mz_internal.mz_show_schemas (database_id)",
     is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_connections_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CONNECTIONS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_connections (schema_id)",
+ON mz_internal.mz_show_connections (schema_id)",
     is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_tables_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TABLES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_tables (schema_id)",
+ON mz_internal.mz_show_tables (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -6850,10 +7085,10 @@ ON mz_internal.mz_show_sources (schema_id)",
 
 pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_views_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_views (schema_id)",
+ON mz_internal.mz_show_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -6877,19 +7112,28 @@ ON mz_internal.mz_show_sinks (schema_id)",
 
 pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_types_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TYPES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_types (schema_id)",
+ON mz_internal.mz_show_types (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SHOW_ROLES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_roles_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_ROLES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_show_roles (name)",
     is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_all_objects_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_ALL_OBJECTS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_objects (schema_id)",
+ON mz_internal.mz_show_all_objects (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -6904,19 +7148,19 @@ ON mz_internal.mz_show_indexes (schema_id)",
 
 pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_columns_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_COLUMNS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_columns (id)",
+ON mz_internal.mz_show_columns (id)",
     is_retained_metrics_object: false,
 };
 
 pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_clusters_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CLUSTERS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_clusters (name)",
+ON mz_internal.mz_show_clusters (name)",
     is_retained_metrics_object: false,
 };
 
@@ -6931,10 +7175,91 @@ ON mz_internal.mz_show_cluster_replicas (cluster)",
 
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_secrets_ind",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SECRETS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_catalog.mz_secrets (schema_id)",
+ON mz_internal.mz_show_secrets (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_databases_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_databases (name)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_schemas_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_SCHEMAS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_schemas (database_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_connections_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_CONNECTIONS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_connections (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_TABLES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_tables_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_TABLES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_tables (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_TYPES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_types_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_TYPES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_types (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_objects_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECTS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_objects (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_columns_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_COLUMNS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_columns (name)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SECRETS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_secrets_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_SECRETS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_secrets (name)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_VIEWS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_views_ind",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::INDEX_MZ_VIEWS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_catalog.mz_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -7244,6 +7569,15 @@ pub const MZ_WEBHOOK_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_WEBHOOK_SOURCES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_webhook_sources (id)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_COMMENTS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_comments_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_COMMENTS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_comments (id)",
     is_retained_metrics_object: true,
 };
 
@@ -7637,6 +7971,17 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
+        Builtin::View(&MZ_SHOW_ALL_OBJECTS),
+        Builtin::View(&MZ_SHOW_COLUMNS),
+        Builtin::View(&MZ_SHOW_CLUSTERS),
+        Builtin::View(&MZ_SHOW_SECRETS),
+        Builtin::View(&MZ_SHOW_DATABASES),
+        Builtin::View(&MZ_SHOW_SCHEMAS),
+        Builtin::View(&MZ_SHOW_TABLES),
+        Builtin::View(&MZ_SHOW_VIEWS),
+        Builtin::View(&MZ_SHOW_TYPES),
+        Builtin::View(&MZ_SHOW_ROLES),
+        Builtin::View(&MZ_SHOW_CONNECTIONS),
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
@@ -7786,6 +8131,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CLUSTERS_IND),
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
+        Builtin::Index(&MZ_SHOW_ROLES_IND),
         Builtin::Index(&MZ_CLUSTERS_IND),
         Builtin::Index(&MZ_INDEXES_IND),
         Builtin::Index(&MZ_ROLES_IND),
@@ -7808,6 +8154,16 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_FRONTIERS_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
+        Builtin::Index(&MZ_COMMENTS_IND),
+        Builtin::Index(&MZ_DATABASES_IND),
+        Builtin::Index(&MZ_SCHEMAS_IND),
+        Builtin::Index(&MZ_CONNECTIONS_IND),
+        Builtin::Index(&MZ_TABLES_IND),
+        Builtin::Index(&MZ_TYPES_IND),
+        Builtin::Index(&MZ_OBJECTS_IND),
+        Builtin::Index(&MZ_COLUMNS_IND),
+        Builtin::Index(&MZ_SECRETS_IND),
+        Builtin::Index(&MZ_VIEWS_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),

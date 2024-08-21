@@ -51,36 +51,36 @@ contains:column "a" specified more than once
 > SELECT * FROM t;
 
 > SHOW TABLES;
-name
-----
-t
+name  comment
+-------------
+t     ""
 
 > SHOW SOURCES;
-name    type  cluster
----------------------
+name    type  cluster  comment
+------------------------------
 
 > SHOW INDEXES ON t;
 
 > CREATE DEFAULT INDEX on t
 
 > SHOW INDEXES ON t
-name            on          cluster         key
+name            on          cluster         key    comment
 -----------------------------------------------------------------------------------
-t_primary_idx   t           <CLUSTER_NAME>  {a,b}
+t_primary_idx   t           <CLUSTER_NAME>  {a,b}  ""
 
 > DROP INDEX t_primary_idx
 
 > SHOW COLUMNS in t;
-name       nullable  type
--------------------------
-a          true       integer
-b          false      text
+name       nullable  type      comment
+--------------------------------------
+a          true       integer  ""
+b          false      text     ""
 
 > SHOW COLUMNS in t WHERE name = 'a'
-a  true  integer
+a  true  integer ""
 
 > SHOW COLUMNS in t LIKE 'b%'
-b  false  text
+b  false  text ""
 
 > INSERT INTO t VALUES (1, 'a');
 
@@ -240,19 +240,19 @@ contains:unknown catalog item 't'
 contains:unknown catalog item 't'
 
 > SHOW TABLES;
-name
-----
-v
+name  comment
+-------------
+v     ""
 
 > SHOW TABLES LIKE 'foo'
 > SHOW TABLES LIKE 'v%'
-v
+v ""
 > SHOW TABLES WHERE name = 'v'
-v
+v ""
 
 > SHOW SOURCES;
-name    type   cluster
-----------------------
+name    type   cluster   comment
+--------------------------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 
@@ -376,10 +376,10 @@ contains:SELECT DISTINCT must have at least one column
 # Test that show columns preserves the column order
 > CREATE TABLE column_order (b int, a int);
 > SHOW COLUMNS FROM column_order
-name nullable type
------------------------
-b    true     integer
-a    true     integer
+name nullable type     comment
+------------------------------
+b    true     integer  ""
+a    true     integer  ""
 
 
 # Test that the underlying Persist shard gets cleaned up on DROP.
