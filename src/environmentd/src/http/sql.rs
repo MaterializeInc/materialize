@@ -1249,7 +1249,7 @@ async fn execute_stmt<S: ResultSender>(
         .into(),
         ExecuteResponse::TransactionCommitted { params }
         | ExecuteResponse::TransactionRolledBack { params } => {
-            let notify_set: mz_ore::collections::HashSet<String> = client
+            let notify_set: mz_ore::collections::HashSet<_> = client
                 .session()
                 .vars()
                 .notify_set()

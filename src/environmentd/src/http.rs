@@ -488,11 +488,13 @@ impl AuthedClient {
         let drop_connection =
             DropConnection::new_connection(session.user(), active_connection_count)?;
         session_config(&mut session);
+        let system_vars = adapter_client.get_system_vars().await;
         for (key, val) in options {
             const LOCAL: bool = false;
-            if let Err(err) = session
-                .vars_mut()
-                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            if let Err(err) =
+                session
+                    .vars_mut()
+                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
             {
                 session.add_notice(AdapterNotice::BadStartupSetting {
                     name: key.to_string(),

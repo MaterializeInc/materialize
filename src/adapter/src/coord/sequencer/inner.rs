@@ -1741,12 +1741,12 @@ impl Coordinator {
 
         let variable = session
             .vars()
-            .get(Some(self.catalog().system_config()), &plan.name)
+            .get(self.catalog().system_config(), &plan.name)
             .or_else(|_| self.catalog().system_config().get(&plan.name))?;
 
         // In lieu of plumbing the user to all system config functions, just check that the var is
         // visible.
-        variable.visible(session.user(), Some(self.catalog().system_config()))?;
+        variable.visible(session.user(), self.catalog().system_config())?;
 
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         if variable.name() == vars::DATABASE.name()
@@ -1818,7 +1818,7 @@ impl Coordinator {
         match values {
             Some(values) => {
                 vars.set(
-                    Some(self.catalog().system_config()),
+                    self.catalog().system_config(),
                     &name,
                     VarInput::SqlSet(&values),
                     local,
@@ -1869,7 +1869,7 @@ impl Coordinator {
                     }
                 }
             }
-            None => vars.reset(Some(self.catalog().system_config()), &name, local)?,
+            None => vars.reset(self.catalog().system_config(), &name, local)?,
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -1889,7 +1889,7 @@ impl Coordinator {
         }
         session
             .vars_mut()
-            .reset(Some(self.catalog().system_config()), &name, false)?;
+            .reset(self.catalog().system_config(), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
     }
 
@@ -1908,7 +1908,7 @@ impl Coordinator {
                     self.validate_set_isolation_level(session)?;
 
                     session.vars_mut().set(
-                        Some(self.catalog().system_config()),
+                        self.catalog().system_config(),
                         TRANSACTION_ISOLATION_VAR_NAME,
                         VarInput::Flat(&isolation_level.to_ast_string_stable()),
                         plan.local,
@@ -3025,7 +3025,7 @@ impl Coordinator {
                 // Get the variable to make sure it's valid and visible.
                 let session_var = session.vars().inspect(variable.name())?;
                 // Return early if it's not visible.
-                session_var.visible(session.user(), Some(catalog.system_vars()))?;
+                session_var.visible(session.user(), catalog.system_vars())?;
 
                 // Emit a warning when deprecated variables are used.
                 // TODO(#27285) remove this after sufficient time has passed
@@ -3904,7 +3904,7 @@ impl Coordinator {
                 // In lieu of plumbing the user to all system config functions, just check that
                 // the var is visible.
                 let var = self.catalog().system_config().get(name)?;
-                var.visible(session.user(), Some(self.catalog().system_config()))?;
+                var.visible(session.user(), self.catalog().system_config())?;
                 Ok(())
             }
             // If we're not a superuser, but the variable is user modifiable, indicate they can use

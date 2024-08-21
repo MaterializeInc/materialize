@@ -209,6 +209,7 @@ where
         (session, auth_session)
     };
 
+    let system_vars = adapter_client.get_system_vars().await;
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match parse_options(&value) {
@@ -229,9 +230,10 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session
-                .vars_mut()
-                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            if let Err(err) =
+                session
+                    .vars_mut()
+                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
             {
                 session.add_notice(AdapterNotice::BadStartupSetting {
                     name: key,
@@ -2087,13 +2089,11 @@ where
         .await?;
         self.conn.flush().await?;
 
-        let system_vars = self.adapter_client.get_system_vars().await.ok();
+        let system_vars = self.adapter_client.get_system_vars().await;
         let max_size = system_vars
-            .as_ref()
-            .map(|resp| resp.get(MAX_COPY_FROM_SIZE.name()))
-            .flatten()
-            .map(|max_size| max_size.parse().ok())
-            .flatten()
+            .get(MAX_COPY_FROM_SIZE.name())
+            .ok()
+            .and_then(|max_size| max_size.value().parse().ok())
             .unwrap_or(usize::MAX);
         tracing::debug!("COPY FROM max buffer size: {max_size} bytes");
 

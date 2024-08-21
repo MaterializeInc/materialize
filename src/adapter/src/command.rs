@@ -27,7 +27,7 @@ use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
 use mz_sql::session::user::User;
-use mz_sql::session::vars::{OwnedVarInput, Var};
+use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
@@ -98,8 +98,7 @@ pub enum Command {
     },
 
     GetSystemVars {
-        conn_id: ConnectionId,
-        tx: oneshot::Sender<Result<GetVariablesResponse, AdapterError>>,
+        tx: oneshot::Sender<SystemVars>,
     },
 
     SetSystemVars {
@@ -228,36 +227,10 @@ impl Transmittable for CatalogDump {
     }
 }
 
-/// The response to [`SessionClient::get_system_vars`](crate::SessionClient::get_system_vars).
-#[derive(Debug, Clone)]
-pub struct GetVariablesResponse(BTreeMap<String, String>);
-
-impl GetVariablesResponse {
-    pub fn new<'a>(vars: impl Iterator<Item = &'a dyn Var>) -> Self {
-        GetVariablesResponse(
-            vars.map(|var| (var.name().to_string(), var.value()))
-                .collect(),
-        )
-    }
-
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.get(name).map(|s| s.as_str())
-    }
-}
-
-impl Transmittable for GetVariablesResponse {
+impl Transmittable for SystemVars {
     type Allowed = bool;
     fn to_allowed(&self) -> Self::Allowed {
         true
-    }
-}
-
-impl IntoIterator for GetVariablesResponse {
-    type Item = (String, String);
-    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
     }
 }
 

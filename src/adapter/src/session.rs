@@ -34,11 +34,11 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
     RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
 };
+use mz_sql::session::vars::IsolationLevel;
 pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
-use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
@@ -369,8 +369,7 @@ impl<T: TimestampManipulation> Session<T> {
 
         if let Some(isolation_level) = isolation_level {
             self.vars
-                .set(None, mz_sql::session::vars::TRANSACTION_ISOLATION_VAR_NAME, VarInput::Flat(IsolationLevel::from(isolation_level).as_str()), true)
-                .expect("transaction_isolation should be a valid var and isolation level is a valid value");
+                .set_local_transaction_isolation(isolation_level.into());
         }
 
         Ok(())

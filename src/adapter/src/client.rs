@@ -38,7 +38,7 @@ use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{OwnedVarInput, Var, CLUSTER};
+use mz_sql::session::vars::{OwnedVarInput, SystemVars, Var, CLUSTER};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -47,9 +47,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{
-    CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, Response,
-};
+use crate::command::{CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response};
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -421,6 +419,13 @@ Issue a SQL query to get started. Need help?
         response
     }
 
+    /// Gets the current value of all system variables.
+    pub async fn get_system_vars(&self) -> SystemVars {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GetSystemVars { tx });
+        rx.await.expect("coordinator unexpectedly gone")
+    }
+
     #[instrument(level = "debug")]
     fn send(&self, cmd: Command) {
         self.inner_cmd_tx
@@ -764,10 +769,8 @@ impl SessionClient {
     }
 
     /// Gets the current value of all system variables.
-    pub async fn get_system_vars(&mut self) -> Result<GetVariablesResponse, AdapterError> {
-        let conn_id = self.session().conn_id().clone();
-        self.send_without_session(|tx| Command::GetSystemVars { conn_id, tx })
-            .await
+    pub async fn get_system_vars(&mut self) -> SystemVars {
+        self.inner().get_system_vars().await
     }
 
     /// Updates the specified system variables to the specified values.
