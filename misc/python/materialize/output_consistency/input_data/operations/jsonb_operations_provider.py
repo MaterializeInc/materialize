@@ -6,8 +6,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from textwrap import dedent
+
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
+)
+from materialize.output_consistency.input_data.params.date_time_operation_param import (
+    DateTimeOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     JSON_FIELD_INDEX_PARAM,
@@ -16,6 +24,9 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
 )
 from materialize.output_consistency.input_data.params.jsonb_operation_param import (
     JsonbOperationParam,
+)
+from materialize.output_consistency.input_data.params.number_operation_param import (
+    NumericOperationParam,
 )
 from materialize.output_consistency.input_data.params.record_operation_param import (
     RecordOperationParam,
@@ -226,3 +237,27 @@ JSONB_OPERATION_TYPES.append(
         comment="additional overlapping variant only for records",
     ),
 )
+
+CREATE_JSON_WITH_GEO_DATA_OP = DbOperation(
+    dedent(
+        """concat('{
+              "@timestamp":"', $, '",
+              "latitude":', $, ',
+              "longitude":', $, ',
+              "location":[', $, ',', $, ']
+            }')::JSONB"""
+    ),
+    [
+        DateTimeOperationParam(support_time=False),
+        NumericOperationParam(),
+        NumericOperationParam(),
+        NumericOperationParam(),
+        NumericOperationParam(),
+    ],
+    JsonbReturnTypeSpec(),
+    comment="JSONB value with geo data",
+)
+CREATE_JSON_WITH_GEO_DATA_OP.added_characteristics.add(
+    ExpressionCharacteristics.JSON_WITH_GEO_DATA
+)
+JSONB_OPERATION_TYPES.append(CREATE_JSON_WITH_GEO_DATA_OP)
