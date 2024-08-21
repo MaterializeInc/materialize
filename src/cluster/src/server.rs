@@ -78,7 +78,7 @@ pub struct TimelyContainer<C, R, A> {
         crossbeam_channel::Sender<(
             crossbeam_channel::Receiver<C>,
             mpsc::UnboundedSender<R>,
-            crossbeam_channel::Sender<A>,
+            mpsc::UnboundedSender<A>,
         )>,
     >,
     /// Thread guards that keep worker threads alive
@@ -298,24 +298,24 @@ where
             })?,
         };
 
-        let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
-            (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
-        let (response_txs, response_rxs): (Vec<_>, Vec<_>) =
-            (0..workers).map(|_| mpsc::unbounded_channel()).unzip();
-        let activators = timely
-            .client_txs
-            .iter()
-            .zip(command_rxs)
-            .zip(response_txs)
-            .map(|((client_tx, cmd_rx), resp_tx)| {
-                let (activator_tx, activator_rx) = crossbeam_channel::unbounded();
-                client_tx
-                    .send((cmd_rx, resp_tx, activator_tx))
-                    .expect("worker should not drop first");
+        let mut command_txs = Vec::with_capacity(workers);
+        let mut response_rxs = Vec::with_capacity(workers);
+        let mut activators = Vec::with_capacity(workers);
+        for client_tx in &timely.client_txs {
+            let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+            let (activator_tx, mut activator_rx) = mpsc::unbounded_channel();
 
-                activator_rx.recv().unwrap()
-            })
-            .collect();
+            client_tx
+                .send((cmd_rx, resp_tx, activator_tx))
+                .expect("worker not dropped");
+            let activator = activator_rx.recv().await.expect("worker not dropped");
+
+            command_txs.push(cmd_tx);
+            response_rxs.push(resp_rx);
+            activators.push(activator);
+        }
+
         *timely_lock = Some(timely);
 
         self.inner = Some(LocalClient::new_partitioned(

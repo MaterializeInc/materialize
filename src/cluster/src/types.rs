@@ -36,7 +36,7 @@ pub trait AsRunnableWorker<C, R> {
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<C>,
             tokio::sync::mpsc::UnboundedSender<R>,
-            crossbeam_channel::Sender<Self::Activatable>,
+            tokio::sync::mpsc::UnboundedSender<Self::Activatable>,
         )>,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
