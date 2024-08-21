@@ -1549,13 +1549,20 @@ async fn handle_list_scim_configurations(
 
 async fn handle_create_scim_configuration(
     State(context): State<Arc<Context>>,
+    TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
     Json(request): Json<SCIM2ConfigurationCreateRequest>,
 ) -> Result<Json<SCIM2ConfigurationResponse>, StatusCode> {
+    // Extract claims from the access token
+    let claims = match decode_access_token(&context, authorization.token()) {
+        Ok(TokenData { claims, .. }) => claims,
+        Err(_) => return Err(StatusCode::UNAUTHORIZED),
+    };
+
     let now = Utc::now();
     let new_config = SCIM2ConfigurationStorage {
         id: Uuid::new_v4().to_string(),
         source: request.source,
-        tenant_id: request.tenant_id,
+        tenant_id: claims.tenant_id.to_string(),
         connection_name: request.connection_name,
         sync_to_user_management: request.sync_to_user_management,
         created_at: now,
@@ -1577,6 +1584,7 @@ async fn handle_create_scim_configuration(
 
     Ok(Json(response))
 }
+
 async fn handle_delete_scim_configuration(
     State(context): State<Arc<Context>>,
     Path(config_id): Path<String>,
@@ -2021,8 +2029,6 @@ pub struct GroupUpdateParams {
 #[derive(Deserialize)]
 pub struct SCIM2ConfigurationCreateRequest {
     pub source: String,
-    #[serde(rename = "tenantId")]
-    pub tenant_id: String,
     #[serde(rename = "connectionName")]
     pub connection_name: String,
     #[serde(rename = "syncToUserManagement")]
