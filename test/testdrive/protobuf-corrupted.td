@@ -38,7 +38,7 @@ garbage
   FORMAT PROTOBUF MESSAGE '.OneInt' USING SCHEMA '${simple-schema}'
 
 ! SELECT * FROM total_garbage
-contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type value: 7
+contains:Decode error: protobuf deserialization error: failed to decode Protobuf message: invalid wire type value: 7 (original text: garbage, original bytes: "67617262616765")
 
 $ kafka-create-topic topic=wrong-message
 
@@ -51,4 +51,4 @@ $ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb mes
   FORMAT PROTOBUF MESSAGE '.OneString' USING SCHEMA '${simple-schema}'
 
 ! SELECT * FROM wrong_message
-contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: Varint (expected LengthDelimited)
+contains:Decode error: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: Varint (expected LengthDelimited)

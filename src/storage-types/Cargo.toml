@@ -26,6 +26,7 @@ columnation = { git = "https://github.com/frankmcsherry/columnation" }
 dec = "0.4.8"
 derivative = "2.2.0"
 differential-dataflow = "0.12.0"
+hex = "0.4.3"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 itertools = { version = "0.10.5" }

@@ -6713,6 +6713,7 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures",
+ "hex",
  "insta",
  "itertools 0.10.5",
  "mysql_async",
