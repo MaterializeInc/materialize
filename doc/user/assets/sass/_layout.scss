@@ -173,15 +173,12 @@ table.inline-headings {
         padding-bottom: var(--large);
     }
 
-    &>ul>li:last-child {
-        padding-bottom: var(--milli);
-    }
-
     a {
         display: block;
         cursor: pointer;
         position: relative;
         padding: 3px 0 3px 15px;
+        margin-left: 5px;
         text-decoration: none;
         word-wrap: break-word;
         white-space: initial;
@@ -227,11 +224,11 @@ table.inline-headings {
 
     .no-children>a,
     .level-4 a {
-        border-left: 2px solid var(--divider-light);
+
 
         &:hover,
         &.active {
-            border-color: var(--highlight);
+            border-left: 2px solid  var(--highlight);
         }
     }
 
@@ -251,34 +248,35 @@ table.inline-headings {
     }
 
     li.level-1 {
-        &>div {
-            margin: 0 0 4px -2px;
-            padding: 4px 0;
-            color: var(--highlight);
+        &>a {
             font-weight: 500;
+            color: var(--highlight);
         }
 
         &>ul {
             margin-bottom: rem(1.5);
         }
+        padding: 4px 0;
+        border-bottom: 1px solid var(--gray-light);
     }
 
+    li.level-1,
     li.level-2,
     li.level-3 {
         >ul {
             display: none;
             padding-top: rem(0.5);
             margin-bottom: rem(0.625);
+            padding-left: rem(0.8);
 
             &:before,
             &:after {
                 content: "";
-                background-image: url("../images/level_three_transition.svg");
                 width: 10px;
                 height: 10px;
                 position: absolute;
-                top: 0;
-                left: -8px;
+                top: 1px;
+                left: 0px;
             }
 
             &:after {
@@ -299,6 +297,10 @@ table.inline-headings {
                 display: block;
             }
         }
+    }
+
+    li.level-1.has-children.open {
+        padding-bottom: 4px;
     }
 
     li.level-2.has-children.open {

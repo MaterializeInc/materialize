@@ -7,10 +7,13 @@
         title="cmd+K (⌘+K/⊞+K)" />
       </div>
       {{ range .Site.Menus.main.ByWeight }}
-      <li class="level-1">
-        <div class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
-          {{.Name | markdownify}}
-        </div>
+      <li class="level-1 {{if .HasChildren }}has-children{{ else }}no-children{{ end }}">
+          <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+            {{- if .HasChildren }}
+              {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
+            {{ end }}
+            {{.Name | markdownify}}
+          </a>
 
         {{- if .HasChildren }}
         <ul>

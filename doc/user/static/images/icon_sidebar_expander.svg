@@ -4,6 +4,6 @@
         <path d="M7 4V10" class="hidden-when-open" />
         <path d="M10 7H4" />
     </g>
-    <path d="M7 -10V0" stroke-width="2"/>
-    <path d="M7 14V24" stroke-width="2"/>
+    <path d="M7 -10V0" stroke-width="0"/>
+    <path d="M7 14V24" stroke-width="0"/>
 </svg>
