@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::Utc;
 use headers::Authorization;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
@@ -436,6 +437,8 @@ async fn test_auth_expiry() {
     let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let roles = Vec::new();
     let users = BTreeMap::from([(
@@ -557,6 +560,8 @@ async fn test_auth_base_require_tls_frontegg() {
     let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let system_password = Uuid::new_v4().to_string();
     let system_client_id = Uuid::new_v4();
@@ -564,6 +569,8 @@ async fn test_auth_base_require_tls_frontegg() {
     let system_initial_api_tokens = vec![ApiToken {
         client_id: system_client_id.clone(),
         secret: system_secret.clone(),
+        description: None,
+        created_at: Utc::now(),
     }];
     let service_user_client_id = Uuid::new_v4();
     let service_user_secret = Uuid::new_v4();
@@ -604,6 +611,8 @@ async fn test_auth_base_require_tls_frontegg() {
             ApiToken {
                 client_id: service_user_client_id.clone(),
                 secret: service_user_secret.clone(),
+                description: None,
+                created_at: Utc::now(),
             },
             TenantApiTokenConfig {
                 tenant_id,
@@ -611,12 +620,17 @@ async fn test_auth_base_require_tls_frontegg() {
                 metadata: Some(ClaimMetadata {
                     user: Some("svc".into()),
                 }),
+                description: None,
+                created_at: Utc::now(),
+                created_by_user_id: client_id,
             },
         ),
         (
             ApiToken {
                 client_id: service_system_user_client_id.clone(),
                 secret: service_system_user_secret.clone(),
+                description: None,
+                created_at: Utc::now(),
             },
             TenantApiTokenConfig {
                 tenant_id,
@@ -624,6 +638,9 @@ async fn test_auth_base_require_tls_frontegg() {
                 metadata: Some(ClaimMetadata {
                     user: Some("mz_system".into()),
                 }),
+                description: None,
+                created_at: Utc::now(),
+                created_by_user_id: client_id,
             },
         ),
     ]);
@@ -1556,6 +1573,7 @@ async fn test_auth_admin_non_superuser() {
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
+    let created_at = Utc::now();
 
     let admin_role = "mzadmin";
 
@@ -1567,7 +1585,12 @@ async fn test_auth_admin_non_superuser() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1584,6 +1607,8 @@ async fn test_auth_admin_non_superuser() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -1693,6 +1718,7 @@ async fn test_auth_admin_superuser() {
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
+    let created_at = Utc::now();
 
     let admin_role = "mzadmin";
 
@@ -1704,7 +1730,12 @@ async fn test_auth_admin_superuser() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1721,6 +1752,8 @@ async fn test_auth_admin_superuser() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -1830,6 +1863,7 @@ async fn test_auth_admin_superuser_revoked() {
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
+    let created_at = Utc::now();
 
     let admin_role = "mzadmin";
 
@@ -1841,7 +1875,12 @@ async fn test_auth_admin_superuser_revoked() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1858,6 +1897,8 @@ async fn test_auth_admin_superuser_revoked() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -1976,6 +2017,7 @@ async fn test_auth_deduplication() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -1986,7 +2028,12 @@ async fn test_auth_deduplication() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2142,6 +2189,7 @@ async fn test_refresh_task_metrics() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2152,7 +2200,12 @@ async fn test_refresh_task_metrics() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2275,6 +2328,7 @@ async fn test_superuser_can_alter_cluster() {
     let admin_password = Uuid::new_v4().to_string();
     let admin_client_id = Uuid::new_v4();
     let admin_secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
@@ -2289,7 +2343,12 @@ async fn test_superuser_can_alter_cluster() {
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![ApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken {
+                    client_id,
+                    secret,
+                    description: None,
+                    created_at,
+                }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -2306,6 +2365,8 @@ async fn test_superuser_can_alter_cluster() {
                 initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
+                    description: None,
+                    created_at: Utc::now(),
                 }],
                 roles: vec![admin_role.to_string()],
                 auth_provider: None,
@@ -2415,6 +2476,7 @@ async fn test_refresh_dropped_session() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2425,7 +2487,12 @@ async fn test_refresh_dropped_session() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2579,13 +2646,19 @@ async fn test_refresh_dropped_session_lru() {
         let password = Uuid::new_v4().to_string();
         let client_id = Uuid::new_v4();
         let secret = Uuid::new_v4();
+        let created_at = Utc::now();
 
         let user = UserConfig {
             id: Uuid::new_v4(),
             email: email.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2771,6 +2844,7 @@ async fn test_transient_auth_failures() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2781,7 +2855,12 @@ async fn test_transient_auth_failures() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2889,6 +2968,7 @@ async fn test_transient_auth_failure_on_refresh() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let created_at = Utc::now();
 
     let frontegg_user = "user@_.com";
 
@@ -2899,7 +2979,12 @@ async fn test_transient_auth_failure_on_refresh() {
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![ApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken {
+                client_id,
+                secret,
+                description: None,
+                created_at,
+            }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
