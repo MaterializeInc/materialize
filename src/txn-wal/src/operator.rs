@@ -194,7 +194,7 @@ where
         let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
 
         let _ = txns_cache.update_gt(&as_of).await;
-        let mut subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
+        let mut subscribe = txns_cache.scoped_txn_subscribe(data_id, as_of.clone());
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -320,7 +320,7 @@ where
             .await
             .expect("schema shouldn't change");
         let mut rx = txns_read
-            .data_subscribe(data_id, as_of.clone(), Box::new(data_write))
+            .scoped_txn_subscribe(data_id, as_of.clone(), Box::new(data_write))
             .await;
         debug!("{} starting as_of={:?}", name, as_of);
 

@@ -20,8 +20,9 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
-use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
+use mz_persist_client::cfg::{RetryParameters, USE_CRITICAL_SINCE_TXN};
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::fetch::{FetchedPart, LeasedBatchPart};
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
@@ -286,6 +287,217 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     }
 }
 
+/// A token exchangeable for a data shard subscribe.
+#[derive(Debug)]
+pub struct DataSubscribe<T> {
+    /// A receiver for changes to the txn shard that are relevant to the shard
+    /// we are subscribed to.
+    txn_subscribe: mpsc::UnboundedReceiver<DataRemapEntry<T>>,
+
+    /// Inner [DataSnapshot].
+    data_snapshot: DataSnapshot<T>,
+}
+
+impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSubscribe<T> {
+    /// Returns a snapshot of all of a shard's data using `as_of`, followed by
+    /// listening to any future updates.
+    ///
+    /// For more details on this operation's semantics, see
+    /// [ReadHandle::subscribe].
+    #[instrument(level = "debug", fields(shard = %self.data_snapshot.data_id))]
+    pub async fn subscribe<K, V, D>(
+        self,
+        data_read: ReadHandle<K, V, T, D>,
+        as_of: Antichain<T>,
+    ) -> Result<SubscribeTxn<K, V, T, D>, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let data_write = WriteHandle::from_read(&data_read, "unblock_read");
+        self.data_snapshot.unblock_read(data_write).await;
+
+        let data_subscribe = data_read.subscribe(as_of).await?;
+        let res = SubscribeTxn::new(self.txn_subscribe, data_subscribe);
+        Ok(res)
+    }
+}
+
+/// Capable of generating a snapshot of all data at `as_of`, followed by a
+/// listen of all updates.
+///
+/// This is a version of [Subscribe] for shards that are managed in txn. For
+/// more details, see [`ReadHandle::subscribe`].
+// WIP: This is annoyingly close to [Subscribe], with the inner logic in
+// `fetch` being different. We _could_ change subscribe and make the inner logic
+// a trait object. Then we can plug in this one or the original impl. Not sure
+// we want that?
+#[derive(Debug)]
+pub struct SubscribeTxn<K: Codec, V: Codec, T, D> {
+    /// A receiver for changes to the txn shard that are relevant to the shard
+    /// we are subscribed to.
+    txn_subscribe: mpsc::UnboundedReceiver<DataRemapEntry<T>>,
+    /// Persist-native, inner, [Subscribe].
+    data_subscribe: Subscribe<K, V, T, D>,
+
+    /// We keep track of the physical upper we have seen on the underlying
+    /// persist Subscribe. So that we can decide when we can forward progress
+    /// updates from the txn shard.
+    physical_upper: Antichain<T>,
+}
+
+impl<K, V, T, D> SubscribeTxn<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    fn new(
+        txn_subscribe: mpsc::UnboundedReceiver<DataRemapEntry<T>>,
+        data_subscribe: Subscribe<K, V, T, D>,
+    ) -> Self {
+        SubscribeTxn {
+            txn_subscribe,
+            data_subscribe,
+            physical_upper: Antichain::from_elem(T::minimum()),
+        }
+    }
+
+    /// Returns a `LeasedBatchPart` enriched with the proper metadata.
+    ///
+    /// First returns snapshot parts, until they're exhausted, at which point
+    /// begins returning listen parts.
+    ///
+    /// The returned `Antichain` represents the subscription progress as it will
+    /// be _after_ the returned parts are fetched.
+    #[instrument(level = "debug", fields(shard = %self.data_subscribe.shard_id()))]
+    pub async fn next(
+        &mut self,
+        // If Some, an override for the default listen sleep retry parameters.
+        listen_retry: Option<RetryParameters>,
+    ) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
+        tokio::select! {
+            res = self.data_subscribe.next(listen_retry.clone()) => {
+                // We can pass these straight through, but we need to sniff out
+                // the physical upper.
+                for update in res.iter() {
+                    if let ListenEvent::Progress(upper) = &update {
+                        // WIP: Be smart about this.
+                        self.physical_upper = upper.clone();
+                    }
+                }
+                return res;
+            }
+            txn_event = self.txn_subscribe.recv() => {
+                match txn_event {
+                    Some(remap_entry) => {
+                        let DataRemapEntry { logical_upper, physical_upper } = remap_entry;
+                        if !self.physical_upper.less_than(&physical_upper) {
+                            return vec![ListenEvent::Progress(Antichain::from_elem(logical_upper))];
+                        }
+
+                        let mut stash = Vec::new();
+                        // Need to catch up on the persist-native subscribe, before we
+                        // can pass this one through.
+                        loop {
+                            let mut res = self.data_subscribe.next(listen_retry).await;
+
+                            for update in res.iter() {
+                                if let ListenEvent::Progress(upper) = &update {
+                                    // WIP: Be smart about this.
+                                    self.physical_upper = upper.clone();
+                                }
+                            }
+
+                            stash.append(&mut res);
+
+                            if !self.physical_upper.less_than(&physical_upper) {
+                                break;
+                            }
+                        }
+
+                        return stash;
+                    }
+                    None => {
+                        // WIP: What do we do? Break out, or depend on the
+                        // listen to eventually return nothing. I think we just
+                        // listen forever...
+                        return vec![];
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<K, V, T, D> SubscribeTxn<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
+    /// fetches and returns the data from within it.
+    #[instrument(level = "debug", fields(shard = %self.data_subscribe.shard_id()))]
+    pub async fn fetch_next(
+        &mut self,
+    ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+        let events = self.next(None).await;
+        let new_len = events
+            .iter()
+            .map(|event| match event {
+                ListenEvent::Updates(parts) => parts.len(),
+                ListenEvent::Progress(_) => 1,
+            })
+            .sum();
+        let mut ret = Vec::with_capacity(new_len);
+        for event in events {
+            match event {
+                ListenEvent::Updates(parts) => {
+                    for part in parts {
+                        let fetched_part = self.data_subscribe.fetch_batch_part(part).await;
+                        let updates = fetched_part.collect::<Vec<_>>();
+                        if !updates.is_empty() {
+                            ret.push(ListenEvent::Updates(updates));
+                        }
+                    }
+                }
+                ListenEvent::Progress(progress) => ret.push(ListenEvent::Progress(progress)),
+            }
+        }
+        ret
+    }
+
+    /// Fetches the contents of `part` and returns its lease.
+    pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+        self.data_subscribe.fetch_batch_part(part).await
+    }
+}
+
+impl<K, V, T, D> SubscribeTxn<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Politely expires this subscribe, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// [`ReadHandle`] held by the subscribe that wasn't explicitly expired
+    /// with this method. When possible, explicit expiry is still preferred
+    /// because the Drop one is best effort and is dependant on a tokio
+    /// [Handle] being available in the TLC at the time of drop (which is a bit
+    /// subtle). Also, explicit expiry allows for control over when it happens.
+    pub async fn expire(self) {
+        // WIP: Also close the channel?
+        self.data_subscribe.expire().await;
+    }
+}
+
 /// The next action to take in a data shard `Listen`.
 ///
 /// See [crate::txn_cache::TxnsCacheState::data_listen_next].
@@ -321,9 +533,11 @@ pub struct DataRemapEntry<T> {
     pub logical_upper: T,
 }
 
+/// A subscription of changes to the txn shard, scoped to a given data shard.
+///
 /// Keeps track of a [`DataRemapEntry`] for shard `data_id`.
 #[derive(Debug)]
-pub(crate) struct DataSubscribe<T> {
+pub(crate) struct ScopedTxnSubscribe<T> {
     /// The id of the data shard.
     pub(crate) data_id: ShardId,
     /// The initial snapshot, used to unblock the reading of the initial
@@ -337,7 +551,7 @@ pub(crate) struct DataSubscribe<T> {
 #[derive(Debug)]
 pub struct DataSubscription<T> {
     /// Metadata and current [`DataRemapEntry`] for the data shard.
-    subscribe: DataSubscribe<T>,
+    subscribe: ScopedTxnSubscribe<T>,
     /// Channel to send [`DataRemapEntry`]s.
     tx: mpsc::UnboundedSender<DataRemapEntry<T>>,
 }
@@ -357,6 +571,17 @@ where
 {
     async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>) {
         snapshot.unblock_read(*self).await;
+    }
+}
+
+// WIP!
+#[async_trait::async_trait]
+impl<T> UnblockRead<T> for ()
+where
+    T: Send + Sync + 'static,
+{
+    async fn unblock_read(self: Box<Self>, _snapshot: DataSnapshot<T>) {
+        // No-op!
     }
 }
 
@@ -415,10 +640,29 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
             .await
     }
 
-    /// Initiate a subscription to `data_id`.
+    /// TODO!
+    pub async fn the_real_data_subscribe(&self, data_id: ShardId, as_of: T) -> DataSubscribe<T> {
+        // WIP: Do we need a `TxnsReadCmd` that does this in one go, and returns
+        // a DataSubscribe and does exactly the thing we need?
+
+        // We only take a snapshot in order to do the unblock read.
+        let data_snapshot = self.data_snapshot(data_id, as_of.clone()).await;
+
+        // And this one already wants to do an unlock-read internally...
+        let unblock: Box<dyn UnblockRead<T>> = Box::new(());
+        let txn_subscribe = self.scoped_txn_subscribe(data_id, as_of, unblock).await;
+
+        DataSubscribe {
+            data_snapshot,
+            txn_subscribe,
+        }
+    }
+
+    /// Initiate a subscription to the txn shard, scoped to the given data
+    /// shard.
     ///
     /// Returns a channel that [`DataRemapEntry`]s are sent over.
-    pub(crate) async fn data_subscribe(
+    pub(crate) async fn scoped_txn_subscribe(
         &self,
         data_id: ShardId,
         as_of: T,
@@ -710,7 +954,7 @@ where
                     unblock,
                     tx,
                 } => {
-                    let mut subscribe = self.cache.data_subscribe(data_id, as_of.clone());
+                    let mut subscribe = self.cache.scoped_txn_subscribe(data_id, as_of.clone());
                     if let Some(snapshot) = subscribe.snapshot.take() {
                         mz_ore::task::spawn(
                             || "txn-wal::unblock_subscribe",

@@ -118,6 +118,11 @@ where
         }
     }
 
+    /// [ShardId] of the shard.
+    pub fn shard_id(&self) -> ShardId {
+        self.listen.handle.machine.shard_id()
+    }
+
     /// Returns a `LeasedBatchPart` enriched with the proper metadata.
     ///
     /// First returns snapshot parts, until they're exhausted, at which point
