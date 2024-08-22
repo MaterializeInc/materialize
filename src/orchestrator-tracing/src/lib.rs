@@ -54,7 +54,14 @@ use opentelemetry_sdk::resource::Resource;
 #[derive(Derivative, Clone, clap::Parser)]
 #[derivative(Debug)]
 pub struct TracingCliArgs {
-    /// Which tracing events to log to stderr.
+    /// Which tracing events to log to stderr during startup, before the
+    /// real log filter is synced from LaunchDarkly.
+    ///
+    /// WARNING: you probably don't want to set this for `environmentd`. This
+    /// parameter only controls logging for the brief moment before the log
+    /// filter is synced from LaunchDarkly. You probably instead want to pass
+    /// `--system-parameter-default=log_filter=<filter>`, which will set the
+    /// default log filter to use unless overridden by the LaunchDarkly sync.
     ///
     /// This value is a comma-separated list of filter directives. Each filter
     /// directive has the following format:
