@@ -112,6 +112,11 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
                     x.add_dynamic("persist_batch_columnar_format_percent", ::mz_dyncfg::ConfigVal::Usize(100));
                     x
+                },
+                {
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_encoding_enable_dictionary", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x
                 }
             ];
 
