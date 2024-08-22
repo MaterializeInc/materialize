@@ -10,7 +10,6 @@
 //! Coordinator functionality to sequence cluster-related plans
 
 use std::collections::BTreeSet;
-use std::time::Duration;
 
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
@@ -566,14 +565,14 @@ impl Coordinator {
         new_config: ClusterConfig,
         reason: ReplicaCreateDropReason,
         strategy: AlterClusterPlanStrategy,
-    ) -> Result<FinalizationNeeded, AdapterError> {
+    ) -> Result<NeedsFinalization, AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
         let owner_id = cluster.owner_id();
 
         let mut ops = vec![];
         let mut create_cluster_replicas = vec![];
-        let mut finalization_needed = FinalizationNeeded::False;
+        let mut finalization_needed = NeedsFinalization::No;
 
         let ClusterVariant::Managed(ClusterVariantManaged {
             size,
@@ -676,7 +675,7 @@ impl Coordinator {
                         create_cluster_replicas.push((cluster_id, id));
                     }
                 }
-                AlterClusterPlanStrategy::For(duration) => {
+                AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
                     for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
                         let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
                         self.create_managed_cluster_replica_op(
@@ -694,9 +693,8 @@ impl Coordinator {
                         )?;
                         create_cluster_replicas.push((cluster_id, id));
                     }
-                    finalization_needed = FinalizationNeeded::In(duration);
+                    finalization_needed = NeedsFinalization::Yes;
                 }
-                AlterClusterPlanStrategy::UntilReady { .. } => coord_bail!("Unimplemented"),
             }
         } else if new_replication_factor < replication_factor {
             // Adjust replica count down
@@ -740,7 +738,7 @@ impl Coordinator {
         // If finalization is needed, finalization should update the cluster
         // config.
         match finalization_needed {
-            FinalizationNeeded::False => {
+            NeedsFinalization::No => {
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
                     name,
@@ -1032,9 +1030,8 @@ fn managed_cluster_replica_name(index: u32) -> String {
 
 /// The type of finalization needed after an
 /// operation such as alter_cluster_managed_to_managed.
-pub enum FinalizationNeeded {
+pub enum NeedsFinalization {
     /// Wait for the provided duration before finalizing
-    In(Duration),
-    /// Finalization has already occurred
-    False,
+    Yes,
+    No,
 }

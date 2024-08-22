@@ -1574,6 +1574,15 @@ pub mod cluster_scheduling {
         false,
     );
 
+    const DEFAULT_CLUSTER_ALTER_CHECK_READY_INTERVAL: Duration = Duration::from_secs(3);
+
+    pub static CLUSTER_ALTER_CHECK_READY_INTERVAL: VarDefinition = VarDefinition::new(
+        "cluster_alter_check_ready_interval",
+        value!(Duration; DEFAULT_CLUSTER_ALTER_CHECK_READY_INTERVAL),
+        "How often to poll readiness checks for cluster alter",
+        false,
+    );
+
     const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
 
     pub static CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL: VarDefinition = VarDefinition::new(

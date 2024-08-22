@@ -42,6 +42,11 @@ pub struct InstanceExists(pub ComputeInstanceId);
 #[error("collection does not exist: {0}")]
 pub struct CollectionMissing(pub GlobalId);
 
+/// Error returned in response to a reference to an unknown compute collection.
+#[derive(Error, Debug)]
+#[error("No replicas found in cluster for target list.")]
+pub struct HydrationCheckBadTarget(pub Vec<ReplicaId>);
+
 /// Errors arising during compute collection lookup.
 #[derive(Error, Debug)]
 pub enum CollectionLookupError {

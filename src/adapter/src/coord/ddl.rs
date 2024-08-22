@@ -914,7 +914,10 @@ impl Coordinator {
 
     /// Drops all pending replicas for a set of clusters
     /// that are undergoing reconfiguration.
-    pub async fn drop_reconfiguration_replicas(&mut self, cluster_ids: BTreeSet<ClusterId>) {
+    pub async fn drop_reconfiguration_replicas(
+        &mut self,
+        cluster_ids: BTreeSet<ClusterId>,
+    ) -> Result<(), AdapterError> {
         let pending_cluster_ops: Vec<Op> = cluster_ids
             .iter()
             .map(|c| {
@@ -941,10 +944,9 @@ impl Coordinator {
             })
             .collect();
         if !pending_cluster_ops.is_empty() {
-            self.catalog_transact(None, pending_cluster_ops)
-                .await
-                .unwrap_or_terminate("cannot fail to drop replicas");
+            self.catalog_transact(None, pending_cluster_ops).await?;
         }
+        Ok(())
     }
 
     /// Cancels all active compute sinks for the identified connection.
@@ -994,8 +996,10 @@ impl Coordinator {
             .expect("must exist for active session")
             .pending_cluster_alters
             .clone();
+        // try to drop reconfig replicas
         self.drop_reconfiguration_replicas(reconfiguring_clusters)
-            .await;
+            .await
+            .unwrap_or_terminate("cannot fail to drop reconfiguration replicas");
 
         self.active_conns
             .get_mut(conn_id)

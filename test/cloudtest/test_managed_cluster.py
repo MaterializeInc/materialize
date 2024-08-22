@@ -159,6 +159,8 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     # Other assertions
     # - no pending replicas after alter finishes
     # - names should match r# patter, not end with `-pending`
+    # - cancelled statements correctly roll back
+    # - timedout until ready queries take the appropriate action
     mz.environmentd.sql(
         'CREATE CLUSTER gracefulatlertest ( SIZE = "1" )',
         port="internal",
@@ -328,3 +330,41 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
         )
         == (["1"],)
     ), "Cluster should not have updated if canceled during alter"
+
+    # Test graceful reconfig wait until ready
+    mz.environmentd.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        DROP CLUSTER IF EXISTS gracefulaltertest CASCADE;
+        """,
+        port="internal",
+        user="mz_system",
+    )
+
+    mz.environmentd.sql(
+        """
+        CREATE CLUSTER slow_hydration( SIZE = "1" );
+        SET CLUSTER TO slow_hydration;
+        SET DATABASE TO materialize;
+        CREATE TABLE test_table (id int);
+
+        -- this view will take a loong time to run/hydrate
+        -- we'll use it to validate timeouts
+        CREATE VIEW  test_view AS WITH
+        a AS (SELECT generate_series(0,10000) AS a),
+        b AS (SELECT generate_series(0,1000) AS b)
+        SELECT * FROM  a,b,test_table;
+
+        CREATE INDEX test_view_idx ON test_view(id);
+        """
+    )
+
+    mz.testdrive.run(
+        input=dedent(
+            """
+            ! ALTER CLUSTER slow_hydration set (size='4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
+            contains: canceling statement, provided timeout lapsed
+            """
+        ),
+        no_reset=True,
+    )

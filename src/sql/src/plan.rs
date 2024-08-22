@@ -1666,7 +1666,7 @@ pub enum OnTimeoutAction {
 
 impl Default for OnTimeoutAction {
     fn default() -> Self {
-        Self::Rollback
+        Self::Commit
     }
 }
 

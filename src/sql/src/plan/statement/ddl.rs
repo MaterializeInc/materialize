@@ -4930,13 +4930,10 @@ pub fn plan_alter_cluster(
 
                     match alter_strategy {
                         AlterClusterPlanStrategy::None => {}
-                        AlterClusterPlanStrategy::For(_) => {
+                        _ => {
                             scx.require_feature_flag(
                                 &crate::session::vars::ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION,
                             )?;
-                        }
-                        AlterClusterPlanStrategy::UntilReady { .. } => {
-                            bail_unsupported!("ALTER CLUSTER .. WITH (WAIT UNTIL READY...) is not yet implemented");
                         }
                     }
 

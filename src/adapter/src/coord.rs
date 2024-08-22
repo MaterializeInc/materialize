@@ -134,7 +134,7 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, OnTimeoutAction, Params, QueryWhen};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
@@ -652,7 +652,8 @@ pub struct ExplainTimestampFinish {
 #[derive(Debug)]
 pub enum ClusterStage {
     Alter(AlterCluster),
-    Finalize(FinalizeAlterCluster),
+    WaitForHydrated(AlterClusterWaitForHydrated),
+    Finalize(AlterClusterFinalize),
 }
 
 #[derive(Debug)]
@@ -662,7 +663,16 @@ pub struct AlterCluster {
 }
 
 #[derive(Debug)]
-pub struct FinalizeAlterCluster {
+pub struct AlterClusterWaitForHydrated {
+    validity: PlanValidity,
+    plan: plan::AlterClusterPlan,
+    new_config: ClusterVariantManaged,
+    timeout_time: Instant,
+    on_timeout: OnTimeoutAction,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterFinalize {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,

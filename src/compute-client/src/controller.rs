@@ -50,6 +50,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
@@ -393,6 +394,21 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         }
 
         result
+    }
+
+    /// Returns `true` iff all collections are hydrated on any of the provided replicas.
+    ///
+    /// For this check, zero-replica clusters are always considered hydrated.
+    /// Their collections would never normally be considered hydrated but it's
+    /// clearly intentional that they have no replicas.
+    pub fn all_collections_hydrated_for_replicas(
+        &self,
+        cluster: StorageInstanceId,
+        replicas: Vec<ReplicaId>,
+    ) -> Result<bool, anyhow::Error> {
+        let i = self.instance(cluster)?;
+        i.all_collections_hydrated_on_replicas(Some(replicas))
+            .map_err(|e| e.into())
     }
 
     /// Returns the read and write frontiers for each collection.
