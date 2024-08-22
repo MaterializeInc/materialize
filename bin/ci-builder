@@ -241,6 +241,9 @@ case "$cmd" in
             --env GIT_AUTHOR_NAME
             --env GIT_COMMITTER_EMAIL
             --env GIT_COMMITTER_NAME
+            # For cloud canary
+            --env REDPANDA_CLOUD_CLIENT_ID
+            --env REDPANDA_CLOUD_CLIENT_SECRET
         )
 
         if [[ $detach_container == "true" ]]; then
