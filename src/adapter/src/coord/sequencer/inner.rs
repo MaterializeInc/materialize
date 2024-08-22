@@ -4504,6 +4504,10 @@ impl Coordinator {
         session: &Session,
         notices: &Vec<RawOptimizerNotice>,
     ) {
+        // `for_session` below is expensive, so return early if there's nothing to do.
+        if notices.is_empty() {
+            return;
+        }
         let humanizer = self.catalog.for_session(session);
         let system_vars = self.catalog.system_config();
         for notice in notices {

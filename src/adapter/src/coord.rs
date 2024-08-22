@@ -113,7 +113,7 @@ use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -2970,27 +2970,42 @@ impl Coordinator {
                 .system_config()
                 .coord_slow_message_warn_threshold();
 
+            // How many messages we'd like to batch up before processing them. Must be > 0.
+            const MESSAGE_BATCH: usize = 64;
+            let mut messages = Vec::with_capacity(MESSAGE_BATCH);
+            let mut cmd_messages = Vec::with_capacity(MESSAGE_BATCH);
+
+            let message_batch = self.metrics
+                .message_batch
+                .with_label_values(&[]);
+
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
-                let msg = select! {
-                    // Order matters here. Some correctness properties rely on us processing
-                    // internal commands before processing external commands.
+                select! {
+                    // We prioritize internal commands over other commands. However, we work through
+                    // batches of commands in some branches of this select, which means that even if
+                    // a command generates internal commands, we will work through the current batch
+                    // before receiving a new batch of commands.
                     biased;
 
-                    // `recv()` on `UnboundedReceiver` is cancel-safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                    Some(m) = internal_cmd_rx.recv() => m,
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of commands.
+                    _ = internal_cmd_rx.recv_many(&mut messages, MESSAGE_BATCH) => {},
                     // `next()` on any stream is cancel-safe:
                     // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
-                    Some(event) = cluster_events.next() => Message::ClusterEvent(event),
+                    // Receive a single command.
+                    Some(event) = cluster_events.next() => messages.push(Message::ClusterEvent(event)),
                     // See [`mz_controller::Controller::Controller::ready`] for notes
                     // on why this is cancel-safe.
+                    // Receive a single command.
                     () = self.controller.ready() => {
-                        Message::ControllerReady
+                        messages.push(Message::ControllerReady);
                     }
                     // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
+                    // Receive a single command.
                     permit = group_commit_rx.ready() => {
                         // If we happen to have batched exactly one user write, use
                         // that span so the `emit_trace_id_notice` hooks up.
@@ -3011,19 +3026,21 @@ impl Coordinator {
                                 span
                             }
                         };
-                        Message::GroupCommitInitiate(span, Some(permit))
+                        messages.push(Message::GroupCommitInitiate(span, Some(permit)));
                     },
-                    // `recv()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                    m = cmd_rx.recv() => match m {
-                        None => break,
-                        Some((otel_ctx, m)) => {
-                            Message::Command(otel_ctx, m)
-
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of commands.
+                    count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(cmd_messages.drain(..).map(|(otel_ctx, cmd)| Message::Command(otel_ctx, cmd)));
                         }
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    // Receive a single command.
                     Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
                         let mut pending_read_txns = vec![pending_read_txn];
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
@@ -3036,10 +3053,11 @@ impl Coordinator {
                                 "connections can not have multiple concurrent reads, prev: {prev:?}"
                             )
                         }
-                        Message::LinearizeReads
+                        messages.push(Message::LinearizeReads);
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
                         if self.controller.read_only() {
                             tracing::info!("not advancing timelines in read-only mode");
@@ -3047,16 +3065,18 @@ impl Coordinator {
                         }
                         let span = info_span!(parent: None, "coord::advance_timelines_interval");
                         span.follows_from(Span::current());
-                        Message::GroupCommitInitiate(span, None)
+                        messages.push(Message::GroupCommitInitiate(span, None));
                     },
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    // Receive a single command.
                     _ = self.check_cluster_scheduling_policies_interval.tick() => {
-                        Message::CheckSchedulingPolicies
+                        messages.push(Message::CheckSchedulingPolicies);
                     },
 
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    // Receive a single command.
                     _ = self.check_clusters_hydrated_interval.tick() => {
                         // We do this directly on the main loop instead of
                         // firing off a message. We are still in read-only mode,
@@ -3070,6 +3090,7 @@ impl Coordinator {
                     // Process the idle metric at the lowest priority to sample queue non-idle time.
                     // `recv()` on `Receiver` is cancellation safe:
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
+                    // Receive a single command.
                     timer = idle_rx.recv() => {
                         timer.expect("does not drop").observe_duration();
                         self.metrics
@@ -3080,55 +3101,60 @@ impl Coordinator {
                     }
                 };
 
-                // All message processing functions trace. Start a parent span
-                // for them to make it easy to find slow messages.
-                let msg_kind = msg.kind();
-                let span = span!(
-                    target: "mz_adapter::coord::handle_message_loop",
-                    Level::INFO,
-                    "coord::handle_message",
-                    kind = msg_kind
-                );
-                let otel_context = span.context().span().span_context().clone();
+                // Observe the number of messages we're processing at once.
+                message_batch.observe(f64::cast_lossy(messages.len()));
 
-                // Record the last kind of message in case we get stuck. For
-                // execute commands, we additionally stash the user's SQL,
-                // statement, so we can log it in case we get stuck.
-                *last_message.lock().expect("poisoned") = LastMessage {
-                    kind: msg_kind,
-                    stmt: match &msg {
-                        Message::Command(
-                            _,
-                            Command::Execute {
-                                portal_name,
-                                session,
-                                ..
-                            },
-                        ) => session
-                            .get_portal_unverified(portal_name)
-                            .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
-                        _ => None,
-                    },
-                };
-
-                let start = Instant::now();
-                self.handle_message(span, msg).await;
-                let duration = start.elapsed();
-
-                self.metrics
-                    .message_handling
-                    .with_label_values(&[msg_kind])
-                    .observe(duration.as_secs_f64());
-
-                // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
-                if duration > warn_threshold {
-                    let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
-                    tracing::error!(
-                        ?msg_kind,
-                        ?trace_id,
-                        ?duration,
-                        "very slow coordinator message"
+                for msg in messages.drain(..) {
+                    // All message processing functions trace. Start a parent span
+                    // for them to make it easy to find slow messages.
+                    let msg_kind = msg.kind();
+                    let span = span!(
+                        target: "mz_adapter::coord::handle_message_loop",
+                        Level::INFO,
+                        "coord::handle_message",
+                        kind = msg_kind
                     );
+                    let otel_context = span.context().span().span_context().clone();
+
+                    // Record the last kind of message in case we get stuck. For
+                    // execute commands, we additionally stash the user's SQL,
+                    // statement, so we can log it in case we get stuck.
+                    *last_message.lock().expect("poisoned") = LastMessage {
+                        kind: msg_kind,
+                        stmt: match &msg {
+                            Message::Command(
+                                _,
+                                Command::Execute {
+                                    portal_name,
+                                    session,
+                                    ..
+                                },
+                            ) => session
+                                .get_portal_unverified(portal_name)
+                                .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
+                            _ => None,
+                        },
+                    };
+
+                    let start = Instant::now();
+                    self.handle_message(msg).instrument(span).await;
+                    let duration = start.elapsed();
+
+                    self.metrics
+                        .message_handling
+                        .with_label_values(&[msg_kind])
+                        .observe(duration.as_secs_f64());
+
+                    // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
+                    if duration > warn_threshold {
+                        let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
+                        tracing::error!(
+                            ?msg_kind,
+                            ?trace_id,
+                            ?duration,
+                            "very slow coordinator message"
+                        );
+                    }
                 }
             }
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
