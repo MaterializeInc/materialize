@@ -363,26 +363,21 @@ add a new 'Table' to a Kafka Source to handle a schema change in the messages pu
 to that topic.
 
 When a new `SourceExport` is added to a Kafka Source, the new export needs to be hydrated
-from the upstream topic to ensure it has a complete view of the topic contents.
+from the upstream topic to ensure it has a complete view of the topic contents. Each export
+will potentially include a different set of metadata columns in its output relation so
+the source will need to handle message construction on a per-export basis.
 
-This creates several potential issues regarding the semantics of Kafka Sources:
+When a new `SourceExport` is added, its resume upper will be the minimum value. When this
+resume upper is merged with the existing resume upper for the source it will cause the
+consumer to begin reading from each partition at the lowest offset available (or the
+'start offset' defined on the Kafka Source). This means that we will potentially do a
+long rehydration to catch up to the previous resume-upper, such that existing
+`SourceExports` will not see any new data until the rehydration completes.
 
--   If a new `SourceExport` is added, its resume upper will be the minimum value. If this
-    resume upper is merged with the existing resume upper for the source (which is what
-    happens in Postgres and MySQL sources), it will cause the consumer to begin reading
-    from each partition at the lowest offset available (or the 'start offset' defined
-    on the Kafka Source). This means that we will potentially do a long rehydration
-    to catch up to the previous resume-upper, such that existing `SourceExports` will not
-    see any new data until the rehydration completes.
--   There is one existing Consumer Group ID used by the Kafka Source, and the source
-    commits the consumer offset to the kafka broker each time the progress collection
-    advances through reclocking. Since the Consumer may need to read from earlier
-    offsets to complete the snapshot of the new `SourceExport`, it's unclear how this
-    may affect external progress tracking and broker behavior.
-
-Open Question:
-
--   Do we need to do anything special to handle any of the above?
+This behavior is the same in the Postgres and MySQL sources, so will be left as-is
+for now. In the future we need to refactor the source dataflows to track progress
+on a per-export basis and do independent reclocking such that we can manage the
+timely capabilities / progress of each source export independently.
 
 #### Migration of source statements and collections
 
@@ -430,22 +425,17 @@ in user-facing documentation and related guides.
 
 The proposal for the 2nd option (a new system table):
 
-Introduce a `mz_catalog.mz_available_source_references` with the following columns:
+Introduce a `mz_internal.mz_source_references` with the following columns:
 
 -   `source_id`: The source (e.g. a Postgres, MySQL, Kafka source) this reference is available for.
--   `reference`: The 'external reference' for this available object, such that using `reference`
-    in a `CREATE TABLE <table_name> FROM SOURCE <source_id> (REFERENCE <reference>)` would
-    construct a table ingesting this upstream reference. This is essentially the fully-qualified
-    upstream name of the reference.
--   `columns`: If available, an array of of columns that this external reference would have if it
-    were ingested as a table in Materialize. This will be NULL for source types where an
+-   `columns`: If available, a `text[]` array of columns that this external reference could have
+    if it were ingested as a table in Materialize. This will be NULL for source types where an
     external registry is needed to determine the upstream schema (e.g. Kafka).
 -   `name`: The object name of the reference. E.g. for a Postgres source this is the table name,
     and for kafka is the topic name.
 -   `namespace`: Any namespace that this reference object exists in, if applicable. For Postgres
-    this would be `<database>.<schema>`, for MySQL this would be `<schema>`, and for Kafka this
-    would be NULL.
--   `last_updated_at`: The timestamp of when this reference was fetched from the upstream system.
+    and MySQL this would be the schema name, and for Kafka this would be NULL.
+-   `updated_at`: The timestamp of when this reference was fetched from the upstream system.
 
 Note that we do not expose the types of any of the upstream columns, since each source has
 different constructs for how types are represented, and since some source-types can't
@@ -453,10 +443,15 @@ represent all upstream types (e.g. MySQL) without knowing which of them will be 
 as TEXT using a TEXT COLUMNS option. Therefore the list of `columns` does not imply that each
 of those columns is one that Materialize can actually ingest.
 
-A new `REFRESH SOURCE <source_id or name>` statement will be introduced that can trigger
-a refresh of the rows in `mz_catalog.mz_available_source_references` that pertain to the
-requested source. Otherwise, this catalog table will only be populated at source creation
-time and upon a defined refresh interval in the source operator (perhaps every 60 seconds).
+Since we only expose one `namespace` column we are also limited to only one layer of namespacing
+in this model. For all existing source types this is okay, since Kafka has no namespacing,
+MySQL only has one level, and in Postgres all tables in a publication must belong to the same
+'database' such that the 2nd level of namespacing doesn't matter. In the future if we encounter
+a situation where we need to expose more levels we can add columns as needed.
+
+A new `REFRESH SOURCE REFERENCES <source_id or name>` statement will be introduced that
+can trigger a refresh of the rows in `mz_internal.mz_source_references` that pertain to the
+requested source. Otherwise, this catalog table will only be populated at source creation.
 
 ### System Catalog & Introspection Updates
 
@@ -471,30 +466,13 @@ ability to introspect source-fed tables that they currently have for subsources.
 
 `CREATE TABLE .. FROM SOURCE` statements would be added to this catalog table.
 
-Two new columns would be added:
-
-`data_source_type`: distinguishes these tables
-from 'normal' tables that are written to directly by users. The value of this will
-be one of `'direct'` or `'source'`.
-
-`data_source_id`: a nullable column that contains the `id` of the data source,
-if there is one. In the case of `CREATE TABLE .. FROM SOURCE` statements this would
-contain the `id` of the primary source.
+A `source_id` column will be added to this table: a nullable column that contains
+the `id` of the primary source if there is one. For normal tables this will be `NULL`.
 
 #### [mz_catalog.mz_sources](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_sources)
 
-`CREATE TABLE .. FROM SOURCE` statements will be added to this catalog table, despite
-them being 'tables', since this catalog table contains columns that are unique to
-source-related objects (e.g. `connection_id`).
-
-We will add the variant `'table'` to the `type` column which is currently a `text` column
-containing one of:
-`'kafka', 'mysql', 'postgres', 'load-generator', 'progress', or 'subsource'.`
-
-Once all customer's sources have been migrated to the new model, the `'subsource'` variant will be removed from the `type` column.
-
-Open Question: Will it be confusing to users that these source-fed tables will appear
-in both the `mz_sources` and `mz_tables` catalog tables?
+`CREATE TABLE .. FROM SOURCE` statements will NOT be added to this catalog table, since
+they are 'tables'.
 
 #### [mz_internal.mz_postgres_source_tables](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_postgres_source_tables) and [mz_internal.mz_mysql_source_tables](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_mysql_source_tables)
 
@@ -504,26 +482,22 @@ Each row in these tables contains a mapping from a `subsource` `id` to the exter
 These will be updated to include the same mappings for `CREATE TABLE .. FROM SOURCE`
 table objects to the external `schema` and `table` they are linked to.
 
+Additionally, an `mz_internal.mz_kafka_source_tables` will be added to map a Kafka
+topic to each `CREATE TABLE .. FROM SOURCE` object that links to a Kafka source.
+
 #### [mz_internal.mz_source_statistics](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statistics)
 
-This table does not require any changes to its schema. However it is important to highlight
-that since multiple tables will be able to ingest from the same upstream external reference,
-the values reported in the following fields will be representative of the total number of
-records output to all tables rather than the number of rows ingested from the external references
-of the upstream system:
-
--   updates_staged
--   updates_committed
--   records_indexed
--   bytes_indexed
--   snapshot_records_known
--   snapshot_records_staged
+This table does not require any changes to its schema. `CREATE TABLE .. FROM SOURCE` objects
+will include the same set of information in this table that subsources do.
 
 #### [mz_internal.mz_source_statuses](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statuses)
 
-Similar to the change to `mz_catalog.mz_sources`, The `"table"` variant will be added
-to the `type` column and all `CREATE TABLE .. FROM SOURCE` statements
-will report a status in this table with the same semantics as existing subsources.
+The `"table"` variant will be added to the `type` column and all `CREATE TABLE .. FROM SOURCE`
+statements will report a status in this table with the same semantics as existing subsources.
+
+It may make sense to remove the `type` column to attempt to normalize this information
+across the catalog, but this will require refactoring the Console too so will be done
+outside the scope of this project.
 
 #### [mz_internal.mz_source_status_history](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_status_history)
 
@@ -558,7 +532,7 @@ problems outlined above:
    for it to be later ripped out, it is preferable to implement the interface
    that solves both this need and the other problems outlined above.
 
-## Open questions
+## Remaining open questions
 
 <!--
 What is left unaddressed by this design document that needs to be
@@ -570,8 +544,3 @@ process, you are responsible for getting answers to these open
 questions. All open questions should be answered by the time a design
 document is merged.
 -->
-
-1. How does this affect the system catalog, and source-specific introspection?
-   (e.g. `mz_source_statistics`)
-
-    Update: Section added above
