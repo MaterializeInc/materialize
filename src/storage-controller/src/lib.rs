@@ -899,7 +899,7 @@ where
                     // Register the collection so our manager knows about it.
                     //
                     // NOTE: Maybe this shouldn't be in the collection manager,
-                    // and collection manager should only be responsble for
+                    // and collection manager should only be responsible for
                     // built-in introspection collections?
                     self.collection_manager.register_append_only_collection(id, false);
                 }

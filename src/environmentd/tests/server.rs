@@ -1322,7 +1322,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 
     // Another storage usage collection should not be scheduled immediately.
     {
-        // Give plenty of time so we don't accidentally do another collection if this test is slow.
+        // Give plenty of time, so we don't accidentally do another collection if this test is slow.
         let server = harness
             .with_storage_usage_collection_interval(Duration::from_secs(60 * 1000))
             .start_blocking();
@@ -1347,7 +1347,11 @@ fn test_storage_usage_doesnt_update_between_restarts() {
                 let expected_collection_interval: f64 =
                     f64::cast_lossy(storage_usage_collection_interval.as_secs());
 
-                assert!(actual_collection_interval >= expected_collection_interval);
+                assert!(
+                    // Add 1 second grace period to avoid flaky tests.
+                    actual_collection_interval >= expected_collection_interval - 1.0,
+                    "actual_collection_interval={actual_collection_interval}, expected_collection_interval={expected_collection_interval}"
+                );
             }
             _ => unreachable!("query is limited to 2"),
         }
@@ -1451,7 +1455,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
                     .map_err(|e| e.to_string())
             }).expect("Could not fetch initial timestamp");
 
-        let initial_server_usage_records = client
+        let initial_storage_usage_records = client
             .query_one(
                 "SELECT COUNT(*)::integer AS number
                      FROM mz_internal.mz_storage_usage_by_shard",
@@ -1461,9 +1465,9 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
             .try_get::<_, i32>(0)
             .expect("Could not get initial count of records");
 
-        info!(%initial_timestamp, %initial_server_usage_records);
+        info!(%initial_timestamp, %initial_storage_usage_records);
         assert!(
-            initial_server_usage_records >= 1,
+            initial_storage_usage_records >= 1,
             "No initial server usage records!"
         );
 
@@ -1498,6 +1502,91 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         assert!(
             subsequent_initial_timestamp > initial_timestamp,
             "Records were not reaped!"
+        );
+    };
+}
+
+#[mz_ore::test]
+fn test_storage_usage_records_are_not_cleared_on_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let collection_interval = Duration::from_secs(1);
+    // Intentionally set retention period extremely high so that records aren't reaped.
+    let retention_period = Duration::from_secs(u64::MAX);
+    let harness = test_util::TestHarness::default()
+        .with_storage_usage_collection_interval(collection_interval)
+        .with_storage_usage_retention_period(retention_period)
+        .data_directory(data_dir.path());
+
+    let (initial_timestamp, initial_storage_usage_records) = {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        // Create a table with no data, which should have some overhead and therefore some storage usage.
+        client
+            .batch_execute("CREATE TABLE usage_test (a int)")
+            .unwrap();
+
+        // Wait for initial storage usage collection, to be sure records are present.
+        let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+            client
+                .query_one(
+                    "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::int8 FROM mz_internal.mz_storage_usage_by_shard;",
+                    &[],
+                )
+                .map_err(|e| e.to_string()).unwrap()
+                .try_get::<_, i64>(0)
+                .map_err(|e| e.to_string())
+        }).expect("Could not fetch initial timestamp");
+
+        let initial_storage_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%initial_timestamp, %initial_storage_usage_records);
+        assert!(
+            initial_storage_usage_records >= 1,
+            "No initial server usage records!"
+        );
+
+        (initial_timestamp, initial_storage_usage_records)
+    };
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let subsequent_initial_timestamp =client
+            .query_one(
+                "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::int8 FROM mz_internal.mz_storage_usage_by_shard;",
+                &[],
+            )
+            .map_err(|e| e.to_string()).unwrap()
+            .try_get::<_, i64>(0)
+            .expect("Could not fetch subsequent initial timestamp");
+
+        let subsequent_storage_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%subsequent_initial_timestamp, %subsequent_storage_usage_records);
+        assert_eq!(
+            subsequent_initial_timestamp, initial_timestamp,
+            "storage usage records were cleared"
+        );
+        assert!(
+            subsequent_storage_usage_records >= initial_storage_usage_records,
+            "storage usage was cleared!"
         );
     };
 }

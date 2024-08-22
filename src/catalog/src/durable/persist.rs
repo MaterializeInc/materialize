@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::VersionedEvent;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
@@ -41,7 +41,7 @@ use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -50,12 +50,11 @@ use crate::durable::initialize::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::metrics::Metrics;
-use crate::durable::objects::serialization::proto;
 use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsageKey};
+use crate::durable::objects::{AuditLogKey, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -625,9 +624,6 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     }
                     StateUpdateKind::Setting(key, value) => {
                         apply(&mut snapshot.settings, key, value, diff);
-                    }
-                    StateUpdateKind::StorageUsage(_key, ()) => {
-                        // Ignore for snapshots.
                     }
                     StateUpdateKind::SystemConfiguration(key, value) => {
                         apply(&mut snapshot.system_configurations, key, value, diff);
@@ -1222,60 +1218,9 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 }
 
-/// Certain large collections are only needed during startup. This struct helps us cache these
-/// values during startup and ignore them at all other times.
-#[derive(Debug)]
-enum LargeCollectionStartupCache<T> {
-    /// Actively caching any new value that is seen.
-    Open(Vec<(T, Diff)>),
-    /// Ignoring any new value that is seen.
-    Closed,
-}
-
-impl<T> LargeCollectionStartupCache<T> {
-    /// Create a new opened [`LargeCollectionStartupCache`].
-    fn new_open() -> LargeCollectionStartupCache<T> {
-        LargeCollectionStartupCache::Open(Vec::new())
-    }
-
-    /// Add value to cache if open, otherwise ignore.
-    fn push(&mut self, value: (T, Diff)) {
-        match self {
-            LargeCollectionStartupCache::Open(cache) => {
-                cache.push(value);
-            }
-            LargeCollectionStartupCache::Closed => {
-                // Cache is closed, ignore value.
-            }
-        }
-    }
-}
-
-impl<T: Ord> LargeCollectionStartupCache<T> {
-    /// If the cache is open, then return all the cached values and close the cache, otherwise
-    /// return `None`.
-    fn take(&mut self) -> Option<Vec<T>> {
-        if let Self::Open(mut cache) = std::mem::replace(self, Self::Closed) {
-            differential_dataflow::consolidation::consolidate(&mut cache);
-            let cache = cache
-                .into_iter()
-                .map(|(v, diff)| {
-                    assert_eq!(1, diff, "consolidated cache should have no retraction");
-                    v
-                })
-                .collect();
-            Some(cache)
-        } else {
-            None
-        }
-    }
-}
-
 /// Applies updates for an opened catalog.
 #[derive(Debug)]
 struct CatalogStateInner {
-    /// A cache of storage usage events that is only populated during startup.
-    storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
     /// A trace of all catalog updates that can be consumed by some higher layer.
     updates: VecDeque<memory::objects::StateUpdate>,
 }
@@ -1283,7 +1228,6 @@ struct CatalogStateInner {
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
         CatalogStateInner {
-            storage_usage_events: LargeCollectionStartupCache::new_open(),
             updates: VecDeque::new(),
         }
     }
@@ -1304,8 +1248,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 .add(update.diff);
         }
 
-        // Storage usage events are skipped due to their size.
-        if !matches!(update.kind, StateUpdateKind::StorageUsage(..)) {
+        {
             let update: Option<memory::objects::StateUpdate> = (&update).try_into()?;
             if let Some(update) = update {
                 self.updates.push_back(update);
@@ -1314,10 +1257,6 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
 
         match (update.kind, update.diff) {
             (StateUpdateKind::AuditLog(_, ()), _) => Ok(None),
-            (StateUpdateKind::StorageUsage(key, ()), _) => {
-                self.storage_usage_events.push((key, update.diff));
-                Ok(None)
-            }
             // Nothing to due for epoch retractions but wait for the next insertion.
             (StateUpdateKind::Epoch(_), -1) => Ok(None),
             (StateUpdateKind::Epoch(epoch), 1) => {
@@ -1529,68 +1468,6 @@ impl DurableCatalogState for PersistCatalogState {
         self.sync_to_current_upper().await?;
         Ok(())
     }
-
-    #[mz_ore::instrument]
-    async fn get_and_prune_storage_usage(
-        &mut self,
-        retention_period: Option<Duration>,
-        boot_ts: mz_repr::Timestamp,
-    ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
-        self.sync_to_current_upper().await?;
-
-        // If no usage retention period is set, set the cutoff to MIN so nothing
-        // is removed.
-        let cutoff_ts = match retention_period {
-            None => u128::MIN,
-            Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
-        };
-        let storage_usage = match self.update_applier.storage_usage_events.take() {
-            Some(storage_usage) => storage_usage,
-            None => {
-                error!("storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
-                self.persist_snapshot()
-                    .await
-                    .filter_map(
-                        |StateUpdate {
-                             kind,
-                             ts: _,
-                             diff: _,
-                         }| match kind {
-                            StateUpdateKind::StorageUsage(key, ()) => Some(key),
-                            _ => None,
-                        },
-                    )
-                    .collect()
-            }
-        };
-
-        let storage_usage = storage_usage
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|key: StorageUsageKey| key.metric);
-        let mut events = Vec::new();
-        let mut expired = Vec::new();
-
-        for event in storage_usage {
-            let event = event?;
-            if u128::from(event.timestamp()) >= cutoff_ts {
-                events.push(event);
-            } else if retention_period.is_some() {
-                debug!("pruning storage event {event:?}");
-                expired.push(event);
-            }
-        }
-
-        if !self.is_read_only() {
-            let mut txn = self.transaction().await?;
-            txn.remove_storage_usage_events(expired);
-            txn.commit_internal().await?;
-        }
-
-        events.sort_by(|event1, event2| event1.sortable_id().cmp(&event2.sortable_id()));
-
-        Ok(events)
-    }
 }
 
 /// Deterministically generate a builtin table migration shard ID for the given
@@ -1741,9 +1618,6 @@ impl Trace {
                 StateUpdateKind::Role(k, v) => trace.roles.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Schema(k, v) => trace.schemas.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Setting(k, v) => trace.settings.values.push(((k, v), ts, diff)),
-                StateUpdateKind::StorageUsage(k, v) => {
-                    trace.storage_usage.values.push(((k, v), ts, diff))
-                }
                 StateUpdateKind::SystemConfiguration(k, v) => {
                     trace.system_configurations.values.push(((k, v), ts, diff))
                 }

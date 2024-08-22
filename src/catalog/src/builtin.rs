@@ -346,6 +346,12 @@ impl Fingerprint for &BuiltinTable {
             .lock()
             .expect("lock poisoned");
         match &*guard {
+            // `mz_storage_usage_by_shard` can never be migrated.
+            _ if self.schema == MZ_STORAGE_USAGE_BY_SHARD.schema
+                && self.name == MZ_STORAGE_USAGE_BY_SHARD.name =>
+            {
+                self.desc.fingerprint()
+            }
             Some((UnsafeBuiltinTableFingerprintWhitespace::All, whitespace)) => {
                 format!("{}{}", self.desc.fingerprint(), whitespace)
             }
@@ -3073,6 +3079,13 @@ WHERE
     mz_sinks.id NOT LIKE 's%'",
     access: vec![PUBLIC_SELECT],
 });
+
+pub static MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION: Lazy<SystemObjectDescription> =
+    Lazy::new(|| SystemObjectDescription {
+        schema_name: MZ_STORAGE_USAGE_BY_SHARD.schema.to_string(),
+        object_type: CatalogItemType::Table,
+        object_name: MZ_STORAGE_USAGE_BY_SHARD.name.to_string(),
+    });
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",

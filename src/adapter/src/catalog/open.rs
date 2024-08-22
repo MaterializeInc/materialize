@@ -19,7 +19,8 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
     Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
-    BUILTIN_PREFIXES, BUILTIN_ROLES, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
+    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -31,8 +32,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    BootstrapStateUpdateKind, CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateDiff,
-    StateUpdate, StateUpdateKind,
+    BootstrapStateUpdateKind, CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges,
+    StateUpdate,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -372,7 +373,6 @@ impl Catalog {
                 BootstrapStateUpdateKind::Item(_) => item_updates.push((kind, ts, diff)),
                 BootstrapStateUpdateKind::Comment(_)
                 | BootstrapStateUpdateKind::AuditLog(_)
-                | BootstrapStateUpdateKind::StorageUsage(_)
                 | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
                 | BootstrapStateUpdateKind::UnfinalizedShard(_) => {
                     post_item_updates.push(StateUpdate {
@@ -470,10 +470,7 @@ impl Catalog {
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
     #[instrument(name = "catalog::open")]
-    pub fn open(
-        config: Config<'_>,
-        boot_ts: mz_repr::Timestamp,
-    ) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
+    pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
         async move {
             let mut storage = config.storage;
             let InitializeStateResult {
@@ -535,26 +532,6 @@ impl Catalog {
                     _ => unreachable!("all operators must be scalar functions"),
                 }
             }
-
-            let storage_usage_events = catalog
-                .storage()
-                .await
-                .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
-                .await?
-                .into_iter()
-                .map(|metric| StateUpdate {
-                    kind: StateUpdateKind::StorageUsage(
-                        mz_catalog::durable::objects::StorageUsage { metric },
-                    ),
-                    ts: boot_ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect();
-            builtin_table_updates.extend(
-                catalog
-                    .state
-                    .generate_builtin_table_updates(storage_usage_events),
-            );
 
             for ip in &catalog.state.egress_ips {
                 builtin_table_updates.push(
@@ -971,6 +948,11 @@ fn add_new_remove_old_builtin_items_migration(
         match system_object_mappings.remove(&desc) {
             Some(system_object_mapping) => {
                 if system_object_mapping.unique_identifier.fingerprint != fingerprint {
+                    assert_ne!(
+                        *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
+                        system_object_mapping.description,
+                        "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
+                    );
                     assert_ne!(
                         builtin.catalog_item_type(),
                         CatalogItemType::Type,

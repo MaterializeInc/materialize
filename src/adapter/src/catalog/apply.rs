@@ -234,9 +234,6 @@ impl CatalogState {
             StateUpdateKind::AuditLog(_audit_log) => {
                 // Audit logs are not stored in-memory.
             }
-            StateUpdateKind::StorageUsage(_storage_usage) => {
-                // Storage usage events are not stored in-memory.
-            }
             StateUpdateKind::StorageCollectionMetadata(storage_collection_metadata) => {
                 self.apply_storage_collection_metadata_update(
                     storage_collection_metadata,
@@ -1069,9 +1066,6 @@ impl CatalogState {
                     .pack_audit_log_update(&audit_log.event, diff)
                     .expect("could not pack audit log update")]
             }
-            StateUpdateKind::StorageUsage(storage_usage) => {
-                vec![self.pack_storage_usage_update(&storage_usage.metric, diff)]
-            }
             StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
@@ -1569,7 +1563,6 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             ),
             StateUpdateKind::Comment(_)
             | StateUpdateKind::AuditLog(_)
-            | StateUpdateKind::StorageUsage(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => push_update(
                 update,

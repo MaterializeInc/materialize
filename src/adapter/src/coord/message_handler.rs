@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use maplit::btreemap;
+use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
@@ -35,6 +36,7 @@ use tracing::{event, info_span, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
+use crate::catalog::Op;
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::{
@@ -42,7 +44,7 @@ use crate::coord::{
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::{catalog, AdapterNotice, TimestampContext};
+use crate::{AdapterNotice, TimestampContext};
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -270,12 +272,25 @@ impl Coordinator {
             self.get_local_write_ts().await.timestamp.into()
         };
 
-        let mut ops = vec![];
+        let mut ops = Vec::with_capacity(shards_usage.by_shard.len());
         for (shard_id, shard_usage) in shards_usage.by_shard {
-            ops.push(catalog::Op::UpdateStorageUsage {
-                shard_id: Some(shard_id.to_string()),
-                size_bytes: shard_usage.size_bytes(),
+            let id = match self.catalog().allocate_storage_usage_id().await {
+                Ok(id) => id,
+                Err(err) => {
+                    tracing::warn!("Failed to allocate ID for storage metrics: {:?}", err);
+                    return;
+                }
+            };
+            let metric = VersionedStorageUsage::new(
+                id,
+                Some(shard_id.to_string()),
+                shard_usage.size_bytes(),
                 collection_timestamp,
+            );
+            let builtin_table_update = self.catalog().pack_storage_usage_update(metric, 1);
+            ops.push(Op::WeirdBuiltinTableUpdates {
+                builtin_table_update,
+                audit_log: Vec::new(),
             });
         }
 

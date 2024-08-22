@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::VersionedEvent;
 use uuid::Uuid;
 
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -277,16 +277,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// NB: We may remove this in later iterations of Pv2.
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
-    /// Gets all storage usage events and permanently deletes from the catalog those
-    /// that happened more than the retention period ago from boot_ts.
-    ///
-    /// Results are guaranteed to be sorted by ID.
-    async fn get_and_prune_storage_usage(
-        &mut self,
-        retention_period: Option<Duration>,
-        boot_ts: mz_repr::Timestamp,
-    ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
-
     /// Allocates and returns `amount` IDs of `id_type`.
     #[mz_ore::instrument(level = "debug")]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
@@ -331,6 +321,12 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = self.allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ReplicaId::System(id))
+    }
+
+    /// Allocates and returns a storage usage ID.
+    async fn allocate_storage_usage_id(&mut self) -> Result<u64, CatalogError> {
+        let id = self.allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, 1).await?;
+        Ok(id.into_element())
     }
 }
 

@@ -147,7 +147,6 @@ impl StateUpdate {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            storage_usage_updates,
             commit_ts: _,
         } = txn_batch;
         let databases = from_batch(databases, StateUpdateKind::Database);
@@ -177,8 +176,6 @@ impl StateUpdate {
         let unfinalized_shards = from_batch(unfinalized_shards, StateUpdateKind::UnfinalizedShard);
         let txn_wal_shard = from_batch(txn_wal_shard, StateUpdateKind::TxnWalShard);
         let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
-        let storage_usage_updates =
-            from_batch(storage_usage_updates, StateUpdateKind::StorageUsage);
 
         databases
             .chain(schemas)
@@ -199,7 +196,6 @@ impl StateUpdate {
             .chain(unfinalized_shards)
             .chain(txn_wal_shard)
             .chain(audit_logs)
-            .chain(storage_usage_updates)
     }
 }
 
@@ -226,7 +222,6 @@ pub enum StateUpdateKind {
     Role(proto::RoleKey, proto::RoleValue),
     Schema(proto::SchemaKey, proto::SchemaValue),
     Setting(proto::SettingKey, proto::SettingValue),
-    StorageUsage(proto::StorageUsageKey, ()),
     SystemConfiguration(
         proto::ServerConfigurationKey,
         proto::ServerConfigurationValue,
@@ -260,7 +255,6 @@ impl StateUpdateKind {
             StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
             StateUpdateKind::Schema(_, _) => Some(CollectionType::Schema),
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
-            StateUpdateKind::StorageUsage(_, _) => Some(CollectionType::StorageUsage),
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
@@ -386,12 +380,6 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let storage_collection_metadata = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
                     storage_collection_metadata,
-                ))
-            }
-            StateUpdateKind::StorageUsage(key, value) => {
-                let storage_usage = into_durable(key, value)?;
-                Some(memory::objects::StateUpdateKind::StorageUsage(
-                    storage_usage,
                 ))
             }
             StateUpdateKind::SystemConfiguration(key, value) => {
@@ -558,11 +546,6 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         key: Some(key),
                         value: Some(value),
                     })
-                }
-                StateUpdateKind::StorageUsage(key, _value) => {
-                    proto::state_update_kind::Kind::StorageUsage(
-                        proto::state_update_kind::StorageUsage { key: Some(key) },
-                    )
                 }
                 StateUpdateKind::SystemConfiguration(key, value) => {
                     proto::state_update_kind::Kind::ServerConfiguration(
@@ -765,14 +748,6 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     value.ok_or_else(|| {
                         TryFromProtoError::missing_field("state_update_kind::Setting::value")
                     })?,
-                ),
-                proto::state_update_kind::Kind::StorageUsage(
-                    proto::state_update_kind::StorageUsage { key },
-                ) => StateUpdateKind::StorageUsage(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::StorageUsage::key")
-                    })?,
-                    (),
                 ),
                 proto::state_update_kind::Kind::ServerConfiguration(
                     proto::state_update_kind::ServerConfiguration { key, value },
