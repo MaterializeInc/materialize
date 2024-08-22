@@ -511,7 +511,7 @@ assessed approximately every hour.
 
 {{< if-released "v0.111" >}}
 Consider querying
-[`mz_internal.mz_recent_storage_usage`](../mz_internal#mz_recent_storage_usage)
+[`mz_catalog.mz_recent_storage_usage`](#mz_recent_storage_usage)
 instead if you are interested in only the most recent storage usage information.
 {{< /if-released >}}
 
