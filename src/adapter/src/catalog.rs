@@ -333,7 +333,7 @@ impl Catalog {
             });
             let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
             soft_panic_or_log!(
-                "all dropped_notices entries have `Arc::strong_count(_) == 1`; \
+                "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
                  bad_notices = {bad_notices}; \
                  drop_ids = {drop_ids:?}"
             );
