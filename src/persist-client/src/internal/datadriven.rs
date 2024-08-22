@@ -98,11 +98,9 @@ impl<'a> DirectiveArgs<'a> {
         let (desc, len, keys) = (parts[0], parts[1], &parts[2..]);
         let desc = Self::parse_desc(desc);
         let len = len.parse().expect("invalid len");
-        HollowBatch {
+        HollowBatch::new_run(
             desc,
-            len,
-            parts: keys
-                .iter()
+            keys.iter()
                 .map(|x| {
                     BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
@@ -116,9 +114,8 @@ impl<'a> DirectiveArgs<'a> {
                     })
                 })
                 .collect(),
-            runs: vec![],
-            run_meta: vec![],
-        }
+            len,
+        )
     }
 
     #[track_caller]

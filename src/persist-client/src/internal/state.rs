@@ -539,6 +539,17 @@ impl<T> HollowBatch<T> {
         }
     }
 
+    /// Construct a batch of a single run.
+    pub(crate) fn new_run(desc: Description<T>, parts: Vec<BatchPart<T>>, len: usize) -> Self {
+        Self {
+            desc,
+            len,
+            parts,
+            runs: vec![],
+            run_meta: vec![],
+        }
+    }
+
     /// An empty hollow batch, representing no updates over the given desc.
     pub(crate) fn empty(desc: Description<T>) -> Self {
         Self {
@@ -2323,7 +2334,7 @@ pub(crate) mod tests {
         keys: &[&str],
         len: usize,
     ) -> HollowBatch<T> {
-        HollowBatch::new(
+        HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(lower),
                 Antichain::from_elem(upper),
@@ -2344,8 +2355,6 @@ pub(crate) mod tests {
                 })
                 .collect(),
             len,
-            vec![],
-            vec![],
         )
     }
 

@@ -1343,7 +1343,7 @@ mod tests {
                                 .into_iter()
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
-                            let output = HollowBatch::new(req.desc, parts, len, vec![], vec![]);
+                            let output = HollowBatch::new_run(req.desc, parts, len);
                             leader
                                 .collections
                                 .trace
@@ -1384,7 +1384,7 @@ mod tests {
     #[mz_ore::test]
     fn regression_15493_sniff_insert() {
         fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
-            HollowBatch::new(
+            HollowBatch::new_run(
                 Description::new(
                     Antichain::from_elem(lower),
                     Antichain::from_elem(upper),
@@ -1392,8 +1392,6 @@ mod tests {
                 ),
                 Vec::new(),
                 len,
-                Vec::new(),
-                Vec::new(),
             )
         }
 
@@ -1494,7 +1492,7 @@ mod tests {
                     Antichain::from_elem(*upper),
                     Antichain::from_elem(*since),
                 );
-                HollowBatch::new(desc, Vec::new(), *len, Vec::new(), Vec::new())
+                HollowBatch::new_run(desc, Vec::new(), *len)
             }
             let replacement = batch(&replacement);
             let batches = spine.iter().map(batch).collect::<Vec<_>>();

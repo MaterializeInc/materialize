@@ -1726,7 +1726,7 @@ mod tests {
 
     #[mz_ore::test]
     fn hollow_batch_migration_keys() {
-        let x = HollowBatch::new(
+        let x = HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(1u64),
                 Antichain::from_elem(2u64),
@@ -1743,8 +1743,6 @@ mod tests {
                 schema_id: None,
             })],
             4,
-            vec![],
-            vec![],
         );
         let mut old = x.into_proto();
         // Old ProtoHollowBatch had keys instead of parts.
