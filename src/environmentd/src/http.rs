@@ -61,6 +61,7 @@ use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::{Service, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
+use uuid::Uuid;
 
 use crate::deployment::state::DeploymentStateHandle;
 use crate::http::sql::SqlError;
@@ -482,6 +483,7 @@ impl AuthedClient {
         let conn_id = adapter_client.new_conn_id()?;
         let mut session = adapter_client.new_session(SessionConfig {
             conn_id,
+            uuid: Uuid::new_v4(),
             user: user.name,
             external_metadata_rx: user.external_metadata_rx,
         });

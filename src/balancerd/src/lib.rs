@@ -673,7 +673,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let outer_metrics = self.metrics.clone();
         let cancellation_resolver = self.cancellation_resolver.clone();
         let conn_uuid = Uuid::new_v4();
-        conn.uuid_handle().set(Some(conn_uuid));
+        conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.

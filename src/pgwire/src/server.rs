@@ -23,6 +23,7 @@ use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
 use tokio_openssl::SslStream;
 use tracing::{debug, error, trace};
+use uuid::Uuid;
 
 use crate::codec::FramedConn;
 use crate::metrics::{Metrics, MetricsConfig};
@@ -127,13 +128,15 @@ impl Server {
                                 mut params,
                             }) => {
                                 // If someone (usually the balancer) forwarded a connection UUID,
-                                // then use that, otherwise use the connection UUID passed in.
+                                // then use that, otherwise generate one.
                                 let conn_uuid_handle = conn.inner_mut().uuid_handle();
                                 let conn_uuid = params
                                     .remove(CONN_UUID_KEY)
                                     .and_then(|uuid| uuid.parse().inspect_err(|e| error!("pgwire connection with invalid conn UUID: {e}")).ok());
+                                let conn_uuid_forwarded = conn_uuid.is_some();
+                                let conn_uuid = conn_uuid.unwrap_or_else(Uuid::new_v4);
                                 conn_uuid_handle.set(conn_uuid);
-                                debug!(conn_uuid = %conn_uuid_handle.display(), "starting new pgwire connection in adapter");
+                                debug!(conn_uuid = %conn_uuid_handle.display(), conn_uuid_forwarded, "starting new pgwire connection in adapter");
 
                                 let mut conn = FramedConn::new(conn_id.clone(), conn);
 
@@ -141,6 +144,7 @@ impl Server {
                                     tls_mode: tls.as_ref().map(|tls| tls.mode),
                                     adapter_client,
                                     conn: &mut conn,
+                                    conn_uuid,
                                     version,
                                     params,
                                     frontegg: frontegg.as_ref(),

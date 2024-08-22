@@ -124,8 +124,8 @@ impl ConnectionUuidHandle {
     }
 
     /// Sets the UUID for this connection.
-    pub fn set(&self, conn_uuid: Option<Uuid>) {
-        *self.0.lock().expect("lock poisoned") = conn_uuid;
+    pub fn set(&self, conn_uuid: Uuid) {
+        *self.0.lock().expect("lock poisoned") = Some(conn_uuid);
     }
 
     /// Returns a displayble that renders a possibly missing connection UUID.
