@@ -1506,16 +1506,62 @@ pub struct TableOption<T: AstInfo> {
 }
 impl_display_for_with_option!(TableOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TableFromSourceOptionName {
+    /// Columns whose types you want to unconditionally format as text
+    TextColumns,
+    /// Columns you want to ignore when ingesting data
+    IgnoreColumns,
+    /// Hex-encoded protobuf of a `ProtoSourceExportStatementDetails`
+    /// message, which includes details necessary for planning this
+    /// table as a Source Export
+    Details,
+}
+
+impl AstDisplay for TableFromSourceOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            TableFromSourceOptionName::TextColumns => "TEXT COLUMNS",
+            TableFromSourceOptionName::IgnoreColumns => "IGNORE COLUMNS",
+            TableFromSourceOptionName::Details => "DETAILS",
+        })
+    }
+}
+impl_display!(TableFromSourceOptionName);
+
+impl WithOptionName for TableFromSourceOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            TableFromSourceOptionName::Details
+            | TableFromSourceOptionName::TextColumns
+            | TableFromSourceOptionName::IgnoreColumns => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableFromSourceOption<T: AstInfo> {
+    pub name: TableFromSourceOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(TableFromSourceOption);
+
 /// `CREATE TABLE .. FROM SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTableFromSourceStatement<T: AstInfo> {
     /// Table name
     pub name: UnresolvedItemName,
-    /// Optional set of columns to include
-    pub columns: Vec<Ident>,
+    pub columns: Vec<ColumnDef<T>>,
+    pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub source: T::ItemName,
     pub external_reference: UnresolvedItemName,
+    pub with_options: Vec<TableFromSourceOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
@@ -1523,19 +1569,25 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
         let Self {
             name,
             columns,
+            constraints,
             source,
             external_reference,
             if_not_exists,
+            with_options,
         } = self;
         f.write_str("CREATE TABLE ");
         if *if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(name);
-        if !columns.is_empty() {
+        if !columns.is_empty() || !constraints.is_empty() {
             f.write_str(" (");
 
             f.write_node(&display::comma_separated(columns));
+            if !constraints.is_empty() {
+                f.write_str(", ");
+                f.write_node(&display::comma_separated(constraints));
+            }
             f.write_str(")");
         }
         f.write_str(" FROM SOURCE ");
@@ -1543,6 +1595,12 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
         f.write_str(" (REFERENCE = ");
         f.write_node(external_reference);
         f.write_str(")");
+
+        if !with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(with_options));
+            f.write_str(")");
+        }
     }
 }
 impl_display_t!(CreateTableFromSourceStatement);

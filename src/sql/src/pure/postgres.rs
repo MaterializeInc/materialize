@@ -19,7 +19,7 @@ use mz_repr::{ColumnType, RelationType, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    ExternalReferences, Ident, UnresolvedItemName, Value, WithOptionValue,
+    ExternalReferences, Ident, TableConstraint, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::sources::postgres::CastType;
@@ -147,97 +147,18 @@ pub fn generate_create_subsource_statements(
     let mut subsources = Vec::with_capacity(requested_subsources.len());
 
     for (subsource_name, purified_export) in requested_subsources {
-        let (text_columns, table) = match purified_export.details {
-            PurifiedExportDetails::Postgres {
-                text_columns,
-                table,
-            } => (text_columns, table),
-            _ => unreachable!("purified export details must be postgres"),
-        };
-
-        let text_column_set = text_columns
-            .as_ref()
-            .map(|v| BTreeSet::from_iter(v.iter().map(Ident::as_str)));
-
-        // Figure out the schema of the subsource
-        let mut columns = vec![];
-        for c in table.columns.iter() {
-            let name = Ident::new(c.name.clone())?;
-
-            let ty = match text_column_set {
-                Some(ref names) if names.contains(c.name.as_str()) => mz_pgrepr::Type::Text,
-                _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
-                    Ok(t) => t,
-                    Err(_) => {
-                        let mut full_name = purified_export.external_reference.0.clone();
-                        full_name.push(name);
-                        unsupported_cols.push((
-                            UnresolvedItemName(full_name).to_ast_string(),
-                            mz_repr::adt::system::Oid(c.type_oid),
-                        ));
-                        continue;
-                    }
-                },
-            };
-
-            let data_type = scx.resolve_type(ty)?;
-            let mut options = vec![];
-
-            if !c.nullable {
-                options.push(mz_sql_parser::ast::ColumnOptionDef {
-                    name: None,
-                    option: mz_sql_parser::ast::ColumnOption::NotNull,
-                });
-            }
-
-            columns.push(ColumnDef {
-                name,
-                data_type,
-                collation: None,
-                options,
-            });
-        }
-
-        let mut constraints = vec![];
-        for key in table.keys.clone() {
-            let mut key_columns = vec![];
-
-            for col_num in key.cols {
-                let ident = Ident::new(
-                    table
-                        .columns
-                        .iter()
-                        .find(|col| col.col_num == col_num)
-                        .expect("key exists as column")
-                        .name
-                        .clone(),
-                )?;
-                key_columns.push(ident);
-            }
-
-            let constraint = mz_sql_parser::ast::TableConstraint::Unique {
-                name: Some(Ident::new(key.name)?),
-                columns: key_columns,
-                is_primary: key.is_primary,
-                nulls_not_distinct: key.nulls_not_distinct,
-            };
-
-            // We take the first constraint available to be the primary key.
-            if key.is_primary {
-                constraints.insert(0, constraint);
-            } else {
-                constraints.push(constraint);
-            }
-        }
-
-        let details = SourceExportStatementDetails::Postgres { table };
+        let PostgresExportStatementValues {
+            columns,
+            constraints,
+            text_columns,
+            details,
+            external_reference,
+        } = generate_source_export_statement_values(scx, purified_export, &mut unsupported_cols)?;
 
         let mut with_options = vec![
             CreateSubsourceOption {
                 name: CreateSubsourceOptionName::ExternalReference,
-                value: Some(WithOptionValue::UnresolvedItemName(
-                    purified_export.external_reference,
-                )),
+                value: Some(WithOptionValue::UnresolvedItemName(external_reference)),
             },
             CreateSubsourceOption {
                 name: CreateSubsourceOptionName::Details,
@@ -250,12 +171,7 @@ pub fn generate_create_subsource_statements(
         if let Some(text_columns) = text_columns {
             with_options.push(CreateSubsourceOption {
                 name: CreateSubsourceOptionName::TextColumns,
-                value: Some(WithOptionValue::Sequence(
-                    text_columns
-                        .into_iter()
-                        .map(WithOptionValue::Ident::<Aug>)
-                        .collect::<Vec<_>>(),
-                )),
+                value: Some(WithOptionValue::Sequence(text_columns)),
             });
         }
 
@@ -291,6 +207,120 @@ pub fn generate_create_subsource_statements(
     Ok(subsources)
 }
 
+pub(super) struct PostgresExportStatementValues {
+    pub(super) columns: Vec<ColumnDef<Aug>>,
+    pub(super) constraints: Vec<TableConstraint<Aug>>,
+    pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) details: SourceExportStatementDetails,
+    pub(super) external_reference: UnresolvedItemName,
+}
+
+pub(super) fn generate_source_export_statement_values(
+    scx: &StatementContext,
+    purified_export: PurifiedSourceExport,
+    unsupported_cols: &mut Vec<(String, mz_repr::adt::system::Oid)>,
+) -> Result<PostgresExportStatementValues, PlanError> {
+    let (text_columns, table) = match purified_export.details {
+        PurifiedExportDetails::Postgres {
+            text_columns,
+            table,
+        } => (text_columns, table),
+        _ => unreachable!("purified export details must be postgres"),
+    };
+
+    let text_column_set = text_columns
+        .as_ref()
+        .map(|v| BTreeSet::from_iter(v.iter().map(Ident::as_str)));
+
+    // Figure out the schema of the subsource
+    let mut columns = vec![];
+    for c in table.columns.iter() {
+        let name = Ident::new(c.name.clone())?;
+
+        let ty = match text_column_set {
+            Some(ref names) if names.contains(c.name.as_str()) => mz_pgrepr::Type::Text,
+            _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
+                Ok(t) => t,
+                Err(_) => {
+                    let mut full_name = purified_export.external_reference.0.clone();
+                    full_name.push(name);
+                    unsupported_cols.push((
+                        UnresolvedItemName(full_name).to_ast_string(),
+                        mz_repr::adt::system::Oid(c.type_oid),
+                    ));
+                    continue;
+                }
+            },
+        };
+
+        let data_type = scx.resolve_type(ty)?;
+        let mut options = vec![];
+
+        if !c.nullable {
+            options.push(mz_sql_parser::ast::ColumnOptionDef {
+                name: None,
+                option: mz_sql_parser::ast::ColumnOption::NotNull,
+            });
+        }
+
+        columns.push(ColumnDef {
+            name,
+            data_type,
+            collation: None,
+            options,
+        });
+    }
+
+    let mut constraints = vec![];
+    for key in table.keys.clone() {
+        let mut key_columns = vec![];
+
+        for col_num in key.cols {
+            let ident = Ident::new(
+                table
+                    .columns
+                    .iter()
+                    .find(|col| col.col_num == col_num)
+                    .expect("key exists as column")
+                    .name
+                    .clone(),
+            )?;
+            key_columns.push(ident);
+        }
+
+        let constraint = mz_sql_parser::ast::TableConstraint::Unique {
+            name: Some(Ident::new(key.name)?),
+            columns: key_columns,
+            is_primary: key.is_primary,
+            nulls_not_distinct: key.nulls_not_distinct,
+        };
+
+        // We take the first constraint available to be the primary key.
+        if key.is_primary {
+            constraints.insert(0, constraint);
+        } else {
+            constraints.push(constraint);
+        }
+    }
+    let details = SourceExportStatementDetails::Postgres { table };
+
+    let text_columns = text_columns.map(|mut columns| {
+        columns.sort();
+        columns
+            .into_iter()
+            .map(WithOptionValue::Ident::<Aug>)
+            .collect()
+    });
+
+    Ok(PostgresExportStatementValues {
+        columns,
+        constraints,
+        text_columns,
+        details,
+        external_reference: purified_export.external_reference,
+    })
+}
+
 pub(super) struct PurifiedSourceExports {
     pub(super) source_exports: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     // NOTE(roshan): The text columns are already part of their
@@ -310,7 +340,7 @@ pub(super) async fn purify_source_exports(
     config: &mz_postgres_util::Config,
     publication: &str,
     connection: &PostgresConnection,
-    external_references: &mut Option<ExternalReferences>,
+    external_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
 ) -> Result<PurifiedSourceExports, PlanError> {
@@ -327,7 +357,7 @@ pub(super) async fn purify_source_exports(
 
     let mut validated_references = vec![];
     match external_references
-        .as_mut()
+        .as_ref()
         .ok_or(PgSourcePurificationError::RequiresExternalReferences)?
     {
         ExternalReferences::All => {
@@ -404,7 +434,7 @@ pub(super) async fn purify_source_exports(
     // source-fed tables to that source later.
     if validated_references.is_empty() {
         sql_bail!(
-            "[internal error]: Postgres source must ingest at least one table, but {} matched none",
+            "[internal error]: Postgres reference {} did not match any tables",
             external_references.as_ref().unwrap().to_ast_string()
         );
     }

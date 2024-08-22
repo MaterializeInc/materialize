@@ -24,11 +24,11 @@ use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
 use mz_mysql_util::MySqlTableDesc;
-use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
+use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
@@ -40,18 +40,20 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
     ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
-    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function,
-    FunctionArgs, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement, UnresolvedItemName,
+    CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
+    DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
+    KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption, LoadGeneratorOptionName,
+    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
+    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement,
+    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::errors::ContextCreationError;
+use mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
@@ -97,7 +99,7 @@ pub(crate) struct RequestedSourceExport<'a, T> {
 
 /// Generates appropriate source exports for a set of external references to export from a source.
 fn source_export_gen<'a, T: ExternalCatalogReference>(
-    selected_references: &mut Vec<ExternalReferenceExport>,
+    selected_references: &'a [ExternalReferenceExport],
     resolver: &SourceReferenceResolver,
     references: &'a [T],
     canonical_width: usize,
@@ -190,11 +192,11 @@ fn validate_source_export_names<T>(
         })?;
     }
 
-    // TODO: Remove this when supporting source-fed tables which can ingest the same external
-    // reference.
-
-    // We technically could allow multiple subsources to ingest the same upstream table, but
-    // it is almost certainly an error on the user's end.
+    // We disallow subsource statements from referencing the same upstream table, but we allow
+    // `CREATE TABLE .. FROM SOURCE` statements to do so. Since `CREATE TABLE .. FROM SOURCE`
+    // purification will only provide 1 `requested_source_export`, we can leave this here without
+    // needing to differentiate between the two types of statements.
+    // TODO(roshan): Remove this when auto-generated subsources are deprecated.
     if let Some(name) = requested_source_exports
         .iter()
         .map(|export| &export.external_reference)
@@ -242,6 +244,9 @@ pub enum PurifiedStatement {
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     },
     PurifiedCreateSink(CreateSinkStatement<Aug>),
+    PurifiedCreateTableFromSource {
+        stmt: CreateTableFromSourceStatement<Aug>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +307,10 @@ pub async fn purify_statement(
                 cluster_id,
             )
         }
+        Statement::CreateTableFromSource(stmt) => (
+            purify_create_table_from_source(catalog, stmt, storage_configuration).await,
+            None,
+        ),
         o => unreachable!("{:?} does not need to be purified", o),
     }
 }
@@ -1203,8 +1212,6 @@ async fn purify_alter_source(
                 )
             }
 
-            let mut references = Some(ExternalReferences::SubsetTables(external_references));
-
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
@@ -1213,7 +1220,7 @@ async fn purify_alter_source(
                 &config,
                 &pg_source_connection.publication,
                 pg_connection,
-                &mut references,
+                &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 &unresolved_source_name,
             )
@@ -1245,8 +1252,6 @@ async fn purify_alter_source(
                 )
                 .await?;
 
-            let mut references = Some(ExternalReferences::SubsetTables(external_references));
-
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point for these subsources.
             let initial_gtid_set =
@@ -1258,11 +1263,11 @@ async fn purify_alter_source(
                 normalized_ignore_columns,
             } = mysql::purify_source_exports(
                 &mut conn,
-                &mut references,
+                &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 ignore_columns,
                 &unresolved_source_name,
-                initial_gtid_set.clone(),
+                initial_gtid_set,
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -1290,6 +1295,346 @@ async fn purify_alter_source(
         options,
         subsources: requested_subsource_map,
     })
+}
+
+async fn purify_create_table_from_source(
+    catalog: impl SessionCatalog,
+    mut stmt: CreateTableFromSourceStatement<Aug>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let scx = StatementContext::new(None, &catalog);
+    let CreateTableFromSourceStatement {
+        name: _,
+        columns,
+        constraints,
+        source: source_name,
+        if_not_exists: _,
+        external_reference,
+        with_options,
+    } = &mut stmt;
+
+    // Columns and constraints cannot be specified by the user but will be populated below.
+    if !columns.is_empty() {
+        sql_bail!("CREATE TABLE .. FROM SOURCE column definitions cannot be specified directly");
+    }
+    if !constraints.is_empty() {
+        sql_bail!(
+            "CREATE TABLE .. FROM SOURCE constraint definitions cannot be specified directly"
+        );
+    }
+
+    // Get the source item
+    let item = match scx.get_item_by_resolved_name(source_name) {
+        Ok(item) => item,
+        Err(e) => return Err(e),
+    };
+
+    // Ensure it's an ingestion-based and alterable source.
+    let desc = match item.source_desc()? {
+        Some(desc) => desc.clone().into_inline_connection(scx.catalog),
+        None => {
+            sql_bail!("cannot ALTER this type of source")
+        }
+    };
+    let unresolved_source_name: UnresolvedItemName = source_name.full_item_name().clone().into();
+    let qualified_source_name = item.name();
+    let connection_name = desc.connection.name();
+
+    let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
+        text_columns,
+        ignore_columns,
+        details,
+        seen: _,
+    } = with_options.clone().try_into()?;
+    assert_none!(details, "details cannot be explicitly set");
+
+    // Our text column values are unqualified (just column names), but the purification methods below
+    // expect to match the fully-qualified names against the full set of tables in upstream, so we
+    // need to qualify them using the external reference first.
+    let qualified_text_columns = text_columns
+        .iter()
+        .map(|col| {
+            UnresolvedItemName(
+                external_reference
+                    .0
+                    .iter()
+                    .chain_one(col)
+                    .map(|i| i.clone())
+                    .collect(),
+            )
+        })
+        .collect_vec();
+    let qualified_ignore_columns = ignore_columns
+        .iter()
+        .map(|col| {
+            UnresolvedItemName(
+                external_reference
+                    .0
+                    .iter()
+                    .chain_one(col)
+                    .map(|i| i.clone())
+                    .collect(),
+            )
+        })
+        .collect_vec();
+
+    // The requested external reference for this table which will be resolved below to a
+    // fully-qualified / normalized reference for each source type.
+    let requested_reference = ExternalReferenceExport {
+        reference: external_reference.clone(),
+        alias: None,
+    };
+
+    // Run purification work specific to each source type: resolve the external reference to
+    // a fully qualified name and obtain the appropriate details for the source-export statement
+    // NOTE that each source type has its own rules for how to resolve the external reference,
+    // and each source-type's fully-qualified external reference may be different. In Postgres
+    // a 3-layer reference is used (database, schema, table), whereas in MySQL only a 2-layer
+    // is used (schema, table), since databases == schemas. For load generator sources
+    // the reference is (schema, table) where schema defines the type of load-generator.
+    // When kafka is implemented, likely just the topic-name will be used.
+    let purified_export = match desc.connection {
+        GenericSourceConnection::Postgres(pg_source_connection) => {
+            // Get PostgresConnection for generating subsources.
+            let pg_connection = &pg_source_connection.connection;
+
+            let config = pg_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let available_replication_slots =
+                mz_postgres_util::available_replication_slots(&client).await?;
+
+            // We need 1 additional replication slot for the snapshots
+            if available_replication_slots < 1 {
+                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
+            }
+
+            // TODO(roshan): Add support for PG sources to allow this
+            if !ignore_columns.is_empty() {
+                sql_bail!(
+                    "{} is a {} source, which does not support IGNORE COLUMNS.",
+                    scx.catalog.minimal_qualification(qualified_source_name),
+                    connection_name
+                )
+            }
+
+            let postgres::PurifiedSourceExports {
+                source_exports,
+                // This `normalized_text_columns` is not relevant for us and is only returned for
+                // `CREATE SOURCE` statements that automatically generate subsources, and will be
+                // removed with that functionality in the future.
+                normalized_text_columns: _,
+            } = postgres::purify_source_exports(
+                &client,
+                &config,
+                &pg_source_connection.publication,
+                pg_connection,
+                &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
+                qualified_text_columns,
+                &unresolved_source_name,
+            )
+            .await?;
+            // There should be exactly one source_export returned for this statement
+            let (_, purified_export) = source_exports.into_iter().next().unwrap();
+            purified_export
+        }
+        GenericSourceConnection::MySql(mysql_source_connection) => {
+            let mysql_connection = &mysql_source_connection.connection;
+            let config = mysql_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            // Retrieve the current @gtid_executed value of the server to mark as the effective
+            // initial snapshot point for these subsources.
+            let initial_gtid_set =
+                mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
+
+            let mysql::PurifiedSourceExports {
+                source_exports,
+                // `normalized_text/ignore_columns` is not relevant for us and is only returned for
+                // `CREATE SOURCE` statements that automatically generate subsources, and will be
+                // removed with that functionality in the future.
+                normalized_text_columns: _,
+                normalized_ignore_columns: _,
+            } = mysql::purify_source_exports(
+                &mut conn,
+                &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
+                qualified_text_columns,
+                qualified_ignore_columns,
+                &unresolved_source_name,
+                initial_gtid_set,
+            )
+            .await?;
+            // There should be exactly one source_export returned for this statement
+            let (_, purified_export) = source_exports.into_iter().next().unwrap();
+            purified_export
+        }
+        GenericSourceConnection::LoadGenerator(load_gen_connection) => {
+            let mut views = load_gen_connection.load_generator.views();
+            // Resolve the desired view reference to a `schema_name.view_name` reference
+            let resolver = SourceReferenceResolver::new(
+                LOAD_GENERATOR_DATABASE_NAME,
+                &views
+                    .iter()
+                    .map(|(view_name, _)| {
+                        (load_gen_connection.load_generator.schema_name(), *view_name)
+                    })
+                    .collect_vec(),
+            )?;
+            let (qualified_reference, view_idx) = resolver.resolve(&external_reference.0, 2)?;
+
+            let desired_view_desc = views.swap_remove(view_idx).1;
+            PurifiedSourceExport {
+                external_reference: qualified_reference,
+                details: PurifiedExportDetails::LoadGenerator {
+                    table: desired_view_desc,
+                },
+            }
+        }
+        // TODO(roshan): Add support for kafka sources
+        _ => sql_bail!(
+            "{} is a {} source, which does not support CREATE TABLE .. FROM SOURCE.",
+            scx.catalog.minimal_qualification(qualified_source_name),
+            connection_name,
+        ),
+    };
+
+    // Update the external reference in the statement to the resolved fully-qualified
+    // external reference
+    *external_reference = purified_export.external_reference.clone();
+
+    // Update options in the statement using the purified export details
+    match &purified_export.details {
+        PurifiedExportDetails::Postgres { .. } => {
+            let mut unsupported_cols = vec![];
+            let postgres::PostgresExportStatementValues {
+                columns: gen_columns,
+                constraints: gen_constraints,
+                text_columns: gen_text_columns,
+                details: gen_details,
+                external_reference: _,
+            } = postgres::generate_source_export_statement_values(
+                &scx,
+                purified_export,
+                &mut unsupported_cols,
+            )?;
+            if !unsupported_cols.is_empty() {
+                unsupported_cols.sort();
+                Err(PgSourcePurificationError::UnrecognizedTypes {
+                    cols: unsupported_cols,
+                })?;
+            }
+
+            if let Some(text_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::TextColumns)
+            {
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
+                } else {
+                    soft_panic_or_log!(
+                        "text_columns should be Some if text_cols_option is present"
+                    );
+                }
+            }
+            *columns = gen_columns;
+            *constraints = gen_constraints;
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    gen_details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+        PurifiedExportDetails::MySql { .. } => {
+            let mysql::MySqlExportStatementValues {
+                columns: gen_columns,
+                constraints: gen_constraints,
+                text_columns: gen_text_columns,
+                ignore_columns: gen_ignore_columns,
+                details: gen_details,
+                external_reference: _,
+            } = mysql::generate_source_export_statement_values(&scx, purified_export)?;
+
+            if let Some(text_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::TextColumns)
+            {
+                if let Some(gen_text_columns) = gen_text_columns {
+                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
+                } else {
+                    soft_panic_or_log!(
+                        "text_columns should be Some if text_cols_option is present"
+                    );
+                }
+            }
+            if let Some(ignore_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::IgnoreColumns)
+            {
+                if let Some(gen_ignore_columns) = gen_ignore_columns {
+                    ignore_cols_option.value = Some(WithOptionValue::Sequence(gen_ignore_columns));
+                } else {
+                    soft_panic_or_log!(
+                        "text_columns should be Some if ignore_cols_option is present"
+                    );
+                }
+            }
+            *columns = gen_columns;
+            *constraints = gen_constraints;
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    gen_details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+        PurifiedExportDetails::LoadGenerator { .. } => {
+            let desc = match purified_export.details {
+                PurifiedExportDetails::LoadGenerator { table } => table,
+                _ => unreachable!("purified export details must be load generator"),
+            };
+
+            let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+            let details = SourceExportStatementDetails::LoadGenerator;
+            *columns = gen_columns;
+            *constraints = gen_constraints;
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
+        }
+        PurifiedExportDetails::Kafka { .. } => {
+            sql_bail!("Kafka sources do not yet support CREATE TABLE .. FROM SOURCE")
+        }
+    };
+
+    Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
 }
 
 async fn purify_source_format(

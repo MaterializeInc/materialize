@@ -50,8 +50,8 @@ message ProtoPostgresSourceExportDetails {
     repeated ProtoPostgresColumnCast column_casts = 2;
 }
 
-// NOTE: this message is encoded and stored as part of a source export
-// statement option (currently only `CREATE SUBSOURCE` statements)
+// NOTE: this message is encoded and stored as part of source export
+// statement options
 // Be extra careful about changes, ensuring that all changes are backwards compatible
 message ProtoPostgresSourceExportStatementDetails {
     mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;

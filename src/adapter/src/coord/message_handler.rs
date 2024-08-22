@@ -535,11 +535,15 @@ impl Coordinator {
                 .await
             }
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
-            | PurifiedStatement::PurifiedCreateSink(..)) => {
+            | PurifiedStatement::PurifiedCreateSink(..)
+            | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
                 // Unify these into a `Statement`.
                 let stmt = match o {
                     PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
                         Statement::AlterSource(alter_source_stmt)
+                    }
+                    PurifiedStatement::PurifiedCreateTableFromSource { stmt } => {
+                        Statement::CreateTableFromSource(stmt)
                     }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }

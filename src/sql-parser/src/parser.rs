@@ -4382,14 +4382,9 @@ impl<'a> Parser<'a> {
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_item_name()?;
-        // parse optional column name list
-        let columns = if self.consume_token(&Token::LParen) {
-            let cols = self.parse_comma_separated(Parser::parse_identifier)?;
-            self.expect_token(&Token::RParen)?;
-            cols
-        } else {
-            vec![]
-        };
+        // Columns are not specified by users, but are populated in this
+        // statement after purification, so Optional is used.
+        let (columns, constraints) = self.parse_columns(Optional)?;
 
         self.expect_keywords(&[FROM, SOURCE])?;
 
@@ -4400,15 +4395,61 @@ impl<'a> Parser<'a> {
         let external_reference = self.parse_item_name()?;
         self.expect_token(&Token::RParen)?;
 
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_table_from_source_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
         Ok(Statement::CreateTableFromSource(
             CreateTableFromSourceStatement {
                 name: table_name,
                 columns,
+                constraints,
                 if_not_exists,
                 source,
                 external_reference,
+                with_options,
             },
         ))
+    }
+
+    fn parse_table_from_source_option(
+        &mut self,
+    ) -> Result<TableFromSourceOption<Raw>, ParserError> {
+        let option = match self.expect_one_of_keywords(&[TEXT, IGNORE, DETAILS])? {
+            ref keyword @ (TEXT | IGNORE) => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_identifier)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                        )
+                    });
+
+                TableFromSourceOption {
+                    name: match *keyword {
+                        TEXT => TableFromSourceOptionName::TextColumns,
+                        IGNORE => TableFromSourceOptionName::IgnoreColumns,
+                        _ => unreachable!(),
+                    },
+                    value,
+                }
+            }
+            DETAILS => TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: self.parse_optional_option_value()?,
+            },
+            _ => unreachable!(),
+        };
+        Ok(option)
     }
 
     fn parse_columns(
