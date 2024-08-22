@@ -441,7 +441,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     ///
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
-    fn refresh_state_metrics(&self) {
+    fn refresh_state_metrics(&mut self) {
         let unscheduled_collections_count =
             self.collections.values().filter(|c| !c.scheduled).count();
 
@@ -467,11 +467,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.refresh_wallclock_lag_metric();
     }
 
-    /// Refresh the `wallclock_lag_seconds` metric with the current lag values.
-    fn refresh_wallclock_lag_metric(&self) {
-        for replica in self.replicas.values() {
-            for collection in replica.collections.values() {
-                let Some(metrics) = &collection.metrics else {
+    /// Refresh the `wallclock_lag_*_seconds` metrics with the current lag values.
+    fn refresh_wallclock_lag_metric(&mut self) {
+        for replica in self.replicas.values_mut() {
+            for collection in replica.collections.values_mut() {
+                let Some(metrics) = &mut collection.metrics else {
                     continue;
                 };
 
@@ -479,7 +479,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                     Some(ts) => (self.wallclock_lag)(ts),
                     None => Duration::ZERO,
                 };
-                metrics.wallclock_lag_seconds.observe(lag.as_secs_f64());
+                metrics.observe_wallclock_lag(lag);
             }
         }
     }
