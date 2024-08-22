@@ -17,6 +17,11 @@ run() {
     bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
+if [ "$BUILDKITE_COMMAND_EXIT_STATUS" -eq -1 ]; then
+  echo "Job was canceled, cleaning target directories to prevent corrupted incremental state"
+  rm -rf target target-xcompile
+fi
+
 echo "Collecting logs"
 # Run before potential "run down" in coverage
 docker ps --all --quiet | xargs --no-run-if-empty docker inspect > docker-inspect.log
