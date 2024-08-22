@@ -19,22 +19,28 @@ use mz_storage_types::sources::SourceData;
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
-static PROTO_DIRECTORY: LazyLock<String> =
-    LazyLock::new(|| format!("{}/protos", env!("CARGO_MANIFEST_DIR")));
+const PROTO_DIRECTORY: &'static str = {
+    if mz_build_tools::is_bazel_build() {
+        "src/catalog/protos"
+    } else {
+        "protos"
+    }
+};
 const PROTO_EXT: &str = "proto";
 
-static SNAPSHOT_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{}/src/durable/upgrade/snapshots",
-        env!("CARGO_MANIFEST_DIR")
-    )
-});
+static SNAPSHOT_DIRECTORY: &'static str = {
+    if mz_build_tools::is_bazel_build() {
+        "src/catalog/src/durable/upgrade/snapshots"
+    } else {
+        "src/durable/upgrade/snapshots"
+    }
+};
 const SNAPSHOT_EXT: &str = "txt";
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_proto_serialization_stability() {
-    let protos: BTreeSet<_> = read_file_names(&PROTO_DIRECTORY, PROTO_EXT)
+    let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
         // Remove `objects.proto`.
         //
         // `objects.proto` is allowed to change and we don't have a good
@@ -44,7 +50,7 @@ fn test_proto_serialization_stability() {
         .filter(|name| name != "objects")
         .collect();
 
-    let snapshot_files: BTreeSet<_> = read_file_names(&SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
+    let snapshot_files: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
 
     let unknown_snapshots: Vec<_> = snapshot_files.difference(&protos).collect();
     if !unknown_snapshots.is_empty() {
@@ -59,7 +65,7 @@ fn test_proto_serialization_stability() {
     let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
     let relation_desc = RelationDesc::empty().with_column("a", ScalarType::Jsonb.nullable(false));
     for snapshot_file in snapshot_files {
-        let encoded_bytes = fs::read(format!("{}/{}.txt", *SNAPSHOT_DIRECTORY, snapshot_file))
+        let encoded_bytes = fs::read(format!("{}/{}.txt", SNAPSHOT_DIRECTORY, snapshot_file))
             .expect("unable to read encoded file");
         let encoded_str = std::str::from_utf8(encoded_bytes.as_slice()).expect("valid UTF-8");
         let decoded = encoded_str
@@ -103,11 +109,11 @@ fn test_proto_serialization_stability() {
 /// cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
 /// ```
 fn generate_missing_encodings() {
-    let protos: BTreeSet<_> = read_file_names(&PROTO_DIRECTORY, PROTO_EXT)
+    let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
         .filter(|name| name != "objects")
         .collect();
 
-    let snapshots: BTreeSet<_> = read_file_names(&SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
+    let snapshots: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
 
     let unknown_snapshots: Vec<_> = snapshots.difference(&protos).collect();
     if !unknown_snapshots.is_empty() {
@@ -120,7 +126,7 @@ fn generate_missing_encodings() {
         let mut file = fs::File::options()
             .create_new(true)
             .write(true)
-            .open(format!("{}/{}.txt", *SNAPSHOT_DIRECTORY, to_encode))
+            .open(format!("{}/{}.txt", SNAPSHOT_DIRECTORY, to_encode))
             .expect("file exists");
         let encoded_datas = AllVersionsStateUpdateKind::arbitrary_vec(to_encode)
             .expect("valid version")

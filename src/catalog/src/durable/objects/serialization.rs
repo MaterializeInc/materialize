@@ -2520,7 +2520,13 @@ mod tests {
     use crate::durable::upgrade::{CATALOG_VERSION, MIN_CATALOG_VERSION};
 
     // Note: Feel free to update this path if the protos move.
-    const PROTO_DIRECTORY: &str = "protos";
+    const PROTO_DIRECTORY: &'static str = {
+        if mz_build_tools::is_bazel_build() {
+            "src/catalog/protos"
+        } else {
+            "protos"
+        }
+    };
 
     #[mz_ore::test]
     fn test_assert_snapshots_exist() {

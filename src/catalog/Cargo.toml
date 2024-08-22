@@ -65,6 +65,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 base64 = "0.13.1"
 insta = "1.32"
+mz-build-tools = { path = "../build-tools", default-features = false }
 mz-postgres-util = { path = "../postgres-util" }
 similar-asserts = "1.4"
 tokio = { version = "1.38.0" }
@@ -87,8 +88,16 @@ normal = ["workspace-hack"]
 [package.metadata.cargo-gazelle.build]
 data = ["protos/**"]
 
+[package.metadata.cargo-gazelle.test.lib]
+data = ["protos/**", "src/durable/upgrade/snapshots/**"]
+
 [package.metadata.cargo-gazelle.test.debug]
 data = ["tests/snapshots/debug*.snap"]
+env = { INSTA_WORKSPACE_ROOT = "." }
 
 [package.metadata.cargo-gazelle.test.open]
 data = ["tests/snapshots/open*.snap"]
+env = { INSTA_WORKSPACE_ROOT = "." }
+
+[package.metadata.cargo-gazelle.test.read-write]
+env = { INSTA_WORKSPACE_ROOT = "." }

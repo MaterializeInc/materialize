@@ -190,3 +190,6 @@ compile_data = ["src/http/static/**/*", "templates/*"]
 
 [package.metadata.cargo-gazelle.build]
 data = ["src/bin/environmentd/sys.c"]
+
+[package.metadata.cargo-gazelle.test.server]
+env = { INSTA_WORKSPACE_ROOT = "." }

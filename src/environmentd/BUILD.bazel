@@ -481,7 +481,7 @@ rust_test(
 	size = "large",
 	compile_data = [],
 	data = [],
-	env = {},
+	env = { "INSTA_WORKSPACE_ROOT": "." },
 	rustc_flags = [],
 	rustc_env = {},
 )
