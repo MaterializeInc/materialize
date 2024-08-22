@@ -584,7 +584,7 @@ steps:
   - id: cloudtest
     label: Cloudtest %N
     depends_on: build-aarch64
-    parallelism: 8
+    parallelism: 6
     timeout_in_minutes: 40
     inputs:
       - test/cloudtest
