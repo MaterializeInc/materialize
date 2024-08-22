@@ -15,6 +15,7 @@ package(default_visibility = ["//visibility:public"])
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
+
 rust_binary(
 	name = "clusterd",
 	version = "0.115.0-dev.0",

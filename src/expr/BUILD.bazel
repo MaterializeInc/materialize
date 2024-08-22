@@ -141,6 +141,7 @@ cargo_build_script(
 rust_test(
 	name = "mz_expr_test_runner_tests",
 	version = "0.0.0",
+	crate_name = "test_runner",
 	srcs = ["tests/test_runner.rs"],
 	aliases = aliases(
 		normal = True,

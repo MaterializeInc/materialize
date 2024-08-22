@@ -133,6 +133,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_sqllogictest_parser_tests",
 	version = "0.0.1",
+	crate_name = "parser",
 	srcs = ["tests/parser.rs"],
 	aliases = aliases(
 		normal = True,

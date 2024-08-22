@@ -161,6 +161,7 @@ cargo_build_script(
 rust_test(
 	name = "mz_catalog_debug_tests",
 	version = "0.0.0",
+	crate_name = "debug",
 	srcs = ["tests/debug.rs"],
 	aliases = aliases(
 		normal = True,
@@ -212,6 +213,7 @@ rust_test(
 rust_test(
 	name = "mz_catalog_open_tests",
 	version = "0.0.0",
+	crate_name = "open",
 	srcs = ["tests/open.rs"],
 	aliases = aliases(
 		normal = True,
@@ -263,6 +265,7 @@ rust_test(
 rust_test(
 	name = "mz_catalog_read-write_tests",
 	version = "0.0.0",
+	crate_name = "read_write",
 	srcs = ["tests/read-write.rs"],
 	aliases = aliases(
 		normal = True,

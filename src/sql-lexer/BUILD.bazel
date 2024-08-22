@@ -92,6 +92,7 @@ cargo_build_script(
 rust_test(
 	name = "mz_sql_lexer_lexer_tests",
 	version = "0.0.0",
+	crate_name = "lexer",
 	srcs = ["tests/lexer.rs"],
 	aliases = aliases(
 		normal = True,

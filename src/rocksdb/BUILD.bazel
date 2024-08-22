@@ -82,6 +82,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_rocksdb_basic_tests",
 	version = "0.0.0",
+	crate_name = "basic",
 	srcs = ["tests/basic.rs"],
 	aliases = aliases(
 		normal = True,

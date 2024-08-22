@@ -70,6 +70,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_ore_proc_instrument_tests",
 	version = "0.1.0",
+	crate_name = "instrument",
 	srcs = ["tests/instrument.rs"],
 	aliases = aliases(
 		normal = True,

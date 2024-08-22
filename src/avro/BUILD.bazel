@@ -75,6 +75,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_avro_io_tests",
 	version = "0.7.0",
+	crate_name = "io",
 	srcs = ["tests/io.rs"],
 	aliases = aliases(
 		normal = True,
@@ -104,6 +105,7 @@ rust_test(
 rust_test(
 	name = "mz_avro_schema_tests",
 	version = "0.7.0",
+	crate_name = "schema",
 	srcs = ["tests/schema.rs"],
 	aliases = aliases(
 		normal = True,

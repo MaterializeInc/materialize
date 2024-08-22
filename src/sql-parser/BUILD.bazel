@@ -109,6 +109,7 @@ cargo_build_script(
 rust_test(
 	name = "mz_sql_parser_sqlparser_common_tests",
 	version = "0.0.0",
+	crate_name = "sqlparser_common",
 	srcs = ["tests/sqlparser_common.rs"],
 	aliases = aliases(
 		normal = True,

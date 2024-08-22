@@ -221,6 +221,7 @@ cargo_build_script(
 rust_test(
 	name = "mz_environmentd_auth_tests",
 	version = "0.115.0-dev.0",
+	crate_name = "auth",
 	srcs = ["tests/auth.rs"],
 	aliases = aliases(
 		normal = True,
@@ -287,6 +288,7 @@ rust_test(
 rust_test(
 	name = "mz_environmentd_cli_tests",
 	version = "0.115.0-dev.0",
+	crate_name = "cli",
 	srcs = ["tests/cli.rs"],
 	aliases = aliases(
 		normal = True,
@@ -353,6 +355,7 @@ rust_test(
 rust_test(
 	name = "mz_environmentd_pgwire_tests",
 	version = "0.115.0-dev.0",
+	crate_name = "pgwire",
 	srcs = ["tests/pgwire.rs"],
 	aliases = aliases(
 		normal = True,
@@ -419,6 +422,7 @@ rust_test(
 rust_test(
 	name = "mz_environmentd_server_tests",
 	version = "0.115.0-dev.0",
+	crate_name = "server",
 	srcs = ["tests/server.rs"],
 	aliases = aliases(
 		normal = True,
@@ -485,6 +489,7 @@ rust_test(
 rust_test(
 	name = "mz_environmentd_sql_tests",
 	version = "0.115.0-dev.0",
+	crate_name = "sql",
 	srcs = ["tests/sql.rs"],
 	aliases = aliases(
 		normal = True,
@@ -551,6 +556,7 @@ rust_test(
 rust_test(
 	name = "mz_environmentd_timezones_tests",
 	version = "0.115.0-dev.0",
+	crate_name = "timezones",
 	srcs = ["tests/timezones.rs"],
 	aliases = aliases(
 		normal = True,
@@ -617,6 +623,7 @@ rust_test(
 rust_test(
 	name = "mz_environmentd_tracing_tests",
 	version = "0.115.0-dev.0",
+	crate_name = "tracing",
 	srcs = ["tests/tracing.rs"],
 	aliases = aliases(
 		normal = True,

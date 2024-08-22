@@ -70,6 +70,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_walkabout_walkabout_tests",
 	version = "0.0.0",
+	crate_name = "walkabout",
 	srcs = ["tests/walkabout.rs"],
 	aliases = aliases(
 		normal = True,

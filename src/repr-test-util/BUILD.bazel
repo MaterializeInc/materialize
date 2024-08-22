@@ -82,6 +82,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_repr_test_util_test_runner_tests",
 	version = "0.0.0",
+	crate_name = "test_runner",
 	srcs = ["tests/test_runner.rs"],
 	aliases = aliases(
 		normal = True,

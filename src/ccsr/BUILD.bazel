@@ -76,6 +76,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_ccsr_client_tests",
 	version = "0.0.0",
+	crate_name = "client",
 	srcs = ["tests/client.rs"],
 	aliases = aliases(
 		normal = True,

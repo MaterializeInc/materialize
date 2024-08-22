@@ -145,6 +145,7 @@ cargo_build_script(
 rust_test(
 	name = "mz_repr_strconv_tests",
 	version = "0.0.0",
+	crate_name = "strconv",
 	srcs = ["tests/strconv.rs"],
 	aliases = aliases(
 		normal = True,

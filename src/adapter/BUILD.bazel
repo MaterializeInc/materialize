@@ -190,6 +190,7 @@ rust_doc_test(
 rust_test(
 	name = "mz_adapter_parameters_tests",
 	version = "0.0.0",
+	crate_name = "parameters",
 	srcs = ["tests/parameters.rs"],
 	aliases = aliases(
 		normal = True,
@@ -257,6 +258,7 @@ rust_test(
 rust_test(
 	name = "mz_adapter_sql_tests",
 	version = "0.0.0",
+	crate_name = "sql",
 	srcs = ["tests/sql.rs"],
 	aliases = aliases(
 		normal = True,
@@ -324,6 +326,7 @@ rust_test(
 rust_test(
 	name = "mz_adapter_timestamp_selection_tests",
 	version = "0.0.0",
+	crate_name = "timestamp_selection",
 	srcs = ["tests/timestamp_selection.rs"],
 	aliases = aliases(
 		normal = True,
