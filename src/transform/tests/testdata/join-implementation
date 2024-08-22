@@ -49,7 +49,7 @@ Project (#0..=#2)
 opt
 (join [(get x)] [[#0 #1 5]])
 ----
-Filter (#0 = 5) AND (#0 = #1)
+Filter (#0 = 5) AND (#1 = 5)
   Get x
 
 opt

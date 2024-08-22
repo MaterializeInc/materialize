@@ -27,6 +27,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{BinaryFunc, VariadicFunc};
 use mz_expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
 
+use crate::analysis::equivalences::EquivalenceClasses;
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformCtx, TransformError};
@@ -245,13 +246,20 @@ impl Join {
 }
 
 /// Unpacks multiple equivalence classes into conjuncts that should all be true, essentially
-/// turning join equivalences to a Filter.
+/// turning join equivalences into a Filter.
 ///
 /// Note that a join equivalence treats null equal to null, while an `=` in a Filter does not.
 /// This function is mindful of this.
 fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarExpr> {
     let mut result = Vec::new();
-    for class in equivalences.iter() {
+    for mut class in equivalences.iter().cloned() {
+        // Let's put the simplest expression at the beginning of `class`, because all the
+        // expressions will involve `class[0]`. For example, without sorting, we can get stuff like
+        // `Filter (#0 = 5) AND (#0 = #1)`.
+        // With sorting, this comes out as
+        // `Filter (#0 = 5) AND (#1 = 5)`.
+        // TODO: In the long term, we might want to call the entire `EquivalenceClasses::minimize`.
+        class.sort_by(EquivalenceClasses::mir_scalar_expr_complexity);
         for expr in class[1..].iter() {
             result.push(MirScalarExpr::CallVariadic {
                 func: VariadicFunc::Or,
