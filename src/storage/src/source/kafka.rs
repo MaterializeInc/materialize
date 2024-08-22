@@ -33,7 +33,7 @@ use mz_storage_types::errors::{
 use mz_storage_types::sources::kafka::{
     KafkaMetadataKind, KafkaSourceConnection, KafkaTimestamp, RangeBound,
 };
-use mz_storage_types::sources::{MzOffset, SourceTimestamp};
+use mz_storage_types::sources::{MzOffset, SourceExport, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
@@ -103,8 +103,6 @@ pub struct KafkaSourceReader {
     _metadata_thread_handle: UnparkOnDropHandle<()>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaSourceMetrics,
-    /// The metadata columns requested by the user
-    metadata_columns: Vec<KafkaMetadataKind>,
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<HealthStatus>>,
     /// Per partition capabilities used to produce messages
@@ -155,6 +153,12 @@ fn responsible_for_pid(config: &RawSourceCreationConfig, pid: i32) -> bool {
     ((config.responsible_worker(config.id) + pid) % config.worker_count) == config.worker_id
 }
 
+struct SourceOutputInfo {
+    output_index: usize,
+    resume_upper: Antichain<KafkaTimestamp>,
+    metadata_columns: Vec<KafkaMetadataKind>,
+}
+
 impl SourceRender for KafkaSourceConnection {
     // TODO(petrosagg): The type used for the partition (RangeBound<PartitionId>) doesn't need to
     // be so complicated and we could instead use `Partitioned<PartitionId, Option<u64>>` where all
@@ -185,6 +189,57 @@ impl SourceRender for KafkaSourceConnection {
         let (mut health_output, health_stream) = builder.new_output();
         let (mut stats_output, stats_stream) = builder.new_output();
 
+        let mut outputs = vec![];
+        for (id, export) in &config.source_exports {
+            let SourceExport {
+                ingestion_output,
+                details,
+                storage_metadata: _,
+            } = export;
+            let resume_upper = Antichain::from_iter(
+                config
+                    .source_resume_uppers
+                    .get(id)
+                    .expect("all source exports must be present in source resume uppers")
+                    .iter()
+                    .map(Partitioned::<RangeBound<PartitionId>, MzOffset>::decode_row),
+            );
+
+            // Output index 0 is the primary source which is a valid output
+            // for legacy Kafka sources.
+            // TODO: When we refactor the SQL layer to include full details on the primary
+            // collection's `SourceExport` struct we should remove this block.
+            let metadata_columns = if *ingestion_output == 0 {
+                // The primary source output won't have source-export specific
+                // details, since its details are stored on the primary source object
+                // itself.
+                match details {
+                    SourceExportDetails::None => self
+                        .metadata_columns
+                        .iter()
+                        .map(|(_name, kind)| kind.clone())
+                        .collect::<Vec<_>>(),
+                    _ => panic!("unexpected source export details: {:?}", details),
+                }
+            } else {
+                match details {
+                    SourceExportDetails::Kafka(details) => details
+                        .metadata_columns
+                        .iter()
+                        .map(|(_name, kind)| kind.clone())
+                        .collect::<Vec<_>>(),
+                    _ => panic!("unexpected source export details: {:?}", details),
+                }
+            };
+
+            let output = SourceOutputInfo {
+                resume_upper,
+                output_index: *ingestion_output,
+                metadata_columns,
+            };
+            outputs.push(output);
+        }
+
         let busy_signal = Arc::clone(&config.busy_signal);
         let button = builder.build(move |caps| {
             SignaledFuture::new(busy_signal, async move {
@@ -202,7 +257,7 @@ impl SourceRender for KafkaSourceConnection {
                     topic,
                     topic_metadata_refresh_interval,
                     start_offsets,
-                    metadata_columns,
+                    metadata_columns: _,
                     // Exhaustive match protects against forgetting to apply an
                     // option. Ignored fields are justified below.
                     connection_id: _,   // not needed here
@@ -220,9 +275,10 @@ impl SourceRender for KafkaSourceConnection {
                 let mut partition_capabilities = BTreeMap::new();
                 let mut max_pid = None;
                 let resume_upper = Antichain::from_iter(
-                    config.source_resume_uppers[&config.id]
+                    outputs
                         .iter()
-                        .map(Partitioned::<RangeBound<PartitionId>, MzOffset>::decode_row),
+                        .map(|output| output.resume_upper.clone())
+                        .flatten(),
                 );
 
                 // Whether or not this instance of the dataflow is performing a snapshot.
@@ -466,10 +522,6 @@ impl SourceRender for KafkaSourceConnection {
                     stats_rx,
                     progress_statistics: Default::default(),
                     partition_info,
-                    metadata_columns: metadata_columns
-                        .into_iter()
-                        .map(|(_name, kind)| kind)
-                        .collect(),
                     _metadata_thread_handle: metadata_thread_handle,
                     partition_metrics: config.metrics.get_kafka_source_metrics(
                         partition_ids,
@@ -671,20 +723,38 @@ impl SourceRender for KafkaSourceConnection {
                                 );
                             }
                             Ok(message) => {
-                                let (message, ts) =
-                                    construct_source_message(&message, &reader.metadata_columns);
-                                if let Some((msg, time, diff)) = reader.handle_message(message, ts)
-                                {
-                                    let pid = time.interval().singleton().unwrap().unwrap_exact();
-                                    let part_cap = &reader.partition_capabilities[pid].data;
-                                    let msg = msg.map_err(|e| {
-                                        DataflowError::SourceError(Box::new(SourceError {
-                                            error: SourceErrorDetails::Other(format!("{}", e)),
-                                        }))
-                                    });
-                                    data_output
-                                        .give_fueled(part_cap, ((0, msg), time, diff))
-                                        .await;
+                                let output_messages = outputs
+                                    .iter()
+                                    .map(|output| {
+                                        let (message, ts) = construct_source_message(
+                                            &message,
+                                            &output.metadata_columns,
+                                        );
+                                        (output.output_index, message, ts)
+                                    })
+                                    // This vec allocation is required to allow obtaining a `&mut`
+                                    // on `reader` for the `reader.handle_message` call in the
+                                    // loop below since  `message` is borrowed from `reader`.
+                                    .collect::<Vec<_>>();
+                                for (output_index, message, ts) in output_messages {
+                                    if let Some((msg, time, diff)) =
+                                        reader.handle_message(message, ts)
+                                    {
+                                        let pid =
+                                            time.interval().singleton().unwrap().unwrap_exact();
+                                        let part_cap = &reader.partition_capabilities[pid].data;
+                                        let msg = msg.map_err(|e| {
+                                            DataflowError::SourceError(Box::new(SourceError {
+                                                error: SourceErrorDetails::Other(format!("{}", e)),
+                                            }))
+                                        });
+                                        data_output
+                                            .give_fueled(
+                                                part_cap,
+                                                ((output_index, msg), time, diff),
+                                            )
+                                            .await;
+                                    }
                                 }
                             }
                         }
@@ -696,49 +766,64 @@ impl SourceRender for KafkaSourceConnection {
                     let mut consumers = std::mem::take(&mut reader.partition_consumers);
                     for consumer in consumers.iter_mut() {
                         while let Some(message) = consumer.get_next_message().transpose() {
-                            let message = match message {
-                                Ok((msg, ts)) => Ok(reader.handle_message(msg, ts)),
-                                Err(err) => Err(err),
-                            };
-                            match message {
-                                Ok(Some((msg, time, diff))) => {
-                                    let pid = time.interval().singleton().unwrap().unwrap_exact();
-                                    let part_cap = &reader.partition_capabilities[pid].data;
-                                    let msg = msg.map_err(|e| {
-                                        DataflowError::SourceError(Box::new(SourceError {
-                                            error: SourceErrorDetails::Other(format!("{}", e)),
-                                        }))
-                                    });
-                                    data_output
-                                        .give_fueled(part_cap, ((0, msg), time, diff))
-                                        .await;
+                            let mut errs = vec![];
+                            for output in outputs.iter() {
+                                let message = match &message {
+                                    Ok((msg, pid)) => {
+                                        let (msg, ts) =
+                                            construct_source_message(msg, &output.metadata_columns);
+                                        assert_eq!(*pid, ts.0);
+                                        Ok(reader.handle_message(msg, ts))
+                                    }
+                                    Err(err) => Err(err),
+                                };
+                                match message {
+                                    Ok(Some((msg, time, diff))) => {
+                                        let pid =
+                                            time.interval().singleton().unwrap().unwrap_exact();
+                                        let part_cap = &reader.partition_capabilities[pid].data;
+                                        let msg = msg.map_err(|e| {
+                                            DataflowError::SourceError(Box::new(SourceError {
+                                                error: SourceErrorDetails::Other(format!("{}", e)),
+                                            }))
+                                        });
+                                        data_output
+                                            .give_fueled(
+                                                part_cap,
+                                                ((output.output_index, msg), time, diff),
+                                            )
+                                            .await;
+                                    }
+                                    // The message was from an offset we've already seen.
+                                    Ok(None) => continue,
+                                    Err(err) => {
+                                        errs.push(err);
+                                    }
                                 }
-                                // The message was from an offset we've already seen.
-                                Ok(None) => continue,
-                                Err(err) => {
-                                    let pid = consumer.pid();
-                                    let last_offset = reader
-                                        .last_offsets
-                                        .get(&pid)
-                                        .expect("partition known to be installed");
+                            }
+                            for err in errs {
+                                let pid = consumer.pid();
+                                let last_offset = reader
+                                    .last_offsets
+                                    .get(&pid)
+                                    .expect("partition known to be installed");
 
-                                    let status = HealthStatusUpdate::stalled(
-                                        format!(
+                                let status = HealthStatusUpdate::stalled(
+                                    format!(
                                         "error consuming from source: {} topic: {topic}: partition:\
                                         {pid} last processed offset: {last_offset} : {err}",
                                         config.name
                                     ),
-                                        None,
-                                    );
-                                    health_output.give(
-                                        &health_cap,
-                                        HealthStatusMessage {
-                                            index: 0,
-                                            namespace: Self::STATUS_NAMESPACE.clone(),
-                                            update: status,
-                                        },
-                                    );
-                                }
+                                    None,
+                                );
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        index: 0,
+                                        namespace: Self::STATUS_NAMESPACE.clone(),
+                                        update: status,
+                                    },
+                                );
                             }
                         }
                     }
@@ -994,11 +1079,8 @@ impl KafkaSourceReader {
             .split_partition_queue(&self.topic_name, partition_id)
             .expect("partition known to be valid");
         partition_queue.set_nonempty_callback(move || context.inner().activate());
-        self.partition_consumers.push(PartitionConsumer::new(
-            partition_id,
-            partition_queue,
-            self.metadata_columns.clone(),
-        ));
+        self.partition_consumers
+            .push(PartitionConsumer::new(partition_id, partition_queue));
         assert_eq!(
             self.consumer
                 .assignment()
@@ -1204,8 +1286,6 @@ struct PartitionConsumer {
     pid: PartitionId,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
-    /// Additional metadata columns requested by the user
-    metadata_columns: Vec<KafkaMetadataKind>,
 }
 
 impl PartitionConsumer {
@@ -1213,12 +1293,10 @@ impl PartitionConsumer {
     fn new(
         pid: PartitionId,
         partition_queue: PartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
-        metadata_columns: Vec<KafkaMetadataKind>,
     ) -> Self {
         PartitionConsumer {
             pid,
             partition_queue,
-            metadata_columns,
         }
     }
 
@@ -1228,21 +1306,9 @@ impl PartitionConsumer {
     /// be transformed into empty values.
     ///
     /// The inner `Option` represents if there is a message to process.
-    fn get_next_message(
-        &mut self,
-    ) -> Result<
-        Option<(
-            Result<SourceMessage, KafkaHeaderParseError>,
-            (PartitionId, MzOffset),
-        )>,
-        KafkaError,
-    > {
+    fn get_next_message(&mut self) -> Result<Option<(BorrowedMessage, PartitionId)>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
-            Some(Ok(msg)) => {
-                let (msg, ts) = construct_source_message(&msg, &self.metadata_columns);
-                assert_eq!(ts.0, self.pid);
-                Ok(Some((msg, ts)))
-            }
+            Some(Ok(msg)) => Ok(Some((msg, self.pid))),
             Some(Err(err)) => Err(err),
             _ => Ok(None),
         }

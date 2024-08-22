@@ -7,11 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// buf breaking: ignore (a compatible change: Field "23" on message
-// "ProtoKafkaSinkConnectionV2" changed type from
-// "mz_storage_types.sinks.ProtoKafkaSinkTopicOptions" to
-// "mz_storage_types.connections.ProtoKafkaTopicOptions".)
-
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";

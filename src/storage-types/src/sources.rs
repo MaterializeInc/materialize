@@ -23,6 +23,7 @@ use bytes::{BufMut, Bytes};
 use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
+use kafka::KafkaSourceExportDetails;
 use load_generator::LoadGeneratorSourceExportDetails;
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
@@ -1113,7 +1114,7 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
 pub enum SourceExportDetails {
     /// Used for the primary export of a source
     None,
-    Kafka,
+    Kafka(KafkaSourceExportDetails),
     Postgres(PostgresSourceExportDetails),
     MySql(MySqlSourceExportDetails),
     LoadGenerator(LoadGeneratorSourceExportDetails),
@@ -1126,7 +1127,7 @@ impl crate::AlterCompatible for SourceExportDetails {
         }
         let r = match (self, other) {
             (Self::None, Self::None) => Ok(()),
-            (Self::Kafka, Self::Kafka) => Ok(()),
+            (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
             (Self::LoadGenerator(s), Self::LoadGenerator(o)) => s.alter_compatible(id, o),
@@ -1151,7 +1152,7 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
         ProtoSourceExportDetails {
             kind: match self {
                 SourceExportDetails::None => None,
-                SourceExportDetails::Kafka => Some(Kind::Kafka(())),
+                SourceExportDetails::Kafka(details) => Some(Kind::Kafka(details.into_proto())),
                 SourceExportDetails::Postgres(details) => {
                     Some(Kind::Postgres(details.into_proto()))
                 }
@@ -1167,7 +1168,7 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
         use proto_source_export_details::Kind;
         Ok(match proto.kind {
             None => SourceExportDetails::None,
-            Some(Kind::Kafka(_)) => SourceExportDetails::Kafka,
+            Some(Kind::Kafka(details)) => SourceExportDetails::Kafka(details.into_rust()?),
             Some(Kind::Postgres(details)) => SourceExportDetails::Postgres(details.into_rust()?),
             Some(Kind::Mysql(details)) => SourceExportDetails::MySql(details.into_rust()?),
             Some(Kind::Loadgen(details)) => {

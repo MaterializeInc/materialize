@@ -50,7 +50,7 @@ breaking:
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/string_or_secret.proto
     # reason: no reason specified
-    - storage-types/src/sinks.proto
+    - storage-types/src/sources.proto
 lint:
   use:
     - DEFAULT
