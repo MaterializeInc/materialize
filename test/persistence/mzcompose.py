@@ -193,7 +193,7 @@ def workflow_inspect_shard(c: Composition) -> None:
         part
         for batch in json_dict["batches"]
         for part_run in batch["part_runs"]
-        for part in part_run
+        for part in part_run[1]
     ]
     non_empty_part = next(part for part in parts if part["encoded_size_bytes"] > 0)
     cols = non_empty_part["stats"]["cols"]["ok"]
