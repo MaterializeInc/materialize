@@ -71,7 +71,7 @@ rust_test(
 		proc_macro_dev = True,
 	),
 	size = "medium",
-	compile_data = [],
+	compile_data = ["src/internal/state_serde.json"],
 	data = [],
 	env = {},
 	rustc_flags = [],

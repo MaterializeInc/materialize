@@ -89,3 +89,6 @@ normal = ["workspace-hack"]
 
 [package.metadata.cargo-gazelle.lib]
 compile_data = ["README.md"]
+
+[package.metadata.cargo-gazelle.test.lib]
+compile_data = ["src/internal/state_serde.json"]

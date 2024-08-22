@@ -13,68 +13,8 @@
 package(default_visibility = ["//visibility:public"])
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
 
-rust_library(
-	name = "mz_metabase_smoketest",
-	version = "0.0.0",
-	srcs = glob(["src/**/*.rs"]),
-	crate_features = [],
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		"//src/metabase:mz_metabase",
-		"//src/ore:mz_ore",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [],
-	data = [],
-	rustc_flags = [],
-	rustc_env = {},
-)
-
-rust_test(
-	name = "mz_metabase_smoketest_lib_tests",
-	version = "0.0.0",
-	crate = ":mz_metabase_smoketest",
-	aliases = aliases(
-		normal = True,
-		normal_dev = True,
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	deps = [
-		"//src/metabase:mz_metabase",
-		"//src/ore:mz_ore",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
-	proc_macro_deps = [] + all_crate_deps(
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	size = "medium",
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
-)
-
-rust_doc_test(
-	name = "mz_metabase_smoketest_doc_test",
-	crate = ":mz_metabase_smoketest",
-	deps = [
-		"//src/metabase:mz_metabase",
-		"//src/ore:mz_ore",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
-)
 
 rust_binary(
 	name = "metabase_smoketest",

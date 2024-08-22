@@ -89,6 +89,16 @@ impl RustLibrary {
             return Ok(None);
         }
 
+        // Not all crates have a `lib.rs` or require a rust_library target.
+        let library_target = metadata
+            .build_targets()
+            .find(|target| matches!(target.id(), BuildTargetId::Library));
+        if library_target.is_none() {
+            let name = metadata.name();
+            tracing::debug!("no library target found for {name}, skipping rust_library",);
+            return Ok(None);
+        }
+
         let name = metadata.name().to_case(Case::Snake);
         let name = QuotedString::new(name);
 
