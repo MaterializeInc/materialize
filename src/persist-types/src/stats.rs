@@ -97,8 +97,8 @@ impl ColumnarStats {
     {
         let inner = map(&self.values)?;
         match self.nulls {
-            Some(_) => Err(anyhow::anyhow!(
-                "expected non-nullable PrimitiveStats<String>, found nullable"
+            Some(nulls) => Err(anyhow::anyhow!(
+                "expected non-nullable stats, found nullable {nulls:?}"
             )),
             None => Ok(inner),
         }
@@ -144,7 +144,7 @@ impl ColumnarStats {
     pub fn try_as_string(&self) -> Result<&PrimitiveStats<String>, anyhow::Error> {
         self.try_as_stats(|values| match values {
             ColumnStatKinds::Primitive(PrimitiveStatsVariants::String(inner)) => Ok(inner),
-            other => anyhow::bail!("expected StructStats found {other:?}"),
+            other => anyhow::bail!("expected PrimitiveStats<String> found {other:?}"),
         })
     }
 }

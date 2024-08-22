@@ -101,7 +101,6 @@ impl RelationPartStats<'_> {
     }
 
     pub fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
-        // While we migrate to our new columnar data setup, check both old and new versions.
         let value_range = match self.col_values(id, arena) {
             Some(spec) => spec,
             None => ResultSpec::anything(),
