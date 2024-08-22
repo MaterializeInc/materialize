@@ -37,6 +37,7 @@ fn main() {
                 "expr/src/relation.proto",
                 "expr/src/relation/func.proto",
                 "expr/src/scalar.proto",
+                "expr/src/scalar/func/format.proto",
                 "expr/src/scalar/like_pattern.proto",
             ],
             &[".."],

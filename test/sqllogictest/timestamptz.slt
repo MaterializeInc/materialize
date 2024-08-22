@@ -13,9 +13,6 @@ ALTER SYSTEM SET enable_binary_date_bin = true
 ----
 COMPLETE 0
 
-# Tests adapted from Postgresql
-# https://github.com/postgres/postgres/blob/master/src/test/regress/sql/timestamptz.sql
-
 # case 1: AD dates, origin < input
 query TTT
 SELECT
@@ -195,3 +192,155 @@ true
 
 query error timestamp out of range
 select timezone('1 day'::interval, '1-12-31'::timestamptz+'262141 years'::interval)
+
+### to_char
+
+statement ok
+CREATE TABLE t (ts timestamp with time zone)
+
+statement ok
+INSERT INTO t VALUES
+  ('1997-01-01 00:00:00 GMT'),
+  ('2021-02-09 01:07:12 UTC'),
+  ('2024-03-21 12:09:23 +0000'),
+  ('2060-12-31 23:59:59.999999 -0800')
+
+query T rowsort
+SELECT to_char(ts, 'DAY Day day DY Dy dy MONTH Month month RM MON Mon mon') FROM t
+----
+SATURDAY  Saturday  saturday  SAT Sat sat JANUARY   January   january   I    JAN Jan jan
+THURSDAY  Thursday  thursday  THU Thu thu MARCH     March     march     III  MAR Mar mar
+TUESDAY   Tuesday   tuesday   TUE Tue tue FEBRUARY  February  february  II   FEB Feb feb
+WEDNESDAY Wednesday wednesday WED Wed wed JANUARY   January   january   I    JAN Jan jan
+
+query T rowsort
+SELECT to_char(ts, 'FMDAY FMDay FMday FMMONTH FMMonth FMmonth FMRM') FROM t
+----
+SATURDAY Saturday saturday JANUARY January january I
+THURSDAY Thursday thursday MARCH March march III
+TUESDAY Tuesday tuesday FEBRUARY February february II
+WEDNESDAY Wednesday wednesday JANUARY January january I
+
+query T rowsort
+SELECT to_char(ts, 'Y,YYY YYYY YYY YY Y CC Q MM WW DDD DD D J') FROM t
+----
+1,997 1997 997 97 7 20 1 01 01 001 01 4 2450450
+2,021 2021 021 21 1 21 1 02 06 040 09 3 2459255
+2,024 2024 024 24 4 21 1 03 12 081 21 5 2460391
+2,061 2061 061 61 1 21 1 01 01 001 01 7 2473826
+
+query T rowsort
+SELECT to_char(ts, 'FMY,YYY FMYYYY FMYYY FMYY FMY FMCC FMQ FMMM FMWW FMDDD FMDD FMD FMJ') FROM t
+----
+1,997 1997 997 97 7 20 1 1 1 1 1 4 2450450
+2,021 2021 21 21 1 21 1 2 6 40 9 3 2459255
+2,024 2024 24 24 4 21 1 3 12 81 21 5 2460391
+2,061 2061 61 61 1 21 1 1 1 1 1 7 2473826
+
+query T rowsort
+SELECT to_char(ts, 'HH HH12 HH24 MI SS SSSS') FROM t
+----
+01 01 01 07 12 4032
+07 07 07 59 59 28799
+12 12 00 00 00 0
+12 12 12 09 23 43763
+
+query T rowsort
+SELECT to_char(ts, '"HH:MI:SS is" HH:MI:SS "\"text between quote marks\""') FROM t
+----
+HH:MI:SS is 01:07:12 "text between quote marks"
+HH:MI:SS is 07:59:59 "text between quote marks"
+HH:MI:SS is 12:00:00 "text between quote marks"
+HH:MI:SS is 12:09:23 "text between quote marks"
+
+query T rowsort
+SELECT to_char(ts, 'HH24--text--MI--text--SS') FROM t
+----
+00--text--00--text--00
+01--text--07--text--12
+07--text--59--text--59
+12--text--09--text--23
+
+query T rowsort
+SELECT to_char(ts, 'YYYYTH YYYYth Jth') FROM t
+----
+1997TH 1997th 2450450th
+2021ST 2021st 2459255th
+2024TH 2024th 2460391st
+2061ST 2061st 2473826th
+
+query T rowsort
+SELECT to_char(ts, 'YYYY A.D. YYYY a.d. YYYY bc HH:MI:SS P.M. HH:MI:SS p.m. HH:MI:SS pm') FROM t
+----
+1997 A.D. 1997 a.d. 1997 ad 12:00:00 A.M. 12:00:00 a.m. 12:00:00 am
+2021 A.D. 2021 a.d. 2021 ad 01:07:12 A.M. 01:07:12 a.m. 01:07:12 am
+2024 A.D. 2024 a.d. 2024 ad 12:09:23 P.M. 12:09:23 p.m. 12:09:23 pm
+2061 A.D. 2061 a.d. 2061 ad 07:59:59 A.M. 07:59:59 a.m. 07:59:59 am
+
+query T rowsort
+SELECT to_char(ts, 'IYYY IYY IY I IW IDDD ID') FROM t
+----
+1997 997 97 7 01 003 3
+2021 021 21 1 06 037 2
+2024 024 24 4 12 081 4
+2060 060 60 0 53 370 6
+
+query T rowsort
+SELECT to_char(ts, 'FMIYYY FMIYY FMIY FMI FMIW FMIDDD FMID') FROM t
+----
+1997 997 97 7 1 3 3
+2021 21 21 1 6 37 2
+2024 24 24 4 12 81 4
+2060 60 60 0 53 370 6
+
+query T
+SELECT to_char(ts, 'FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  MS US') FROM (
+    VALUES
+        ('2018-11-02 12:34:56'::timestamp),
+        ('2018-11-02 12:34:56.78'),
+        ('2018-11-02 12:34:56.78901'),
+        ('2018-11-02 12:34:56.78901234')
+    ) d(ts)
+----
+FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  000 000000
+FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  780 780000
+FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  789 789010
+FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  789 789012
+
+# Verify that the format string gets precompiled.
+query T multiline
+EXPLAIN SELECT to_char(ts, 'HH:MI:SS') FROM t
+----
+Explained Query:
+  Project (#1)
+    Map (tochartstz[HH:MI:SS](#0))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Verify handling of NULL arguments.
+
+statement ok
+INSERT INTO t VALUES (NULL)
+
+query T rowsort
+SELECT to_char(ts, 'HH:MI:SS') FROM t
+----
+01:07:12
+07:59:59
+12:00:00
+12:09:23
+NULL
+
+query T
+SELECT to_char(ts, NULL) FROM t
+----
+NULL
+NULL
+NULL
+NULL
+NULL

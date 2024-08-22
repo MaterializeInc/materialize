@@ -112,6 +112,7 @@ filegroup(
 		"src/relation.proto",
 		"src/relation/func.proto",
 		"src/scalar.proto",
+		"src/scalar/func/format.proto",
 		"src/scalar/like_pattern.proto",
 		"//src/pgtz:all_protos",
 		"//src/proto:all_protos",

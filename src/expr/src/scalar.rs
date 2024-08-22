@@ -34,6 +34,7 @@ use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{
     parse_timezone, regexp_replace_parse_flags, BinaryFunc, UnaryFunc, UnmaterializableFunc,
     VariadicFunc,
@@ -1027,6 +1028,24 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
+                        } else if *func == BinaryFunc::ToCharTimestamp && expr2.is_literal() {
+                            let format_str = expr2.as_literal_str().unwrap();
+                            *e = MirScalarExpr::CallUnary {
+                                func: UnaryFunc::ToCharTimestamp(func::ToCharTimestamp {
+                                    format_string: format_str.to_string(),
+                                    format: DateTimeFormat::compile(format_str),
+                                }),
+                                expr: Box::new(expr1.take()),
+                            };
+                        } else if *func == BinaryFunc::ToCharTimestampTz && expr2.is_literal() {
+                            let format_str = expr2.as_literal_str().unwrap();
+                            *e = MirScalarExpr::CallUnary {
+                                func: UnaryFunc::ToCharTimestampTz(func::ToCharTimestampTz {
+                                    format_string: format_str.to_string(),
+                                    format: DateTimeFormat::compile(format_str),
+                                }),
+                                expr: Box::new(expr1.take()),
+                            };
                         } else if matches!(*func, BinaryFunc::Eq | BinaryFunc::NotEq)
                             && expr2 < expr1
                         {

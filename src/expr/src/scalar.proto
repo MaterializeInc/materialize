@@ -14,6 +14,7 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 
 import "expr/src/scalar/like_pattern.proto";
+import "expr/src/scalar/func/format.proto";
 
 import "pgtz/src/timezone.proto";
 import "proto/src/chrono.proto";
@@ -126,6 +127,10 @@ message ProtoUnaryFunc {
     message ProtoCastRecord1ToRecord2 {
         mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;
         repeated ProtoMirScalarExpr cast_exprs = 2;
+    }
+    message ProtoToCharTimestamp {
+        string format_string = 1;
+        mz_expr.scalar.func.format.ProtoDateTimeFormat format = 2;
     }
     reserved 5, 6, 15, 104, 111, 115, 212, 306, 313;
     oneof kind {
@@ -451,6 +456,8 @@ message ProtoUnaryFunc {
         google.protobuf.Empty kafka_murmur2_string = 328;
         google.protobuf.Empty seahash_bytes = 329;
         google.protobuf.Empty seahash_string = 330;
+        ProtoToCharTimestamp to_char_timestamp = 331;
+        ProtoToCharTimestamp to_char_timestamp_tz = 332;
     }
 }
 
