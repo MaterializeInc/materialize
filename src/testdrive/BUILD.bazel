@@ -18,7 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_testdrive",
-	version = "0.114.0-dev.0",
+	version = "0.115.0-dev.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = ["default"],
 	aliases = aliases(
@@ -56,7 +56,7 @@ rust_library(
 
 rust_test(
 	name = "mz_testdrive_lib_tests",
-	version = "0.114.0-dev.0",
+	version = "0.115.0-dev.0",
 	crate = ":mz_testdrive",
 	aliases = aliases(
 		normal = True,
@@ -169,7 +169,7 @@ cargo_build_script(
 
 rust_binary(
 	name = "testdrive",
-	version = "0.114.0-dev.0",
+	version = "0.115.0-dev.0",
 	crate_root = "src/bin/testdrive.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],
