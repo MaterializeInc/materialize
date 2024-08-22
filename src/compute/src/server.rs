@@ -445,32 +445,44 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             return;
         }
 
+        // The last time we did periodic maintenance.
         let mut last_maintenance = Instant::now();
+        // By default, perform maintenance immediately.
         let mut maintenance = true;
 
         // Commence normal operation.
         let mut shutdown = false;
         while !shutdown {
-            // Enable trace compaction.
             if maintenance {
+                // Enable trace compaction.
                 if let Some(compute_state) = &mut self.compute_state {
                     compute_state.traces.maintenance();
                 }
             }
 
-            let start = Instant::now();
-            self.timely_worker.step_or_park(None);
-            self.metrics
-                .timely_step_duration_seconds
-                .observe(start.elapsed().as_secs_f64());
-
+            // Get the maintenance interval, default to zero if we don't have a compute state.
             let maintenance_interval = self
                 .compute_state
                 .as_ref()
                 .map_or(Duration::ZERO, |state| state.server_maintenance_interval);
-            if last_maintenance.elapsed() > maintenance_interval {
+
+            // Determine how long to sleep for. If we performed maintenance, sleep until woken up.
+            // Otherwise, sleep until the next maintenance interval.
+            let sleep_duration = (!maintenance).then(|| {
+                (last_maintenance + maintenance_interval).saturating_duration_since(Instant::now())
+            });
+
+            // Step the timely worker, recording the time taken.
+            let timer = self.metrics.timely_step_duration_seconds.start_timer();
+            self.timely_worker.step_or_park(sleep_duration);
+            timer.observe_duration();
+
+            // Determine if we need to perform maintenance, which is true if `maintenance_interval`
+            // time has passed since the last maintenance.
+            let now = Instant::now();
+            if now >= last_maintenance + maintenance_interval {
                 maintenance = true;
-                last_maintenance = Instant::now();
+                last_maintenance = now;
             } else {
                 maintenance = false;
             }
@@ -507,8 +519,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_copy_tos();
             }
 
-            self.metrics
-                .record_shared_row_metrics(self.timely_worker.index());
+            if maintenance {
+                self.metrics
+                    .record_shared_row_metrics(self.timely_worker.index());
+            }
         }
     }
 
