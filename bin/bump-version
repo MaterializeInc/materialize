@@ -52,5 +52,6 @@ fi
 rm -f src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancerd}/Cargo.toml.bak LICENSE.bak
 
 cargo update --workspace
+bin/bazel gen
 
 git commit -am "release: bump to version v$version"
