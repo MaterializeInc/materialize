@@ -15,7 +15,7 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
@@ -445,10 +445,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             return;
         }
 
-        let mut step = 0;
-
         let mut last_maintenance = Instant::now();
-        let maintenance_interval = std::time::Duration::from_millis(50);
         let mut maintenance = true;
 
         // Commence normal operation.
@@ -467,6 +464,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 .timely_step_duration_seconds
                 .observe(start.elapsed().as_secs_f64());
 
+            let maintenance_interval = self
+                .compute_state
+                .as_ref()
+                .map_or(Duration::ZERO, |state| state.server_maintenance_interval);
             if last_maintenance.elapsed() > maintenance_interval {
                 maintenance = true;
                 last_maintenance = Instant::now();
@@ -476,7 +477,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
             if maintenance {
                 // Report frontier information back the coordinator.
-                if let Some(mut compute_state) = self.activate_compute(&mut response_tx, step) {
+                if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                     compute_state.report_frontiers();
                     compute_state.report_dropped_collections();
                     compute_state.report_operator_hydration();
@@ -497,10 +498,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 }
             }
             for cmd in cmds {
-                self.handle_command(&mut response_tx, cmd, step);
+                self.handle_command(&mut response_tx, cmd);
             }
 
-            if let Some(mut compute_state) = self.activate_compute(&mut response_tx, step) {
+            if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
@@ -508,16 +509,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
             self.metrics
                 .record_shared_row_metrics(self.timely_worker.index());
-            step += 1;
         }
     }
 
-    fn handle_command(
-        &mut self,
-        response_tx: &mut ResponseSender,
-        cmd: ComputeCommand,
-        step: usize,
-    ) {
+    fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
@@ -531,7 +526,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             }
             _ => (),
         }
-        self.activate_compute(response_tx, step)
+        self.activate_compute(response_tx)
             .unwrap()
             .handle_compute_command(cmd);
     }
@@ -539,14 +534,12 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     fn activate_compute<'a>(
         &'a mut self,
         response_tx: &'a mut ResponseSender,
-        step: usize,
     ) -> Option<ActiveComputeState<'a, A>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
                 response_tx,
-                step,
             })
         } else {
             None
@@ -828,7 +821,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
         // Execute the commands to bring us to `new_commands`.
         for command in todo_commands.into_iter() {
-            self.handle_command(response_tx, command, 0);
+            self.handle_command(response_tx, command);
         }
 
         // Overwrite `self.command_history` to reflect `new_commands`.

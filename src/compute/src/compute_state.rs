@@ -158,6 +158,10 @@ pub struct ComputeState {
 
     /// Send-side for read-only state.
     pub read_only_tx: watch::Sender<bool>,
+
+    /// Interval at which to perform server maintenance tasks. Set to a zero interval to
+    /// perform maintenance with every `step_or_park` invocation.
+    pub server_maintenance_interval: Duration,
 }
 
 impl ComputeState {
@@ -203,6 +207,7 @@ impl ComputeState {
             suspended_collections: Default::default(),
             read_only_tx,
             read_only_rx,
+            server_maintenance_interval: Duration::ZERO,
         }
     }
 
@@ -285,6 +290,8 @@ impl ComputeState {
         let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
         info!("using chunked stack: {chunked_stack}");
         mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
+
+        self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
     }
 
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
@@ -310,8 +317,6 @@ pub(crate) struct ActiveComputeState<'a, A: Allocate> {
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut ResponseSender,
-    /// The current step counter.
-    pub step: usize,
 }
 
 /// A token that keeps a sink alive.
@@ -504,7 +509,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
-                PendingPeek::index(peek, trace_bundle, self.step)
+                PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
                 let metadata = metadata.clone();
@@ -754,30 +759,21 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     /// Either complete the peek (and send the response) or put it in the pending set.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
-        let (response, step) = match &mut peek {
+        let response = match &mut peek {
             PendingPeek::Index(peek) => {
-                let step = peek.step;
-                (
-                    peek.seek_fulfillment(upper, self.compute_state.max_result_size),
-                    step,
-                )
+                peek.seek_fulfillment(upper, self.compute_state.max_result_size)
             }
-            PendingPeek::Persist(peek) => (
-                peek.result.try_recv().ok().map(|(result, duration)| {
-                    self.compute_state
-                        .metrics
-                        .persist_peek_seconds
-                        .observe(duration.as_secs_f64());
-                    result
-                }),
-                self.step,
-            ),
+            PendingPeek::Persist(peek) => peek.result.try_recv().ok().map(|(result, duration)| {
+                self.compute_state
+                    .metrics
+                    .persist_peek_seconds
+                    .observe(duration.as_secs_f64());
+                result
+            }),
         };
 
         if let Some(response) = response {
-            let steps = self.step - step;
-            let _span =
-                span!(parent: peek.span(), Level::DEBUG, "process_peek", steps = steps).entered();
+            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek").entered();
             self.send_peek_response(peek, response)
         } else {
             let uuid = peek.peek().uuid;
@@ -897,7 +893,7 @@ impl PendingPeek {
         }
     }
 
-    fn index(peek: Peek, mut trace_bundle: TraceBundle, step: usize) -> Self {
+    fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
         let empty_frontier = Antichain::new();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
         trace_bundle
@@ -917,7 +913,6 @@ impl PendingPeek {
             peek,
             trace_bundle,
             span: tracing::Span::current(),
-            step,
         })
     }
 
@@ -1124,8 +1119,6 @@ pub struct IndexPeek {
     trace_bundle: TraceBundle,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
-    /// The step counter when the peek was created.
-    pub step: usize,
 }
 
 impl IndexPeek {
