@@ -1,19 +1,18 @@
-This is an all-in-one Docker image of Materialize, a fast, distributed SQL
-database built on streaming internals. This image is used for **internal**
-development and testing of Materialize.
+The Materialize Emulator is an all-in-one Docker image available on Docker Hub, offering the fastest way to get hands-on experience with Materialize in a local environment.
 
-> **Warning**
->
-> You **should not** run production deployments using this Docker image.
->
-> This Docker image is **not** supported by Materialize.
->
-> This Docker image does **not** support version upgrades.
->
-> The performance characteristics of this Docker image are **not** representative
-> of the performance characteristics of our hosted offering. This image bundles
-> several services into the same container, while in our hosted offering we
-> run these services scaled across many machines.
+|                           | **Materialize Emulator**                                          | **Materialize**                                                              |
+|---------------------------|-------------------------------------------------------------------|------------------------------------------------------------------------------|
+| **Description**           | The fastest option for prototyping or internal testing with Materialize.              | Materialize's cloud hosted SaaS solution for critical operational workloads. [Try it free](https://materialize.com/try/) or [book a demo](https://materialize.com/demo/)            |
+| **Production deployments** | ❌ Not suitable due to performance and license limitations.        | ✔️ Supported.                                                                 |
+| **Performance**     | ❌ Limited. Several bundled services in a single container                         | ✔️ High. Services are scaled across many machines.                              |
+| **Support**                | ❌ Limited support (via [Slack Community](https://materialize.com/s/chat))  | ✔️ Dedicated technical support                                                |
+| **Sample data**            | ✔️ Quickstart data source                                                    | ✔️ Quickstart data source                                                    |
+| **Data sources**           | ✔️ Manual configuration using SQL only                                       | ✔️ Streamlined GUI-based setup                                       |
+| **Version upgrades**       | ❌ Manual, with no data persistence                                         | ✔️ Automated                                                                  |
+| **Use case isolation**     | ❌                                                                          | ✔️                                                                           |
+| **Fault tolerance**        | ❌                                                                          | ✔️                                                                           |
+| **Horizontal scalability** | ❌                                                                          | ✔️                                                                           |
+| **GUI**                    | ❌                                                                          | ✔️ Materialize Console, a dedicated web app for Materialize.       |
 
 ## License and Privacy Policy
 
