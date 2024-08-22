@@ -218,6 +218,8 @@ so it is executed.""",
 
     permit_rerunning_successful_steps(pipeline)
 
+    set_retry_on_agent_lost(pipeline)
+
     set_default_agents_queue(pipeline)
 
     if test_selection := os.getenv("CI_TEST_SELECTION"):
@@ -317,6 +319,32 @@ def permit_rerunning_successful_steps(pipeline: Any) -> None:
     def visit(step: Any) -> None:
         step.setdefault("retry", {}).setdefault("manual", {}).setdefault(
             "permit_on_passed", True
+        )
+
+    for config in pipeline["steps"]:
+        if "trigger" in config or "wait" in config or "block" in config:
+            continue
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                visit(inner_config)
+            continue
+        visit(config)
+
+
+def set_retry_on_agent_lost(pipeline: Any) -> None:
+    def visit(step: Any) -> None:
+        step.setdefault("retry", {}).setdefault("automatic", []).extend(
+            [
+                {
+                    "exit_status": -1,  # Connection to agent lost
+                    "signal_reason": "none",
+                    "limit": 2,
+                },
+                {
+                    "signal_reason": "agent_stop",  # Stopped by OS
+                    "limit": 2,
+                },
+            ]
         )
 
     for config in pipeline["steps"]:
