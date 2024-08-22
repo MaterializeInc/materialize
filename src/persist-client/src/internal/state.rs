@@ -20,6 +20,7 @@ use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
@@ -506,10 +507,21 @@ impl<T> HollowBatch<T> {
         runs: Vec<usize>,
         mut run_meta: Vec<RunMeta>,
     ) -> Self {
-        debug_assert!(runs.is_sorted(), "run indices should be sorted");
         debug_assert!(
-            runs.last().iter().all(|i| **i <= parts.len()),
-            "run indices should be a valid indices into parts"
+            runs.is_strictly_sorted(),
+            "run indices should be strictly increasing"
+        );
+        debug_assert!(
+            runs.first().map_or(true, |i| *i > 0),
+            "run indices should be positive"
+        );
+        debug_assert!(
+            runs.last().map_or(true, |i| *i < parts.len()),
+            "run indices should be valid indices into parts"
+        );
+        debug_assert!(
+            run_meta.len() <= runs.len() + 1,
+            "all metadata should correspond to a run"
         );
 
         // Don't store the trailing default run meta for backward-compatibility reasons.
