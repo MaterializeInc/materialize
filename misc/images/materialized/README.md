@@ -12,7 +12,7 @@ The Materialize Emulator is an all-in-one Docker image available on Docker Hub, 
 | **Use case isolation**     | ❌                                                                          | ✔️                                                                           |
 | **Fault tolerance**        | ❌                                                                          | ✔️                                                                           |
 | **Horizontal scalability** | ❌                                                                          | ✔️                                                                           |
-| **GUI**                    | ❌                                                                          | ✔️ Materialize Console, a dedicated web app for Materialize.       |
+| **GUI**                    | ❌                                                                          | ✔️ Materialize Console (dedicated web app).       |
 
 ## License and Privacy Policy
 
