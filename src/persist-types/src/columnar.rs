@@ -103,7 +103,7 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     type Mut: ColumnPush<Self>;
 
     /// The statistics type of columns of this type of data.
-    type Stats: ColumnStats<Self> + StatsFrom<Self::Col>;
+    type Stats: ColumnStats + StatsFrom<Self::Col>;
 }
 
 /// If necessary, whatever information beyond the type of `Self` needed to

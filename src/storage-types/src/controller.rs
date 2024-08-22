@@ -13,9 +13,7 @@ use std::fmt::{self, Debug, Display};
 use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::Data;
-use mz_persist_types::dyn_struct::DynStruct;
-use mz_persist_types::stats::{PartStats, StructStats};
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
@@ -427,14 +425,18 @@ impl TxnsCodec for TxnsCodecRow {
     }
 
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
-        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<T::Stats> {
-            stats
-                .col::<T>(col)
-                .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))
-                .ok()?
-        }
-        let stats = col::<Option<DynStruct>>(&stats.key, "ok")?;
-        let stats = col::<String>(&stats.some, "shard_id")?;
+        let stats = stats
+            .key
+            .col("key")?
+            .try_as_optional_struct()
+            .map_err(|err| error!("unexpected stats type for col 'key': {}", err))
+            .ok()?;
+        let stats = stats
+            .some
+            .col("shard_id")?
+            .try_as_string()
+            .map_err(|err| error!("unexpected stats type for col 'shard_id': {}", err))
+            .ok()?;
         let data_id_str = data_id.to_string();
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }

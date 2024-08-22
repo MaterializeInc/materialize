@@ -89,6 +89,64 @@ impl ColumnarStats {
             _ => None,
         }
     }
+
+    /// Helper method to "downcast" to stats of type `T`.
+    fn try_as_stats<'a, T, F>(&'a self, map: F) -> Result<T, anyhow::Error>
+    where
+        F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
+    {
+        let inner = map(&self.values)?;
+        match self.nulls {
+            Some(nulls) => Err(anyhow::anyhow!(
+                "expected non-nullable stats, found nullable {nulls:?}"
+            )),
+            None => Ok(inner),
+        }
+    }
+
+    /// Helper method to "downcast" [`OptionStats<T>`].
+    fn try_as_option_stats<'a, T, F>(&'a self, map: F) -> Result<OptionStats<T>, anyhow::Error>
+    where
+        F: FnOnce(&'a ColumnStatKinds) -> Result<T, anyhow::Error>,
+    {
+        let inner = map(&self.values)?;
+        match self.nulls {
+            Some(nulls) => Ok(OptionStats {
+                none: nulls.count,
+                some: inner,
+            }),
+            None => Err(anyhow::anyhow!(
+                "expected nullable stats, found non-nullable"
+            )),
+        }
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<StructStats>`]
+    /// if the inner statistics are nullable and for a structured column.
+    pub fn try_as_optional_struct(&self) -> Result<OptionStats<&StructStats>, anyhow::Error> {
+        self.try_as_option_stats(|values| match values {
+            ColumnStatKinds::Struct(inner) => Ok(inner),
+            other => anyhow::bail!("expected StructStats found {other:?}"),
+        })
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to an [`OptionStats<BytesStats>`]
+    /// if the inner statistics are nullable and for a column of bytes.
+    pub fn try_as_optional_bytes(&self) -> Result<OptionStats<&BytesStats>, anyhow::Error> {
+        self.try_as_option_stats(|values| match values {
+            ColumnStatKinds::Bytes(inner) => Ok(inner),
+            other => anyhow::bail!("expected BytesStats found {other:?}"),
+        })
+    }
+
+    /// Tries to "downcast" this instance of [`ColumnarStats`] to a [`PrimitiveStats<String>`]
+    /// if the inner statistics are nullable and for a structured column.
+    pub fn try_as_string(&self) -> Result<&PrimitiveStats<String>, anyhow::Error> {
+        self.try_as_stats(|values| match values {
+            ColumnStatKinds::Primitive(PrimitiveStatsVariants::String(inner)) => Ok(inner),
+            other => anyhow::bail!("expected PrimitiveStats<String> found {other:?}"),
+        })
+    }
 }
 
 impl DynStats for ColumnarStats {
@@ -270,7 +328,12 @@ impl std::fmt::Debug for StatsFn {
 }
 
 /// Aggregate statistics about a column of type `T`.
-pub trait ColumnStats<T: Data>: DynStats {
+pub trait ColumnStats: DynStats {
+    /// Type returned as the stat bounds.
+    type Ref<'a>
+    where
+        Self: 'a;
+
     /// An inclusive lower bound on the data contained in the column, if known.
     ///
     /// This will often be a tight bound, but it's not guaranteed. Persist
@@ -281,9 +344,9 @@ pub trait ColumnStats<T: Data>: DynStats {
     /// Similarly, if the column is empty, this will contain `T: Default`.
     /// Emptiness will be indicated in statistics higher up (i.e.
     /// [StructStats]).
-    fn lower<'a>(&'a self) -> Option<T::Ref<'a>>;
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>>;
     /// Same as [Self::lower] but an (also inclusive) upper bound.
-    fn upper<'a>(&'a self) -> Option<T::Ref<'a>>;
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>>;
     /// The number of `None`s if this column is optional or 0 if it isn't.
     fn none_count(&self) -> usize;
 
@@ -417,12 +480,14 @@ impl DynStats for NoneStats {
     }
 }
 
-impl<T: Data> ColumnStats<T> for NoneStats {
-    fn lower<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+impl ColumnStats for NoneStats {
+    type Ref<'a> = ();
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
-    fn upper<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
@@ -441,15 +506,14 @@ impl<T: Data> ColumnStats<T> for NoneStats {
     }
 }
 
-impl<T> ColumnStats<Option<T>> for OptionStats<NoneStats>
-where
-    Option<T>: Data,
-{
-    fn lower<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+impl ColumnStats for OptionStats<NoneStats> {
+    type Ref<'a> = Option<()>;
+
+    fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 
-    fn upper<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+    fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
         None
     }
 

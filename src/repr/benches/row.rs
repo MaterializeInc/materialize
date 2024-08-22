@@ -283,7 +283,7 @@ fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
 fn encode_structured2(schema: &RelationDesc, rows: &[Row]) -> Part2 {
     let mut builder = PartBuilder2::new(schema, &UnitSchema);
     for row in rows.iter() {
-        builder.push(row, &(), 1, 1);
+        builder.push(row, &(), 1u64, 1i64);
     }
     builder.finish()
 }
@@ -352,7 +352,7 @@ fn bench_roundtrip(c: &mut Criterion) {
         let mut builder = PartBuilder2::new(&schema, &UnitSchema);
         b.iter(|| {
             for row in rows.iter() {
-                builder.push(row, &(), 1, 1);
+                builder.push(row, &(), 1u64, 1i64);
             }
             std::hint::black_box(&mut builder);
         });
@@ -475,7 +475,7 @@ fn bench_json(c: &mut Criterion) {
         b.iter(|| {
             let mut builder = PartBuilder2::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
-                std::hint::black_box(&mut builder).push(&row, &(), 1, 1);
+                std::hint::black_box(&mut builder).push(&row, &(), 1u64, 1i64);
             }
             let part = builder.finish();
             std::hint::black_box(part.key);
@@ -505,7 +505,7 @@ fn bench_json(c: &mut Criterion) {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
         let mut builder = PartBuilder2::new(&schema, &UnitSchema);
-        builder.push(&row, &(), 1, 1);
+        builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();
 
         let col = part
@@ -556,7 +556,7 @@ fn bench_string(c: &mut Criterion) {
         b.iter(|| {
             let mut builder = PartBuilder2::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
-                std::hint::black_box(&mut builder).push(&row, &(), 1, 1);
+                std::hint::black_box(&mut builder).push(&row, &(), 1u64, 1i64);
             }
             let part = builder.finish();
             std::hint::black_box(part.key);
@@ -586,7 +586,7 @@ fn bench_string(c: &mut Criterion) {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
         let mut builder = PartBuilder2::new(&schema, &UnitSchema);
-        builder.push(&row, &(), 1, 1);
+        builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();
 
         let col = part

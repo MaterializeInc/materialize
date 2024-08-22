@@ -29,8 +29,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "c201060a040232014d",
-          "upper": "c201160a0907303146460756945c10e9ffffffffffffffff01",
+          "lower": "06000000000000000e00e80000000000000000000000000000000000000000000000800000000000",
+          "upper": "1000000017000000b103f402cc0192002f0107000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -108,8 +109,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "c201160a14084830872884384424224456981949950067088d",
-          "upper": "c201060a040688403c"
+          "lower": "260000000000000058004300b603b503d503c801e000a8018001740368033e035400800000000000",
+          "upper": "06000000000000009301b00200000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -270,8 +272,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "8a010a08c1ed031088f4f1b001",
-          "upper": "8a010a08c1ed031088f4f1b001"
+          "lower": "0000f6c1161c7a08",
+          "upper": "0000f6c1161c7a08",
+          "kind": "packed-time"
         },
         "1": {
           "nulls": {
@@ -297,8 +300,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "9a011008f9b50210b90118ca9c03209082a135",
-          "upper": "9a011008f9b60610f00118dc90022090b2b001"
+          "lower": "80009af9000000b90000ce4a06a84110",
+          "upper": "80019b79000000f00000885c002c1910",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -442,8 +446,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "2": {
-          "lower": "c201160a14061094654379179016190566924011831013634d",
-          "upper": "c201080a040431798c1005"
+          "lower": "26000000000000007a020d003f030b009c033602be001000b3007b018e025e003d00800000000000",
+          "upper": "06000000fbffffff1e03af0100000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -470,8 +475,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "8a010808de0e10a8ebc02c",
-          "upper": "8a010a08bbe20310c0bfd3f702"
+          "lower": "0000075e059035a8",
+          "upper": "0000f13b2ef4dfc0",
+          "kind": "packed-time"
         }
       }
     }
@@ -495,15 +501,17 @@ expression: all_stats
           "upper": "‮:󨼛﻿\u001bp\u000b﻿{}\r{Ѩ*􂗃I﻿"
         },
         "1": {
-          "lower": "92011108bae10b10e601189f9f0220e8a6b5d402",
-          "upper": "92011108bae10b10e601189f9f0220e8a6b5d402",
+          "lower": "8002f0ba000000e600008f9f2a8d5368",
+          "upper": "8002f0ba000000e600008f9f2a8d5368",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
         },
         "2": {
-          "lower": "a2011608a392fb6410aec79bbb021893d885b68ee8e0d2cd01",
-          "upper": "a2011b089bf4c9c80610ab8b84ccfcffffffff0118bcbda7f5dba0bfb453"
+          "lower": "8c9ec923a766e3ae4da58340e6c16c13",
+          "upper": "e9127a1b498105abd368fd05bea9debc",
+          "kind": "packed-interval"
         }
       }
     }
@@ -554,8 +562,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "a2011c08c8aec486faffffffff0110f3d5d2c10118f2fcf78cdcafd4f4ff01",
-          "upper": "a2011b0886adffd7ffffffffff0110eb9dfaf60118cb9cc1bab4a5d08242"
+          "lower": "20d117489834aaf37fe9517dc19dfe72",
+          "upper": "7affd6869ede8eebc205412b47504e4b",
+          "kind": "packed-interval"
         },
         "1": {
           "lower": {
@@ -669,8 +678,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "9a0110088ec802106d18fbcb042090f0c2fc01",
-          "upper": "9a01100894e20410ec0218c45e20d0f5fb9c01"
+          "lower": "8000a40e0000006d000125fb1f90b810",
+          "upper": "800131140000016c00002f44139efad0",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -721,8 +731,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "ca011065e21f97882e4f978b83380b674414f9",
-          "upper": "ca0110f1744e5a9818b1996957658eaf24268b",
+          "lower": "65e21f97882e4f978b83380b674414f9",
+          "upper": "f1744e5a9818b1996957658eaf24268b",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -846,8 +857,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "9a010f08c64010d70218907420a0bfa5f801",
-          "upper": "9a01100894c90e106318bed70420f0d196d002"
+          "lower": "800020460000015700003a101f095fa0",
+          "upper": "8003a4940000006300012bbe2a05a8f0",
+          "kind": "packed-date-time"
         },
         "2": {
           "lower": ":\\×🕴\\.$x2E🕴:`/🕴&a򂹕Ⱥ",
@@ -928,8 +940,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "ca0110023632ade923a27c1c99acc5c46d97ba",
-          "upper": "ca0110e3af2f0fd3ce72241f3e2bdcc23e79be"
+          "lower": "023632ade923a27c1c99acc5c46d97ba",
+          "upper": "e3af2f0fd3ce72241f3e2bdcc23e79be",
+          "kind": "uuid"
         },
         "2": {
           "lower": {
@@ -1146,8 +1159,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "ca01102a322bc3db933e00f4084bb082c94116",
-          "upper": "ca0110f671ffa6f48626ac55cf0d9eb7c3a562"
+          "lower": "2a322bc3db933e00f4084bb082c94116",
+          "upper": "f671ffa6f48626ac55cf0d9eb7c3a562",
+          "kind": "uuid"
         }
       }
     }
@@ -1167,8 +1181,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "ca01101fad9c717f1239e80f7672e33f37e87c",
-          "upper": "ca01106be5ff1f6dfec876657b913aad130ba4"
+          "lower": "1fad9c717f1239e80f7672e33f37e87c",
+          "upper": "6be5ff1f6dfec876657b913aad130ba4",
+          "kind": "uuid"
         }
       }
     }
@@ -1188,8 +1203,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "a2012108d6e79edcfcffffffff0110b68db7c6faffffffff0118ccbec88cbdf1c5a2d601",
-          "upper": "a2012108d6e79edcfcffffffff0110b68db7c6faffffffff0118ccbec88cbdf1c5a2d601",
+          "lower": "4b87b3d628cdc6b65645178bd1921f4c",
+          "upper": "4b87b3d628cdc6b65645178bd1921f4c",
+          "kind": "packed-interval",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -1237,8 +1253,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "9a011008c6a80210ba021887a80220b8aba001",
-          "upper": "9a011008d3bb0f1081021898a60220b8ecb62a",
+          "lower": "800094460000013a00009407002815b8",
+          "upper": "8003ddd30000010100009318054db638",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -1310,8 +1327,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "9a011008df0310ae0118b5ea0320c094b79602",
-          "upper": "9a011108d3e60f10c00218fdc50320d08bcac601"
+          "lower": "800001df000000ae0000f53522cdca40",
+          "upper": "8003f353000001400000e2fd18d285d0",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": "\r%_󠒆‮$򢄤\u0002$򟰈\t",
@@ -1482,8 +1500,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "ca01101808a1de78720446ee86033a6e407bd8",
-          "upper": "ca0110ad5e9fc9b810c356aec7ca7c59df728a",
+          "lower": "1808a1de78720446ee86033a6e407bd8",
+          "upper": "ad5e9fc9b810c356aec7ca7c59df728a",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "3"
           }
@@ -1809,8 +1828,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "a2012008c08fd19ff8ffffffff0110a1b593e2fbffffffff0118fa98d9f38e86a4cf09",
-          "upper": "a20116088ccc80ca0710859b96d90618c68db8eca1b89bc712"
+          "lower": "03f447c03c44daa1899e9030ee764c7a",
+          "upper": "f940260ceb258d85928e6dc21d8e06c6",
+          "kind": "packed-interval"
         }
       }
     }
@@ -2161,8 +2181,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "8a010908d5431098a4fcad02",
-          "upper": "8a010908e380051088ebc519"
+          "lower": "000021d525bf1218",
+          "upper": "0001406303317588",
+          "kind": "packed-time"
         },
         "1": {
           "lower": "\u0001🕴.\u001b¥B:&",
@@ -2188,8 +2209,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "9201110892960210cf0118d1b80420b0a4b8aa01",
-          "upper": "9201110892960210cf0118d1b80420b0a4b8aa01"
+          "lower": "80008b12000000cf00011c51154e1230",
+          "upper": "80008b12000000cf00011c51154e1230",
+          "kind": "packed-date-time"
         },
         "2": "NoneStats"
       }
@@ -2210,8 +2232,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "a2012108aeafaed8fbffffffff0110c384bbddfdffffffff0118dce9eeb3c5e3f1cdce01",
-          "upper": "a2011708d4d9f6ce031098a8d0fd0118d1cdd5e4b4c5e590bc01"
+          "lower": "3b0b97ae5baec2434e9bc71c567bb4dc",
+          "upper": "b9ddacd49fb414183c21962b4c9566d1",
+          "kind": "packed-interval"
         },
         "1": "NoneStats",
         "2": {
@@ -2535,8 +2558,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "0801",
-          "upper": "0801",
+          "lower": "800007b2000000010000000000000000",
+          "upper": "800007b2000000010000000000000000",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -2695,8 +2719,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "8a010a08869e011080b0b18e02",
-          "upper": "8a010a08b5950510b0c4a1b603"
+          "lower": "00004f0621cc5800",
+          "upper": "00014ab536c86230",
+          "kind": "packed-time"
         }
       }
     }
@@ -2717,8 +2742,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "a2012008a2c0e7d8fcffffffff0110b3f1ecb4f8ffffffff0118809fbf97a1e8c2bc3f",
-          "upper": "a2011608c087fcd606109e9af55a188093c2c2f79cfbaa9601"
+          "lower": "4b19e022069b38b3bf790b4212efcf80",
+          "upper": "eadf03c08b5d4d1e1655ece778508980",
+          "kind": "packed-interval"
         },
         "2": {
           "nulls": {
@@ -3134,8 +3160,9 @@ expression: all_stats
           "upper": "<DM'\u0007򎁫O"
         },
         "1": {
-          "lower": "ca0110aa13e52a2ee7d690a3f0875e62a32a75",
-          "upper": "ca0110aa13e52a2ee7d690a3f0875e62a32a75"
+          "lower": "aa13e52a2ee7d690a3f0875e62a32a75",
+          "upper": "aa13e52a2ee7d690a3f0875e62a32a75",
+          "kind": "uuid"
         },
         "2": "NoneStats"
       }
@@ -3238,8 +3265,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "8a010a088f990110989a8f8d02",
-          "upper": "8a010908d9a70410b0fd801a"
+          "lower": "00004c8f21a3cd18",
+          "upper": "000113d903403eb0",
+          "kind": "packed-time"
         }
       }
     }
@@ -3346,8 +3374,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "9201100885d30410f30118cfe90420d880927d",
-          "upper": "92011108aca00e10e60218ce89022088e2c9e602"
+          "lower": "80012985000000f3000134cf0fa48058",
+          "upper": "8003902c00000166000084ce2cd27108",
+          "kind": "packed-date-time"
         },
         "1": {
           "nulls": {
@@ -3452,8 +3481,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "9a010f08eee70b104718a1e80320b097ec2b",
-          "upper": "9a011108b5da0f10ff011882f20220a896b09603",
+          "lower": "8002f3ee000000470000f421057b0bb0",
+          "upper": "8003ed35000000ff0000b90232cc0b28",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -3640,8 +3670,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "c201200a137094023602271776772755050500098630596d10ffffffffffffffffff01",
-          "upper": "c201160a0905307480776972705c10e9ffffffffffffffff01"
+          "lower": "2500000001000000540276026200f4013200f302040308030f015a0217005e000700800000000000",
+          "upper": "1000000017000000c102cc030803e001330105000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": "NoneStats"
       }
@@ -3723,8 +3754,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "9a011008a1f80710d30118d11420e0e3d3b401",
-          "upper": "9a011008a1f80710d30118d11420e0e3d3b401"
+          "lower": "8001fc21000000d300000a511694f1e0",
+          "upper": "8001fc21000000d300000a511694f1e0",
+          "kind": "packed-date-time"
         },
         "2": {
           "nulls": {
@@ -3750,8 +3782,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "ca011049a5ed9b8a0d5c8a0823fa63657523be",
-          "upper": "ca0110f3fb959f4d8c901f52ff32d068486055"
+          "lower": "49a5ed9b8a0d5c8a0823fa63657523be",
+          "upper": "f3fb959f4d8c901f52ff32d068486055",
+          "kind": "uuid"
         }
       }
     }
@@ -3856,8 +3889,9 @@ expression: all_stats
           "upper": "¥&fȺK�?.ÃLf►÷\u0000.\r🕴\u001b�􇨞Ⱥa/񛍗%u`3򵩯'"
         },
         "1": {
-          "lower": "92010f089bcf0110830218e15f2088f7f631",
-          "upper": "92011108b3980f10f00118edb8012098f4e4b703"
+          "lower": "8000679b0000010300002fe1063dbb88",
+          "upper": "8003cc33000000f000005c6d36f93a18",
+          "kind": "packed-date-time"
         },
         "2": {
           "nulls": {
@@ -4070,8 +4104,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "9a011108ac940210cc0218fb920320b8ed92a501",
-          "upper": "9a010f08d0810c102318d4fa032080abc952"
+          "lower": "80008a2c0000014c0000c97b14a4b6b8",
+          "upper": "800300d0000000230000fd540a525580",
+          "kind": "packed-date-time"
         },
         "1": {
           "nulls": {
@@ -4134,8 +4169,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "ca0110445e3927b76c55e69d9ae2362b6df759",
-          "upper": "ca0110e213c73bd9d0915d46ca1fe16ffa2425"
+          "lower": "445e3927b76c55e69d9ae2362b6df759",
+          "upper": "e213c73bd9d0915d46ca1fe16ffa2425",
+          "kind": "uuid"
         },
         "1": "NoneStats"
       }
@@ -4164,8 +4200,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "0801",
-          "upper": "0801",
+          "lower": "0000000000000000",
+          "upper": "0000000000000000",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -4427,8 +4464,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "9a010f08af9d01101b1887da0420d0ee9c77",
-          "upper": "9a011108f2bd0c10ce0218f1f00220a8e2ecc501",
+          "lower": "80004eaf0000001b00012d070ee73750",
+          "upper": "80031ef20000014e0000b87118bb3128",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "3"
           }
@@ -4463,8 +4501,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "a2012008868efa85fbffffffff0110e1f487dafdffffffff0118d0addae8f1e9ec8a1b",
-          "upper": "a2011608b0eae9c80710e2a0ae91071888eae487f0ee81930a"
+          "lower": "30be87065b41fa619b15b34f1d1696d0",
+          "upper": "f91a7530f22b90628a26077700f93508",
+          "kind": "packed-interval"
         },
         "1": "NoneStats"
       }
@@ -4542,8 +4581,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "ca0110134eaf11ffca14efd1d0b20eff3ac3df",
-          "upper": "ca0110fce91ff820e1c7109dcb2b27d7086667"
+          "lower": "134eaf11ffca14efd1d0b20eff3ac3df",
+          "upper": "fce91ff820e1c7109dcb2b27d7086667",
+          "kind": "uuid"
         }
       }
     }
@@ -4594,8 +4634,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "8a010a088c9a0310b8ca85c901",
-          "upper": "8a010a088c9a0310b8ca85c901",
+          "lower": "0000cd0c19216538",
+          "upper": "0000cd0c19216538",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -4898,8 +4939,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a011008e3bd05102318f0cb0320b893dcc001",
-          "upper": "9a011008e3bd05102318f0cb0320b893dcc001"
+          "lower": "80015ee3000000230000e5f0181709b8",
+          "upper": "80015ee3000000230000e5f0181709b8",
+          "kind": "packed-date-time"
         },
         "2": {
           "nulls": {
@@ -5007,8 +5049,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "920111088ba00410d20218aba5042080dccde102",
-          "upper": "920110089db80b105f18bd9f0420c0fcd68b03"
+          "lower": "8001100b00000152000112ab2c336e00",
+          "upper": "8002dc1d0000005f00010fbd3175be40",
+          "kind": "packed-date-time"
         },
         "2": {
           "lower": {
@@ -5221,8 +5264,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "9a011008cba90610880218f3df012080a5f76d",
-          "upper": "9a011008efcc0b101d18c08a0520a8fbc0c301",
+          "lower": "800194cb0000010800006ff30dbdd280",
+          "upper": "8002e66f0000001d0001454018703da8",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -5253,8 +5297,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "92010f08c0fa0910e802188c0d20e0e8a301",
-          "upper": "92010f08c0fa0910e802188c0d20e0e8a301"
+          "lower": "80027d40000001680000068c0028f460",
+          "upper": "80027d40000001680000068c0028f460",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": {
@@ -5284,8 +5329,9 @@ expression: all_stats
         "0": "NoneStats",
         "1": "NoneStats",
         "2": {
-          "lower": "ca011058d62e833c7937bd2ed36c49e78d064e",
-          "upper": "ca0110f010a3c67e2d46bce41293c7f3f6b8ed",
+          "lower": "58d62e833c7937bd2ed36c49e78d064e",
+          "upper": "f010a3c67e2d46bce41293c7f3f6b8ed",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -5406,8 +5452,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "c201160a14024437229146411455921105184880713981269d",
-          "upper": "0806",
+          "lower": "26000000000000000d01d503c9027003b80069009903c7019b019200e500b5011800800000000000",
+          "upper": "01000000000000000000000000000000000000000000000000000000000000000000400000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -5536,8 +5583,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "9a011008fcb202103618fa8e0120e8a0b98002",
-          "upper": "9a011008d6c00e100518b2f60120f8dcc0d302"
+          "lower": "8000997c000000360000477a200e5068",
+          "upper": "8003a0560000000500007b322a702e78",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": {
@@ -5671,8 +5719,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "ca011029f57fd1ae39c9fa3a99940d697a51bd",
-          "upper": "ca0110fc59fa690607148f2693d4d5d62241af",
+          "lower": "29f57fd1ae39c9fa3a99940d697a51bd",
+          "upper": "fc59fa690607148f2693d4d5d62241af",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -5695,8 +5744,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "c2010d0a0906809249886106796d100a",
-          "upper": "c201160a0930220601203633456c10eaffffffffffffffff01",
+          "lower": "10000000f6ffffff1c036a007603f900290306000000000000000000000000000000800000000000",
+          "upper": "1100000016000000c8017902cb005902dc001e000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -5761,8 +5811,9 @@ expression: all_stats
           "not nulls": "json_lists"
         },
         "1": {
-          "lower": "8a010a0890ac011098e5f5b901",
-          "upper": "8a010a0890ac011098e5f5b901"
+          "lower": "00005610173d7298",
+          "upper": "00005610173d7298",
+          "kind": "packed-time"
         }
       }
     }
@@ -5807,8 +5858,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "92011008eeff0410fa0118912220c8db93d303",
-          "upper": "92011008eeff0410fa0118912220c8db93d303"
+          "lower": "80013fee000000fa000011113a64edc8",
+          "upper": "80013fee000000fa000011113a64edc8",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": {
@@ -5893,8 +5945,9 @@ expression: all_stats
           "not nulls": "json_mixed"
         },
         "1": {
-          "lower": "92011108afa706108a01189a8701208084d3ca03",
-          "upper": "92011108ecff0b10a201189bd70220c898eca103",
+          "lower": "800193af0000008a0000439a3954c200",
+          "upper": "8002ffec000000a20000ab9b343b0c48",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -5925,8 +5978,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "8a010908dfa10110a898ee18",
-          "upper": "8a010a089be80410d886ce8f02"
+          "lower": "000050df031b8c28",
+          "upper": "0001341b21f38358",
+          "kind": "packed-time"
         },
         "2": "NoneStats"
       }
@@ -5947,8 +6001,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "8a010808dd1810e090ac69",
-          "upper": "8a0109088aa00410e0f7b523"
+          "lower": "00000c5d0d2b0860",
+          "upper": "0001100a046d7be0",
+          "kind": "packed-time"
         },
         "1": {
           "lower": {
@@ -5977,8 +6032,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "ca0110ac796e3e56be0bc8f5d9b50ea2922c6b",
-          "upper": "ca0110e41d939a64e8c37b2017d306d3d3165f"
+          "lower": "ac796e3e56be0bc8f5d9b50ea2922c6b",
+          "upper": "e41d939a64e8c37b2017d306d3d3165f",
+          "kind": "uuid"
         },
         "2": {
           "lower": false,
@@ -6163,8 +6219,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "92010f08e41410a40118c10420b0dee9a903",
-          "upper": "92010f0899b30d101218cc2220c0bcd4fa01",
+          "lower": "80000a64000000a400000241353a6f30",
+          "upper": "80035999000000120000114c1f551e40",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -6253,8 +6310,9 @@ expression: all_stats
         },
         "1": "NoneStats",
         "2": {
-          "lower": "92010f08b90f102e1881890320a888859803",
-          "upper": "9201100886a80f10880218feb60220f0b4cb10"
+          "lower": "800007b90000002e0000c48133014428",
+          "upper": "8003d4060000010800009b7e0212da70",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -6394,8 +6452,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "c201160a14074273054886915091240609547534903883261d",
-          "upper": "c201060a02627c1002",
+          "lower": "2600000000000000050173038703160223026102f0005b0093037603360011014a00800000000000",
+          "upper": "03000000feffffff7302000000000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -6445,8 +6504,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "c2010d0a0905491540336911967d100a",
-          "upper": "0808",
+          "lower": "10000000f6ffffffc7038f0350011c02eb0105000000000000000000000000000000800000000000",
+          "upper": "01000000000000000000000000000000000000000000000000000000000000000000200000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "3"
           }
@@ -6611,8 +6671,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "9a01180885efffffffffffffff0110aa0118d8ea042090e49f8c01",
-          "upper": "9a011008f8fc03104c1892a40220d092c1e102"
+          "lower": "7ffff785000000aa000135581187f210",
+          "upper": "8000fe780000004c000092122c304950",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -6691,8 +6752,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "c201060a040895532d",
-          "upper": "c201060a040983729c"
+          "lower": "060000000000000014027f0300000000000000000000000000000000000000000000800000000000",
+          "upper": "0600000000000000d902d70300000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": {
           "lower": {
@@ -6720,8 +6782,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "a2012008b5b896dff8ffffffff0110e0deedf9feffffffff01189188eaa0d8c4c8bc1d",
-          "upper": "a20116089fcdd39c0510eecee9ac01189ab9b790f3afef9564"
+          "lower": "0be59c356f3b6f609d792225841a8411",
+          "upper": "d394e69f959a676ee42bbd7f320ddc9a",
+          "kind": "packed-interval"
         }
       }
     }
@@ -6804,12 +6867,14 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "8a010908d60410b8c4ac9002",
-          "upper": "8a010a08fdd60310a0b1d7d802"
+          "lower": "00000256220b2238",
+          "upper": "0000eb7d2b15d8a0",
+          "kind": "packed-time"
         },
         "1": {
-          "lower": "9a010f08de6210b30118f60a20d8a2c88301",
-          "upper": "9a01110887d30d10d10218dfa90120e8dfcd9c02",
+          "lower": "8000315e000000b30000057610721158",
+          "upper": "8003698700000151000054df23936fe8",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -6897,8 +6962,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "8a010a08deac0210a881cf9102",
-          "upper": "8a010a08fabd0410b0cd969501"
+          "lower": "0000965e2233c0a8",
+          "upper": "00011efa12a5a6b0",
+          "kind": "packed-time"
         }
       }
     }
@@ -7072,8 +7138,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "2": {
-          "lower": "9a01100894dd01104818b0e50120e0c4bda301",
-          "upper": "9a010f08d8a00f10f10118da7a20b0b3c451",
+          "lower": "80006e9400000048000072b0146f6260",
+          "upper": "8003d058000000f100003d5a0a3119b0",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -7096,8 +7163,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "8a010a08ead70210b0f4eb9803",
-          "upper": "8a010a08cae80410d8b5958102"
+          "lower": "0000abea331afa30",
+          "upper": "0001344a20255ad8",
+          "kind": "packed-time"
         },
         "1": {
           "lower": "1e866e5c7ad3eb579ae940b98cbc376bce749533f4e34ac40ee87ad57f3e194ab03c0f00ff75d302197550441458caa6752aa72758df9b6b17c53ebeb49a26879c8534bf410e63d4ef31aa48f065ef1e04cc72a7a67b0dd9a24cafed2612d71997b02265",
@@ -7329,8 +7397,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "8a010a08d7800210c0b6fc9403",
-          "upper": "8a01090890dd041098db881c"
+          "lower": "00008057329f1b40",
+          "upper": "00012e9003822d98",
+          "kind": "packed-time"
         },
         "1": {
           "lower": {
@@ -7508,8 +7577,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "8a01090888691088dca99e02",
-          "upper": "8a010a08a5d60410a0dc898903"
+          "lower": "0000348823ca6e08",
+          "upper": "00012b2531226e20",
+          "kind": "packed-time"
         }
       }
     }
@@ -7593,8 +7663,8 @@ expression: all_stats
               "$serde_json::private::Number": "1"
             },
             "stats": {
-              "lower": "c201160a0929241630966635767c10eaffffffffffffffff01",
-              "upper": "c201160a0929241630966635767c10eaffffffffffffffff01"
+              "lower": "c201160a14292416309666357670000000000000000000000c",
+              "upper": "c201160a14292416309666357670000000000000000000000c"
             }
           },
           "񜘢¥\r𥿍<\\﻿_,\\&򟲅$򕳑𛽧򳾗󳼟�-": {
@@ -7864,8 +7934,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "ca0110275faec814f273df3d788c5564224544",
-          "upper": "ca01106c58871bae1e4e510257315cfdbaf7de"
+          "lower": "275faec814f273df3d788c5564224544",
+          "upper": "6c58871bae1e4e510257315cfdbaf7de",
+          "kind": "uuid"
         },
         "1": {
           "lower": {
@@ -8096,8 +8167,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "8a010808900a10a8adff10",
-          "upper": "8a010a08958e0510d8e695c102",
+          "lower": "00000510021fd6a8",
+          "upper": "0001471528257358",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -8366,8 +8438,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "92011008b00c10d60118bbd30220b8a2cbbe03",
-          "upper": "92010f08acaa0b107418ac3a20b8fe92ab03"
+          "lower": "80000630000000d60000a9bb37d2d138",
+          "upper": "8002d52c0000007400001d2c3564bf38",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -8432,8 +8505,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "a2011b08989dfad6faffffffff0110f8dbc3c40518d0e2bb87e78c87d721",
-          "upper": "a2011c08b2e5c5c50310c4bf89ccfaffffffff0118bfa0a6ecace5f595c601"
+          "lower": "2ade8e98d890edf8a1ae1c6670eef150",
+          "upper": "b8b172b229825fc4462bd72acd89903f",
+          "kind": "packed-interval"
         },
         "1": {
           "nulls": {
@@ -8473,12 +8547,14 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "a20120088bd5eaacfeffffffff01108aa5cecafaffffffff01189bbbf79d859fccaf07",
-          "upper": "a2011708beb6abe70310e6cdf1c80118fdbee78cf8fa978adf01"
+          "lower": "659aaa8b2953928a875f30f853bddd9b",
+          "upper": "bceadb3e991c66e65f145fd78199df7d",
+          "kind": "packed-interval"
         },
         "2": {
-          "lower": "9a01160893eaffffffffffffff011052189ccc0420b8a8c41f",
-          "upper": "9a011008f4ea0f101718ec980520d0928bf302"
+          "lower": "7ffff513000000520001261c03f11438",
+          "upper": "8003f5740000001700014c6c2e62c950",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -8561,12 +8637,14 @@ expression: all_stats
           "upper": "񗿣.&🕴.Lb\u0002ww󃥔"
         },
         "1": {
-          "lower": "ca011001066ea800cb95ffe5e246201ccc5e5f",
-          "upper": "ca0110eb7be2bb85e59fe334364c1979e3424e"
+          "lower": "01066ea800cb95ffe5e246201ccc5e5f",
+          "upper": "eb7be2bb85e59fe334364c1979e3424e",
+          "kind": "uuid"
         },
         "2": {
-          "lower": "9a011108b4ae0410930118e3ce0220c88cdead01",
-          "upper": "9a011008cf910f10ec0218f4452088d1a19402"
+          "lower": "80011734000000930000a76315b78648",
+          "upper": "8003c8cf0000016c000022f422886888",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -8679,8 +8757,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "9a010f08eda00710f70118be1820a0c8b475",
-          "upper": "9a010f08eda00710f70118be1820a0c8b475"
+          "lower": "8001d06d000000f700000c3e0ead2420",
+          "upper": "8001d06d000000f700000c3e0ead2420",
+          "kind": "packed-date-time"
         },
         "1": {
           "nulls": {
@@ -8713,8 +8792,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "9a011108ccf30110960118dfeb0120e8a9a18403",
-          "upper": "9a01100880d30d10ed0118c4e10220c0e2dc07",
+          "lower": "800079cc00000096000075df308854e8",
+          "upper": "80036980000000ed0000b0c400f73140",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -8738,8 +8818,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "c201160a14151244303154046612788311009541947549926d",
-          "upper": "c2010d0a0909246307253414087c100a",
+          "lower": "27000000000000009e032502b3031d0209003701140364022e009a002f01f4009700800000000000",
+          "upper": "10000000f6ffffff57009e01fd003301f60009000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -8939,8 +9020,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "ca011031fe98561c3214a8d806fd3ddf5d0f23",
-          "upper": "ca011031fe98561c3214a8d806fd3ddf5d0f23"
+          "lower": "31fe98561c3214a8d806fd3ddf5d0f23",
+          "upper": "31fe98561c3214a8d806fd3ddf5d0f23",
+          "kind": "uuid"
         },
         "1": {
           "nulls": {
@@ -9092,8 +9174,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "9a010e08f673109702188d0720e0c2ea33",
-          "upper": "9a010f0892810b104718d3900520c0f2fc40",
+          "lower": "800039f6000001170000038d067aa160",
+          "upper": "8002c0920000004700014853081f3940",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -9140,8 +9223,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "a2011b08e690ecbaf9ffffffff0110e6acfda20718dc9cbaca998dcd814b",
-          "upper": "a2011608af98eed60610a9dda3ee0518b387a5a2f5d0cda73a",
+          "lower": "175b0866f45f5666cb033469994e8e5c",
+          "upper": "eadb8c2fddc8eea9ba4f3687544943b3",
+          "kind": "packed-interval",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -9190,8 +9274,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "ca0110719de7ef5037f0032b3c011aa3c1c579",
-          "upper": "ca0110fde043d677576909c1129323f48891f7"
+          "lower": "719de7ef5037f0032b3c011aa3c1c579",
+          "upper": "fde043d677576909c1129323f48891f7",
+          "kind": "uuid"
         },
         "1": {
           "lower": "2bceda252568a978f185a1d0bf31b40839e0eb2ffd699c7cecc2f83927195d40e1830e6be84a670715d090b40cb086d22bb9ad48dba6688df11d28db14d3c8aa5aa3dce93d12c6f6041f43d2f6fb283d2ca25b24b10149eb13c0d918218e52bfef950f37",
@@ -9291,8 +9376,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "a2011c08deaa8884f8ffffffff0110abdec6ba011880ddcecf9aecadd7c601",
-          "upper": "a2011708f6a1b8f8051094a0b6d30718b4ff93da8bb1c8a0ac01"
+          "lower": "0082155e9751af2b46aeb761a9f3ae80",
+          "upper": "df0e10f6fa6d90142c412188bb44ffb4",
+          "kind": "packed-interval"
         }
       }
     }
@@ -9384,12 +9470,14 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "a20117089dcaf5a80110cac588f60218d2b9cda190a089dea801",
-          "upper": "a2011708cbb98ee2051090a2d2b60718a0fad9abd3f0a9e99f01"
+          "lower": "951d651daec222ca28bc250104335cd2",
+          "upper": "dc439ccbf6d491101fd2a78535767d20",
+          "kind": "packed-interval"
         },
         "1": {
-          "lower": "92011108daf30510d001188de80320d8bbb99e02",
-          "upper": "92011008da9c0f10cf0218ae8e0420e8b4d233"
+          "lower": "800179da000000d00000f40d23ce5dd8",
+          "upper": "8003ce5a0000014f0001072e06749a68",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -9487,8 +9575,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "ca0110b6702f832e072646d7d61b30a496b2e6",
-          "upper": "ca0110b6702f832e072646d7d61b30a496b2e6",
+          "lower": "b6702f832e072646d7d61b30a496b2e6",
+          "upper": "b6702f832e072646d7d61b30a496b2e6",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -9511,8 +9600,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "a2012108fdc8eadcffffffffff0110d9ff85e1ffffffffff0118b8d1afb796d8c2afea01",
-          "upper": "a2011708b788c8eb0410fdb293bd0418e08093dff9effa86d201"
+          "lower": "7b9aa47d7c217fd96a5f0ac166ebe8b8",
+          "upper": "cd720437c7a4d97d520deb7f9be4c060",
+          "kind": "packed-interval"
         },
         "1": {
           "lower": false,
@@ -9672,8 +9762,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "2": {
-          "lower": "a2011b08cee39180fbffffffff0110c2e495a50618fe8afbd0d58ee5b842",
-          "upper": "a2011608ffa1b74410fcb193ac0418bec5cf80bdd6d996f001"
+          "lower": "300471cee4a57242c27194755a1ec57e",
+          "upper": "888dd0ffc584d8fc702d66b3d013e2be",
+          "kind": "packed-interval"
         }
       }
     }
@@ -9788,8 +9879,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "92010f08bb4910880118e2c90320c0baaa2a",
-          "upper": "92011008c1af0c100418d9f6012090c9bbd901"
+          "lower": "800024bb000000880000e4e2054a9d40",
+          "upper": "800317c10000000400007b591b2ee490",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -9809,8 +9901,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "9a011108fe8a0210c90118e9dd0220f0edb88d01",
-          "upper": "9a011108d0840c10990218a9f00220f090d9b601"
+          "lower": "8000857e000000c90000aee911ae36f0",
+          "upper": "80030250000001190000b82916d64870",
+          "kind": "packed-date-time"
         },
         "1": {
           "nulls": {
@@ -9853,8 +9946,9 @@ expression: all_stats
           "not nulls": "json_lists"
         },
         "1": {
-          "lower": "ca01107524e2f3bbd3374cbe72394623effb40",
-          "upper": "ca01107524e2f3bbd3374cbe72394623effb40"
+          "lower": "7524e2f3bbd3374cbe72394623effb40",
+          "upper": "7524e2f3bbd3374cbe72394623effb40",
+          "kind": "uuid"
         }
       }
     }
@@ -9899,8 +9993,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "a2011c089ed598d3f9ffffffff0110bc93e5ac0318d1ff94bd90e0babbf401",
-          "upper": "a2011c089ed598d3f9ffffffff0110bc93e5ac0318d1ff94bd90e0babbf401"
+          "lower": "1a662a9eb59949bc7476eb0107a53fd1",
+          "upper": "1a662a9eb59949bc7476eb0107a53fd1",
+          "kind": "packed-interval"
         },
         "1": {
           "nulls": {
@@ -10017,8 +10112,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "8a010908ab5d10b0d18f8303",
-          "upper": "8a010a08c5960510f8d9d4a003",
+          "lower": "00002eab3063e8b0",
+          "upper": "00014b4534152cf8",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -10121,8 +10217,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "92011008c75910a602188edc0320b0a1a6d403",
-          "upper": "9201100887fe0b10691880df0220b0aaeebb03",
+          "lower": "80002cc7000001260000ee0e3a8990b0",
+          "upper": "8002ff07000000690000af80377b9530",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -10235,12 +10332,14 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "9a01100883f10810c501189fea0120b8ffb61a",
-          "upper": "9a011108c38b0e10d60118b0990120d0b0a3c101"
+          "lower": "80023883000000c50000751f034dbfb8",
+          "upper": "800385c3000000d600004cb01828d850",
+          "kind": "packed-date-time"
         },
         "1": {
-          "lower": "c201060a040850969d",
-          "upper": "c2010d0a0908919262159174371c100a"
+          "lower": "0600000000000000c903520300000000000000000000000000000000000000000000800000000000",
+          "upper": "10000000f6ffffff7301ae009f000601970308000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -10311,8 +10410,9 @@ expression: all_stats
           "upper": "󹩮2'A򖒢\u001b%.|!򍡫w"
         },
         "1": {
-          "lower": "c201060a040417352c",
-          "upper": "c201060a040417352c"
+          "lower": "06000000000000006001a10100000000000000000000000000000000000000000000000000000000",
+          "upper": "06000000000000006001a10100000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "2": "NoneStats"
       }
@@ -10528,8 +10628,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "ca01104df171cb0bbb39a4f7cbe9e645786738",
-          "upper": "ca01106b644a2cf0f5b33e8eaab998ebf8cc92"
+          "lower": "4df171cb0bbb39a4f7cbe9e645786738",
+          "upper": "6b644a2cf0f5b33e8eaab998ebf8cc92",
+          "kind": "uuid"
         },
         "1": {
           "nulls": {
@@ -10562,8 +10663,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "8a0109089f5110c0e09e8b01",
-          "upper": "8a010a08f6c3041098a5e4a403"
+          "lower": "0000289f1167b040",
+          "upper": "000121f634991298",
+          "kind": "packed-time"
         }
       }
     }
@@ -10667,8 +10769,9 @@ expression: all_stats
           "upper": "𘛁=:A'􂂄"
         },
         "1": {
-          "lower": "9a011008e1cc08103818aba70220b0909ff702",
-          "upper": "9a011008a6d40f107218e1b50220a0dbe6f802"
+          "lower": "8002266100000038000093ab2ee7c830",
+          "upper": "8003ea260000007200009ae12f19ada0",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -10688,8 +10791,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "a2011b089ecdd1e3ffffffffff0110e0f7a59501188da9b5f98ebefcaf43",
-          "upper": "a2011708f787a4f70510ea938ef80218dcdbd0b8dbb08bf6d401"
+          "lower": "7c74669e92a97be0c35ff1f0ef2d548d",
+          "upper": "dee903f7af0389ea54ec2d85b7142ddc",
+          "kind": "packed-interval"
         }
       }
     }
@@ -10912,8 +11016,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "ca011047d33b265b20350e3d7580a00ef05816",
-          "upper": "ca01108130db389dcb2927d70a67a2d5f8c54f"
+          "lower": "47d33b265b20350e3d7580a00ef05816",
+          "upper": "8130db389dcb2927d70a67a2d5f8c54f",
+          "kind": "uuid"
         },
         "1": {
           "nulls": {
@@ -10975,8 +11080,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "8a010808ac211088ffb753",
-          "upper": "8a010908af900410b09ee41f"
+          "lower": "000010ac0a6dff88",
+          "upper": "0001082f03f90f30",
+          "kind": "packed-time"
         },
         "2": {
           "lower": {
@@ -11127,8 +11233,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "a2011608a5d589e60110b1eee5af0518e9c3e4fde3b4baa55e",
-          "upper": "a2011608a5d589e60110b1eee5af0518e9c3e4fde3b4baa55e",
+          "lower": "9cc26aa5d5f97731de4ae9a63fb921e9",
+          "upper": "9cc26aa5d5f97731de4ae9a63fb921e9",
+          "kind": "packed-interval",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -11260,8 +11367,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "c201160a14073996055894509570592211956351407598221d",
-          "upper": "c201060a02038d1001"
+          "lower": "2600000000000000dd00560297015f01bc03d30050023a02fd017e033700e4034900800000000000",
+          "upper": "02000000ffffffff2600000000000000000000000000000000000000000000000000800000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -11357,8 +11465,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "9a011108e0ed0110e80118f2d30120f88a98a701",
-          "upper": "9a011108b7f00f10dd0218ebfe0320b096d4b803"
+          "lower": "800076e0000000e8000069f214e60578",
+          "upper": "8003f8370000015d0000ff6b37150b30",
+          "kind": "packed-date-time"
         },
         "1": "NoneStats",
         "2": {
@@ -11386,8 +11495,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "92011008c90a10c0021891cf0420a0ab90a001",
-          "upper": "9201110887b90d10b90218bbae032090f6d0c703"
+          "lower": "800005490000014000012791140415a0",
+          "upper": "80035c87000001390000d73b38f43b10",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -11460,8 +11570,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a011608bee7ffffffffffffff01106718e96120b89f85af02",
-          "upper": "9a011008d0fe07100e18fce90420c88295fb02"
+          "lower": "7ffff3be00000067000030e925e14fb8",
+          "upper": "8001ff500000000e000134fc2f654148",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -11481,8 +11592,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "ca011035a2f9c3bc76fd49eca19cffb55c7d48",
-          "upper": "ca0110d1e7bb3062bd868abef27aed707a927d",
+          "lower": "35a2f9c3bc76fd49eca19cffb55c7d48",
+          "upper": "d1e7bb3062bd868abef27aed707a927d",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -11576,8 +11688,9 @@ expression: all_stats
           "upper": true
         },
         "2": {
-          "lower": "ca01100cc63c6b257bf5503479d17b5a0bfb24",
-          "upper": "ca0110c41a0b7942332d53dccab1bd65608afd"
+          "lower": "0cc63c6b257bf5503479d17b5a0bfb24",
+          "upper": "c41a0b7942332d53dccab1bd65608afd",
+          "kind": "uuid"
         }
       }
     }
@@ -11859,8 +11972,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "8a010808971a10c089aa67",
-          "upper": "8a010808971a10c089aa67"
+          "lower": "00000d170cea84c0",
+          "upper": "00000d170cea84c0",
+          "kind": "packed-time"
         },
         "1": {
           "lower": {
@@ -11979,15 +12093,17 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "a2011b0894dfeedbf9ffffffff0110a9a2b26618b496f697bdb3d3c3b701",
-          "upper": "a2011708d894d5bf0610ccdac3e506188ca78ef09c83ba98a201",
+          "lower": "1b7baf948ccc912937874d9bd2fd8b34",
+          "upper": "e7f54a58ecb0ed4c2230e819ce03938c",
+          "kind": "packed-interval",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
         },
         "1": {
-          "lower": "c2010d0a0905809053592879061d100a",
-          "upper": "0806"
+          "lower": "10000000f6ffffff3d006f0350023500290305000000000000000000000000000000800000000000",
+          "upper": "01000000000000000000000000000000000000000000000000000000000000000000400000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -12175,8 +12291,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "c201090a05047207533d1007",
-          "upper": "c201090a05159855293d1008"
+          "lower": "08000000f9ffffff1502cf002f000000000000000000000000000000000000000000800000000000",
+          "upper": "09000000f8ffffff250157039f000000000000000000000000000000000000000000800000000000",
+          "kind": "packed-numeric"
         },
         "1": {
           "nulls": {
@@ -12241,8 +12358,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "9a011008f2a503102618a2840220a092938601",
-          "upper": "9a011108a0d90d10800118a6c70320e8dbae8e01",
+          "lower": "8000d2f2000000260000822210c4c920",
+          "upper": "80036ca0000000800000e3a611cbade8",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -12354,8 +12472,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "c2010d0a0903956522717129749d100a",
-          "upper": "0808",
+          "lower": "10000000f6ffffffed028100cd020a02bc0303000000000000000000000000000000800000000000",
+          "upper": "01000000000000000000000000000000000000000000000000000000000000000000200000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -12423,8 +12542,9 @@ expression: all_stats
           "upper": true
         },
         "1": {
-          "lower": "8a010908d46e10b0a5aaf102",
-          "upper": "8a010a08e9de0110d8d7d9a903"
+          "lower": "000037542e2a92b0",
+          "upper": "00006f6935366bd8",
+          "kind": "packed-time"
         },
         "2": {
           "lower": {
@@ -12592,8 +12712,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "ca01105758e61c250180ec9618a381a5b07322",
-          "upper": "ca01105758e61c250180ec9618a381a5b07322"
+          "lower": "5758e61c250180ec9618a381a5b07322",
+          "upper": "5758e61c250180ec9618a381a5b07322",
+          "kind": "uuid"
         },
         "1": {
           "nulls": {
@@ -12683,8 +12804,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "8a010908c94010d8f1f28203",
-          "upper": "8a010908cfd20410b8d5fe5a"
+          "lower": "00002049305cb8d8",
+          "upper": "0001294f0b5faab8",
+          "kind": "packed-time"
         }
       }
     }
@@ -12778,8 +12900,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "c2010d0a0904766370583883547c100a",
-          "upper": "c2010d0a0904766370583883547c100a"
+          "lower": "10000000f6ffffff2302730347027201fe0204000000000000000000000000000000000000000000",
+          "upper": "10000000f6ffffff2302730347027201fe0204000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": {
           "lower": {
@@ -12837,8 +12960,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "a2012008d9fdb28cfbffffffff0110cda0ebcef9ffffffff0118b0acbba4a0a1adb70f",
-          "upper": "a201200897f2a693ffffffffff0110aff0a08efcffffffff0118b1b6fd93abe3e6ae14"
+          "lower": "318cbed919dad04d8f6eb50a048ed630",
+          "upper": "7269b91741c8382f945d9b1ab27f5b31",
+          "kind": "packed-interval"
         },
         "2": {
           "lower": "?[[*Ѩ\"'𮏤򧵫q!??xh\t",
@@ -12983,8 +13107,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "8a0109089e5010e8c39fe901",
-          "upper": "8a010a08cdc1041098aa90fa02",
+          "lower": "0000281e1d27e1e8",
+          "upper": "000120cd2f441518",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -13011,8 +13136,9 @@ expression: all_stats
           "upper": false
         },
         "1": {
-          "lower": "c201090a05065842628c1008",
-          "upper": "c201090a05065842628c1008"
+          "lower": "08000000f8ffffff74024a0341000000000000000000000000000000000000000000000000000000",
+          "upper": "08000000f8ffffff74024a0341000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "2": "NoneStats"
       }
@@ -13164,8 +13290,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "c201070a0396624d1004",
-          "upper": "c2010d0a0909420894485262204c100a",
+          "lower": "05000000fcffffff7002600000000000000000000000000000000000000000000000800000000000",
+          "upper": "10000000f6ffffffcc000601e5017e03a40109000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -13195,8 +13322,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "a2011a08eb93b08afdffffffff0110a7dce76f18a3c5afc9c4e6a9ef5d",
-          "upper": "a2011c08e3cddbb70610b29acdc3fdffffffff0118c3abe5dca3dce28bb201"
+          "lower": "514c09eb8df9ee27dddea734492be2a3",
+          "upper": "e6f6e6e358734d3232178ae23b9955c3",
+          "kind": "packed-interval"
         },
         "1": {
           "lower": {
@@ -13248,8 +13376,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "9a01110897a10510ee0118dfaa0220a0f0fbc203",
-          "upper": "9a011108e1b20f10b70118a4b60120d0df9bf601",
+          "lower": "80015097000000ee0000955f385ef820",
+          "upper": "8003d961000000b700005b241ec6efd0",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -13272,8 +13401,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "a2011b08e48bcfa5f9ffffffff01109dd9c63c189db0dc8e9a9198aafb01",
-          "upper": "a2012108a08af3a5ffffffffff0110cc88c28afeffffffff0118efebc9f6a59dcd87a801"
+          "lower": "14b3c5e48791ac9d7b546089a1d7181d",
+          "upper": "74bcc5206150844c280f34ea5ed275ef",
+          "kind": "packed-interval"
         }
       }
     }
@@ -13293,8 +13423,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "a2011b08e39095e1f9ffffffff0110ae8c93aa041886b2fd978aebcfe211",
-          "upper": "a2011708ade5aae306108b8284cd0218c8fdef94a3c5d886cd01",
+          "lower": "1c254863c544c62e91c53f58a2ff5906",
+          "upper": "ec6ab2ada9a1010b4d0d622a329bfec8",
+          "kind": "packed-interval",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -13368,8 +13499,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "ca01103747f4f4439ce10b49e4859857713d60",
-          "upper": "ca0110b59ac8ad43534e1f64c3a55ad39474eb",
+          "lower": "3747f4f4439ce10b49e4859857713d60",
+          "upper": "b59ac8ad43534e1f64c3a55ad39474eb",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -13460,8 +13592,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "92011008a9d80a108d0118f2c10120d0abd526",
-          "upper": "92011008a9d80a108d0118f2c10120d0abd526",
+          "lower": "8002ac290000008d000060f204d555d0",
+          "upper": "8002ac290000008d000060f204d555d0",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -13823,8 +13956,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "9a01110884f50410e70118a29d0420c0bbbae701",
-          "upper": "9a011008f68609104c18caff0320f887f8ab03"
+          "lower": "80013a84000000e700010ea21cee9dc0",
+          "upper": "800243760000004c0000ffca357e03f8",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -13844,8 +13978,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "9a011108928b0d10a20218e2a9022098b5e7bd03",
-          "upper": "9a011008d2f60e10ac0218a8fc042098f2ba6a"
+          "lower": "8003459200000122000094e237b9da98",
+          "upper": "8003bb520000012c00013e280d4eb918",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -13894,8 +14029,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "8a010908e9b00410e8f1b528",
-          "upper": "8a010a08cab70410d89ab89f03"
+          "lower": "00011869050d78e8",
+          "upper": "00011bca33ee0d58",
+          "kind": "packed-time"
         },
         "1": {
           "lower": {
@@ -13967,8 +14103,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "ca01102ab76f4675f7316d94a7d2a4d3b4ea57",
-          "upper": "ca0110eafef9b696587192d09947e1c3b0124a"
+          "lower": "2ab76f4675f7316d94a7d2a4d3b4ea57",
+          "upper": "eafef9b696587192d09947e1c3b0124a",
+          "kind": "uuid"
         }
       }
     }
@@ -14013,8 +14150,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "ca0110272a7e9589f5b59be1ad207c4803629e",
-          "upper": "ca0110dbe1320ba6689b30107fe4c6a8fadef5"
+          "lower": "272a7e9589f5b59be1ad207c4803629e",
+          "upper": "dbe1320ba6689b30107fe4c6a8fadef5",
+          "kind": "uuid"
         }
       }
     }
@@ -14068,12 +14206,14 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a010f08b58b04100f18a20e20a0f9e1a003",
-          "upper": "9a010f08b58b04100f18a20e20a0f9e1a003"
+          "lower": "800105b50000000f0000072234187ca0",
+          "upper": "800105b50000000f0000072234187ca0",
+          "kind": "packed-date-time"
         },
         "2": {
-          "lower": "c201060a040359344c",
-          "upper": "c201060a040359344c"
+          "lower": "06000000000000005801670100000000000000000000000000000000000000000000000000000000",
+          "upper": "06000000000000005801670100000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -14326,8 +14466,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "92010f08a05f10840218f4be0220e0f1b125",
-          "upper": "92010f08e8840e103618ddc8042088fbbe5f"
+          "lower": "80002fa00000010400009f7404ac78e0",
+          "upper": "80038268000000360001245d0befbd88",
+          "kind": "packed-date-time"
         },
         "2": "NoneStats"
       }
@@ -14472,8 +14613,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "8a010a08d1880310b894dd8203",
-          "upper": "8a010a08fcff0410d8a8aab302"
+          "lower": "0000c45130574a38",
+          "upper": "00013ffc266a9458",
+          "kind": "packed-time"
         }
       }
     }
@@ -14645,8 +14787,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "c2010d0a0903682186624324068c100a",
-          "upper": "c2010d0a0903682186624324068c100a"
+          "lower": "10000000f6ffffff440044017002ba00aa0203000000000000000000000000000000000000000000",
+          "upper": "10000000f6ffffff440044017002ba00aa0203000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -14843,8 +14986,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "92010f08a2c905106318a37920c0c8b7ac02",
-          "upper": "92010f08a2c905106318a37920c0c8b7ac02"
+          "lower": "800164a20000006300003ca3258de440",
+          "upper": "800164a20000006300003ca3258de440",
+          "kind": "packed-date-time"
         },
         "2": {
           "lower": {
@@ -14872,8 +15016,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "9201100880cf0d10e302188ac80120e8fadc1a",
-          "upper": "9201100880cf0d10e302188ac80120e8fadc1a",
+          "lower": "80036780000001630000640a03573d68",
+          "upper": "80036780000001630000640a03573d68",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -15474,8 +15619,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "c201080a045437515d1006",
-          "upper": "c201160a0942699928466326614c10eaffffffffffffffff01"
+          "lower": "07000000faffffff0302b50105000000000000000000000000000000000000000000800000000000",
+          "upper": "110000001600000066024601d201a003bb022a000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "2": {
           "nulls": {
@@ -15502,8 +15648,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "92010e08cca707102818f17820c8b2a822",
-          "upper": "92011108dfd50f10880218b4b00120f897c18403"
+          "lower": "8001d3cc0000002800003c71044a1948",
+          "upper": "8003eadf000001080000583430904bf8",
+          "kind": "packed-date-time"
         },
         "2": "NoneStats"
       }
@@ -15655,8 +15802,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "9a010e088f77100d1887a30120e896e759",
-          "upper": "9a011108d1890a10930118a1c60320d0cce59403",
+          "lower": "80003b8f0000000d000051870b39cb68",
+          "upper": "800284d1000000930000e32132996650",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -15687,8 +15835,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "92011108c3d80d10e901189aca0220d8abcfd301",
-          "upper": "92011108c3d80d10e901189aca0220d8abcfd301",
+          "lower": "80036c43000000e90000a51a1a73d5d8",
+          "upper": "80036c43000000e90000a51a1a73d5d8",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -15887,8 +16036,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "c201050a0379538c",
-          "upper": "c201060a040857467c"
+          "lower": "05000000000000001a024f0000000000000000000000000000000000000000000000000000000000",
+          "upper": "0600000000000000d301590300000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -15986,8 +16136,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "0801",
-          "upper": "0801",
+          "lower": "01000000000000000000000000000000000000000000000000000000000000000000200000000000",
+          "upper": "01000000000000000000000000000000000000000000000000000000000000000000c00000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -16049,8 +16200,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "8a010a0896c00410d0c8afe102",
-          "upper": "8a010a0896c00410d0c8afe102"
+          "lower": "000120162c2be450",
+          "upper": "000120162c2be450",
+          "kind": "packed-time"
         }
       }
     }
@@ -16081,8 +16233,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "92011008ecc804101d188cfe0320c8978bfc02",
-          "upper": "92011008dae00c10830118ef8e0120f8aada48"
+          "lower": "8001246c0000001d0000ff0c2f82cbc8",
+          "upper": "8003305a000000830000476f09169578",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -16138,8 +16291,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "ca011006377193d9b286ad87f0d5e070af2d37",
-          "upper": "ca0110ea70efcd050523fe4046c9d244cde983"
+          "lower": "06377193d9b286ad87f0d5e070af2d37",
+          "upper": "ea70efcd050523fe4046c9d244cde983",
+          "kind": "uuid"
         }
       }
     }
@@ -16195,8 +16349,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "920110089535108802189fba022098d1b4bd03",
-          "upper": "92010e08c4ea08101918c50f20d0d8813d"
+          "lower": "80001a950000010800009d1f37ad2898",
+          "upper": "8002354400000019000007c507a06c50",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -16286,8 +16441,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "8a010908caf00210e8f3e27a",
-          "upper": "8a010a08e4f40310a09b88dc01",
+          "lower": "0000b84a0f58b9e8",
+          "upper": "0000fa641b820da0",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -16346,8 +16502,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "8a010808d0781098fbe15c",
-          "upper": "8a010a08d3fd0210e8ffab8503"
+          "lower": "00003c500b987d98",
+          "upper": "0000bed330aaffe8",
+          "kind": "packed-time"
         },
         "1": "NoneStats",
         "2": {
@@ -16461,16 +16618,18 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "ca0110082b8f084e0ab4e6920607ed5cb0adaa",
-          "upper": "ca0110c761d25a1b42e88a78e5ce6184047693"
+          "lower": "082b8f084e0ab4e6920607ed5cb0adaa",
+          "upper": "c761d25a1b42e88a78e5ce6184047693",
+          "kind": "uuid"
         },
         "1": {
           "lower": false,
           "upper": true
         },
         "2": {
-          "lower": "ca01100b0f3465d4273437079ba0e493395a2a",
-          "upper": "ca0110eced28ce91304364858dd988fee4694a"
+          "lower": "0b0f3465d4273437079ba0e493395a2a",
+          "upper": "eced28ce91304364858dd988fee4694a",
+          "kind": "uuid"
         }
       }
     }
@@ -16576,16 +16735,18 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "9a011008fc9b0210dc0218a61220b8ddfa8f02",
-          "upper": "9a01110899f30d10820118ebed012080d7e3f602",
+          "lower": "80008dfc0000015c0000092621feaeb8",
+          "upper": "8003799900000082000076eb2ed8eb80",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
         },
         "1": "NoneStats",
         "2": {
-          "lower": "a2012108ab8dc48ffdffffffff0110f3b4e2fffeffffffff0118cfcea3c4f4c3b4f79501",
-          "upper": "a2011608d3f1a8bb0610d4cdf2f3031893afae98d5c1fa9d3c",
+          "lower": "51f106ab6ff89a7315eed21f4888e74f",
+          "upper": "e76a38d3be7ca6d4bc3bea0d530b9793",
+          "kind": "packed-interval",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -16658,8 +16819,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "ca011021066179998002b5d43c64d8ec3cf634",
-          "upper": "ca0110afa7efd1f0d4ad49f74548143cf7705b"
+          "lower": "21066179998002b5d43c64d8ec3cf634",
+          "upper": "afa7efd1f0d4ad49f74548143cf7705b",
+          "kind": "uuid"
         }
       }
     }
@@ -16763,15 +16925,17 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "c201060a02043c1001",
-          "upper": "c2010d0a0905304119274390442c100a",
+          "lower": "02000000ffffffff2b00000000000000000000000000000000000000000000000000000000000000",
+          "upper": "10000000f6ffffffba01860112017700300105000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
         },
         "1": {
-          "lower": "c201090a05343900968d1008",
-          "upper": "c201060a040735568c"
+          "lower": "09000000f8ffffffc803840357010000000000000000000000000000000000000000800000000000",
+          "upper": "06000000000000003802df0200000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "2": {
           "nulls": {
@@ -16824,12 +16988,14 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "9a010f089136100718e981042090898fd002",
-          "upper": "9a011108d2de0f10dd011881980520a8bdc9b901"
+          "lower": "80001b1100000007000100e92a03c490",
+          "upper": "8003ef52000000dd00014c0117325ea8",
+          "kind": "packed-date-time"
         },
         "1": {
-          "lower": "8a010908d9191090e4f3ed01",
-          "upper": "8a010a08a4df011098f7a7d101",
+          "lower": "00000cd91dbcf210",
+          "upper": "00006fa41a29fb98",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -16936,8 +17102,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "a2011b08ab9db89cf8ffffffff0110ddd8fdf20118cc8e919b85aedec02d",
-          "upper": "a2011b08a083f2d10210d1cff8b6faffffffff0118d9dab9fcab94aed02d"
+          "lower": "038e0eab9e5f6c5dad8179705364474c",
+          "upper": "aa3c81a026de27d1ada0b8a2bf8e6d59",
+          "kind": "packed-interval"
         }
       }
     }
@@ -17311,8 +17478,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "9a010d08e62b101218b0622088c2b967",
-          "upper": "9a010f08bccf0d10741891502090d39acf03"
+          "lower": "800015e600000012000031300cee6108",
+          "upper": "800367bc000000740000281139e6a990",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -17369,8 +17537,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "c201090a05038724944d1007",
-          "upper": "0806"
+          "lower": "08000000f9ffffffb003d40226000000000000000000000000000000000000000000800000000000",
+          "upper": "01000000000000000000000000000000000000000000000000000000000000000000400000000000",
+          "kind": "packed-numeric"
         },
         "1": "NoneStats",
         "2": {
@@ -17566,8 +17735,8 @@ expression: all_stats
               "$serde_json::private::Number": "1"
             },
             "stats": {
-              "lower": "c201160a0904395508018412788c10e9ffffffffffffffff01",
-              "upper": "c201160a0904395508018412788c10e9ffffffffffffffff01"
+              "lower": "c201160a14439550801841278800000000000000000000000c",
+              "upper": "c201160a14439550801841278800000000000000000000000c"
             }
           },
           "nulls": {
@@ -17575,8 +17744,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "c2010a0a0604678549886c1009",
-          "upper": "c2010d0a0909583343893670917c100a",
+          "lower": "0a000000f7ffffff76032502a6020400000000000000000000000000000000000000000000000000",
+          "upper": "10000000f6ffffff95039e027d035701470209000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -17664,8 +17834,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "92011108f9ae0e10b10218aca50320b09fcae702",
-          "upper": "92011108f9ae0e10b10218aca50320b09fcae702"
+          "lower": "80039779000001310000d2ac2cf28fb0",
+          "upper": "80039779000001310000d2ac2cf28fb0",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -17685,8 +17856,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "ca01102a255c488973e7a75f2a104fda563ee3",
-          "upper": "ca01109e74356176bd727c730fa5a7f2e9ec84"
+          "lower": "2a255c488973e7a75f2a104fda563ee3",
+          "upper": "9e74356176bd727c730fa5a7f2e9ec84",
+          "kind": "uuid"
         }
       }
     }
@@ -17799,8 +17971,9 @@ expression: all_stats
         },
         "1": "NoneStats",
         "2": {
-          "lower": "8a010908987c1098e7c9fc02",
-          "upper": "8a010a08e5c80310889e889f03",
+          "lower": "00003e182f927398",
+          "upper": "0000e46533e20f08",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "3"
           }
@@ -17983,12 +18156,14 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "8a010908ab3910d8cad7bc02",
-          "upper": "8a010a089ca70310c8b9fec103"
+          "lower": "00001cab2795e558",
+          "upper": "0000d39c383f9cc8",
+          "kind": "packed-time"
         },
         "2": {
-          "lower": "8a010a08bbb4031088b3c4e201",
-          "upper": "8a010908b8cb0310a8de9749"
+          "lower": "0000da3b1c511988",
+          "upper": "0000e5b80925ef28",
+          "kind": "packed-time"
         }
       }
     }
@@ -18165,8 +18340,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "92011008f59d01104f18c8e80220b88ac7c203",
-          "upper": "9201100888df0810c10218f41b20c0c6fa8b01",
+          "lower": "80004ef50000004f0000b4483851c538",
+          "upper": "80022f880000014100000df4117ea340",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -18236,12 +18412,14 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "9a011108f1f10a10d90118dbac0320a0c5fc8701",
-          "upper": "9a010f08ecd60e105f18c0eb042098ab9371"
+          "lower": "8002b8f1000000d90000d65b10ff22a0",
+          "upper": "8003ab6c0000005f000135c00e24d598",
+          "kind": "packed-date-time"
         },
         "1": {
-          "lower": "a201210899b4dcd7f9ffffffff0110edc391f0ffffffffff0118c9b5aaffa7ec8dbde401",
-          "upper": "a201160887af86c60410a3f88d551881ea8edab9acb9ca9701"
+          "lower": "1af71a197e0461ed647a37627fea9ac9",
+          "upper": "c8c197878aa37c231794e5639b43b501",
+          "kind": "packed-interval"
         },
         "2": {
           "lower": "",
@@ -18654,8 +18832,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "ca0110239b79b95892eb9fd0657fca4e80d115",
-          "upper": "ca0110a6d38bb4644f4ac36dee6a0e76f935d7"
+          "lower": "239b79b95892eb9fd0657fca4e80d115",
+          "upper": "a6d38bb4644f4ac36dee6a0e76f935d7",
+          "kind": "uuid"
         }
       }
     }
@@ -18675,8 +18854,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "c201160a0931443528692346586d10eaffffffffffffffff01",
-          "upper": "c2010d0a0959963520262381295c100c"
+          "lower": "11000000160000004a025a01b4021002bb011f000000000000000000000000000000800000000000",
+          "upper": "11000000f4ffffff27017d0106010802c3033b000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": {
           "nulls": {
@@ -18703,8 +18883,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "92010f089146103418f9880120d097a7f702",
-          "upper": "92011008bcf90f10b10218df4220e0a2f2a002",
+          "lower": "8000231100000034000044792ee9cbd0",
+          "upper": "8003fcbc000001310000215f241c9160",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -18753,8 +18934,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a011008ab3210bb021896da0120b8b6a28702",
-          "upper": "9a011008b9ea09103518b29b0220a0e7d38301"
+          "lower": "8000192b0000013b00006d1620e89b38",
+          "upper": "800275390000003500008db21074f3a0",
+          "kind": "packed-date-time"
         },
         "2": {
           "lower": ":Ѩ\rå󿯻\rjO5﻿򱍭zb‮N¼񎑁񀧿`.s‮𙻤o",
@@ -18781,8 +18963,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "92010f08d49b03107218bee60220b8838546",
-          "upper": "92011008af8c0d109e01188aa8042080a6f30d"
+          "lower": "8000cdd4000000720000b33e08c141b8",
+          "upper": "8003462f0000009e0001140a01bcd300",
+          "kind": "packed-date-time"
         },
         "1": {
           "nulls": {
@@ -18946,12 +19129,14 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a011008ff3210af0118ef880220f0ede2f902",
-          "upper": "9a010f08e1e20f10c10218a50720f0c8c41e"
+          "lower": "8000197f000000af0000846f2f38b6f0",
+          "upper": "8003f16100000141000003a503d12470",
+          "kind": "packed-date-time"
         },
         "2": {
-          "lower": "9a011708b2edffffffffffffff01106d18cdd30320b883b68602",
-          "upper": "9a011108e8880e10c70118cbc60320b8abe3bb01"
+          "lower": "7ffff6b20000006d0000e9cd20cd81b8",
+          "upper": "80038468000000c70000e34b1778d5b8",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -19033,8 +19218,9 @@ expression: all_stats
         },
         "1": "NoneStats",
         "2": {
-          "lower": "c201060a040605143d",
-          "upper": "c201160a0905431676569914348c10e9ffffffffffffffff01",
+          "lower": "06000000000000008f005d0200000000000000000000000000000000000000000000800000000000",
+          "upper": "10000000170000005c0192033902a402af0105000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -19250,8 +19436,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "ca011039070a4eec1011506aaf4b135b7be7c1",
-          "upper": "ca0110e3d52978652c825cd9c97dfecf37e36d"
+          "lower": "39070a4eec1011506aaf4b135b7be7c1",
+          "upper": "e3d52978652c825cd9c97dfecf37e36d",
+          "kind": "uuid"
         },
         "2": "NoneStats"
       }
@@ -19309,8 +19496,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "c201160a14127008551421114671609747569586915283852d",
-          "upper": "c201160a0905751159348648879c10e9ffffffffffffffff01"
+          "lower": "270000000000000054031b0193034a023902eb0261029f027200a501270208007f00800000000000",
+          "upper": "10000000170000006f0388025c019f00ef0205000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": "NoneStats",
         "2": {
@@ -19787,8 +19975,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "ca01104782b0167a6763c8bb29376e5b55d4b2",
-          "upper": "ca0110621b2a4d95f5ed4982a1204a68443bc3"
+          "lower": "4782b0167a6763c8bb29376e5b55d4b2",
+          "upper": "621b2a4d95f5ed4982a1204a68443bc3",
+          "kind": "uuid"
         },
         "2": {
           "nulls": {
@@ -19907,8 +20096,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "c201160a14103550320887318958767225280492859846435d",
-          "upper": "c2010d0a0901525746593017159c100a"
+          "lower": "2700000000000000b3014e035b03ec011801e100ff02be033e017703400126026700800000000000",
+          "upper": "10000000f6ffffff9f0011005102ea020d0201000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": {
           "nulls": {
@@ -20016,8 +20206,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "a2012108dc87ace2faffffffff0110da9ca29bfaffffffff011886f8a8f5bef1c7f8a201",
-          "upper": "a2012108dc87ace2faffffffff0110da9ca29bfaffffffff011886f8a8f5bef1c7f8a201"
+          "lower": "2c4b03dc23688e5a22f11f8beeaa3c06",
+          "upper": "2c4b03dc23688e5a22f11f8beeaa3c06",
+          "kind": "packed-interval"
         }
       }
     }
@@ -20066,8 +20257,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a011108958e0110fc0118c9c30320c8c6e39402",
-          "upper": "9a011008e5ae0b10e40118f0702098cc92c101"
+          "lower": "80004715000000fc0000e1c92298e348",
+          "upper": "8002d765000000e4000038701824a618",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -20111,8 +20303,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "92011808f9f9ffffffffffffff0110ab0118c3ee0420989ad69f02",
-          "upper": "92011108faf90e10da0218bae4032088fca0d502",
+          "lower": "7ffffcf9000000ab0001374323f58d18",
+          "upper": "8003bcfa0000015a0000f23a2aa83e08",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -20139,12 +20332,14 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "0807",
-          "upper": "c2010d0a0905765580382230638c100a"
+          "lower": "01000000000000000000000000000000000000000000000000000000000000000000c00000000000",
+          "upper": "10000000f6ffffff7e02e6007e014402fd0205000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": {
-          "lower": "92011108d9c80110aa011899990220a0cbe7b402",
-          "upper": "92010f08d8cb0d104f18ea2c20f89398a003"
+          "lower": "80006459000000aa00008c992699e5a0",
+          "upper": "800365d80000004f0000166a340609f8",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -20164,12 +20359,14 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "9a01100881cb0210dc0118b6f6032088a5df26",
-          "upper": "9a010f08e2a50c101a18eca80220989cbd3b"
+          "lower": "8000a581000000dc0000fb3604d7d288",
+          "upper": "800312e20000001a0000946c076f4e18",
+          "kind": "packed-date-time"
         },
         "1": {
-          "lower": "ca0110501743d1471b96578640c4950dfa0f38",
-          "upper": "ca0110896036867f2edcb06d5affb23c015d02",
+          "lower": "501743d1471b96578640c4950dfa0f38",
+          "upper": "896036867f2edcb06d5affb23c015d02",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -20247,8 +20444,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "92010d0883bb031031181020a0fad672",
-          "upper": "92010f08e3f80c103418d1a50120e0dbe44e"
+          "lower": "8000dd8300000031000000100e55bd20",
+          "upper": "80033c6300000034000052d109d92de0",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": {
@@ -20379,8 +20577,9 @@ expression: all_stats
         "0": "NoneStats",
         "1": "NoneStats",
         "2": {
-          "lower": "92011708bef7ffffffffffffff01105118d0ec0420e0c6969102",
-          "upper": "920110088aab0f10ab0218ee4320e0bbcbc901"
+          "lower": "7ffffbbe00000051000136502225a360",
+          "upper": "8003d58a0000012b000021ee1932dde0",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -20518,8 +20717,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "8a010a089d800110d8cef9cc02",
-          "upper": "8a010a08b9dc0410e0c4dabd03",
+          "lower": "0000401d299e6758",
+          "upper": "00012e3937b6a260",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -20748,8 +20948,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "8a010908f35810b082c6b103",
-          "upper": "8a010a08e7bc0310e0eebac303"
+          "lower": "00002c7336318130",
+          "upper": "0000de67386eb760",
+          "kind": "packed-time"
         },
         "1": {
           "lower": {
@@ -20796,8 +20997,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "8a010908e2cf0310f8dbbb3f",
-          "upper": "8a010a08c2ec0410c8e5e6d502"
+          "lower": "0000e7e207eeedf8",
+          "upper": "000136422ab9b2c8",
+          "kind": "packed-time"
         }
       }
     }
@@ -20884,8 +21086,9 @@ expression: all_stats
         },
         "1": "NoneStats",
         "2": {
-          "lower": "c201060a040874149d",
-          "upper": "c2010d0a0909079920074006184c100a"
+          "lower": "060000000000000095006a0300000000000000000000000000000000000000000000800000000000",
+          "upper": "10000000f6ffffffb80006004a0098034f0009000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -20905,8 +21108,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "9a010f08edb101101e18f85a20e0ced28703",
-          "upper": "9a010f08ba9c0b103118e0292080db89d903",
+          "lower": "800058ed0000001e00002d7830f4a760",
+          "upper": "8002ce3a00000031000014e03b226d80",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -21035,8 +21239,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "ca01109bf211e068d74ac303b4b99c9e1fc274",
-          "upper": "ca01109bf211e068d74ac303b4b99c9e1fc274"
+          "lower": "9bf211e068d74ac303b4b99c9e1fc274",
+          "upper": "9bf211e068d74ac303b4b99c9e1fc274",
+          "kind": "uuid"
         }
       }
     }
@@ -21110,8 +21315,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a011708cef7ffffffffffffff01103e18e0960120e8f9a6b701",
-          "upper": "9a011708cef7ffffffffffffff01103e18e0960120e8f9a6b701"
+          "lower": "7ffffbce0000003e00004b6016e9bce8",
+          "upper": "7ffffbce0000003e00004b6016e9bce8",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -21316,8 +21522,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "8a010a08f183011098fbdd8402",
-          "upper": "8a010a08a1eb0210d0daf0f302"
+          "lower": "000041f120977d98",
+          "upper": "0000b5a12e7c2d50",
+          "kind": "packed-time"
         }
       }
     }
@@ -21465,8 +21672,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "8a010a08bffc011080a6b0ca01",
-          "upper": "8a010908cf9f0510a0d2b23d",
+          "lower": "00007e3f194c1300",
+          "upper": "00014fcf07aca920",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -21824,8 +22032,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "c2010d0a0917810591123068996d100b",
-          "upper": "c2010d0a0907352180008975675c100a",
+          "lower": "11000000f5ffffffe40344007b004f022a0311000000000000000000000000000000800000000000",
+          "upper": "10000000f6ffffffa302cf030800b400600107000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "3"
           }
@@ -21848,8 +22057,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "ca01100fb3ec34dfe033b19bf3cf1130ea05f1",
-          "upper": "ca0110e9994599c870a75060fbfd8a7ef10183"
+          "lower": "0fb3ec34dfe033b19bf3cf1130ea05f1",
+          "upper": "e9994599c870a75060fbfd8a7ef10183",
+          "kind": "uuid"
         }
       }
     }
@@ -22046,8 +22256,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "ca011006fc1c933c13339ac551ac788f36ed11",
-          "upper": "ca01108f95adbce2d8695864f909474b3740d9"
+          "lower": "06fc1c933c13339ac551ac788f36ed11",
+          "upper": "8f95adbce2d8695864f909474b3740d9",
+          "kind": "uuid"
         }
       }
     }
@@ -22071,8 +22282,9 @@ expression: all_stats
           "upper": "ed8022ef53d29f8722dfa846526da8a5106c2075f094a4ce4aa1f20939ea0bdc1f3ce90554da059b06272a371c08580b3064fd578281c0d91fa3ba6fb9a1308e28ae114e5d67d8536f00e1d538883eee55ae3512507b34aaec2779c61360d0d9c2fd97dc"
         },
         "1": {
-          "lower": "c201160a14122554072140689417980757860677824183506d",
-          "upper": "c201080a040882189c1006",
+          "lower": "2700000000000000fa01b7003803a5025c03f502d403a101b1028c0048002a027a00800000000000",
+          "upper": "06000000faffffffbd00720300000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -22470,8 +22682,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "2": {
-          "lower": "a2012008c7c6a09ffaffffffff0110f39b8596ffffffffff0118bd899fab929ef0d12e",
-          "upper": "a20117088e81e79b0610feb2bcdf0518e3d4cad4eee0aaa1d701"
+          "lower": "23e8234772c14df3aea3c0f12567c4bd",
+          "upper": "e379c08edbef197e5742ab06ea92aa63",
+          "kind": "packed-interval"
         }
       }
     }
@@ -22516,8 +22729,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "8a010908d20e10c0a0d8dd02",
-          "upper": "8a010a08e09f0510f0cd849401"
+          "lower": "000007522bb61040",
+          "upper": "00014fe0128126f0",
+          "kind": "packed-time"
         }
       }
     }
@@ -22560,16 +22774,18 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "92011008d2df0710b80218e05520b0bd989e03",
-          "upper": "92011108bbc00e10ac0218dfae0220d08aba8003",
+          "lower": "8001efd20000013800002ae033c61eb0",
+          "upper": "8003a03b0000012c0000975f300e8550",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
         },
         "1": "NoneStats",
         "2": {
-          "lower": "a2011b08afabcae3fbffffffff0110bb8cc4820618968f85f9afabf8993a",
-          "upper": "a20116089b83c5ba0310f090b7830118d8e0b5c9efd3b7a405"
+          "lower": "3c7295afe051063bba33e15aff214796",
+          "upper": "b751419b906dc8708548de9ef92d7058",
+          "kind": "packed-interval"
         }
       }
     }
@@ -23133,8 +23349,9 @@ expression: all_stats
           "upper": true
         },
         "2": {
-          "lower": "9a011108b28c0410810118e3d9022098b5d5c303",
-          "upper": "9a011108b28c0410810118e3d9022098b5d5c303"
+          "lower": "80010632000000810000ace338755a98",
+          "upper": "80010632000000810000ace338755a98",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -23216,8 +23433,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "8a010908b7e90110a8aed510",
-          "upper": "8a010908b7e90110a8aed510"
+          "lower": "000074b702155728",
+          "upper": "000074b702155728",
+          "kind": "packed-time"
         }
       }
     }
@@ -23237,8 +23455,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "9a011008ecba0510ba0118f4d00420e0a5a117",
-          "upper": "9a011008ecba0510ba0118f4d00420e0a5a117"
+          "lower": "80015d6c000000ba0001287402e852e0",
+          "upper": "80015d6c000000ba0001287402e852e0",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": {
@@ -23371,8 +23590,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "9201100896900510701889960420e8c4eceb01",
-          "upper": "9201100896900510701889960420e8c4eceb01",
+          "lower": "800148160000007000010b091d7b2268",
+          "upper": "800148160000007000010b091d7b2268",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -23696,8 +23916,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "c201160a0906113925386067853d10eaffffffffffffffff01",
-          "upper": "c201060a040964485c"
+          "lower": "10000000160000005503430082019d03710006000000000000000000000000000000800000000000",
+          "upper": "0600000000000000e501c40300000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -23725,8 +23946,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "9a011008cb9d02105518f8ff012088f5acb901",
-          "upper": "9a011108aabc0910cc0218ef990320d880f2d702"
+          "lower": "80008ecb0000005500007ff8172b3a88",
+          "upper": "80025e2a0000014c0000ccef2afc8058",
+          "kind": "packed-date-time"
         }
       }
     }
@@ -23834,8 +24056,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "c2010d0a0908067816677355568d100b",
-          "upper": "c201160a0922831908073771195c10eaffffffffffffffff01",
+          "lower": "10000000f5ffffff38026301a5023003430008000000000000000000000000000000800000000000",
+          "upper": "1100000016000000c300030349008c033f0316000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "2"
           }
@@ -23896,8 +24119,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "92011008a3cb01108e0118867e20c0aacb8201",
-          "upper": "92011108a0bb0d10cc0118c4d00320b0c7f79c02"
+          "lower": "800065a30000008e00003f061052d540",
+          "upper": "80035da0000000cc0000e844239de3b0",
+          "kind": "packed-date-time"
         },
         "1": "NoneStats"
       }
@@ -23951,8 +24175,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "a2012008c7b499fcfaffffffff011099c6c7c1fcffffffff0118f28586e2cffa9e8566",
-          "upper": "a2011c08c1d6e4ea0610e2c1afb4fdffffffff0118efbabca38393accdd601"
+          "lower": "2f865a474831e319e60a7bd4fc4182f2",
+          "upper": "ed592b41568be0e2569ab098346f1d6f",
+          "kind": "packed-interval"
         },
         "2": {
           "nulls": {
@@ -24016,8 +24241,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "a2012008ebd0f5d8f9ffffffff011094f1d8b8fdffffffff0118b88dc19df1b99d9806",
-          "upper": "a2011708dfd1cba40110a4a8a9820518e5ac91defacab39ca701",
+          "lower": "1b1d686b57163894863075cf13b046b8",
+          "upper": "9492e8dfd04a54242738ce57abc45665",
+          "kind": "packed-interval",
           "nulls": {
             "$serde_json::private::Number": "3"
           }
@@ -24074,8 +24300,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "ca01105c313a4cd106b72f780b54bc5a4346cf",
-          "upper": "ca0110af0ed342b8973c96f4273403e00fc325",
+          "lower": "5c313a4cd106b72f780b54bc5a4346cf",
+          "upper": "af0ed342b8973c96f4273403e00fc325",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -24107,8 +24334,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "ca01108ff3c826541d6679af101e1ecf18ceb8",
-          "upper": "ca0110edcd6e8b929cb6562f3c32551a83529a"
+          "lower": "8ff3c826541d6679af101e1ecf18ceb8",
+          "upper": "edcd6e8b929cb6562f3c32551a83529a",
+          "kind": "uuid"
         }
       }
     }
@@ -24396,8 +24624,9 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "92011708c9ffffffffffffffff0110b50218bfcf0220a896cb16",
-          "upper": "92011108a7ad0e10870118b4990120b88198ac02"
+          "lower": "7fffffc9000001350000a7bf02d2cb28",
+          "upper": "800396a70000008700004cb4258600b8",
+          "kind": "packed-date-time"
         },
         "1": "NoneStats",
         "2": "NoneStats"
@@ -24427,8 +24656,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "a2012008908bdaa0f8ffffffff0110d981bbe4ffffffffff0118daccd3fad3cc8ed167",
-          "upper": "a2011c08c8def0ab06108bc8e2affeffffffff01189ac4eef3cdf9cdacda01"
+          "lower": "041685907c8ec0d9e7a23a653f54e65a",
+          "upper": "e57c2f4865f8a40b5a5937ccde7ba21a",
+          "kind": "packed-interval"
         }
       }
     }
@@ -24564,8 +24794,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "0807",
-          "upper": "c201160a14169720761395251662590589539049830932552c",
+          "lower": "01000000000000000000000000000000000000000000000000000000000000000000c00000000000",
+          "upper": "27000000000000002802a4033e0331001b024d024e029602fb008b01f902d002a900000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -24725,8 +24956,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "ca011018c304229037712f1b3bd41defbc163b",
-          "upper": "ca0110a5f0d76d3900181d54b0fc0e1226f01d"
+          "lower": "18c304229037712f1b3bd41defbc163b",
+          "upper": "a5f0d76d3900181d54b0fc0e1226f01d",
+          "kind": "uuid"
         }
       }
     }
@@ -25001,12 +25233,14 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "9a011108d6d30310e20218b9820520b0b2a0e502",
-          "upper": "9a011008fea20810c40218da6720989692c701"
+          "lower": "8000e9d600000162000141392ca81930",
+          "upper": "8002117e00000144000033da18e48b18",
+          "kind": "packed-date-time"
         },
         "1": {
-          "lower": "c201160a0901717777116487284d10e9ffffffffffffffff01",
-          "upper": "0806",
+          "lower": "10000000170000001c01e70174000903cd0201000000000000000000000000000000800000000000",
+          "upper": "01000000000000000000000000000000000000000000000000000000000000000000400000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -25059,8 +25293,9 @@ expression: all_stats
           }
         },
         "1": {
-          "lower": "a201200889f8ec8df8ffffffff0110c0eaaac9f8ffffffff011888b79f85809acffa09",
-          "upper": "a2011708f2bfdfe3031099eaac9d0618bca29f8ff386b0d3a901"
+          "lower": "01bb3c09092ab54089f53cd000a7db88",
+          "upper": "bc77dff2e3ab351929a6c03731e7d13c",
+          "kind": "packed-interval"
         }
       }
     }
@@ -25221,8 +25456,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "8a010a08f38a02109881949f01",
-          "upper": "8a010a08deeb041098f4e59301"
+          "lower": "0000857313e50098",
+          "upper": "000135de12797a18",
+          "kind": "packed-time"
         }
       }
     }
@@ -25320,8 +25556,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "8a010a08a3fd0110b8fac5d203",
-          "upper": "8a010a08ad890310b080b4d602"
+          "lower": "00007ea33a517d38",
+          "upper": "0000c4ad2acd0030",
+          "kind": "packed-time"
         }
       }
     }
@@ -25446,8 +25683,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "c2010c0a08269343203171295d1009",
-          "upper": "c201160a0964835438344375624c10eaffffffffffffffff01"
+          "lower": "0f000000f7ffffff2701ab00cb0057010d0100000000000000000000000000000000800000000000",
+          "upper": "1100000016000000700277015801b601430340000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -25542,8 +25780,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "8a010a08898a0110b8e2a89101",
-          "upper": "8a010a08c897051098c6f2f202",
+          "lower": "00004509122a3138",
+          "upper": "00014bc82e5ca318",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -25567,8 +25806,9 @@ expression: all_stats
         },
         "0": "json_mixed",
         "1": {
-          "lower": "8a010908a81710f8aae3bf02",
-          "upper": "8a010908b5aa0210a8ff8f48"
+          "lower": "00000ba827f8d578",
+          "upper": "000095350903ffa8",
+          "kind": "packed-time"
         }
       }
     }
@@ -25588,8 +25828,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "8a010a08d2b50110f8eeb4d502",
-          "upper": "8a010908c8e30410e8dd937b"
+          "lower": "00005ad22aad3778",
+          "upper": "000131c80f64eee8",
+          "kind": "packed-time"
         }
       }
     }
@@ -25609,8 +25850,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "c201060a040683825d",
-          "upper": "c201160a0913349846576067662c10eaffffffffffffffff01"
+          "lower": "06000000000000003903ab0200000000000000000000000000000000000000000000800000000000",
+          "upper": "11000000160000009602430040024e035d010d000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -25695,8 +25937,9 @@ expression: all_stats
         },
         "1": "NoneStats",
         "2": {
-          "lower": "c201060a040879777d",
-          "upper": "c201060a040785292c"
+          "lower": "060000000000000009036f0300000000000000000000000000000000000000000000800000000000",
+          "upper": "06000000000000002401110300000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -25716,8 +25959,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "9a011008d1e205107118e4b90120d0f7abee01",
-          "upper": "9a011008cbf40e10f70118aef10220b8d3da05"
+          "lower": "800171510000007100005ce41dcafbd0",
+          "upper": "8003ba4b000000f70000b8ae00b6a9b8",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": "\r¥\r#=\u0003n򟈠",
@@ -25791,8 +26035,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "8a010a08c8a90110f8bde3ac03",
-          "upper": "8a010a08d89d0410a0beafd303"
+          "lower": "000054c83598def8",
+          "upper": "00010ed83a6bdf20",
+          "kind": "packed-time"
         },
         "1": {
           "lower": {
@@ -25911,8 +26156,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "9a011008c68206105618c4a40320d0d5dbc601",
-          "upper": "9a011008d6e80f10681888bd0220c0c5ecee02",
+          "lower": "80018146000000560000d24418d6ead0",
+          "upper": "8003f4560000006800009e882ddb22c0",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -25972,8 +26218,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "ca011017c30f387a7b7e80c6efa7830ee610da",
-          "upper": "ca0110fffdee737239d876ab85318b8ab2e51f",
+          "lower": "17c30f387a7b7e80c6efa7830ee610da",
+          "upper": "fffdee737239d876ab85318b8ab2e51f",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "3"
           }
@@ -26016,8 +26263,9 @@ expression: all_stats
         },
         "0": "NoneStats",
         "1": {
-          "lower": "c201200a131393631226476296430934216394131361617d10feffffffffffffffff01",
-          "upper": "c201050a0309881d"
+          "lower": "25000000020000006902690183008a01d800a603ae012801dc01e200770289010100800000000000",
+          "upper": "04000000000000007103090000000000000000000000000000000000000000000000800000000000",
+          "kind": "packed-numeric"
         }
       }
     }
@@ -26066,8 +26314,9 @@ expression: all_stats
           "$serde_json::private::Number": "2"
         },
         "0": {
-          "lower": "8a01090887fe0210c8b38274",
-          "upper": "8a010908e7b2031080e88f27"
+          "lower": "0000bf070e8099c8",
+          "upper": "0000d96704e3f400",
+          "kind": "packed-time"
         },
         "1": {
           "nulls": {
@@ -26093,8 +26342,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "9a011008e3850210df0118b60820b88dffaf03",
-          "upper": "9a011108c1aa0f10c40118a2d4012088e5cd9102"
+          "lower": "800082e3000000df0000043635ffc6b8",
+          "upper": "8003d541000000c400006a2222337288",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": {
@@ -26176,8 +26426,9 @@ expression: all_stats
           "$serde_json::private::Number": "6"
         },
         "0": {
-          "lower": "ca011007eb6d25c968cb0eca266b82074f1335",
-          "upper": "ca0110a37148c817639f89637e75860c757cb7",
+          "lower": "07eb6d25c968cb0eca266b82074f1335",
+          "upper": "a37148c817639f89637e75860c757cb7",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -26216,8 +26467,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "ca0110b5a92edcd33756a43b83ab32031644ad",
-          "upper": "ca0110f9bc8dae4f1851ee0afe2dd6d570abd2"
+          "lower": "b5a92edcd33756a43b83ab32031644ad",
+          "upper": "f9bc8dae4f1851ee0afe2dd6d570abd2",
+          "kind": "uuid"
         }
       }
     }
@@ -26312,16 +26564,18 @@ expression: all_stats
           "$serde_json::private::Number": "4"
         },
         "0": {
-          "lower": "9a011108e3e10410d7021897c90320a881f08303",
-          "upper": "9a011008e28f0e10581881b2042088bdab8203"
+          "lower": "800130e3000001570000e497307c00a8",
+          "upper": "800387e20000005800011901304ade88",
+          "kind": "packed-date-time"
         },
         "1": {
           "lower": "\\`<*Ⱥf..Ⱥ󖅬\r&Ѩ﻿",
           "upper": "󙜖ꖭ\b~`$\u0000󴮒.=*\\񀂞\u000b*\bfj*K񭌴{[\t'Ѩ􍸦 "
         },
         "2": {
-          "lower": "8a010a08bd980210b8e4f4a903",
-          "upper": "8a010a08aed9041098fbd6ad03"
+          "lower": "00008c3d353d3238",
+          "upper": "00012cae35b5bd98",
+          "kind": "packed-time"
         }
       }
     }
@@ -26392,8 +26646,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "a2011a08f8d5bb6510d682aceefdffffffff0118e38c84e7d7d6b1e018",
-          "upper": "a2011a08f8d5bb6510d682aceefdffffffff0118e38c84e7d7d6b1e018"
+          "lower": "8caeeaf85dcb015698c0c6b57ce10663",
+          "upper": "8caeeaf85dcb015698c0c6b57ce10663",
+          "kind": "packed-interval"
         }
       }
     }
@@ -26419,8 +26674,9 @@ expression: all_stats
           "not nulls": "NoneStats"
         },
         "1": {
-          "lower": "a2012108eab1ecd1fbffffffff01109fc7cbc6fbffffffff011880adb0b1acb0ec84e101",
-          "upper": "a2012108eab1ecd1fbffffffff01109fc7cbc6fbffffffff011880adb0b1acb0ec84e101"
+          "lower": "3a3b18ea38d2e39f6109b182c62c1680",
+          "upper": "3a3b18ea38d2e39f6109b182c62c1680",
+          "kind": "packed-interval"
         }
       }
     }
@@ -26495,8 +26751,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "8a010808901b1088edb22d",
-          "upper": "8a010a08f1920210d8e98ec003",
+          "lower": "00000d9005acb688",
+          "upper": "000089713803b4d8",
+          "kind": "packed-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -26846,8 +27103,9 @@ expression: all_stats
         "0": "NoneStats",
         "1": "NoneStats",
         "2": {
-          "lower": "ca01103b371b79c3c766eed9fdaccb024348ff",
-          "upper": "ca0110ed701259864afd933fc9a951e5c7f916"
+          "lower": "3b371b79c3c766eed9fdaccb024348ff",
+          "upper": "ed701259864afd933fc9a951e5c7f916",
+          "kind": "uuid"
         }
       }
     }
@@ -26925,8 +27183,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "ca011043fdfea5a6c415dc472b6c55b277f6a5",
-          "upper": "ca0110e17a675f3c051a41e6a1855b07ab16a9",
+          "lower": "43fdfea5a6c415dc472b6c55b277f6a5",
+          "upper": "e17a675f3c051a41e6a1855b07ab16a9",
+          "kind": "uuid",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -27158,8 +27417,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "a2011b08f5fdeff00710aaf1a1e1f8ffffffff011888a0d0e6fc90f78343",
-          "upper": "a2011b08f5fdeff00710aaf1a1e1f8ffffffff011888a0d0e6fc90f78343"
+          "lower": "fe1bfef50c2878aac307dc87ccd41008",
+          "upper": "fe1bfef50c2878aac307dc87ccd41008",
+          "kind": "packed-interval"
         },
         "1": {
           "lower": "򴠮w«/",
@@ -27245,8 +27505,9 @@ expression: all_stats
           }
         },
         "2": {
-          "lower": "c201060a040917479d",
-          "upper": "c201050a0316273c",
+          "lower": "0600000000000000df01950300000000000000000000000000000000000000000000800000000000",
+          "upper": "05000000000000001101100000000000000000000000000000000000000000000000000000000000",
+          "kind": "packed-numeric",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
@@ -27300,8 +27561,9 @@ expression: all_stats
           "$serde_json::private::Number": "5"
         },
         "0": {
-          "lower": "c201160a14072309228525636886237293444708115798887d",
-          "upper": "c201150a08364677409221926c10e8ffffffffffffffff01"
+          "lower": "260000000000000077031e037300c402bc012501ed0076037c020d02e40035014800800000000000",
+          "upper": "0f000000180000009e03dd009901a5026c0100000000000000000000000000000000000000000000",
+          "kind": "packed-numeric"
         },
         "1": {
           "lower": {
@@ -27329,8 +27591,9 @@ expression: all_stats
           "$serde_json::private::Number": "1"
         },
         "0": {
-          "lower": "a2011b08f0f2f8a90510f6fad2fbffffffffff0118e5a8f289918dccca2b",
-          "upper": "a2011b08f0f2f8a90510f6fad2fbffffffffff0118e5a8f289918dccca2b"
+          "lower": "d53e39707f74bd76ab953069113c9465",
+          "upper": "d53e39707f74bd76ab953069113c9465",
+          "kind": "packed-interval"
         }
       }
     }
@@ -27356,8 +27619,9 @@ expression: all_stats
           "not nulls": "json_mixed"
         },
         "1": {
-          "lower": "ca011011749cd92e1f858d6780373bd379d4ec",
-          "upper": "ca0110d8c621bd48751b017850881687e8ad23"
+          "lower": "11749cd92e1f858d6780373bd379d4ec",
+          "upper": "d8c621bd48751b017850881687e8ad23",
+          "kind": "uuid"
         }
       }
     }
@@ -27625,8 +27889,9 @@ expression: all_stats
           "$serde_json::private::Number": "3"
         },
         "0": {
-          "lower": "ca011011f27e65cbffa120deca41df60f44de0",
-          "upper": "ca0110640f4f4ab970758e17969707cd5b3a4b"
+          "lower": "11f27e65cbffa120deca41df60f44de0",
+          "upper": "640f4f4ab970758e17969707cd5b3a4b",
+          "kind": "uuid"
         },
         "1": {
           "lower": {
@@ -27820,8 +28085,9 @@ expression: all_stats
           "$serde_json::private::Number": "7"
         },
         "0": {
-          "lower": "9a011008acf106105218b3920320e8cfca8601",
-          "upper": "9a011008ecc10f10da0218c77220e09beead03",
+          "lower": "8001b8ac000000520000c93310d2a7e8",
+          "upper": "8003e0ec0000015a0000394735bb8de0",
+          "kind": "packed-date-time",
           "nulls": {
             "$serde_json::private::Number": "1"
           }
