@@ -20,7 +20,6 @@ use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
-use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
@@ -396,7 +395,7 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
-    pub(crate) runs: Vec<usize>,
+    pub(crate) run_splits: Vec<usize>,
     /// Run-level metadata: the first entry has metadata for the first run, and so on.
     /// If there's no corresponding entry for a particular run, it's assumed to be [RunMeta::default()].
     pub(crate) run_meta: Vec<RunMeta>,
@@ -408,7 +407,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             desc,
             parts,
             len,
-            runs,
+            run_splits: runs,
             run_meta,
         } = self;
         f.debug_struct("HollowBatch")
@@ -435,7 +434,7 @@ impl<T: Serialize> serde::Serialize for HollowBatch<T> {
             len,
             // Both parts and runs are covered by the self.runs call.
             parts: _,
-            runs: _,
+            run_splits: _,
             run_meta: _,
         } = self;
         let mut s = s.serialize_struct("HollowBatch", 5)?;
@@ -462,14 +461,14 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
-            runs: self_runs,
+            run_splits: self_runs,
             run_meta: self_run_meta,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
-            runs: other_runs,
+            run_splits: other_runs,
             run_meta: other_run_meta,
         } = other;
         (
@@ -504,49 +503,48 @@ impl<T> HollowBatch<T> {
         desc: Description<T>,
         parts: Vec<BatchPart<T>>,
         len: usize,
-        runs: Vec<usize>,
-        mut run_meta: Vec<RunMeta>,
+        run_meta: Vec<RunMeta>,
+        run_splits: Vec<usize>,
     ) -> Self {
         debug_assert!(
-            runs.is_strictly_sorted(),
+            run_splits.is_strictly_sorted(),
             "run indices should be strictly increasing"
         );
         debug_assert!(
-            runs.first().map_or(true, |i| *i > 0),
+            run_splits.first().map_or(true, |i| *i > 0),
             "run indices should be positive"
         );
         debug_assert!(
-            runs.last().map_or(true, |i| *i < parts.len()),
+            run_splits.last().map_or(true, |i| *i < parts.len()),
             "run indices should be valid indices into parts"
         );
         debug_assert!(
-            run_meta.len() <= runs.len() + 1,
+            parts.is_empty() || run_meta.len() == run_splits.len() + 1,
             "all metadata should correspond to a run"
         );
-
-        // Don't store the trailing default run meta for backward-compatibility reasons.
-        while run_meta.last() == Some(&RunMeta::default()) {
-            run_meta.pop();
-        }
-        run_meta.shrink_to_fit();
 
         Self {
             desc,
             len,
             parts,
-            runs,
+            run_splits,
             run_meta,
         }
     }
 
-    /// Construct a batch of a single run.
+    /// Construct a batch of a single run with default metadata. Mostly interesting for tests.
     pub(crate) fn new_run(desc: Description<T>, parts: Vec<BatchPart<T>>, len: usize) -> Self {
+        let run_meta = if parts.is_empty() {
+            vec![]
+        } else {
+            vec![RunMeta::default()]
+        };
         Self {
             desc,
             len,
             parts,
-            runs: vec![],
-            run_meta: vec![],
+            run_splits: vec![],
+            run_meta,
         }
     }
 
@@ -556,22 +554,18 @@ impl<T> HollowBatch<T> {
             desc,
             len: 0,
             parts: vec![],
-            runs: vec![],
+            run_splits: vec![],
             run_meta: vec![],
         }
     }
 
-    pub(crate) fn runs(&self) -> impl Iterator<Item = (RunMeta, &[BatchPart<T>])> {
+    pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[BatchPart<T>])> {
         let run_ends = self
-            .runs
+            .run_splits
             .iter()
             .copied()
             .chain(std::iter::once(self.parts.len()));
-        let run_metas = self
-            .run_meta
-            .iter()
-            .cloned()
-            .chain(std::iter::repeat(RunMeta::default()));
+        let run_metas = self.run_meta.iter();
         let run_parts = run_ends
             .scan(0, |start, end| {
                 let range = *start..end;
@@ -2111,13 +2105,17 @@ pub(crate) mod tests {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
-                let runs = if runs { vec![parts.len()] } else { vec![] };
-                HollowBatch {
-                    desc: Description::new(lower, upper, since),
-                    parts,
-                    len: len % 10,
-                    runs,
-                    run_meta: vec![],
+                if runs && parts.len() > 2 {
+                    let split_at = parts.len() / 2;
+                    HollowBatch::new(
+                        Description::new(lower, upper, since),
+                        parts,
+                        len % 10,
+                        vec![RunMeta::default(), RunMeta::default()],
+                        vec![split_at],
+                    )
+                } else {
+                    HollowBatch::new_run(Description::new(lower, upper, since), parts, len % 10)
                 }
             },
         )

@@ -24,7 +24,6 @@ use uuid::Uuid;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_dyncfg::Config;
@@ -459,6 +458,17 @@ impl BatchBuilderConfig {
         let rand = || usize::cast_from(Uuid::new_v4().hashed()) % 100;
         self.batch_columnar_format.is_structured() && self.batch_columnar_format_percent > rand()
     }
+
+    fn run_meta(&self, order: RunOrder, schema: Option<SchemaId>) -> RunMeta {
+        if self.record_run_meta {
+            RunMeta {
+                order: Some(order),
+                schema,
+            }
+        } else {
+            RunMeta::default()
+        }
+    }
 }
 
 /// A list of (lowercase) column names that persist will always retain
@@ -705,22 +715,22 @@ where
         let remainder = self.buffer.drain();
         self.flush_part(stats_schemas, remainder).await;
 
-        let record_run_meta = self.parts.cfg.record_run_meta;
+        let run_meta = self.parts.cfg.run_meta(
+            if self.expect_consolidated {
+                RunOrder::Codec
+            } else {
+                RunOrder::Unordered
+            },
+            stats_schemas.id,
+        );
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
         let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, registered_upper, self.since);
-        if self.runs.last() != Some(&self.parts_written) && record_run_meta {
-            let ordering = if self.expect_consolidated {
-                RunOrder::Codec
-            } else {
-                RunOrder::Unordered
-            };
-            self.run_meta.push(RunMeta {
-                order: Some(ordering),
-                schema: stats_schemas.id,
-            })
+        if self.parts_written != 0 {
+            // Record the metadata for the final / implicit run.
+            self.run_meta.push(run_meta)
         }
         let batch = Batch::new(
             batch_delete_enabled,
@@ -728,7 +738,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, parts, self.num_updates, self.runs, self.run_meta),
+            HollowBatch::new(desc, parts, self.num_updates, self.run_meta, self.runs),
         );
 
         Ok(batch)
@@ -811,12 +821,11 @@ where
                 if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
                     soft_panic_or_log!("expected data in sorted order");
                     self.runs.push(self.parts_written);
-                    if self.parts.cfg.record_run_meta {
-                        self.run_meta.push(RunMeta {
-                            order: Some(RunOrder::Unordered),
-                            schema: stats_schemas.id,
-                        })
-                    }
+                    self.run_meta.push(
+                        self.parts
+                            .cfg
+                            .run_meta(RunOrder::Unordered, stats_schemas.id),
+                    )
                 }
 
                 // given the above check, whether or not we extended an existing run or
@@ -834,12 +843,11 @@ where
             // NB: there is an implicit run starting at index 0
             if self.parts_written > 0 {
                 self.runs.push(self.parts_written);
-                if self.parts.cfg.record_run_meta {
-                    self.run_meta.push(RunMeta {
-                        order: Some(RunOrder::Unordered),
-                        schema: stats_schemas.id,
-                    })
-                }
+                self.run_meta.push(
+                    self.parts
+                        .cfg
+                        .run_meta(RunOrder::Unordered, stats_schemas.id),
+                )
             }
         }
 

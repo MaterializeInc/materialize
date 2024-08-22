@@ -485,7 +485,8 @@ where
             let any_batch_rewrite = batches
                 .iter()
                 .any(|x| x.batch.parts.iter().any(|x| x.ts_rewrite().is_some()));
-            let (mut parts, mut num_updates, mut runs, mut run_metas) = (vec![], 0, vec![], vec![]);
+            let (mut parts, mut num_updates, mut run_splits, mut run_metas) =
+                (vec![], 0, vec![], vec![]);
             for batch in batches.iter() {
                 let () = validate_truncate_batch(&batch.batch, &desc, any_batch_rewrite)?;
                 for (run_meta, run) in batch.batch.runs() {
@@ -495,9 +496,9 @@ where
                     // Mark the boundary if this is not the first run in the batch.
                     let start_index = parts.len();
                     if start_index != 0 {
-                        runs.push(start_index);
+                        run_splits.push(start_index);
                     }
-                    run_metas.push(run_meta);
+                    run_metas.push(run_meta.clone());
                     parts.extend_from_slice(run);
                 }
                 num_updates += batch.batch.len;
@@ -507,7 +508,7 @@ where
             let res = self
                 .machine
                 .compare_and_append(
-                    &HollowBatch::new(desc.clone(), parts, num_updates, runs, run_metas),
+                    &HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits),
                     &self.writer_id,
                     &self.debug_state,
                     heartbeat_timestamp,

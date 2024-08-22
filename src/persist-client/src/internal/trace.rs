@@ -307,7 +307,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
                 // Empty legacy batches are not deterministic: different nodes may split them up
                 // in different ways. For now, we rearrange them such to match the spine data.
-                if batch.parts.is_empty() && batch.runs.is_empty() && batch.len == 0 {
+                if batch.parts.is_empty() && batch.run_splits.is_empty() && batch.len == 0 {
                     let mut new_upper = batch.desc.upper().clone();
 
                     // While our current batch is too small, and there's another empty batch
@@ -713,7 +713,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     pub fn is_compact(&self) -> bool {
         // This definition is extremely likely to change, but for now, we consider a batch
         // "compact" if it has at most one hollow batch with at most one run.
-        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.runs.is_empty())
+        self.parts.len() <= 1 && self.parts.iter().all(|p| p.batch.run_splits.is_empty())
     }
 
     pub fn is_merging(&self) -> bool {

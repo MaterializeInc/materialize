@@ -1297,12 +1297,18 @@ impl RustType<ProtoHandleDebugState> for HandleDebugState {
 
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
+        let mut run_meta = self.run_meta.into_proto();
+        // For backwards compatibility reasons, don't keep default metadata in the proto.
+        let run_meta_default = RunMeta::default().into_proto();
+        while run_meta.last() == Some(&run_meta_default) {
+            run_meta.pop();
+        }
         ProtoHollowBatch {
             desc: Some(self.desc.into_proto()),
             parts: self.parts.into_proto(),
             len: self.len.into_proto(),
-            runs: self.runs.into_proto(),
-            run_meta: self.run_meta.into_proto(),
+            runs: self.run_splits.into_proto(),
+            run_meta,
             deprecated_keys: vec![],
         }
     }
@@ -1323,12 +1329,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 schema_id: None,
             })
         }));
+        // We discard default metadatas from the proto above; re-add them here.
+        let run_splits: Vec<usize> = proto.runs.into_rust()?;
+        let num_runs = if parts.is_empty() {
+            0
+        } else {
+            run_splits.len() + 1
+        };
+        let mut run_meta: Vec<RunMeta> = proto.run_meta.into_rust()?;
+        run_meta.resize(num_runs, RunMeta::default());
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
             len: proto.len.into_rust()?,
-            runs: proto.runs.into_rust()?,
-            run_meta: proto.run_meta.into_rust()?,
+            run_splits,
+            run_meta,
         })
     }
 }

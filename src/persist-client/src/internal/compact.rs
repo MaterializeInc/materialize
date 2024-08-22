@@ -458,7 +458,7 @@ where
             }
         }
         if let Some(single_nonempty_batch) = single_nonempty_batch {
-            if single_nonempty_batch.runs.len() == 0
+            if single_nonempty_batch.run_splits.len() == 0
                 && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
             {
                 metrics.compaction.fast_path_eligible.inc();
@@ -474,7 +474,8 @@ where
             cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
         let mut all_parts = vec![];
-        let mut all_runs = vec![];
+        let mut all_run_splits = vec![];
+        let mut all_run_meta = vec![];
         let mut len = 0;
 
         for (runs, run_chunk_max_memory_usage) in
@@ -506,7 +507,8 @@ where
                 schemas.clone(),
             )
             .await?;
-            let (parts, runs, updates) = (batch.parts, batch.runs, batch.len);
+            let (parts, run_splits, run_meta, updates) =
+                (batch.parts, batch.run_splits, batch.run_meta, batch.len);
             assert!(
                 (updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0),
                 "updates={}, parts={}",
@@ -534,21 +536,22 @@ where
             //         runs:  [    1       3   4 ]
             let run_offset = all_parts.len();
             if all_parts.len() > 0 {
-                all_runs.push(run_offset);
+                all_run_splits.push(run_offset);
             }
-            all_runs.extend(runs.iter().map(|run_start| run_start + run_offset));
+            all_run_splits.extend(run_splits.iter().map(|run_start| run_start + run_offset));
+            all_run_meta.extend(run_meta);
             all_parts.extend(parts);
             len += updates;
         }
 
         Ok(CompactRes {
-            output: HollowBatch {
-                desc: req.desc.clone(),
-                parts: all_parts,
-                runs: all_runs,
+            output: HollowBatch::new(
+                req.desc.clone(),
+                all_parts,
                 len,
-                run_meta: vec![],
-            },
+                all_run_meta,
+                all_run_splits,
+            ),
         })
     }
 
@@ -561,20 +564,23 @@ where
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
-    ) -> Vec<(Vec<(&'a Description<T>, &'a [BatchPart<T>])>, usize)> {
+    ) -> Vec<(
+        Vec<(&'a Description<T>, &'a RunMeta, &'a [BatchPart<T>])>,
+        usize,
+    )> {
         let ordered_runs = Self::order_runs(req);
         let mut ordered_runs = ordered_runs.iter().peekable();
 
         let mut chunks = vec![];
         let mut current_chunk = vec![];
         let mut current_chunk_max_memory_usage = 0;
-        while let Some((desc, _meta, run)) = ordered_runs.next() {
+        while let Some((desc, meta, run)) = ordered_runs.next() {
             let run_greatest_part_size = run
                 .iter()
                 .map(|x| x.encoded_size_bytes())
                 .max()
                 .unwrap_or(cfg.batch.blob_target_size);
-            current_chunk.push((*desc, *run));
+            current_chunk.push((*desc, *meta, *run));
             current_chunk_max_memory_usage += run_greatest_part_size;
 
             if let Some((_next_desc, _next_meta, next_run)) = ordered_runs.peek() {
@@ -631,8 +637,12 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, RunMeta, &[BatchPart<T>])> {
-        let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
+    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &RunMeta, &[BatchPart<T>])> {
+        let total_number_of_runs = req
+            .inputs
+            .iter()
+            .map(|x| x.run_splits.len() + 1)
+            .sum::<usize>();
 
         let mut batch_runs: VecDeque<_> = req
             .inputs
@@ -660,7 +670,7 @@ where
         cfg: &'a CompactConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
-        runs: Vec<(&'a Description<T>, &'a [BatchPart<T>])>,
+        runs: Vec<(&'a Description<T>, &'a RunMeta, &'a [BatchPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -712,7 +722,8 @@ where
             cfg.split_old_runs,
         );
 
-        for (desc, parts) in runs {
+        for (desc, _meta, parts) in runs {
+            // TODO: use the metadata in the consolidator
             consolidator.enqueue_run(desc, parts.iter().cloned());
         }
 
