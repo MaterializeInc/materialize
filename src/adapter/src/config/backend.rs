@@ -32,6 +32,7 @@ impl SystemParameterBackend {
             conn_id,
             uuid: Uuid::new_v4(),
             user: SYSTEM_USER.name.clone(),
+            client_ip: None,
             external_metadata_rx: None,
         });
         let session_client = client.startup(session).await?;

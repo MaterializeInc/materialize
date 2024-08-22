@@ -15,6 +15,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::mem;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -90,6 +91,7 @@ where
     // is also used to return an error when no role exists and
     // therefore there is no valid `RoleMetadata`.
     role_metadata: Option<RoleMetadata>,
+    client_ip: Option<IpAddr>,
     vars: SessionVars,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
@@ -121,6 +123,10 @@ where
         &self.conn_id
     }
 
+    fn client_ip(&self) -> Option<&IpAddr> {
+        self.client_ip.as_ref()
+    }
+
     fn pcx(&self) -> &PlanContext {
         &self
             .transaction()
@@ -145,6 +151,7 @@ where
 #[derive(Debug)]
 pub struct SessionMeta {
     conn_id: ConnectionId,
+    client_ip: Option<IpAddr>,
     pcx: PlanContext,
     role_metadata: RoleMetadata,
     vars: SessionVars,
@@ -157,6 +164,10 @@ impl SessionMetadata for SessionMeta {
 
     fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
+    }
+
+    fn client_ip(&self) -> Option<&IpAddr> {
+        self.client_ip.as_ref()
     }
 
     fn pcx(&self) -> &PlanContext {
@@ -180,6 +191,8 @@ pub struct SessionConfig {
     ///
     /// Must not be reused, even after the session terminates.
     pub uuid: Uuid,
+    /// The peer address of the client
+    pub client_ip: Option<IpAddr>,
     /// The name of the user associated with the session.
     pub user: String,
     /// An optional receiver that the session will periodically check for
@@ -203,6 +216,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn meta(&self) -> SessionMeta {
         SessionMeta {
             conn_id: self.conn_id().clone(),
+            client_ip: self.client_ip().copied(),
             pcx: self.pcx().clone(),
             role_metadata: self.role_metadata().clone(),
             vars: self.vars.clone(),
@@ -263,6 +277,7 @@ impl<T: TimestampManipulation> Session<T> {
                 conn_id: DUMMY_CONNECTION_ID,
                 uuid: Uuid::new_v4(),
                 user: SYSTEM_USER.name.clone(),
+                client_ip: None,
                 external_metadata_rx: None,
             },
             metrics,
@@ -277,6 +292,7 @@ impl<T: TimestampManipulation> Session<T> {
             conn_id,
             uuid,
             user,
+            client_ip,
             mut external_metadata_rx,
         }: SessionConfig,
         metrics: SessionMetrics,
@@ -302,6 +318,7 @@ impl<T: TimestampManipulation> Session<T> {
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
             role_metadata: None,
+            client_ip,
             vars,
             notices_tx,
             notices_rx,

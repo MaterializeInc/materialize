@@ -20,6 +20,7 @@ use tokio_postgres::error::SqlState;
 use crate::ErrorResponse;
 
 pub const CONN_UUID_KEY: &str = "mz_connection_uuid";
+pub const MZ_FORWARDED_FOR_KEY: &str = "mz_forwarded_for";
 
 #[derive(Debug)]
 pub enum Conn<A> {

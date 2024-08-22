@@ -80,7 +80,7 @@ use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroI64;
 use std::ops::Neg;
 use std::str::FromStr;
@@ -1022,6 +1022,7 @@ pub struct ConnMeta {
     application_name: String,
     uuid: Uuid,
     conn_id: ConnectionId,
+    client_ip: Option<IpAddr>,
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
@@ -1064,6 +1065,10 @@ impl ConnMeta {
 
     pub fn uuid(&self) -> Uuid {
         self.uuid
+    }
+
+    pub fn client_ip(&self) -> Option<IpAddr> {
+        self.client_ip
     }
 
     pub fn connected_at(&self) -> EpochMillis {

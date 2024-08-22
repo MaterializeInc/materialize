@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -58,6 +59,7 @@ pub enum Command {
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         user: User,
         conn_id: ConnectionId,
+        client_ip: Option<IpAddr>,
         secret_key: u32,
         uuid: Uuid,
         application_name: String,

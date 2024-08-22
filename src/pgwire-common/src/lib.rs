@@ -22,7 +22,7 @@ pub use codec::{
     decode_startup, input_err, parse_frame_len, CodecError, Cursor, DecodeState, Pgbuf,
     ACCEPT_SSL_ENCRYPTION, MAX_REQUEST_SIZE, REJECT_ENCRYPTION,
 };
-pub use conn::{Conn, CONN_UUID_KEY};
+pub use conn::{Conn, CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY};
 pub use format::Format;
 pub use message::{
     ErrorResponse, FrontendMessage, FrontendStartupMessage, VERSIONS, VERSION_3, VERSION_CANCEL,

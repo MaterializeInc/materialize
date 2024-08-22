@@ -188,6 +188,7 @@ where
                     conn_id: conn.conn_id().clone(),
                     uuid: conn_uuid,
                     user: auth_session.user().into(),
+                    client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
                 });
                 let expired = async move { auth_session.expired().await };
@@ -208,6 +209,7 @@ where
             conn_id: conn.conn_id().clone(),
             uuid: conn_uuid,
             user,
+            client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
         });
         // No frontegg check, so auth session lasts indefinitely.
@@ -355,7 +357,7 @@ fn parse_option(option: &str) -> Result<(&str, &str), ()> {
     Err(())
 }
 
-/// Splits value by any number of spaces except those preceeded by `\`.
+/// Splits value by any number of spaces except those preceded by `\`.
 fn split_options(value: &str) -> Vec<String> {
     let mut strs = Vec::new();
     // Need to build a string because of the escaping, so we can't simply

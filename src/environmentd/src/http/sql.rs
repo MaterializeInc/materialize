@@ -9,18 +9,21 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use futures::future::BoxFuture;
 use futures::Future;
+
 use http::StatusCode;
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
@@ -117,11 +120,13 @@ pub async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     // An upstream middleware may have already provided the user for us
     let user = existing_user.and_then(|Extension(user)| Some(user));
+    let addr = Box::new(addr.ip());
     ws.max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, user, ws).await })
+        .on_upgrade(|ws| async move { run_ws(&state, user, *addr, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -144,8 +149,8 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
-    let mut client = match init_ws(state, user, &mut ws).await {
+async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mut ws: WebSocket) {
+    let mut client = match init_ws(state, user, peer_addr, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to

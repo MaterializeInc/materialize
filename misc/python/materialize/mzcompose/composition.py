@@ -639,6 +639,7 @@ class Composition:
         port: int | None = None,
         password: str | None = None,
         ssl_context: ssl.SSLContext | None = None,
+        init_params: dict[str, str] = {},
     ) -> Connection:
         if service is None:
             service = "materialized"
@@ -651,6 +652,7 @@ class Composition:
             password=password,
             port=port,
             ssl_context=ssl_context,
+            init_params=init_params,
         )
         conn.autocommit = True
         return conn
@@ -662,9 +664,12 @@ class Composition:
         port: int | None = None,
         password: str | None = None,
         ssl_context: ssl.SSLContext | None = None,
+        init_params: dict[str, str] = {},
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        conn = self.sql_connection(service, user, port, password, ssl_context)
+        conn = self.sql_connection(
+            service, user, port, password, ssl_context, init_params
+        )
         return conn.cursor()
 
     def sql(

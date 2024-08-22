@@ -12,12 +12,18 @@ Tests using the balancerd service instead of connecting to materialized directly
 Uses the frontegg-mock instead of a real frontend backend.
 """
 
+import contextlib
 import json
+import socket
 import ssl
+import struct
 import uuid
+from collections.abc import Callable
 from textwrap import dedent
+from typing import Any
 from urllib.parse import quote
 
+import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import InterfaceError
@@ -91,6 +97,7 @@ SERVICES = [
             "--https-resolver-template=materialized:6881",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
+            "--default-config=balancerd_inject_proxy_protocol_header_http=true",
         ],
         depends_on=["test-certs"],
         volumes=[
@@ -142,7 +149,9 @@ def assert_metrics(c: Composition, contains: str):
     assert contains in result.stdout
 
 
-def sql_cursor(c: Composition, service="balancerd", email="u1@example.com") -> Cursor:
+def sql_cursor(
+    c: Composition, service="balancerd", email="u1@example.com", init_params={}
+) -> Cursor:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
@@ -151,6 +160,7 @@ def sql_cursor(c: Composition, service="balancerd", email="u1@example.com") -> C
         user=email,
         password=app_password(email),
         ssl_context=ssl_context,
+        init_params=init_params,
     )
 
 
@@ -184,6 +194,128 @@ def workflow_http(c: Composition) -> None:
     assert json.loads(result.stdout)["results"][0]["rows"][0][0] == "123"
     # TODO: We can't assert metrics for `mz_balancer_tenant_connection_active{source="https"` here
     # because there's no CNAME. Does docker-compose support this somehow?
+
+
+def workflow_ip_forwarding(c: Composition) -> None:
+    """Test that forwarding the client IP through the balancer works over both HTTP and SQL."""
+    c.up("balancerd", "frontegg-mock", "materialized")
+    # balancer is going to be running with https
+    # in this scenario we should validate that connections
+    # via the balancer come from the current ip
+    # and that we can use proxy_protocol when talking to
+    # envd directly.
+    balancer_port = c.port("balancerd", 6876)
+    # mz internal (unencrypted port)
+    materialize_port = c.port("materialized", 6878)
+
+    # We want to make sure the request we're making through the balancer does not use the balancers
+    # ip for the sessions.
+    # https://stackoverflow.com/questions/5281341/get-local-network-interface-addresses-using-only-proc
+    balancer_ip = [
+        ip
+        for ip in c.exec(
+            "balancerd",
+            "awk",
+            r"/32 host/ { print i } {i=$2}",
+            "/proc/net/fib_trie",
+            capture=True,
+        ).stdout.split("\n")
+        if ip != "127.0.0.1"
+    ][0]
+
+    r = requests.post(
+        f"https://localhost:{balancer_port}/api/sql",
+        headers={},
+        auth=(OTHER_USER, app_password(OTHER_USER)),
+        json={
+            "query": "select client_ip from mz_internal.mz_sessions where connection_id = pg_backend_pid();"
+        },
+        verify=False,
+    )
+    print(f"response {r.text}")
+    session_ip = json.loads(r.text)["results"][0]["rows"][0][0]
+    assert (
+        session_ip != balancer_ip
+    ), f"requests from ({session_ip}) proxied by balancer should not use balancer ip ({balancer_ip}) in session"
+
+    # Also assert psql connections don't use the balancer ip
+    cursor = sql_cursor(c)
+    cursor.execute(
+        "select client_ip from mz_internal.mz_sessions where connection_id = pg_backend_pid();"
+    )
+    rows = cursor.fetchall()
+    session_ip = rows[0][0]
+    assert (
+        session_ip != balancer_ip
+    ), f"requests from ({session_ip}) proxied by balancer should not use balancer ip ({balancer_ip}) in session"
+
+    def create_proxy_protocol_v2_header(
+        client_ip: str, client_port: int, server_ip: str, server_port: int
+    ):
+        # Signature for Proxy Protocol v2
+        signature = b"\r\n\r\n\x00\r\nQUIT\n"
+        # Version and command (0x21 means version 2, PROXY command)
+        version_and_command = 0x21
+        # Address family and protocol (0x11 means INET (IPv4) + STREAM (TCP))
+        family_and_protocol = 0x11
+        # Source and destination address are sent as bytes.
+        src_addr = socket.inet_aton(client_ip)
+        dst_addr = socket.inet_aton(server_ip)
+        # Pack ports into 2-byte unsigned integers
+        src_port = struct.pack("!H", client_port)
+        dst_port = struct.pack("!H", server_port)
+        # Length of the address information (IPv4(4*2) + ports(1*2) = 12 bytes)
+        addr_len = struct.pack("!H", 12)
+        # Construct the final Proxy Protocol v2 header
+        header = (
+            signature
+            + struct.pack("!BB", version_and_command, family_and_protocol)
+            + addr_len
+            + src_addr
+            + dst_addr
+            + src_port
+            + dst_port
+        )
+
+        return header
+
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.connect(("127.0.0.1", materialize_port))
+
+        # Pick an ip we couldn't normal connect from and trick envd into
+        # thinking we're connecting with
+        proxy_header = create_proxy_protocol_v2_header(
+            "1.1.1.1", 1111, "127.0.0.1", 1111
+        )
+        # Make an http request over the socket
+
+        json_data = {
+            "query": "select client_ip from mz_internal.mz_sessions where connection_id = pg_backend_pid();"
+        }
+        json_data = json.dumps(json_data)
+        content_length = len(json_data.encode("utf-8"))
+        http_sql_query_request = dedent(
+            f"""\
+            POST /api/sql HTTP/1.1\r
+            Host: 127.0.0.1:{materialize_port}\r
+            Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
+            Content-Type: application/json\r
+            Content-Length: {content_length}\r
+            \r
+            {json_data}"""
+        )
+        sock.sendall(proxy_header + http_sql_query_request.encode("utf-8"))
+
+        # read and parse the response
+        body_separator = "\r\n\r\n"
+        tcp_resp = sock.recv(8192)
+        resp_split = tcp_resp.split(body_separator.encode("utf-8"))
+        assert (
+            len(resp_split) > 1
+        ), f"expected response with header and body, found: {resp_split}"
+        body = resp_split[1]
+        # assert that we tricked environmentd
+        assert json.loads(body)["results"][0]["rows"][0][0] == "1.1.1.1"
 
 
 def workflow_wide_result(c: Composition) -> None:
@@ -285,6 +417,31 @@ def workflow_mz_restarted(c: Composition) -> None:
 
     # Future connections work
     sql_cursor(c)
+
+
+def workflow_pgwire_param_rejection(c: Composition) -> None:
+    """Existing connections should fail if balancerd is restarted"""
+    c.up("balancerd", "frontegg-mock", "materialized")
+
+    def check_error(message: str, f: Callable[..., Any], expected_error: Any):
+        try:
+            f()
+        except Exception as e:
+            assert isinstance(e, expected_error)
+            return
+        raise AssertionError(f"Expected {message} to raise {expected_error}")
+
+    check_error(
+        "connect with x_forwarded_for param",
+        lambda: sql_cursor(c, init_params={"mz_forwarded_for": "1.1.1.1"}),
+        InterfaceError,
+    )
+
+    check_error(
+        "connect with mz_connection_id param",
+        lambda: sql_cursor(c, init_params={"mz_connection_uuid": "123456"}),
+        InterfaceError,
+    )
 
 
 def workflow_balancerd_restarted(c: Composition) -> None:

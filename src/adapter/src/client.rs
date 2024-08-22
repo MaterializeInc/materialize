@@ -164,6 +164,7 @@ impl Client {
         let conn_id = session.conn_id().clone();
         let secret_key = session.secret_key();
         let uuid = session.uuid();
+        let client_ip = session.client_ip();
         let application_name = session.application_name().into();
         let notice_tx = session.retain_notice_transmitter();
 
@@ -187,6 +188,7 @@ impl Client {
             conn_id: conn_id.clone(),
             secret_key,
             uuid,
+            client_ip: client_ip.copied(),
             application_name,
             notice_tx,
         });
@@ -360,6 +362,7 @@ Issue a SQL query to get started. Need help?
             conn_id,
             uuid: Uuid::new_v4(),
             user: SUPPORT_USER.name.clone(),
+            client_ip: None,
             external_metadata_rx: None,
         });
         let mut session_client = self.startup(session).await?;

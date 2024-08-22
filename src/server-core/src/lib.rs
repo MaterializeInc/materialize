@@ -29,9 +29,10 @@ use mz_ore::netio::AsyncReady;
 use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
 use scopeguard::ScopeGuard;
 use socket2::{SockRef, TcpKeepalive};
-use tokio::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
@@ -69,6 +70,61 @@ impl Connection {
     /// Returns a handle to the connection UUID.
     pub fn uuid_handle(&self) -> ConnectionUuidHandle {
         ConnectionUuidHandle(Arc::clone(&self.conn_uuid))
+    }
+
+    /// Attempts to parse a proxy header from the tcp_stream.
+    /// If none is found or it is unable to be parsed None will
+    /// be returned. If a header is found it will be returned and its
+    /// bytes will be removed from the stream.
+    ///
+    /// It is possible an invalid header was sent, if that is the case
+    /// any downstream service will be responsible for returning errors
+    /// to the client.
+    pub async fn take_proxy_header_address(&mut self) -> Option<ProxiedAddress> {
+        // 1024 bytes is a rather large header for tcp proxy header, unless
+        // if the header contains TLV fields or uses a unix socket address
+        // this could easily be hit. We'll use a 1024 byte max buf to allow
+        // limited support for this.
+        let mut buf = [0u8; 1024];
+        let len = match self.tcp_stream.peek(&mut buf).await {
+            Ok(n) if n > 0 => n,
+            _ => {
+                debug!("Failed to read from client socket or no data received");
+                return None;
+            }
+        };
+
+        // Attempt to parse the header, and log failures.
+        let (header, hlen) = match ProxyHeader::parse(
+            &buf[..len],
+            ParseConfig {
+                include_tlvs: false,
+                allow_v1: false,
+                allow_v2: true,
+            },
+        ) {
+            Ok((header, hlen)) => (header, hlen),
+            Err(proxy_header::Error::Invalid) => {
+                debug!(
+                    "Proxy header is invalid. This is likely due to no no header being provided",
+                );
+                return None;
+            }
+            Err(e) => {
+                debug!("Proxy header parse error '{:?}', ignoring header.", e);
+                return None;
+            }
+        };
+        debug!("Proxied connection with header {:?}", header);
+        let address = header.proxied_address().map(|a| a.to_owned());
+        // Proxy header found, clear the bytes.
+        let _ = self.read_exact(&mut buf[..hlen]).await;
+        address
+    }
+
+    /// Peer address of the inner tcp_stream.
+    pub fn peer_addr(&self) -> Result<std::net::SocketAddr, io::Error> {
+        self.tcp_stream.peer_addr()
     }
 }
 

@@ -14,6 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use futures::future::LocalBoxFuture;
@@ -91,6 +92,7 @@ impl Coordinator {
                     conn_id,
                     secret_key,
                     uuid,
+                    client_ip,
                     application_name,
                     notice_tx,
                 } => {
@@ -102,6 +104,7 @@ impl Coordinator {
                         conn_id,
                         secret_key,
                         uuid,
+                        client_ip,
                         application_name,
                         notice_tx,
                     )
@@ -276,6 +279,7 @@ impl Coordinator {
         conn_id: ConnectionId,
         secret_key: u32,
         uuid: uuid::Uuid,
+        client_ip: Option<IpAddr>,
         application_name: String,
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
@@ -323,6 +327,7 @@ impl Coordinator {
                     user,
                     application_name,
                     uuid,
+                    client_ip,
                     conn_id: conn_id.clone(),
                     authenticated_role: role_id,
                     deferred_lock: None,

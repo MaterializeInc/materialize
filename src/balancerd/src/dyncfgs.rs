@@ -12,6 +12,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
 use mz_tracing::params::TracingParameters;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
@@ -27,6 +28,13 @@ pub const SIGTERM_WAIT: Config<Duration> = Config::new(
     "balancerd_sigterm_wait",
     Duration::from_secs(60 * 10),
     "Duration to wait after SIGTERM for outstanding connections to complete.",
+);
+
+/// Whether to inject tcp proxy protocol headers to downstream http servers.
+pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
+    "balancerd_inject_proxy_protocol_header_http",
+    false,
+    "Whether to inject tcp proxy protocol headers to downstream http servers.",
 );
 
 /// Sets the filter to apply to stderr logging.
@@ -82,11 +90,39 @@ pub const SENTRY_FILTERS: Config<fn() -> String> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&SIGTERM_WAIT)
+        .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)
         .add(&OPENTELEMETRY_FILTER_DEFAULTS)
         .add(&SENTRY_FILTERS)
+}
+
+/// Overrides default values for the Balancerd ConfigSet.
+///
+/// This is meant to be used in combination with clap cli flag
+/// `--default-config key=value`
+/// Not all ConfigSet values can be defaulted with this
+/// function. An error will be returned if a key does
+/// not accept default overrides, or if there is a value
+/// parsing error..
+pub(crate) fn set_defaults(
+    config_set: &mut ConfigSet,
+    default_config: Vec<(String, String)>,
+) -> Result<(), anyhow::Error> {
+    let mut config_updates = ConfigUpdates::default();
+    for (k, v) in default_config.iter() {
+        if k.as_str() == INJECT_PROXY_PROTOCOL_HEADER_HTTP.name() {
+            config_updates.add_dynamic(
+                INJECT_PROXY_PROTOCOL_HEADER_HTTP.name(),
+                mz_dyncfg::ConfigVal::Bool(bool::from_str(v)?),
+            )
+        } else {
+            return Err(anyhow!("Invalid default config value {k}"));
+        }
+    }
+    config_updates.apply(config_set);
+    Ok(())
 }
 
 /// Get all dynamic tracing config parameters from this [`ConfigSet`].

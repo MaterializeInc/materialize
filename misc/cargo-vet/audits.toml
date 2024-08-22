@@ -898,6 +898,11 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "3.4.0"
 
+[[audits.proxy-header]]
+who = "Justin Bradfield <justin@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
