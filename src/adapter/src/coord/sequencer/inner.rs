@@ -85,6 +85,7 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
 use mz_storage_types::AlterCompatible;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
@@ -93,7 +94,7 @@ use tracing::{warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{BuiltinTableAppendNotify, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
     CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
@@ -4499,11 +4500,7 @@ where
 
 impl Coordinator {
     /// Forward notices that we got from the optimizer.
-    pub(super) fn emit_optimizer_notices(
-        &mut self,
-        session: &Session,
-        notices: &Vec<RawOptimizerNotice>,
-    ) {
+    fn emit_optimizer_notices(&mut self, session: &Session, notices: &Vec<RawOptimizerNotice>) {
         // `for_session` below is expensive, so return early if there's nothing to do.
         if notices.is_empty() {
             return;
@@ -4525,8 +4522,8 @@ impl Coordinator {
             };
             if notice_enabled {
                 // We don't need to redact the notice parts because
-                // `emit_optimizer_notices` is onlyy called by the `sequence_~`
-                // method for the DDL that produces that notice.
+                // `emit_optimizer_notices` is only called by the `sequence_~`
+                // method for the statement that produces that notice.
                 session.add_notice(AdapterNotice::OptimizerNotice {
                     notice: notice.message(&humanizer, false).to_string(),
                     hint: notice.hint(&humanizer, false).to_string(),
@@ -4536,6 +4533,50 @@ impl Coordinator {
                 .optimization_notices
                 .with_label_values(&[kind.metric_label()])
                 .inc_by(1);
+        }
+    }
+
+    /// Process the metainfo from a newly created non-transient dataflow.
+    async fn process_dataflow_metainfo(
+        &mut self,
+        df_meta: DataflowMetainfo,
+        export_id: GlobalId,
+        session: &Session,
+        notice_ids: Vec<GlobalId>,
+    ) -> Option<BuiltinTableAppendNotify> {
+        // Emit raw notices to the user.
+        self.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+
+        // Create a metainfo with rendered notices.
+        let df_meta = self
+            .catalog()
+            .render_notices(df_meta, notice_ids, Some(export_id));
+
+        // Attend to optimization notice builtin tables and save the metainfo in the catalog's
+        // in-memory state.
+        if self.catalog().state().system_config().enable_mz_notices()
+            && !df_meta.optimizer_notices.is_empty()
+        {
+            let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
+            self.catalog().state().pack_optimizer_notices(
+                &mut builtin_table_updates,
+                df_meta.optimizer_notices.iter(),
+                1,
+            );
+
+            // Save the metainfo.
+            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
+
+            Some(
+                self.builtin_table_update()
+                    .execute(builtin_table_updates)
+                    .await,
+            )
+        } else {
+            // Save the metainfo.
+            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
+
+            None
         }
     }
 }

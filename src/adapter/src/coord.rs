@@ -3282,6 +3282,22 @@ impl Coordinator {
             .await;
     }
 
+    /// Like `ship_dataflow`, but also await on builtin table updates.
+    pub(crate) async fn ship_dataflow_and_notice_builtin_table_updates(
+        &mut self,
+        dataflow: DataflowDescription<Plan>,
+        instance: ComputeInstanceId,
+        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
+    ) {
+        if let Some(notice_builtin_updates_fut) = notice_builtin_updates_fut {
+            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance);
+            let ((), ()) =
+                futures::future::join(notice_builtin_updates_fut, ship_dataflow_fut).await;
+        } else {
+            self.ship_dataflow(dataflow, instance).await;
+        }
+    }
+
     /// Install a _watch set_ in the controller that is automatically associated with the given
     /// connection id. The watchset will be automatically cleared if the connection terminates
     /// before the watchset completes.

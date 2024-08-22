@@ -655,20 +655,13 @@ impl Coordinator {
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
+                let notice_builtin_updates_fut = coord
+                    .process_dataflow_metainfo(df_meta, sink_id, session, notice_ids)
+                    .await;
+
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
-
-                // Emit notices.
-                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
-
-                // Return a metainfo with rendered notices.
-                let df_meta = coord
-                    .catalog()
-                    .render_notices(df_meta, notice_ids, Some(sink_id));
-                coord
-                    .catalog_mut()
-                    .set_dataflow_metainfo(sink_id, df_meta.clone());
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 
@@ -699,29 +692,13 @@ impl Coordinator {
                     )
                     .await;
 
-                if coord.catalog().state().system_config().enable_mz_notices() {
-                    // Initialize a container for builtin table updates.
-                    let mut builtin_table_updates =
-                        Vec::with_capacity(df_meta.optimizer_notices.len());
-                    // Collect optimization hint updates.
-                    coord.catalog().state().pack_optimizer_notices(
-                        &mut builtin_table_updates,
-                        df_meta.optimizer_notices.iter(),
-                        1,
-                    );
-                    // Write collected optimization hints to the builtin tables.
-                    let builtin_updates_fut = coord
-                        .builtin_table_update()
-                        .execute(builtin_table_updates)
-                        .await;
-
-                    let ship_dataflow_fut = coord.ship_dataflow(df_desc, cluster_id);
-
-                    let ((), ()) =
-                        futures::future::join(builtin_updates_fut, ship_dataflow_fut).await;
-                } else {
-                    coord.ship_dataflow(df_desc, cluster_id).await;
-                }
+                coord
+                    .ship_dataflow_and_notice_builtin_table_updates(
+                        df_desc,
+                        cluster_id,
+                        notice_builtin_updates_fut,
+                    )
+                    .await;
             })
             .await;
 
