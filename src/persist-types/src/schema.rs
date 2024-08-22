@@ -55,7 +55,9 @@ pub(crate) enum ArrayMigration {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum StructArrayMigration {
-    AddFieldNullable {
+    // TODO: Support adding fields not at the end, if/when that becomes
+    // necessary.
+    AddFieldNullableAtEnd {
         name: String,
         typ: DataType,
     },
@@ -105,7 +107,7 @@ impl StructArrayMigration {
     fn contains_drop(&self) -> bool {
         use StructArrayMigration::*;
         match self {
-            AddFieldNullable { .. } => false,
+            AddFieldNullableAtEnd { .. } => false,
             DropField { .. } => true,
             AlterFieldNullable { .. } => false,
             Recurse { migration, .. } => migration.contains_drop(),
@@ -115,7 +117,7 @@ impl StructArrayMigration {
     fn migrate(&self, len: usize, fields: &mut Fields, arrays: &mut Vec<Arc<dyn Array>>) {
         use StructArrayMigration::*;
         match self {
-            AddFieldNullable { name, typ } => {
+            AddFieldNullableAtEnd { name, typ } => {
                 arrays.push(new_null_array(typ, len));
                 let mut f = SchemaBuilder::from(&*fields);
                 f.push(Arc::new(Field::new(name, typ.clone(), true)));
@@ -200,6 +202,7 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
     use ArrayMigration::*;
     use StructArrayMigration::*;
 
+    let mut added_field = false;
     let mut field_migrations = Vec::new();
     for n in new.iter() {
         // This find (and the below) make the overall runtime of this O(n^2). We
@@ -208,11 +211,16 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
         // avoid the allocation.
         let o = old.find(n.name());
         let o = match o {
+            // If we've already added a field and then encounter another that
+            // exists in old, the field we added wasn't at the end. We only
+            // support adding fields at the end for now, so return incompatible.
+            Some(_) if added_field => return None,
             Some((_, o)) => o,
             // Allowed to add a new field but it must be nullable.
             None if !n.is_nullable() => return None,
             None => {
-                field_migrations.push(AddFieldNullable {
+                added_field = true;
+                field_migrations.push(AddFieldNullableAtEnd {
                     name: n.name().to_owned(),
                     typ: n.data_type().clone(),
                 });
@@ -352,6 +360,13 @@ mod tests {
             Some(true),
         );
 
+        // Add two fields.
+        testcase(
+            struct_([]),
+            struct_([("a", Boolean, true), ("b", Boolean, true)]),
+            Some(false),
+        );
+
         // Nested struct.
         testcase(
             struct_([("a", struct_([("b", Boolean, false)]), false)]),
@@ -403,6 +418,18 @@ mod tests {
             struct_([("2", Boolean, false), ("10", Utf8, false)]),
             struct_([("10", Utf8, false)]),
             Some(true),
+        );
+
+        // Regression test for another bug caught during code review where a
+        // field was added not at the end.
+        testcase(
+            struct_([("a", Boolean, true), ("c", Boolean, true)]),
+            struct_([
+                ("a", Boolean, true),
+                ("b", Boolean, true),
+                ("c", Boolean, true),
+            ]),
+            None,
         );
     }
 }
