@@ -16,7 +16,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 
-SENTRY_DSN = os.environ["BUILDKITE_SENTRY_DSN"]
+SENTRY_DSN = os.getenv("BUILDKITE_SENTRY_DSN")
 
 SERVICES = [
     Materialized(

@@ -45,7 +45,14 @@ steps:
   - wait
   - label: mkpipeline
     command: bin/ci-builder run stable bin/pyactivate -m ci.mkpipeline $pipeline $@
-    priority: 100
+    priority: 200
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-aarch64-4cpu-8gb
+    retry:
+      automatic:
+        - exit_status: -1
+          signal_reason: none
+          limit: 2
+        - signal_reason: agent_stop
+          limit: 2
 EOF
