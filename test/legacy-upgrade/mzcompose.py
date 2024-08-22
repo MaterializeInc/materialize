@@ -178,6 +178,7 @@ def test_upgrade_from_version(
             system_parameter_defaults=system_parameter_defaults,
             deploy_generation=deploy_generation,
             restart="on-failure",
+            sanity_restart=False,
         )
         with c.override(mz_from):
             c.up(mz_service)
@@ -188,6 +189,8 @@ def test_upgrade_from_version(
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
             system_parameter_defaults=system_parameter_defaults,
+            restart="on-failure",
+            sanity_restart=False,
         )
         with c.override(mz_from):
             c.up(mz_service)
@@ -247,6 +250,7 @@ def test_upgrade_from_version(
                     system_parameter_defaults=system_parameter_defaults,
                     deploy_generation=deploy_generation,
                     restart="on-failure",
+                    sanity_restart=False,
                 )
             ):
                 c.up(mz_service)
@@ -275,6 +279,7 @@ def test_upgrade_from_version(
         system_parameter_defaults=system_parameter_defaults,
         deploy_generation=deploy_generation,
         restart="on-failure",
+        sanity_restart=False,
     )
     with c.override(mz_to):
         c.up(mz_service)
