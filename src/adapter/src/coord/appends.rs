@@ -447,11 +447,9 @@ impl Coordinator {
         // ordering of advancing timelines and user transactions. Updating read holds are only to
         // allow compaction and free some memory. Non-realtime timelines can only be written to by
         // upstream sources, which we don't provide ordering guarantees for with respect to user
-        // transactions. We send the `AdvanceTimelines` message here out of convenience, because we
+        // transactions. We advance the timelines here out of convenience, because we
         // know at least the real-time timeline will have a read hold that can be updated.
-        self.internal_cmd_tx
-            .send(Message::AdvanceTimelines)
-            .expect("sending to self.internal_cmd_tx cannot fail");
+        self.advance_timelines().await;
     }
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.

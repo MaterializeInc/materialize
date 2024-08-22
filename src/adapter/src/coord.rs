@@ -2984,22 +2984,28 @@ impl Coordinator {
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
                 select! {
-                    // Order matters here. Some correctness properties rely on us processing
-                    // internal commands before processing external commands.
+                    // We prioritize internal commands over other commands. However, we work through
+                    // batches of commands in some branches of this select, which means that even if
+                    // a command generates internal commands, we will work through the current batch
+                    // before receiving a new batch of commands.
                     biased;
 
                     // `recv_many()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of commands.
                     _ = internal_cmd_rx.recv_many(&mut messages, MESSAGE_BATCH) => {},
                     // `next()` on any stream is cancel-safe:
                     // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
+                    // Receive a single command.
                     Some(event) = cluster_events.next() => messages.push(Message::ClusterEvent(event)),
                     // See [`mz_controller::Controller::Controller::ready`] for notes
                     // on why this is cancel-safe.
+                    // Receive a single command.
                     () = self.controller.ready() => {
                         messages.push(Message::ControllerReady);
                     }
                     // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
+                    // Receive a single command.
                     permit = group_commit_rx.ready() => {
                         // If we happen to have batched exactly one user write, use
                         // that span so the `emit_trace_id_notice` hooks up.
@@ -3024,6 +3030,7 @@ impl Coordinator {
                     },
                     // `recv_many()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of commands.
                     count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
                         if count == 0 {
                             break;
@@ -3033,6 +3040,7 @@ impl Coordinator {
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    // Receive a single command.
                     Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
                         let mut pending_read_txns = vec![pending_read_txn];
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
@@ -3049,6 +3057,7 @@ impl Coordinator {
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
                         if self.controller.read_only() {
                             tracing::info!("not advancing timelines in read-only mode");
@@ -3060,12 +3069,14 @@ impl Coordinator {
                     },
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    // Receive a single command.
                     _ = self.check_cluster_scheduling_policies_interval.tick() => {
                         messages.push(Message::CheckSchedulingPolicies);
                     },
 
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    // Receive a single command.
                     _ = self.check_clusters_hydrated_interval.tick() => {
                         // We do this directly on the main loop instead of
                         // firing off a message. We are still in read-only mode,
@@ -3079,6 +3090,7 @@ impl Coordinator {
                     // Process the idle metric at the lowest priority to sample queue non-idle time.
                     // `recv()` on `Receiver` is cancellation safe:
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
+                    // Receive a single command.
                     timer = idle_rx.recv() => {
                         timer.expect("does not drop").observe_duration();
                         self.metrics
@@ -3089,6 +3101,7 @@ impl Coordinator {
                     }
                 };
 
+                // Observe the number of messages we're processing at once.
                 message_batch.observe(f64::cast_lossy(messages.len()));
 
                 for msg in messages.drain(..) {
