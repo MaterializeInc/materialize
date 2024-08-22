@@ -15,6 +15,7 @@ import urllib.parse
 
 import pg8000
 
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     _wait_for_pg,
 )
@@ -32,7 +33,7 @@ REGION = "aws/us-east-1"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
 USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com")
 APP_PASSWORD = os.environ["NIGHTLY_CANARY_APP_PASSWORD"]
-VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
+VERSION = f"{MzVersion.parse_cargo()}--main.{os.environ['BUILDKITE_COMMIT']}"
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
