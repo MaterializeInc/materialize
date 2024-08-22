@@ -252,6 +252,7 @@ impl Client {
   Cluster: {}
   Database: {}
   {}
+  Session UUID: {}
 
 Issue a SQL query to get started. Need help?
   View documentation: https://materialize.com/s/docs
@@ -270,6 +271,7 @@ Issue a SQL query to get started. Need help?
                         schemas.iter().map(|id| id.to_string()).join(", ")
                     ),
                 },
+                session.uuid(),
             )));
         }
 
@@ -356,6 +358,7 @@ Issue a SQL query to get started. Need help?
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(SessionConfig {
             conn_id,
+            uuid: Uuid::new_v4(),
             user: SUPPORT_USER.name.clone(),
             external_metadata_rx: None,
         });

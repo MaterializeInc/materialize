@@ -51,6 +51,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, debug_span, warn, Instrument};
+use uuid::Uuid;
 
 use crate::codec::FramedConn;
 use crate::message::{self, BackendMessage};
@@ -83,6 +84,8 @@ pub struct RunParams<'a, A> {
     pub adapter_client: mz_adapter::Client,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
+    /// The universally unique identifier for the connection.
+    pub conn_uuid: Uuid,
     /// The protocol version that the client provided in the startup message.
     pub version: i32,
     /// The parameters that the client provided in the startup message.
@@ -111,6 +114,7 @@ pub async fn run<'a, A>(
         tls_mode,
         adapter_client,
         conn,
+        conn_uuid,
         version,
         mut params,
         frontegg,
@@ -182,6 +186,7 @@ where
                 // canonical.
                 let session = adapter_client.new_session(SessionConfig {
                     conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
                     user: auth_session.user().into(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
                 });
@@ -201,6 +206,7 @@ where
     } else {
         let session = adapter_client.new_session(SessionConfig {
             conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
             user,
             external_metadata_rx: None,
         });

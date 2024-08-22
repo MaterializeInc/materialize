@@ -182,6 +182,7 @@ mod tests {
     use mz_repr::{GlobalId, Timestamp};
     use mz_sql::catalog::RoleAttributes;
     use mz_sql::session::metadata::SessionMetadata;
+    use uuid::Uuid;
 
     use crate::catalog::{Catalog, Op};
     use crate::coord::validity::PlanValidity;
@@ -217,6 +218,7 @@ mod tests {
                 &mz_build_info::DUMMY_BUILD_INFO,
                 SessionConfig {
                     conn_id,
+                    uuid: Uuid::new_v4(),
                     user,
                     external_metadata_rx: None,
                 },

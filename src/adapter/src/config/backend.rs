@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use mz_sql::session::user::SYSTEM_USER;
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::config::SynchronizedParameters;
 use crate::session::SessionConfig;
@@ -29,6 +30,7 @@ impl SystemParameterBackend {
         let conn_id = client.new_conn_id()?;
         let session = client.new_session(SessionConfig {
             conn_id,
+            uuid: Uuid::new_v4(),
             user: SYSTEM_USER.name.clone(),
             external_metadata_rx: None,
         });

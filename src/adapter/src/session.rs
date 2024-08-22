@@ -172,7 +172,14 @@ impl SessionMetadata for SessionMeta {
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     /// The connection ID for the session.
+    ///
+    /// May be reused after the session terminates.
     pub conn_id: ConnectionId,
+    /// A universally unique identifier for the session, across all processes,
+    /// region, and all time.
+    ///
+    /// Must not be reused, even after the session terminates.
+    pub uuid: Uuid,
     /// The name of the user associated with the session.
     pub user: String,
     /// An optional receiver that the session will periodically check for
@@ -254,6 +261,7 @@ impl<T: TimestampManipulation> Session<T> {
             &DUMMY_BUILD_INFO,
             SessionConfig {
                 conn_id: DUMMY_CONNECTION_ID,
+                uuid: Uuid::new_v4(),
                 user: SYSTEM_USER.name.clone(),
                 external_metadata_rx: None,
             },
@@ -267,6 +275,7 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         SessionConfig {
             conn_id,
+            uuid,
             user,
             mut external_metadata_rx,
         }: SessionConfig,
@@ -286,7 +295,7 @@ impl<T: TimestampManipulation> Session<T> {
         }
         Session {
             conn_id,
-            uuid: Uuid::new_v4(),
+            uuid,
             transaction: TransactionStatus::Default,
             pcx: None,
             metrics,
