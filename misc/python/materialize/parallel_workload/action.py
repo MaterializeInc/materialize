@@ -1021,7 +1021,9 @@ class FlipFlagsAction(Action):
             "row_with_validate",
             "arrow",
         ]
-        self.flags_with_values["persist_encoding_enable_dictionary"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_encoding_enable_dictionary"] = (
+            BOOLEAN_FLAG_VALUES
+        )
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
