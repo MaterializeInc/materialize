@@ -50,8 +50,9 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    arb_row_for_relation, ColumnName, ColumnType, NotNullViolation, ProtoColumnName,
-    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationType,
+    arb_relation_desc_diff, arb_row_for_relation, ColumnName, ColumnType, NotNullViolation,
+    PropRelationDescDiff, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
+    RelationDesc, RelationType,
 };
 pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
 pub use crate::row::encoding2::{RowColumnarDecoder, RowColumnarEncoder};

@@ -23,6 +23,7 @@ pub fn backward_compatible(old: &DataType, new: &DataType) -> Option<Migration> 
 }
 
 /// See [backward_compatible].
+#[derive(Debug)]
 pub struct Migration(ArrayMigration);
 
 impl Migration {
@@ -88,12 +89,26 @@ impl ArrayMigration {
             NoOp => array,
             Struct(migrations) => {
                 let len = array.len();
-                let array = array
-                    .as_any()
-                    .downcast_ref::<StructArray>()
-                    .unwrap_or_else(|| panic!("expected Struct got {:?}", array.data_type()))
-                    .clone();
-                let (mut fields, mut arrays, nulls) = array.into_parts();
+
+                let (mut fields, mut arrays, nulls) = match array.data_type() {
+                    DataType::Null => {
+                        let all_add_nullable = migrations.iter().all(|action| {
+                            matches!(action, StructArrayMigration::AddFieldNullableAtEnd { .. })
+                        });
+                        assert!(all_add_nullable, "invalid migrations, {migrations:?}");
+                        (Fields::empty(), Vec::new(), None)
+                    }
+                    DataType::Struct(_) => {
+                        let array = array
+                            .as_any()
+                            .downcast_ref::<StructArray>()
+                            .expect("known to be StructArray")
+                            .clone();
+                        array.into_parts()
+                    }
+                    other => panic!("expected Struct or Null got {other:?}"),
+                };
+
                 for migration in migrations {
                     migration.migrate(len, &mut fields, &mut arrays);
                 }
@@ -164,6 +179,16 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
     use ArrayMigration::NoOp;
     use DataType::*;
     match (old, new) {
+        (Null, Struct(fields)) if fields.iter().all(|field| field.is_nullable()) => {
+            let migrations = fields
+                .iter()
+                .map(|field| StructArrayMigration::AddFieldNullableAtEnd {
+                    name: field.name().clone(),
+                    typ: field.data_type().clone(),
+                })
+                .collect();
+            Some(ArrayMigration::Struct(migrations))
+        }
         (
             Null | Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
             | Float16 | Float32 | Float64 | Binary | Utf8 | Date32 | Date64 | LargeBinary
@@ -431,5 +456,10 @@ mod tests {
             ]),
             None,
         );
+
+        // Regression test for migrating a RelationDesc with no columns
+        // (which gets encoded as a NullArray) to a RelationDesc with one
+        // nullable column.
+        testcase(Null, struct_([("a", Boolean, true)]), Some(false))
     }
 }
