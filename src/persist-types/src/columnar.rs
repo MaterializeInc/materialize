@@ -10,8 +10,8 @@
 //! Columnar understanding of persisted data
 //!
 //! For efficiency/performance, we directly expose the columnar structure of
-//! persist's internal encoding to users during encoding and decoding. For
-//! ergonomics, we wrap the [`arrow`] crate we use to read and write parquet data.
+//! persist's internal encoding to users during encoding and decoding. Interally
+//! we use the [`arrow`] crate that gets durably written as parquet data.
 //!
 //! Some of the requirements that led to this design:
 //! - Support a separation of data and schema because Row is not
@@ -19,32 +19,10 @@
 //!   types. A RelationDesc is necessary to describe a Row schema.
 //! - Narrow down [`arrow::datatypes::DataType`] (the arrow "logical" types) to a
 //!   set we want to support in persist.
-//! - Associate a [`parquet::basic::Encoding`] with each of those types.
 //! - Do `dyn Any` downcasting of columns once per part, not once per update.
-//! - Unlike [`arrow`], be precise about whether each column is optional or not.
 //!
-//! The primary presentation of this abstraction is a sealed trait [Data], which
-//! is implemented for the owned version of each type of data that can be stored
-//! in persist: `int64`, `Option<String>`, etc.
-//!
-//! Under the hood, it's necessary to store something like a map of `name ->
-//! column`. A natural instinct is to make Data object safe, but I couldn't
-//! figure out a way to make that work without severe limitations. As a result,
-//! the DataType enum is introduced with a 1:1 relationship between variants and
-//! implementations of Data. This allows for easy type erasure and guardrails
-//! when downcasting the types back.
-//!
-//! Note: The "Data" strategy is roughly how columnation works and the
-//! "DataType" strategy is roughly how [`arrow`] works. Doing both of them gets us
-//! the benefits of both, while the downside is code duplication and cognitive
-//! overhead.
-//!
-//! The Data trait has associated types for the exclusive "builder" type for the
-//! column and for the shared "reader" type. These also implement some common traits
-//! to make relationships between types more structured.
-//!
-//! Finally, the [Schema] trait maps an implementor of [Codec] to the underlying
-//! column structure. It also provides a [PartEncoder] and [PartDecoder] for
+//! Finally, the [Schema2] trait maps an implementor of [Codec] to the underlying
+//! column structure. It also provides a [ColumnEncoder] and [ColumnDecoder] for
 //! amortizing any downcasting that does need to happen.
 
 use anyhow::anyhow;

@@ -350,7 +350,7 @@ impl ToAvro for JsonValue {
 }
 
 impl Value {
-    /// Validate the value against the given [Schema](../schema/enum.Schema.html).
+    /// Validate the value against the given [Schema2](../schema/enum.Schema.html).
     ///
     /// See the [Avro specification](https://avro.apache.org/docs/current/spec.html)
     /// for the full set of rules of schema validation.

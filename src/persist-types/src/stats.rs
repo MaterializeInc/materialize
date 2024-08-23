@@ -334,10 +334,10 @@ pub trait TrimStats: Message {
     fn trim(&mut self);
 }
 
-/// Aggregate statistics about data contained in a [Part].
+/// Aggregate statistics about data contained in a [Part2].
 #[derive(Arbitrary, Debug)]
 pub struct PartStats {
-    /// Aggregate statistics about key data contained in a [Part].
+    /// Aggregate statistics about key data contained in a [Part2].
     pub key: StructStats,
 }
 

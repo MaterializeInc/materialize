@@ -123,7 +123,6 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
 }
 
 /// Encodes a [`BlobTraceUpdates`] and calculates [`PartStats`].
-/// We also return structured data iff [BatchColumnarFormat::is_structured] is enabled.
 pub(crate) fn encode_updates<K, V>(
     schemas: &Schemas<K, V>,
     updates: &BlobTraceUpdates,

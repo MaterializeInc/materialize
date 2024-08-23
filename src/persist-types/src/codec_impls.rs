@@ -23,7 +23,7 @@ use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use crate::stats::{ColumnarStats, NoneStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
-/// An implementation of [Schema] for [()].
+/// An implementation of [Schema2] for [()].
 #[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
 
@@ -237,7 +237,7 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     }
 }
 
-/// An implementation of [Schema] for [String].
+/// An implementation of [Schema2] for [String].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StringSchema;
 
@@ -286,7 +286,7 @@ impl Codec for String {
     }
 }
 
-/// An implementation of [Schema] for [`Vec<u8>`].
+/// An implementation of [Schema2] for [`Vec<u8>`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VecU8Schema;
 
@@ -357,7 +357,7 @@ impl Codec for ShardId {
     }
 }
 
-/// An implementation of [Schema] for [ShardId].
+/// An implementation of [Schema2] for [ShardId].
 #[derive(Debug, PartialEq)]
 pub struct ShardIdSchema;
 
@@ -437,7 +437,7 @@ impl Opaque for i64 {
     }
 }
 
-/// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema].
+/// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema2].
 #[derive(Debug)]
 pub struct TodoSchema<T>(PhantomData<T>);
 

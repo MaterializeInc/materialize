@@ -8,9 +8,6 @@
 // by the Apache License, Version 2.0.
 
 //! Parquet serialization and deserialization for persist data.
-//!
-//! TODO: Move this into mz_persist_client::internal once we don't need
-//! [validate_roundtrip].
 
 use std::fmt::Debug;
 use std::io::Write;

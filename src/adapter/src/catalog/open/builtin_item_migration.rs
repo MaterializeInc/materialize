@@ -588,7 +588,7 @@ mod persist_schema {
         }
     }
 
-    /// An implementation of [Schema] for [TableKey].
+    /// An implementation of [Schema2] for [TableKey].
     #[derive(Debug, PartialEq)]
     pub(super) struct TableKeySchema;
 
