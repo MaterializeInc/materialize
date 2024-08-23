@@ -24,6 +24,17 @@ use std::path::PathBuf;
 #[cfg(bazel)]
 extern crate runfiles;
 
+/// Returns if we're currently building with Bazel.
+pub const fn is_bazel_build() -> bool {
+    cfg_if! {
+        if #[cfg(bazel)] {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Returns the path to `protoc`.
 ///
 /// Looks for `protoc` in the following places:

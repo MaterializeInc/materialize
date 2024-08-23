@@ -21,4 +21,11 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 # Build `environmentd`, `clusterd`, and `balancerd` with optimizations.
-bin/bazel build //src/environmentd:environmentd //src/clusterd:clusterd //src/balancerd:mz_balancerd_bin -c opt --remote_cache=https://bazel-remote.dev.materialize.com 2>&1 | sed -e 's/INFO/--- INFO/'
+bin/bazel build \
+    //src/environmentd:environmentd \
+    //src/clusterd:clusterd \
+    //src/balancerd:mz_balancerd_bin \
+    //src/sqllogictest:sqllogictest \
+    //src/testdrive:testdrive \
+    //src/fivetran-destination:mz_fivetran_destination_bin \
+    -c opt --remote_cache=https://bazel-remote.dev.materialize.com 2>&1 | sed -e 's/INFO/--- INFO/'
