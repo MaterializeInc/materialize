@@ -2532,22 +2532,27 @@ impl Coordinator {
                         continue;
                     }
 
-                    // Build an optimizer for this INDEX.
-                    let mut optimizer = optimize::index::Optimizer::new(
-                        self.owned_catalog(),
-                        compute_instance.clone(),
-                        entry.id(),
-                        optimizer_config.clone(),
-                        self.optimizer_metrics(),
-                    );
+                    let (optimized_plan, global_lir_plan) = {
+                        // Build an optimizer for this INDEX.
+                        let mut optimizer = optimize::index::Optimizer::new(
+                            self.owned_catalog(),
+                            compute_instance.clone(),
+                            entry.id(),
+                            optimizer_config.clone(),
+                            self.optimizer_metrics(),
+                        );
 
-                    // MIR ⇒ MIR optimization (global)
-                    let index_plan = optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
-                    let global_mir_plan = optimizer.optimize(index_plan)?;
-                    let optimized_plan = global_mir_plan.df_desc().clone();
+                        // MIR ⇒ MIR optimization (global)
+                        let index_plan =
+                            optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
+                        let global_mir_plan = optimizer.optimize(index_plan)?;
+                        let optimized_plan = global_mir_plan.df_desc().clone();
 
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                        (optimized_plan, global_lir_plan)
+                    };
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
@@ -2580,26 +2585,30 @@ impl Coordinator {
                         .resolve_full_name(entry.name(), None)
                         .to_string();
 
-                    // Build an optimizer for this MATERIALIZED VIEW.
-                    let mut optimizer = optimize::materialized_view::Optimizer::new(
-                        self.owned_catalog(),
-                        compute_instance.clone(),
-                        entry.id(),
-                        internal_view_id,
-                        mv.desc.iter_names().cloned().collect(),
-                        mv.non_null_assertions.clone(),
-                        mv.refresh_schedule.clone(),
-                        debug_name,
-                        optimizer_config.clone(),
-                        self.optimizer_metrics(),
-                    );
+                    let (optimized_plan, global_lir_plan) = {
+                        // Build an optimizer for this MATERIALIZED VIEW.
+                        let mut optimizer = optimize::materialized_view::Optimizer::new(
+                            self.owned_catalog(),
+                            compute_instance.clone(),
+                            entry.id(),
+                            internal_view_id,
+                            mv.desc.iter_names().cloned().collect(),
+                            mv.non_null_assertions.clone(),
+                            mv.refresh_schedule.clone(),
+                            debug_name,
+                            optimizer_config.clone(),
+                            self.optimizer_metrics(),
+                        );
 
-                    // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.optimize(mv.optimized_expr.clone())?;
-                    let optimized_plan = global_mir_plan.df_desc().clone();
+                        // MIR ⇒ MIR optimization (global)
+                        let global_mir_plan = optimizer.optimize(mv.optimized_expr.clone())?;
+                        let optimized_plan = global_mir_plan.df_desc().clone();
 
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                        (optimized_plan, global_lir_plan)
+                    };
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
