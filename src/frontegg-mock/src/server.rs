@@ -210,15 +210,15 @@ impl FronteggMockServer {
             )
             .route(
                 GROUPS_PATH,
-                get(handle_list_scim_groups).post(handle_create_scim_group),
+                get(handle_list_groups).post(handle_create_group),
             )
             .route(
                 GROUP_PATH,
-                get(handle_get_scim_group)
-                    .patch(handle_update_scim_group)
-                    .delete(handle_delete_scim_group),
+                get(handle_get_group)
+                    .patch(handle_update_group)
+                    .delete(handle_delete_group),
             )
-            .route(GROUP_PATH_WITH_SLASH, get(handle_get_scim_group))
+            .route(GROUP_PATH_WITH_SLASH, get(handle_get_group))
             .route(
                 GROUP_ROLES_PATH,
                 post(handle_add_roles_to_group).delete(handle_remove_roles_from_group),
@@ -311,6 +311,6 @@ pub struct Context {
     pub auth_requests: Arc<Mutex<u64>>,
     pub roles: Arc<Vec<UserRole>>,
     pub sso_configs: Mutex<BTreeMap<String, SSOConfigStorage>>,
-    pub groups: Mutex<BTreeMap<String, ScimGroup>>,
+    pub groups: Mutex<BTreeMap<String, Group>>,
     pub scim_configurations: Mutex<BTreeMap<String, SCIM2ConfigurationStorage>>,
 }

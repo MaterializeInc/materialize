@@ -485,7 +485,7 @@ pub async fn handle_add_users_to_group(
     if let Some(group) = groups.get_mut(&group_id) {
         for user_id in payload.user_ids {
             if !group.users.iter().any(|u| u.id == user_id) {
-                group.users.push(ScimUser {
+                group.users.push(User {
                     id: user_id,
                     name: "".to_string(),
                     email: "".to_string(),

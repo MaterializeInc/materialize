@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use super::scim::{DefaultRoles, GroupMapping, GroupMappingResponse};
+use super::group::{DefaultRoles, GroupMapping, GroupMappingResponse};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

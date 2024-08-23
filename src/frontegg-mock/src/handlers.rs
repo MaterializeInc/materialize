@@ -8,11 +8,13 @@
 // by the Apache License, Version 2.0.
 
 pub mod auth;
+pub mod group;
 pub mod scim;
 pub mod sso;
 pub mod user;
 
 pub use auth::*;
+pub use group::*;
 pub use scim::*;
 pub use sso::*;
 pub use user::*;
