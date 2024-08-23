@@ -1201,7 +1201,10 @@ impl HirScalarExpr {
                                 .typ(&get_inner.typ().column_types)
                                 .scalar_type;
 
-                            // Build a new record with the original row in a record in a list + the encoded args in a record
+                            // Build a new record that has two fields:
+                            // 1. the original row in a record
+                            // 2. the encoded args (which can be either a single value, or a record
+                            //    if the window function has multiple arguments, such as `lag`)
                             let fn_input_record_fields =
                                 [original_row_record_type, mir_encoded_args_type]
                                     .iter()

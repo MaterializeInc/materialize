@@ -234,10 +234,10 @@ pub struct WindowExpr {
     pub partition_by: Vec<HirScalarExpr>,
     // ORDER BY is represented in a complicated way: `plan_function_order_by` gave us two things:
     //  - the `ColumnOrder`s we have put in the `order_by` fields in the `WindowExprType` in `func`
-    //   above,
+    //    above,
     //  - the `HirScalarExpr`s we have put in the following `order_by` field.
     // These are separated because they are used in different places: the outer `order_by` is used
-    // in the lowering: based on it, we construct a Row that has all the values of the scalar exprs;
+    // in the lowering: based on it, we create a Row constructor that collects the scalar exprs;
     // the inner `order_by` is used in the rendering to actually execute the ordering on these Rows.
     // (`WindowExpr` exists only in HIR, but not in MIR.)
     // Note that the `column` field in the `ColumnOrder`s point into the Row constructed in the
@@ -533,10 +533,11 @@ impl ScalarWindowFunc {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ValueWindowExpr {
     pub func: ValueWindowFunc,
-    // If the argument list has a single element (e.g., for `first_value`), then it's that element.
-    // If the argument list has multiple elements (e.g., for `lag`), then it's encoded in a record,
-    // e.g., `row(#1, 3, null)`.
+    /// If the argument list has a single element (e.g., for `first_value`), then it's that element.
+    /// If the argument list has multiple elements (e.g., for `lag`), then it's encoded in a record,
+    /// e.g., `row(#1, 3, null)`.
     pub args: Box<HirScalarExpr>,
+    /// See comment on `WindowExpr::order_by`.
     pub order_by: Vec<ColumnOrder>,
     pub window_frame: WindowFrame,
     pub ignore_nulls: bool,

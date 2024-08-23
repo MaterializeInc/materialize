@@ -1813,7 +1813,11 @@ impl AggregateFunc {
     /// Like `eval`, but it's given a [OneByOneAggr]. If `self` is a `WindowAggregate`, then
     /// the given [OneByOneAggr] will be used to evaluate the wrapped aggregate inside the
     /// `WindowAggregate`. If `self` is not a `WindowAggregate`, then it simply calls `eval`.
-    pub fn eval_fast_window_agg<'a, I, W>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+    pub fn eval_with_fast_window_agg<'a, I, W>(
+        &self,
+        datums: I,
+        temp_storage: &'a RowArena,
+    ) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
         W: OneByOneAggr,

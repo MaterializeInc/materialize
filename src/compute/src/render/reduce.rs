@@ -788,8 +788,8 @@ where
                     let key_len = datums_local.len();
                     datums_local.push(
                         // Note that this is not necessarily a window aggregation, in which case
-                        // `eval_fast_window_agg` delegates to the normal `eval`.
-                        func.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
+                        // `eval_with_fast_window_agg` delegates to the normal `eval`.
+                        func.eval_with_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
                             iter,
                             &temp_storage,
                         ),
@@ -845,7 +845,7 @@ where
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
                         datums_local.push(
-                            func2.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
+                            func2.eval_with_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
                                 iter,
                                 &temp_storage,
                             ),
