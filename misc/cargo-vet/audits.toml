@@ -1005,6 +1005,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.0.202"
 
+[[audits.serde_json]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.125"
+
 [[audits.sha2-asm]]
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
