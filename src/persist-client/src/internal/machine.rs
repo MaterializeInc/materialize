@@ -56,7 +56,7 @@ use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
-use crate::schema::SchemaId;
+use crate::schema::{CaESchema, SchemaId};
 use crate::write::WriterId;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
@@ -716,6 +716,27 @@ where
     /// See [crate::PersistClient::latest_schema].
     pub fn latest_schema(&self) -> Option<(SchemaId, K::Schema, V::Schema)> {
         self.applier.latest_schema()
+    }
+
+    /// See [crate::PersistClient::compare_and_evolve_schema].
+    ///
+    /// TODO: Unify this with [Self::register_schema]?
+    pub async fn compare_and_evolve_schema(
+        &mut self,
+        expected: SchemaId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> (CaESchema<K, V>, RoutineMaintenance) {
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, state, maintenance) = self
+            .apply_unbatched_idempotent_cmd(
+                &metrics.cmds.compare_and_evolve_schema,
+                |_seqno, _cfg, state| {
+                    state.compare_and_evolve_schema::<K, V>(expected, key_schema, val_schema)
+                },
+            )
+            .await;
+        (state, maintenance)
     }
 
     async fn tombstone_step(&mut self) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {

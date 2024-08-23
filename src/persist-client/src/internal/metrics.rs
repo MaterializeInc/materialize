@@ -419,6 +419,7 @@ impl MetricsVecs {
             expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
             become_tombstone: self.cmd_metrics("become_tombstone"),
+            compare_and_evolve_schema: self.cmd_metrics("compare_and_evolve_schema"),
         }
     }
 
@@ -620,6 +621,7 @@ pub struct CmdsMetrics {
     pub(crate) expire_writer: CmdMetrics,
     pub(crate) merge_res: CmdMetrics,
     pub(crate) become_tombstone: CmdMetrics,
+    pub(crate) compare_and_evolve_schema: CmdMetrics,
 }
 
 #[derive(Debug)]

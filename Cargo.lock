@@ -5760,6 +5760,7 @@ dependencies = [
  "bytes",
  "chrono",
  "hex",
+ "itertools 0.10.5",
  "mz-build-tools",
  "mz-ore",
  "mz-proto",

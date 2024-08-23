@@ -43,7 +43,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
-use crate::schema::SchemaId;
+use crate::schema::{CaESchema, SchemaId};
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
@@ -613,6 +613,41 @@ impl PersistClient {
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
         Ok(machine.latest_schema())
+    }
+
+    /// Registers a new latest schema for the given shard.
+    ///
+    /// This new schema must be [backward_compatible] with all previous schemas
+    /// for this shard. If it's not, [CaESchema::Incompatible] is returned.
+    ///
+    /// [backward_compatible]: mz_persist_types::schema::backward_compatible
+    ///
+    /// To prevent races, the caller must declare what it believes to be the
+    /// latest schema id. If this doesn't match reality,
+    /// [CaESchema::ExpectedMismatch] is returned.
+    pub async fn compare_and_evolve_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        expected: SchemaId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+        diagnostics: Diagnostics,
+    ) -> Result<CaESchema<K, V>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let mut machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+        let (res, maintenance) = machine
+            .compare_and_evolve_schema(expected, key_schema, val_schema)
+            .await;
+        maintenance.start_performing(&machine, &gc);
+        Ok(res)
     }
 
     /// Check if the given shard is in a finalized state; ie. it can no longer be

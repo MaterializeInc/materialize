@@ -2042,12 +2042,13 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::ArrayData;
+    use arrow::array::{build_compare, ArrayData};
     use bytes::Bytes;
     use mz_ore::assert_err;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
+    use mz_persist_types::schema::backward_compatible;
     use mz_repr::{arb_datum_for_scalar, ProtoRelationDesc, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -2147,7 +2148,7 @@ mod tests {
         // Encode to Parquet.
         let mut buf = Vec::new();
         let fields = Fields::from(vec![Field::new("k", col.data_type().clone(), false)]);
-        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col)];
+        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col.clone())];
         mz_persist_types::parquet::encode_arrays(&mut buf, fields, arrays, config).unwrap();
 
         // Decode from Parquet.
@@ -2183,6 +2184,15 @@ mod tests {
         let encoded_schema = SourceData::encode_schema(&desc);
         let roundtrip_desc = SourceData::decode_schema(&encoded_schema);
         assert_eq!(desc, roundtrip_desc);
+
+        // Verify that the RelationDesc is backward compatible with itself (this
+        // mostly checks for `unimplemented!` type panics).
+        let migration =
+            mz_persist_types::schema::backward_compatible(col.data_type(), col.data_type());
+        let migration = migration.expect("should be backward compatible with self");
+        // Also verify that the Fn doesn't do anything wonky.
+        let migrated = migration.migrate(Arc::new(col.clone()));
+        assert_eq!(col.data_type(), migrated.data_type());
     }
 
     #[mz_ore::test]
@@ -2206,6 +2216,61 @@ mod tests {
 
         proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), strat))| {
             roundtrip_source_data(desc, source_datas, &config);
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn backward_compatible_migrate() {
+        fn is_sorted(array: &dyn Array) -> bool {
+            let Ok(cmp) = build_compare(array, array) else {
+                // TODO: arrow v51.0.0 doesn't support comparing structs. When
+                // we migrate to v52+, the `build_compare` function is
+                // deprecated and replaced by `make_comparator`, which does
+                // support structs. At which point, this will work (and we
+                // should switch this early return to an expect, if possible).
+                return false;
+            };
+            (0..array.len())
+                .tuple_windows()
+                .all(|(i, j)| cmp(i, j).is_le())
+        }
+        fn testcase(old: &RelationDesc, new: &RelationDesc, datas: &[SourceData]) {
+            fn data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
+                use mz_persist_types::columnar::ColumnEncoder;
+                let array = Schema2::encoder(schema).expect("valid schema").finish();
+                Array::data_type(&array).clone()
+            }
+
+            let Some(migration) = backward_compatible(&data_type(old), &data_type(new)) else {
+                return;
+            };
+            let mut encoder = Schema2::<SourceData>::encoder(old).expect("valid schema");
+            for data in datas {
+                encoder.append(data);
+            }
+            let old = encoder.finish();
+            let new = Schema2::<SourceData>::encoder(new)
+                .expect("valid schema")
+                .finish();
+            let old: Arc<dyn Array> = Arc::new(old);
+            let new: Arc<dyn Array> = Arc::new(new);
+            let migrated = migration.migrate(Arc::clone(&old));
+            assert_eq!(migrated.data_type(), new.data_type());
+
+            // Check the sortedness preservation, if we can.
+            if migration.preserves_order() && is_sorted(&old) {
+                assert!(is_sorted(&new))
+            }
+        }
+
+        let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&old), 2)
+                .prop_map(move |datas| (old.clone(), new.clone(), datas))
+        });
+
+        proptest!(|((old, new, datas) in strat)| {
+            testcase(&old, &new, &datas);
         });
     }
 
