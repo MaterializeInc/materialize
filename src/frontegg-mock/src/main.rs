@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Manages a single Materialize environment.
+//!
+//! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
+//! on port 6876.
+
 use anyhow::Context as AnyhowContext;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_frontegg_mock::models::{UserConfig, UserRole};
