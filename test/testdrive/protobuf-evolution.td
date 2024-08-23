@@ -135,4 +135,4 @@ $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb mess
 {"wrong": "i'm not an int!"}
 
 ! SELECT * FROM evolution
-contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)
+contains:Decode error: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)
