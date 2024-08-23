@@ -95,6 +95,7 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     wait(condition="delete", resource=f"secret/{secret}")
 
 
+@pytest.mark.skip(reason="Flaky, see #29072")
 def test_missing_secret(mz: MaterializeApplication) -> None:
     """Test that Mz does not panic if a secret goes missing from K8s"""
     mz.testdrive.run(

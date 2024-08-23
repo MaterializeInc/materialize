@@ -584,7 +584,7 @@ steps:
   - id: cloudtest
     label: Cloudtest %N
     depends_on: build-aarch64
-    parallelism: 6
+    parallelism: 8
     timeout_in_minutes: 40
     inputs:
       - test/cloudtest
@@ -605,7 +605,7 @@ steps:
     agents:
       # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
       # queue: hetzner-aarch64-8cpu-16gb
-      queue: linux-aarch64-medium
+      queue: linux-aarch64
     sanitizer: skip
 
   - id: source-sink-errors
