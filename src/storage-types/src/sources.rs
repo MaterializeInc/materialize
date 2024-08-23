@@ -1882,8 +1882,8 @@ mod tests {
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
-    use mz_persist_types::schema::backward_compatible;
-    use mz_repr::ProtoRelationDesc;
+    use mz_persist_types::schema::{backward_compatible, Migration};
+    use mz_repr::{arb_relation_desc_diff, PropRelationDescDiff, ProtoRelationDesc};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
 
@@ -2003,58 +2003,113 @@ mod tests {
         });
     }
 
+    fn is_sorted(array: &dyn Array) -> bool {
+        let Ok(cmp) = build_compare(array, array) else {
+            // TODO: arrow v51.0.0 doesn't support comparing structs. When
+            // we migrate to v52+, the `build_compare` function is
+            // deprecated and replaced by `make_comparator`, which does
+            // support structs. At which point, this will work (and we
+            // should switch this early return to an expect, if possible).
+            return false;
+        };
+        (0..array.len())
+            .tuple_windows()
+            .all(|(i, j)| cmp(i, j).is_le())
+    }
+
+    fn get_data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
+        use mz_persist_types::columnar::ColumnEncoder;
+        let array = Schema2::encoder(schema).expect("valid schema").finish();
+        Array::data_type(&array).clone()
+    }
+
+    #[track_caller]
+    fn backward_compatible_testcase(
+        old: &RelationDesc,
+        new: &RelationDesc,
+        migration: Migration,
+        datas: &[SourceData],
+    ) {
+        let mut encoder = Schema2::<SourceData>::encoder(old).expect("valid schema");
+        for data in datas {
+            encoder.append(data);
+        }
+        let old = encoder.finish();
+        let new = Schema2::<SourceData>::encoder(new)
+            .expect("valid schema")
+            .finish();
+        let old: Arc<dyn Array> = Arc::new(old);
+        let new: Arc<dyn Array> = Arc::new(new);
+        let migrated = migration.migrate(Arc::clone(&old));
+        assert_eq!(migrated.data_type(), new.data_type());
+
+        // Check the sortedness preservation, if we can.
+        if migration.preserves_order() && is_sorted(&old) {
+            assert!(is_sorted(&new))
+        }
+    }
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn backward_compatible_migrate() {
-        fn is_sorted(array: &dyn Array) -> bool {
-            let Ok(cmp) = build_compare(array, array) else {
-                // TODO: arrow v51.0.0 doesn't support comparing structs. When
-                // we migrate to v52+, the `build_compare` function is
-                // deprecated and replaced by `make_comparator`, which does
-                // support structs. At which point, this will work (and we
-                // should switch this early return to an expect, if possible).
-                return false;
-            };
-            (0..array.len())
-                .tuple_windows()
-                .all(|(i, j)| cmp(i, j).is_le())
-        }
-        fn testcase(old: &RelationDesc, new: &RelationDesc, datas: &[SourceData]) {
-            fn data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
-                use mz_persist_types::columnar::ColumnEncoder;
-                let array = Schema2::encoder(schema).expect("valid schema").finish();
-                Array::data_type(&array).clone()
-            }
-
-            let Some(migration) = backward_compatible(&data_type(old), &data_type(new)) else {
-                return;
-            };
-            let mut encoder = Schema2::<SourceData>::encoder(old).expect("valid schema");
-            for data in datas {
-                encoder.append(data);
-            }
-            let old = encoder.finish();
-            let new = Schema2::<SourceData>::encoder(new)
-                .expect("valid schema")
-                .finish();
-            let old: Arc<dyn Array> = Arc::new(old);
-            let new: Arc<dyn Array> = Arc::new(new);
-            let migrated = migration.migrate(Arc::clone(&old));
-            assert_eq!(migrated.data_type(), new.data_type());
-
-            // Check the sortedness preservation, if we can.
-            if migration.preserves_order() && is_sorted(&old) {
-                assert!(is_sorted(&new))
-            }
-        }
-
+    fn backward_compatible_migrate1() {
         let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
             proptest::collection::vec(arb_source_data_for_relation_desc(&old), 2)
                 .prop_map(move |datas| (old.clone(), new.clone(), datas))
         });
 
         proptest!(|((old, new, datas) in strat)| {
-            testcase(&old, &new, &datas);
+            let old_data_type = get_data_type(&old);
+            let new_data_type = get_data_type(&new);
+
+            if let Some(migration) = backward_compatible(&old_data_type, &new_data_type) {
+                backward_compatible_testcase(&old, &new, migration, &datas);
+            };
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn backward_compatible_migrate_from_common() {
+        fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
+            // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
+            let should_be_compatible = diffs.iter().any(|diff| match diff {
+                // We only support adding nullable columns.
+                PropRelationDescDiff::AddColumn {
+                    typ: ColumnType { nullable, .. },
+                    ..
+                } => *nullable,
+                PropRelationDescDiff::DropColumn { .. } => true,
+                _ => false,
+            });
+
+            let mut new = old.clone();
+            for diff in diffs.into_iter() {
+                diff.apply(&mut new)
+            }
+
+            let old_data_type = get_data_type(&old);
+            let new_data_type = get_data_type(&new);
+
+            if let Some(migration) = backward_compatible(&old_data_type, &new_data_type) {
+                backward_compatible_testcase(&old, &new, migration, &datas);
+            } else if should_be_compatible {
+                panic!("new DataType was not compatible when it should have been!");
+            }
+        }
+
+        let strat = any::<RelationDesc>()
+            .prop_flat_map(|desc| {
+                proptest::collection::vec(arb_source_data_for_relation_desc(&desc), 2)
+                    .no_shrink()
+                    .prop_map(move |datas| (desc.clone(), datas))
+            })
+            .prop_flat_map(|(desc, datas)| {
+                arb_relation_desc_diff(&desc)
+                    .prop_map(move |diffs| (desc.clone(), diffs, datas.clone()))
+            });
+
+        proptest!(|((old, diffs, datas) in strat)| {
+            test_case(old, diffs, datas);
         });
     }
 

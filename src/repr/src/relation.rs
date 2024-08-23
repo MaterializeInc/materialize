@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::{fmt, iter, vec};
 
 use anyhow::bail;
@@ -251,9 +253,7 @@ impl RustType<ProtoKey> for Vec<usize> {
 }
 
 /// The name of a column in a [`RelationDesc`].
-#[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ColumnName(pub(crate) String);
 
 impl ColumnName {
@@ -320,6 +320,38 @@ impl From<ColumnName> for mz_sql_parser::ast::Ident {
     fn from(value: ColumnName) -> Self {
         // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
         mz_sql_parser::ast::Ident::new_unchecked(value.0)
+    }
+}
+
+impl proptest::arbitrary::Arbitrary for ColumnName {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<ColumnName>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        // Long column names are generally uninteresting, and can greatly
+        // increase the runtime for a test case, so bound the max length.
+        let mut weights = vec![(50, Just(1..8)), (20, Just(8..16))];
+        if std::env::var("PROPTEST_LARGE_DATA").is_ok() {
+            weights.extend([
+                (5, Just(16..128)),
+                (1, Just(128..1024)),
+                (1, Just(1024..4096)),
+            ]);
+        }
+        let name_length = Union::new_weighted(weights);
+
+        // Non-ASCII characters are also generally uninteresting and can make
+        // debugging harder.
+        let char_strat = Rc::new(Union::new_weighted(vec![
+            (50, proptest::char::range('A', 'z').boxed()),
+            (1, any::<char>().boxed()),
+        ]));
+
+        name_length
+            .prop_flat_map(move |length| proptest::collection::vec(char_strat.clone(), length))
+            .prop_map(|chars| ColumnName(chars.into_iter().collect::<String>()))
+            .no_shrink()
+            .boxed()
     }
 }
 
@@ -587,24 +619,7 @@ impl Arbitrary for RelationDesc {
 /// Returns a [`Strategy`] that generates an arbitrary [`RelationDesc`] with a number columns
 /// within the range provided.
 pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Value = RelationDesc> {
-    // Long column names are generally uninteresting, and can greatly
-    // increase the runtime for a test case, so bound the max length.
-    let mut weights = vec![(50, Just(0..8)), (20, Just(8..16))];
-    if std::env::var("PROPTEST_LARGE_DATA").is_ok() {
-        weights.extend([
-            (5, Just(16..128)),
-            (1, Just(128..1024)),
-            (1, Just(1024..4096)),
-        ]);
-    }
-    let name_length = Union::new_weighted(weights);
-
-    let name_strat = name_length
-        .prop_flat_map(|length| proptest::collection::vec(any::<char>(), length))
-        .prop_map(|chars| chars.into_iter().collect::<String>())
-        .no_shrink();
-
-    proptest::collection::btree_map(name_strat, any::<ColumnType>(), num_cols)
+    proptest::collection::btree_map(any::<ColumnName>(), any::<ColumnType>(), num_cols)
         .prop_map(RelationDesc::from_names_and_types)
 }
 
@@ -640,4 +655,183 @@ impl fmt::Display for NotNullViolation {
             self.0.as_str().quoted()
         )
     }
+}
+
+/// Diffs that can be generated proptest and applied to a [`RelationDesc`] to
+/// exercise schema migrations.
+#[derive(Debug)]
+pub enum PropRelationDescDiff {
+    AddColumn { name: ColumnName, typ: ColumnType },
+    DropColumn { name: ColumnName },
+    MovePosition { name: ColumnName, new_pos: usize },
+    ToggleNullability { name: ColumnName },
+    ChangeType { name: ColumnName, typ: ColumnType },
+}
+
+impl PropRelationDescDiff {
+    pub fn apply(self, desc: &mut RelationDesc) {
+        match self {
+            PropRelationDescDiff::AddColumn { name, typ } => {
+                desc.names.push(name);
+                desc.typ.column_types.push(typ);
+                assert_eq!(desc.names.len(), desc.typ.column_types.len());
+            }
+            PropRelationDescDiff::DropColumn { name } => {
+                let Some(pos) = desc.names.iter().position(|col| *col == name) else {
+                    return;
+                };
+                desc.names.remove(pos);
+                desc.typ.column_types.remove(pos);
+                for key_set in &mut desc.typ.keys {
+                    let Some(key_pos) = key_set.iter().position(|col_idx| *col_idx == pos) else {
+                        continue;
+                    };
+                    key_set.remove(key_pos);
+                }
+            }
+            PropRelationDescDiff::MovePosition { name, new_pos } => {
+                let num_columns = desc.typ.columns().len();
+                if num_columns == 0 {
+                    return;
+                }
+
+                let Some((current_pos, _)) = desc.get_by_name(&name) else {
+                    return;
+                };
+                let new_pos = new_pos % num_columns;
+                desc.names.swap(current_pos, new_pos);
+                desc.typ.column_types.swap(current_pos, new_pos);
+                for key_set in &mut desc.typ.keys {
+                    for key in key_set.iter_mut() {
+                        if *key == current_pos {
+                            *key = new_pos;
+                        }
+                    }
+                }
+            }
+            PropRelationDescDiff::ToggleNullability { name } => {
+                let Some((pos, _)) = desc.get_by_name(&name) else {
+                    return;
+                };
+                let col_type = desc
+                    .typ
+                    .column_types
+                    .get_mut(pos)
+                    .expect("ColumnNames and ColumnTypes out of sync!");
+                col_type.nullable = !col_type.nullable;
+            }
+            PropRelationDescDiff::ChangeType { name, typ } => {
+                let Some((pos, _)) = desc.get_by_name(&name) else {
+                    return;
+                };
+                let col_type = desc
+                    .typ
+                    .column_types
+                    .get_mut(pos)
+                    .expect("ColumnNames and ColumnTypes out of sync!");
+                *col_type = typ;
+            }
+        }
+    }
+}
+
+/// Generates a set of [`PropRelationDescDiff`]s based on some source [`RelationDesc`].
+pub fn arb_relation_desc_diff(
+    source: &RelationDesc,
+) -> impl Strategy<Value = Vec<PropRelationDescDiff>> {
+    let source = Rc::new(source.clone());
+    let num_source_columns = source.typ.columns().len();
+
+    let num_add_columns = Union::new_weighted(vec![(100, Just(0..8)), (1, Just(8..64))]);
+    let add_columns_strat = num_add_columns
+        .prop_flat_map(|num_columns| {
+            proptest::collection::vec((any::<ColumnName>(), any::<ColumnType>()), num_columns)
+        })
+        .prop_map(|cols| {
+            cols.into_iter()
+                .map(|(name, typ)| PropRelationDescDiff::AddColumn { name, typ })
+                .collect::<Vec<_>>()
+        });
+
+    // If the source RelationDesc is empty there is nothing else to do.
+    if num_source_columns == 0 {
+        return add_columns_strat.boxed();
+    }
+
+    let source_ = Rc::clone(&source);
+    let drop_columns_strat = (0..num_source_columns).prop_perturb(move |num_columns, mut rng| {
+        let mut set = BTreeSet::default();
+        for _ in 0..num_columns {
+            let col_idx = rng.gen_range(0..num_source_columns);
+            set.insert(source_.get_name(col_idx).clone());
+        }
+        set.into_iter()
+            .map(|name| PropRelationDescDiff::DropColumn { name })
+            .collect::<Vec<_>>()
+    });
+
+    let source_ = Rc::clone(&source);
+    let move_columns_strat = (0..num_source_columns).prop_perturb(move |num_columns, mut rng| {
+        let mut map = BTreeMap::default();
+        for _ in 0..num_columns {
+            let col_idx = rng.gen_range(0..num_source_columns);
+            let new_pos = rng.gen_range(0..num_source_columns);
+            map.insert(source_.get_name(col_idx).clone(), new_pos);
+        }
+        map.into_iter()
+            .map(|(name, new_pos)| PropRelationDescDiff::MovePosition { name, new_pos })
+            .collect::<Vec<_>>()
+    });
+
+    let source_ = Rc::clone(&source);
+    let toggle_nullability_strat =
+        (0..num_source_columns).prop_perturb(move |num_columns, mut rng| {
+            let mut set = BTreeSet::default();
+            for _ in 0..num_columns {
+                let col_idx = rng.gen_range(0..num_source_columns);
+                set.insert(source_.get_name(col_idx).clone());
+            }
+            set.into_iter()
+                .map(|name| PropRelationDescDiff::ToggleNullability { name })
+                .collect::<Vec<_>>()
+        });
+
+    let source_ = Rc::clone(&source);
+    let change_type_strat = (0..num_source_columns)
+        .prop_perturb(move |num_columns, mut rng| {
+            let mut set = BTreeSet::default();
+            for _ in 0..num_columns {
+                let col_idx = rng.gen_range(0..num_source_columns);
+                set.insert(source_.get_name(col_idx).clone());
+            }
+            set
+        })
+        .prop_flat_map(|cols| {
+            proptest::collection::vec(any::<ColumnType>(), cols.len())
+                .prop_map(move |types| (cols.clone(), types))
+        })
+        .prop_map(|(cols, types)| {
+            cols.into_iter()
+                .zip(types.into_iter())
+                .map(|(name, typ)| PropRelationDescDiff::ChangeType { name, typ })
+                .collect::<Vec<_>>()
+        });
+
+    (
+        add_columns_strat,
+        drop_columns_strat,
+        move_columns_strat,
+        toggle_nullability_strat,
+        change_type_strat,
+    )
+        .prop_map(|(adds, drops, moves, toggles, changes)| {
+            adds.into_iter()
+                .chain(drops.into_iter())
+                .chain(moves.into_iter())
+                .chain(toggles.into_iter())
+                .chain(changes.into_iter())
+                .collect::<Vec<_>>()
+        })
+        .prop_shuffle()
+        .boxed()
 }
