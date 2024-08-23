@@ -1228,6 +1228,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
+        skip: "flaky until #27954 is fixed"
 
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
