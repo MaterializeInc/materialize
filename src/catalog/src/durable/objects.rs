@@ -499,6 +499,51 @@ impl DurableType for Item {
     }
 }
 
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SourceReferences {
+    pub source_id: GlobalId,
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Arbitrary)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
+impl DurableType for SourceReferences {
+    type Key = SourceReferencesKey;
+    type Value = SourceReferencesValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            SourceReferencesKey {
+                source_id: self.source_id,
+            },
+            SourceReferencesValue {
+                updated_at: self.updated_at,
+                references: self.references,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            source_id: key.source_id,
+            updated_at: value.updated_at,
+            references: value.references,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        SourceReferencesKey {
+            source_id: self.source_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SystemObjectDescription {
     pub schema_name: String,
@@ -925,6 +970,7 @@ pub struct Snapshot {
     pub system_configurations:
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+    pub source_references: BTreeMap<proto::SourceReferencesKey, proto::SourceReferencesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
@@ -1020,6 +1066,17 @@ pub struct DatabaseValue {
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct SourceReferencesKey {
+    pub(crate) source_id: GlobalId,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+pub struct SourceReferencesValue {
+    pub(crate) references: Vec<SourceReference>,
+    pub(crate) updated_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]

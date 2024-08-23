@@ -2457,6 +2457,7 @@ pub enum StateUpdateKind {
     Cluster(durable::objects::Cluster),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     // Temporary items are not actually updated via the durable catalog, but this allows us to
     // model them the same way as all other items.
@@ -2532,6 +2533,7 @@ pub enum BootstrapStateUpdateKind {
     Cluster(durable::objects::Cluster),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
@@ -2555,6 +2557,9 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             }
             BootstrapStateUpdateKind::SystemConfiguration(kind) => {
                 StateUpdateKind::SystemConfiguration(kind)
+            }
+            BootstrapStateUpdateKind::SourceReferences(kind) => {
+                StateUpdateKind::SourceReferences(kind)
             }
             BootstrapStateUpdateKind::Cluster(kind) => StateUpdateKind::Cluster(kind),
             BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
@@ -2600,6 +2605,9 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             }
             StateUpdateKind::ClusterReplica(kind) => {
                 Ok(BootstrapStateUpdateKind::ClusterReplica(kind))
+            }
+            StateUpdateKind::SourceReferences(kind) => {
+                Ok(BootstrapStateUpdateKind::SourceReferences(kind))
             }
             StateUpdateKind::SystemObjectMapping(kind) => {
                 Ok(BootstrapStateUpdateKind::SystemObjectMapping(kind))

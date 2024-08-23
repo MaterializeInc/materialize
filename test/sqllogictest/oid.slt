@@ -1120,3 +1120,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17012  mz_columns_ind
 17013  mz_secrets_ind
 17014  mz_views_ind
+17015  mz_source_references

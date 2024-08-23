@@ -231,6 +231,9 @@ impl CatalogState {
             StateUpdateKind::Comment(comment) => {
                 self.apply_comment_update(comment, diff, retractions);
             }
+            StateUpdateKind::SourceReferences(source_reference) => {
+                self.apply_source_references_update(source_reference, diff, retractions);
+            }
             StateUpdateKind::AuditLog(_audit_log) => {
                 // Audit logs are not stored in-memory.
             }
@@ -936,6 +939,23 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
+    fn apply_source_references_update(
+        &mut self,
+        _source_references: mz_catalog::durable::SourceReferences,
+        diff: StateDiff,
+        _retractions: &mut InProgressRetractions,
+    ) {
+        match diff {
+            StateDiff::Addition => {
+                unimplemented!("source references are not yet implemented");
+            }
+            StateDiff::Retraction => {
+                unimplemented!("source references are not yet implemented");
+            }
+        }
+    }
+
+    #[instrument(level = "debug")]
     fn apply_storage_collection_metadata_update(
         &mut self,
         storage_collection_metadata: mz_catalog::durable::StorageCollectionMetadata,
@@ -1061,6 +1081,9 @@ impl CatalogState {
                 &comment.comment,
                 diff,
             )],
+            StateUpdateKind::SourceReferences(source_references) => {
+                self.pack_source_references_update(&source_references, diff)
+            }
             StateUpdateKind::AuditLog(audit_log) => {
                 vec![self
                     .pack_audit_log_update(&audit_log.event, diff)
@@ -1562,6 +1585,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 &mut item_additions,
             ),
             StateUpdateKind::Comment(_)
+            | StateUpdateKind::SourceReferences(_)
             | StateUpdateKind::AuditLog(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => push_update(

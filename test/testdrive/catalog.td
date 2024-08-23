@@ -603,6 +603,7 @@ mz_optimizer_notices                     ""
 mz_postgres_sources                      ""
 mz_postgres_source_tables                ""
 mz_sessions                              ""
+mz_source_references                     ""
 mz_storage_usage_by_shard                ""
 mz_subscriptions                         ""
 mz_type_pg_metadata                      ""
@@ -769,7 +770,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-56
+57
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

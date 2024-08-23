@@ -45,9 +45,9 @@ use crate::durable::objects::{
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
     ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
-    UnfinalizedShardKey,
+    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
+    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
+    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -772,6 +772,65 @@ impl RustType<proto::ServerConfigurationValue> for ServerConfigurationValue {
 
     fn from_proto(proto: proto::ServerConfigurationValue) -> Result<Self, TryFromProtoError> {
         Ok(ServerConfigurationValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::SourceReferencesKey> for SourceReferencesKey {
+    fn into_proto(&self) -> proto::SourceReferencesKey {
+        proto::SourceReferencesKey {
+            source: Some(self.source_id.into_proto()),
+        }
+    }
+    fn from_proto(proto: proto::SourceReferencesKey) -> Result<Self, TryFromProtoError> {
+        Ok(SourceReferencesKey {
+            source_id: proto
+                .source
+                .into_rust_if_some("SourceReferencesKey::source_id")?,
+        })
+    }
+}
+
+impl RustType<proto::SourceReferencesValue> for SourceReferencesValue {
+    fn into_proto(&self) -> proto::SourceReferencesValue {
+        proto::SourceReferencesValue {
+            updated_at: Some(proto::EpochMillis {
+                millis: self.updated_at,
+            }),
+            references: self
+                .references
+                .iter()
+                .map(|reference| reference.into_proto())
+                .collect(),
+        }
+    }
+    fn from_proto(proto: proto::SourceReferencesValue) -> Result<Self, TryFromProtoError> {
+        Ok(SourceReferencesValue {
+            updated_at: proto
+                .updated_at
+                .into_rust_if_some("SourceReferencesValue::updated_at")?,
+            references: proto
+                .references
+                .into_iter()
+                .map(|reference| reference.into_rust())
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl RustType<proto::SourceReference> for SourceReference {
+    fn into_proto(&self) -> proto::SourceReference {
+        proto::SourceReference {
+            name: self.name.clone(),
+            namespace: self.namespace.clone(),
+            columns: self.columns.clone(),
+        }
+    }
+    fn from_proto(proto: proto::SourceReference) -> Result<Self, TryFromProtoError> {
+        Ok(SourceReference {
+            name: proto.name,
+            namespace: proto.namespace,
+            columns: proto.columns,
+        })
     }
 }
 

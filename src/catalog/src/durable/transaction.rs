@@ -48,9 +48,9 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
-    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    TxnWalShardValue, UnfinalizedShardKey,
+    SettingValue, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -85,6 +85,7 @@ pub struct Transaction<'a> {
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
+    source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
@@ -114,6 +115,7 @@ impl<'a> Transaction<'a> {
             id_allocator,
             configs,
             settings,
+            source_references,
             system_object_mappings,
             system_configurations,
             default_privileges,
@@ -150,6 +152,7 @@ impl<'a> Transaction<'a> {
             id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
             configs: TableTransaction::new(configs, |_a, _b| false)?,
             settings: TableTransaction::new(settings, |_a, _b| false)?,
+            source_references: TableTransaction::new(source_references, |_a, _b| false)?,
             system_gid_mapping: TableTransaction::new(system_object_mappings, |_a, _b| false)?,
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
@@ -1830,6 +1833,7 @@ impl<'a> Transaction<'a> {
             system_gid_mapping,
             system_configurations,
             default_privileges,
+            source_references,
             system_privileges,
             audit_log_updates,
             storage_collection_metadata,
@@ -1902,6 +1906,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 comments,
                 StateUpdateKind::Comment,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                source_references,
+                StateUpdateKind::SourceReferences,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(

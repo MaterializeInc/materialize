@@ -33,15 +33,19 @@
 //! 5. We should now have a copy of the protobuf objects as they currently exist, and a copy of
 //!    how we want them to exist. For example, if the version of the Catalog before we made our
 //!    changes was 15, we should now have `objects_v15.proto` and `objects_v16.proto`.
-//! 6. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file.
-//! 7. Add a new file to `catalog/src/durable/upgrade` which is where we'll put the new migration
+//! 6. Rebuild Materialize which will error because the hashes stored in `src/catalog/protos/hashes.json`
+//!    have now changed. Update these to match the new hashes for objects.proto and
+//!    objects_v<CATALOG_VERSION>.proto
+//! 7. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file.
+//! 8. Add a new file to `catalog/src/durable/upgrade` which is where we'll put the new migration
 //!    path.
-//! 8. Write upgrade functions using the two versions of the protos we now have, e.g.
+//! 9. Write upgrade functions using the two versions of the protos we now have, e.g.
 //!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
 //!    import any defaults or constants from elsewhere in the codebase, because then a future
 //!    change could then impact a previous migration.
-//! 9. Call your upgrade function in [`run_upgrade()`].
-//! 10. Generate a test file for the new version:
+//! 10. Add an import for your new module to this file: mod v<CATALOG_VERSION-1>_to_v<CATALOG_VERSION>;
+//! 11. Call your upgrade function in [`run_upgrade()`].
+//! 12. Generate a test file for the new version:
 //!     ```ignore
 //!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
 //!     ```
@@ -176,14 +180,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v60, v61, v62);
+objects!(v60, v61, v62, v63);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 62;
+pub const CATALOG_VERSION: u64 = 63;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -197,6 +201,7 @@ const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
 mod v60_to_v61;
 mod v61_to_v62;
+mod v62_to_v63;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -282,6 +287,9 @@ async fn run_upgrade(
         }
         61 => {
             run_versioned_upgrade(unopened_catalog_state, mode, version, v61_to_v62::upgrade).await
+        }
+        62 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v62_to_v63::upgrade).await
         }
 
         // Up-to-date, no migration needed!
