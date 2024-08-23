@@ -161,7 +161,7 @@ cargo_build_script(
 		build_proc_macro = True,
 	),
 	build_script_env = {},
-	data = [],
+	data = ["@fivetran_sdk//:all_protos"],
 	compile_data = [],
 	rustc_flags = [],
 	rustc_env = {},

@@ -12,6 +12,7 @@ use std::env;
 fn main() {
     // Build protobufs.
     env::set_var("PROTOC", mz_build_tools::protoc());
+    env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
 
     let mut config = prost_build::Config::new();
     config
@@ -23,6 +24,13 @@ fn main() {
         // that get mistreated as doc tests.
         .disable_comments(["."]);
 
+    // Bazel places the `fivetran-sdk` submodule in a slightly different place.
+    let includes_directories = if mz_build_tools::is_bazel_build() {
+        &["../../../fivetran_sdk"]
+    } else {
+        &["../../misc/fivetran-sdk"]
+    };
+
     const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
 
     tonic_build::configure()
@@ -32,10 +40,6 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
-        .compile_with_config(
-            config,
-            &["destination_sdk.proto"],
-            &["../../misc/fivetran-sdk"],
-        )
+        .compile_with_config(config, &["destination_sdk.proto"], includes_directories)
         .unwrap();
 }

@@ -507,3 +507,14 @@ rust_repositories()
 
 load("@cxxbridge//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")
 cxxbridge_cmd_deps()
+
+# git Submodules
+#
+# We include any git Submodules as local Bazel repositories so we can access
+# their contents or build them.
+
+new_local_repository(
+    name = "fivetran_sdk",
+    path = "misc/fivetran-sdk",
+    build_file = "//misc/bazel:git_submodules/BUILD.fivetran_sdk.bazel",
+)
