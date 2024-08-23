@@ -54,20 +54,25 @@ def main():
     print(f"Bumping version on main to {next_version}...")
     spawn.runv([MZ_ROOT / "bin" / "bump-version", str(next_version)])
 
+    # Create the release page in the docs for the next version after the one that was just
+    # cut, which will be released in ~two weeks (not the next Thursday, but the following
+    # one).
     next_version_final = str(next_version).removesuffix(".0-dev.0")
     print(f"Creating {next_version_final}.md in the docs")
     today = datetime.today()
-    next_thursday = today + timedelta(days=((3 - today.weekday()) % 7 or 7))
+    two_thursdays_from_now = today + timedelta(
+        days=(7 + ((3 - today.weekday()) % 7 or 7))
+    )
     next_version_doc_file = Path(
         MZ_ROOT / "doc" / "user" / "content" / "releases" / f"{next_version_final}.md"
     )
     if not next_version_doc_file.exists():
         text = VERSION_FILE_TEXT.replace("$VERSION", str(next_version_final)).replace(
-            "$DATE", next_thursday.strftime("%Y-%m-%d")
+            "$DATE", two_thursdays_from_now.strftime("%Y-%m-%d")
         )
         next_version_doc_file.write_text(text)
         git.add_file(str(next_version_doc_file))
-        git.commit_all_changed(f"release: create doc file for ${next_version_final}")
+        git.commit_all_changed(f"release: create doc file for {next_version_final}")
 
     print(f"Pushing to {remote}...")
     spawn.runv(["git", "push", remote, "main"])
