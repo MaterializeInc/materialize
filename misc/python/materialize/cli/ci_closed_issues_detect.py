@@ -56,6 +56,8 @@ REFERENCE_RE = re.compile(
     | tracked\ with
     # Used in proto files
     | //\ buf\ breaking:\ ignore
+    # Used in documentation
+    | in\ the\ future
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -79,6 +81,8 @@ IGNORE_RE = re.compile(
     | issues/20211\>
     # src/sql/src/plan/statement.rs
     | issues/20019\>
+    # src/storage/src/storage_state.rs
+    | \#19907$
     )
     """,
     re.VERBOSE | re.IGNORECASE,
