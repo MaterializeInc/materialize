@@ -737,6 +737,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
     }
 
     /// TODO!
+    #[allow(dead_code)] // WIP
     pub(crate) fn recent_upper(
         &self,
         id: GlobalId,

@@ -1639,11 +1639,21 @@ where
         &mut self,
         id: GlobalId,
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
-        let upper = self
-            .persist_monotonic_worker
-            .recent_upper(id)
+        let metadata = &self.storage_collections.collection_metadata(id)?;
+        let persist_client = self
+            .persist
+            .open(metadata.persist_location.clone())
             .await
-            .expect("sender hung up")?;
+            .unwrap();
+        let write_handle = self
+            .open_data_handles(
+                &id,
+                metadata.data_shard,
+                metadata.relation_desc.clone(),
+                &persist_client,
+            )
+            .await;
+        let upper = write_handle.shared_upper();
 
         let res = match upper.as_option() {
             Some(f) if f > &T::minimum() => {
