@@ -16,6 +16,7 @@ use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use arrow::array::Array;
+use arrow::datatypes::DataType;
 use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -26,6 +27,7 @@ use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
 use mz_persist_types::columnar::{ColumnEncoder, Schema2};
+use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
@@ -47,7 +49,7 @@ use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
 use crate::read::LeasedReaderId;
-use crate::schema::SchemaId;
+use crate::schema::{CaESchema, SchemaId};
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -732,6 +734,13 @@ pub struct EncodedSchemas {
     pub val_data_type: Bytes,
 }
 
+impl EncodedSchemas {
+    pub(crate) fn decode_data_type(buf: &[u8]) -> DataType {
+        let proto = prost::Message::decode(buf).expect("valid ProtoDataType");
+        DataType::from_proto(proto).expect("valid DataType")
+    }
+}
+
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub enum CompareAndAppendBreak<T> {
@@ -952,6 +961,62 @@ where
                 Break(NoOpStateTransition(None))
             }
         }
+    }
+
+    pub fn compare_and_evolve_schema<K: Codec, V: Codec>(
+        &mut self,
+        expected: SchemaId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> ControlFlow<NoOpStateTransition<CaESchema<K, V>>, CaESchema<K, V>> {
+        fn data_type<T>(schema: &impl Schema2<T>) -> DataType {
+            // To be defensive, create an empty batch and inspect the resulting
+            // data type (as opposed to something like allowing the `Schema2` to
+            // declare the DataType).
+            let array = Schema2::encoder(schema).expect("valid schema").finish();
+            Array::data_type(&array).clone()
+        }
+
+        let (current_id, current) = self
+            .schemas
+            .last_key_value()
+            .expect("all shards have a schema");
+        if *current_id != expected {
+            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
+                schema_id: *current_id,
+                key: K::decode_schema(&current.key),
+                val: V::decode_schema(&current.val),
+            }));
+        }
+
+        let key_dt = data_type(key_schema);
+        let val_dt = data_type(val_schema);
+        let key_fn = backward_compatible(&EncodedSchemas::decode_data_type(&current.key), &key_dt);
+        let val_fn = backward_compatible(&EncodedSchemas::decode_data_type(&current.val), &val_dt);
+        let (Some(key_fn), Some(val_fn)) = (key_fn, val_fn) else {
+            return Break(NoOpStateTransition(CaESchema::Incompatible));
+        };
+        // Persist initially disallows dropping columns. This would require a
+        // bunch more work (e.g. not safe to use the latest schema in
+        // compaction) and isn't initially necessary in mz.
+        if key_fn.contains_drop() || val_fn.contains_drop() {
+            return Break(NoOpStateTransition(CaESchema::Incompatible));
+        }
+
+        // We'll have to do something more sophisticated here to
+        // generate the next id if/when we start supporting the removal
+        // of schemas.
+        let id = SchemaId(self.schemas.len());
+        self.schemas.insert(
+            id,
+            EncodedSchemas {
+                key: K::encode_schema(key_schema),
+                key_data_type: prost::Message::encode_to_vec(&key_dt.into_proto()).into(),
+                val: V::encode_schema(val_schema),
+                val_data_type: prost::Message::encode_to_vec(&val_dt.into_proto()).into(),
+            },
+        );
+        Continue(CaESchema::Ok(id))
     }
 
     pub fn compare_and_append(

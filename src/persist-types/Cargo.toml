@@ -17,6 +17,7 @@ arrow = { version = "51.0.0", default-features = false }
 bytes = "1.3.0"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 hex = "0.4.3"
+itertools = "0.10.5"
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }
 mz-proto = { path = "../proto", default-features = false }
 parquet = { version = "51.0.0", default-features = false, features = ["arrow"] }

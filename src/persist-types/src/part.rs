@@ -349,8 +349,8 @@ pub struct Part2 {
 pub struct PartBuilder2<K, KS: Schema2<K>, V, VS: Schema2<V>> {
     key: KS::Encoder,
     val: VS::Encoder,
-    time: Vec<i64>,
-    diff: Vec<i64>,
+    time: Codec64Mut,
+    diff: Codec64Mut,
 }
 
 impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
@@ -358,8 +358,8 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
     pub fn new(key_schema: &KS, val_schema: &VS) -> Self {
         let key = key_schema.encoder().unwrap();
         let val = val_schema.encoder().unwrap();
-        let time = Vec::new();
-        let diff = Vec::new();
+        let time = Codec64Mut(Vec::new());
+        let diff = Codec64Mut(Vec::new());
 
         PartBuilder2 {
             key,
@@ -369,12 +369,12 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
         }
     }
 
-    /// Pushes a new value onto [`PartBuilder2`].
-    pub fn push(&mut self, key: &K, val: &V, time: i64, diff: i64) {
+    /// Push a new row onto this [`PartBuilder2`].
+    pub fn push<T: Codec64, D: Codec64>(&mut self, key: &K, val: &V, t: T, d: D) {
         self.key.append(key);
         self.val.append(val);
-        self.time.push(time);
-        self.diff.push(diff);
+        self.time.push(t);
+        self.diff.push(d);
     }
 
     /// Finishes the builder returning a [`Part2`].
@@ -388,8 +388,8 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
 
         let key_col = key.finish();
         let val_col = val.finish();
-        let time = ScalarBuffer::from(time);
-        let diff = ScalarBuffer::from(diff);
+        let time = ScalarBuffer::from(time.0);
+        let diff = ScalarBuffer::from(diff.0);
 
         Part2 {
             key: Arc::new(key_col),

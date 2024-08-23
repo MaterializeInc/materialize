@@ -279,6 +279,7 @@ steps:
               args: [
                 --system-param=persist_part_decode_format=arrow,
                 --system-param=persist_batch_columnar_format=both_v2,
+                --system-param=persist_encoding_enable_dictionary=true,
               ]
 
       - id: testdrive-in-cloudtest
@@ -846,6 +847,18 @@ steps:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-0dt-bump-version
+        label: "Checks 0dt upgrade to a bumped version"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          # TODO(def-): Switch back to hetzner
+          queue: builder-linux-aarch64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-aarch64
@@ -1227,6 +1240,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
+        skip: "flaky until #27954 is fixed"
 
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"

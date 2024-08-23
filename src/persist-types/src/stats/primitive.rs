@@ -18,7 +18,6 @@ use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;
 use serde::Serialize;
 
-use crate::columnar::Data;
 use crate::dyn_struct::ValidityRef;
 use crate::stats::{
     proto_primitive_stats, BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
@@ -188,12 +187,14 @@ impl DynStats for PrimitiveStats<Vec<u8>> {
 
 /// This macro implements the [`ColumnStats`] trait for all variants of [`PrimitiveStats`].
 macro_rules! stats_primitive {
-    ($data:ty, $ref:ident, $variant:ident) => {
-        impl ColumnStats<$data> for PrimitiveStats<$data> {
-            fn lower<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
+    ($data:ty, $ref_ty:ty, $ref:ident, $variant:ident) => {
+        impl ColumnStats for PrimitiveStats<$data> {
+            type Ref<'a> = $ref_ty;
+
+            fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.lower.$ref())
             }
-            fn upper<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
+            fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.upper.$ref())
             }
             fn none_count(&self) -> usize {
@@ -212,11 +213,13 @@ macro_rules! stats_primitive {
             }
         }
 
-        impl ColumnStats<Option<$data>> for OptionStats<PrimitiveStats<$data>> {
-            fn lower<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
+        impl ColumnStats for OptionStats<PrimitiveStats<$data>> {
+            type Ref<'a> = Option<$ref_ty>;
+
+            fn lower<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.some.lower())
             }
-            fn upper<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
+            fn upper<'a>(&'a self) -> Option<Self::Ref<'a>> {
                 Some(self.some.upper())
             }
             fn none_count(&self) -> usize {
@@ -245,18 +248,18 @@ macro_rules! stats_primitive {
     };
 }
 
-stats_primitive!(bool, clone, Bool);
-stats_primitive!(u8, clone, U8);
-stats_primitive!(u16, clone, U16);
-stats_primitive!(u32, clone, U32);
-stats_primitive!(u64, clone, U64);
-stats_primitive!(i8, clone, I8);
-stats_primitive!(i16, clone, I16);
-stats_primitive!(i32, clone, I32);
-stats_primitive!(i64, clone, I64);
-stats_primitive!(f32, clone, F32);
-stats_primitive!(f64, clone, F64);
-stats_primitive!(String, as_str, String);
+stats_primitive!(bool, bool, clone, Bool);
+stats_primitive!(u8, u8, clone, U8);
+stats_primitive!(u16, u16, clone, U16);
+stats_primitive!(u32, u32, clone, U32);
+stats_primitive!(u64, u64, clone, U64);
+stats_primitive!(i8, i8, clone, I8);
+stats_primitive!(i16, i16, clone, I16);
+stats_primitive!(i32, i32, clone, I32);
+stats_primitive!(i64, i64, clone, I64);
+stats_primitive!(f32, f32, clone, F32);
+stats_primitive!(f64, f64, clone, F64);
+stats_primitive!(String, &'a str, as_str, String);
 
 impl StatsFrom<BooleanBuffer> for PrimitiveStats<bool> {
     fn stats_from(col: &BooleanBuffer, validity: ValidityRef) -> Self {
@@ -720,8 +723,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::columnar::sealed::ColumnMut;
-    use crate::columnar::ColumnPush;
+    use crate::stats2::ColumnarStatsBuilder;
 
     #[mz_ore::test]
     fn test_truncate_bytes() {
@@ -842,20 +844,19 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn proptest_cost_trim() {
-        fn primitive_stats<'a, T: Data<Cfg = ()>, F>(xs: &'a [T], f: F) -> (&'a [T], T::Stats)
+        fn primitive_stats<T, A>(vals: &[T]) -> (&[T], PrimitiveStats<T>)
         where
-            F: for<'b> Fn(&'b T) -> T::Ref<'b>,
+            T: Clone,
+            A: arrow::array::Array + From<Vec<T>>,
+            PrimitiveStats<T>: ColumnarStatsBuilder<T, ArrowColumn = A>,
         {
-            let mut col = T::Mut::new(&());
-            for x in xs {
-                col.push(f(x));
-            }
+            let column = A::from(vals.to_vec());
+            let stats = <PrimitiveStats<T> as ColumnarStatsBuilder<T>>::from_column(&column);
 
-            let col = col.finish();
-            let stats = T::Stats::stats_from(&col, ValidityRef(None));
-            (xs, stats)
+            (vals, stats)
         }
-        fn testcase<T: Data + PartialOrd + Clone + Debug, P>(xs_stats: (&[T], PrimitiveStats<T>))
+
+        fn testcase<T: PartialOrd + Clone + Debug, P>(xs_stats: (&[T], PrimitiveStats<T>))
         where
             PrimitiveStats<T>: RustType<P> + DynStats,
             P: TrimStats,
@@ -878,44 +879,46 @@ mod tests {
         }
 
         proptest!(|(a in any::<bool>(), b in any::<bool>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u8>(), b in any::<u8>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u16>(), b in any::<u16>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u32>(), b in any::<u32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<u64>(), b in any::<u64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i8>(), b in any::<i8>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i16>(), b in any::<i16>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i32>(), b in any::<i32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<i64>(), b in any::<i64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<f32>(), b in any::<f32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
         proptest!(|(a in any::<f64>(), b in any::<f64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
+            testcase(primitive_stats(&[a, b]))
         });
 
         // Construct strings that are "interesting" in that they have some
         // (possibly empty) shared prefix.
         proptest!(|(prefix in any::<String>(), a in any::<String>(), b in any::<String>())| {
             let vals = &[format!("{}{}", prefix, a), format!("{}{}", prefix, b)];
-            testcase(primitive_stats(vals, |x| x))
+            let col = StringArray::from(vals.to_vec());
+            let stats = PrimitiveStats::<String>::from_column(&col);
+            testcase((&vals[..], stats))
         });
 
         // Construct strings that are "interesting" in that they have some
@@ -927,7 +930,7 @@ mod tests {
             sb.extend(&b);
             let vals = &[sa, sb];
             let array = BinaryArray::from_vec(vals.iter().map(|v| v.as_ref()).collect());
-            let stats = PrimitiveStats::<Vec<u8>>::stats_from(&array, ValidityRef(None));
+            let stats = PrimitiveStats::<Vec<u8>>::from_column(&array);
             testcase((vals, stats));
         });
     }

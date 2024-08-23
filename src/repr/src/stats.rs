@@ -171,13 +171,11 @@ impl<'a> JsonDatums<'a> {
 mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::part::PartBuilder;
-    use mz_persist_types::stats::{
-        ColumnStats, ColumnarStats, ProtoStructStats, StructStats, TrimStats,
-    };
+    use mz_persist_types::stats::{ProtoStructStats, StructStats, TrimStats};
     use mz_proto::RustType;
     use proptest::prelude::*;
 
-    use crate::{Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena, ScalarType};
+    use crate::{Datum, RelationDesc, Row, RowArena, ScalarType};
 
     fn datum_stats_roundtrip_trim<'a>(
         schema: &RelationDesc,
@@ -198,24 +196,10 @@ mod tests {
         // (regression for a bug we had that caused panic at stats usage time).
         actual.trim();
         let actual: StructStats = RustType::from_proto(actual).unwrap();
+        let arena = RowArena::default();
         for (name, typ) in schema.iter() {
-            struct ColMinMaxNulls<'a>(&'a ColumnarStats);
-            impl<'a> DatumToPersistFn<()> for ColMinMaxNulls<'a> {
-                fn call<T: DatumToPersist>(self) {
-                    let ColMinMaxNulls(stats) = self;
-                    let stats = stats.downcast::<T::Data>().unwrap();
-                    let arena = RowArena::default();
-                    let _ = stats
-                        .lower()
-                        .map(|val| arena.make_datum(|packer| T::decode(val, packer)));
-                    let _ = stats
-                        .upper()
-                        .map(|val| arena.make_datum(|packer| T::decode(val, packer)));
-                    let _ = stats.none_count();
-                }
-            }
-            let col_stats = actual.cols.get(name.as_str()).unwrap();
-            typ.to_persist(ColMinMaxNulls(col_stats));
+            let col_stats = actual.col(name.as_str()).unwrap();
+            crate::stats2::col_values(&typ.scalar_type, &col_stats.values, &arena);
         }
     }
 

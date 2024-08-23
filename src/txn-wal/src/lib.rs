@@ -309,9 +309,10 @@ impl TxnsCodec for TxnsCodecDefault {
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         let stats = stats
             .key
-            .col::<String>("")
+            .col("")?
+            .try_as_string()
             .map_err(|err| error!("unexpected stats type: {}", err))
-            .ok()??;
+            .ok()?;
         let data_id_str = data_id.to_string();
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }

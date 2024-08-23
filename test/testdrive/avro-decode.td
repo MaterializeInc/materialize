@@ -217,7 +217,7 @@ garbage
   FORMAT AVRO USING SCHEMA '${reader-schema}'
 
 ! SELECT f2 FROM avro_corrupted_values
-contains:Decode error: Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 1
+contains:Decode error: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 103 (original text: garbage, original bytes: "67617262616765")
 
 # Test decoding of corrupted messages without magic byte
 $ kafka-create-topic topic=avro-corrupted-values2

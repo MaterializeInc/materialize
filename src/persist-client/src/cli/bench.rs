@@ -43,7 +43,7 @@ pub struct S3FetchArgs {
     iters: usize,
 
     #[clap(long)]
-    decode: bool,
+    parse: bool,
 }
 
 /// Runs the given bench command.
@@ -56,7 +56,7 @@ pub async fn run(command: BenchArgs) -> Result<(), anyhow::Error> {
 }
 
 async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
-    let decode = args.decode;
+    let parse = args.parse;
     let shard_id = args.shard.shard_id();
     let state_versions = args.shard.open().await?;
     let versions = state_versions
@@ -70,9 +70,9 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
         .snapshot(state.since())
         .expect("since should be available for reads");
 
-    let start = Instant::now();
-    println!("iter,key,size_bytes,fetch_secs,decode_secs");
+    println!("iter,key,size_bytes,fetch_secs,parse_secs");
     for iter in 0..args.iters {
+        let start = Instant::now();
         let mut fetches = Vec::new();
         for part in snap.iter().flat_map(|x| x.parts.iter()) {
             let key = match part {
@@ -85,11 +85,11 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
                 let buf = blob.get(&key).await.unwrap().unwrap();
                 let fetch_elapsed = start.elapsed();
                 let buf_len = buf.len();
-                let decode_elapsed = mz_ore::task::spawn_blocking(
+                let parse_elapsed = mz_ore::task::spawn_blocking(
                     || "",
                     move || {
                         let start = Instant::now();
-                        if decode {
+                        if parse {
                             BlobTraceBatchPart::<u64>::decode(&buf, &metrics.columnar).unwrap();
                         }
                         start.elapsed()
@@ -101,16 +101,16 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
                     key,
                     buf_len,
                     fetch_elapsed.as_secs_f64(),
-                    decode_elapsed.as_secs_f64(),
+                    parse_elapsed.as_secs_f64(),
                 )
             });
             fetches.push(fetch);
         }
         for fetch in fetches {
-            let (key, size_bytes, fetch_secs, decode_secs) = fetch.await.unwrap();
+            let (key, size_bytes, fetch_secs, parse_secs) = fetch.await.unwrap();
             println!(
                 "{},{},{},{},{}",
-                iter, key, size_bytes, fetch_secs, decode_secs
+                iter, key, size_bytes, fetch_secs, parse_secs
             );
         }
     }

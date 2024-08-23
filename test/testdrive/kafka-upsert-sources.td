@@ -664,8 +664,8 @@ ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
 # though for other types (e.g. avro) the value columns should be present and flattened.
 
 > SELECT key, data, error::text FROM value_decode_error ORDER BY key
-val1 <null> "(\"Bytes: Failed to decode JSON: {\"\"a\"\":,\"\"c\"\":\"\"d\"\"} (original bytes: [7b, 22, 61, 22, 3a, 2c, 22, 63, 22, 3a, 22, 64, 22, 7d])\")"
-val2 <null> "(\"Bytes: Failed to decode JSON: [1,2, (original bytes: [5b, 31, 2c, 32, 2c])\")"
+val1 <null> "(\"Failed to decode JSON: expected value at line 1 column 6 (original text: {\"\"a\"\":,\"\"c\"\":\"\"d\"\"}, original bytes: \"\"7b2261223a2c2263223a2264227d\"\")\")"
+val2 <null> "(\"Failed to decode JSON: EOF while parsing a value at line 1 column 5 (original text: [1,2,, original bytes: \"\"5b312c322c\"\")\")"
 
 # replace the bad values with good ones
 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=inline-value-errors-1
@@ -724,6 +724,6 @@ $ kafka-ingest format=bytes key-format=avro key-schema=${keyschema} topic=inline
 {"key": "birdmore"} "notvalidavro"
 
 > SELECT key, f1, f2, decode_error::text from value_decode_error_avro ORDER BY key
-birdmore      <null>   <null>    "(\"Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 32 (original bytes: [20, 22, 6e, 6f, 74, 76, 61, 6c, 69, 64, 61, 76, 72, 6f, 22])\")"
+birdmore      <null>   <null>    "(\"avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 32 (original text:  \"\"notvalidavro\"\", original bytes: \"\"20226e6f7476616c69646176726f22\"\")\")"
 fish          fish     1000      <null>
 mammal1       moose    1         <null>

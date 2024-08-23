@@ -177,8 +177,9 @@ pub fn error_free(part_stats: Option<PartStats>, err_col_name: &str) -> Option<b
     // The number of OKs is the number of rows whose error is None.
     let num_oks = part_stats
         .key
-        .col::<Option<Vec<u8>>>(err_col_name)
+        .col(err_col_name)?
+        .try_as_optional_bytes()
         .expect("err column should be a Option<Vec<u8>>")
-        .map(|x| x.none)?;
+        .none;
     Some(num_results == num_oks)
 }

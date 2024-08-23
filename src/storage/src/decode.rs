@@ -223,12 +223,7 @@ impl PreDelimitedFormat {
                 let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
                     DecodeErrorKind::Bytes(format!(
                         "Failed to decode JSON: {}",
-                        // See if we can output the string that failed to be converted to JSON.
-                        match std::str::from_utf8(bytes) {
-                            Ok(str) => str.to_string(),
-                            // Otherwise produce the nominally helpful error.
-                            Err(_) => e.display_with_causes().to_string(),
-                        }
+                        e.display_with_causes(),
                     ))
                 })?;
                 Ok(Some(j.into_row()))

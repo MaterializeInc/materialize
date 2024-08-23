@@ -71,7 +71,20 @@ impl DecodeError {
 
 impl Display for DecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (original bytes: {:x?})", self.kind, self.raw)
+        // See if we can output the bytes that failed to decode as a string.
+        let str_repr = std::str::from_utf8(&self.raw).ok();
+        // strip any NUL characters from the str_repr to prevent an error
+        // in the postgres protocol decoding
+        let str_repr = str_repr.map(|s| s.replace('\0', "NULL"));
+        let bytes_repr = hex::encode(&self.raw);
+        match str_repr {
+            Some(s) => write!(
+                f,
+                "{} (original text: {}, original bytes: {:x?})",
+                self.kind, s, bytes_repr
+            ),
+            None => write!(f, "{} (original bytes: {:x?})", self.kind, bytes_repr),
+        }
     }
 }
 
@@ -105,8 +118,8 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
 impl Display for DecodeErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DecodeErrorKind::Text(e) => write!(f, "Text: {}", e),
-            DecodeErrorKind::Bytes(e) => write!(f, "Bytes: {}", e),
+            DecodeErrorKind::Text(e) => f.write_str(e),
+            DecodeErrorKind::Bytes(e) => f.write_str(e),
         }
     }
 }

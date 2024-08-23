@@ -12,7 +12,9 @@ import time
 from inspect import getframeinfo, stack
 from typing import TYPE_CHECKING, Any
 
+from materialize import MZ_ROOT, spawn
 from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -113,3 +115,12 @@ class Validate(Action):
     def join(self, e: Executor) -> None:
         for check in self.checks:
             check.join_validate(e)
+
+
+class BumpVersion(Action):
+    def execute(self, e: Executor) -> None:
+        version = MzVersion.parse_cargo().bump_minor()
+        spawn.runv(["bin/bump-version", str(version), "--no-commit"], cwd=MZ_ROOT)
+
+    def join(self, e: Executor) -> None:
+        pass
