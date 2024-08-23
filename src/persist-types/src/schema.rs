@@ -90,19 +90,13 @@ impl ArrayMigration {
             Struct(migrations) => {
                 let len = array.len();
 
-                match array.data_type() {
+                let (mut fields, mut arrays, nulls) = match array.data_type() {
                     DataType::Null => {
                         let all_add_nullable = migrations.iter().all(|action| {
                             matches!(action, StructArrayMigration::AddFieldNullableAtEnd { .. })
                         });
                         assert!(all_add_nullable, "invalid migrations, {migrations:?}");
-
-                        let mut fields = Fields::empty();
-                        let mut arrays = Vec::new();
-                        for migration in migrations {
-                            migration.migrate(len, &mut fields, &mut arrays);
-                        }
-                        Arc::new(StructArray::new(fields, arrays, None))
+                        (Fields::empty(), Vec::new(), None)
                     }
                     DataType::Struct(_) => {
                         let array = array
@@ -110,14 +104,15 @@ impl ArrayMigration {
                             .downcast_ref::<StructArray>()
                             .expect("known to be StructArray")
                             .clone();
-                        let (mut fields, mut arrays, nulls) = array.into_parts();
-                        for migration in migrations {
-                            migration.migrate(len, &mut fields, &mut arrays);
-                        }
-                        Arc::new(StructArray::new(fields, arrays, nulls))
+                        array.into_parts()
                     }
                     other => panic!("expected Struct or Null got {other:?}"),
+                };
+
+                for migration in migrations {
+                    migration.migrate(len, &mut fields, &mut arrays);
                 }
+                Arc::new(StructArray::new(fields, arrays, nulls))
             }
         }
     }

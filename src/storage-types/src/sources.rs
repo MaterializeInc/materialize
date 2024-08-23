@@ -1883,7 +1883,7 @@ mod tests {
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
     use mz_persist_types::schema::{backward_compatible, Migration};
-    use mz_repr::{arb_relation_desc_diff, PropRelationDescDiff, ProtoRelationDesc};
+    use mz_repr::{arb_relation_desc_diff, PropRelationDescDiff, ProtoRelationDesc, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
 
