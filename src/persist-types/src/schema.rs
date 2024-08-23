@@ -89,16 +89,35 @@ impl ArrayMigration {
             NoOp => array,
             Struct(migrations) => {
                 let len = array.len();
-                let array = array
-                    .as_any()
-                    .downcast_ref::<StructArray>()
-                    .unwrap_or_else(|| panic!("expected Struct got {:?}", array.data_type()))
-                    .clone();
-                let (mut fields, mut arrays, nulls) = array.into_parts();
-                for migration in migrations {
-                    migration.migrate(len, &mut fields, &mut arrays);
+
+                match array.data_type() {
+                    DataType::Null => {
+                        let all_add_nullable = migrations.iter().all(|action| {
+                            matches!(action, StructArrayMigration::AddFieldNullableAtEnd { .. })
+                        });
+                        assert!(all_add_nullable, "invalid migrations, {migrations:?}");
+
+                        let mut fields = Fields::empty();
+                        let mut arrays = Vec::new();
+                        for migration in migrations {
+                            migration.migrate(len, &mut fields, &mut arrays);
+                        }
+                        Arc::new(StructArray::new(fields, arrays, None))
+                    }
+                    DataType::Struct(_) => {
+                        let array = array
+                            .as_any()
+                            .downcast_ref::<StructArray>()
+                            .expect("known to be StructArray")
+                            .clone();
+                        let (mut fields, mut arrays, nulls) = array.into_parts();
+                        for migration in migrations {
+                            migration.migrate(len, &mut fields, &mut arrays);
+                        }
+                        Arc::new(StructArray::new(fields, arrays, nulls))
+                    }
+                    other => panic!("expected Struct or Null got {other:?}"),
                 }
-                Arc::new(StructArray::new(fields, arrays, nulls))
             }
         }
     }
@@ -165,6 +184,16 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
     use ArrayMigration::NoOp;
     use DataType::*;
     match (old, new) {
+        (Null, Struct(fields)) if fields.iter().all(|field| field.is_nullable()) => {
+            let migrations = fields
+                .iter()
+                .map(|field| StructArrayMigration::AddFieldNullableAtEnd {
+                    name: field.name().clone(),
+                    typ: field.data_type().clone(),
+                })
+                .collect();
+            Some(ArrayMigration::Struct(migrations))
+        }
         (
             Null | Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
             | Float16 | Float32 | Float64 | Binary | Utf8 | Date32 | Date64 | LargeBinary
@@ -432,5 +461,10 @@ mod tests {
             ]),
             None,
         );
+
+        // Regression test for migrating a RelationDesc with no columns
+        // (which gets encoded as a NullArray) to a RelationDesc with one
+        // nullable column.
+        testcase(Null, struct_([("a", Boolean, true)]), Some(false))
     }
 }

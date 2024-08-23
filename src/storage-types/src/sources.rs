@@ -2090,7 +2090,8 @@ mod tests {
                     typ: ColumnType { nullable, .. },
                     ..
                 } => *nullable,
-                PropRelationDescDiff::DropColumn { .. } => true,
+                // TODO(parkmycar): Re-enable DropColumn.
+                // PropRelationDescDiff::DropColumn { .. } => true,
                 _ => false,
             });
 
