@@ -74,7 +74,8 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=PostgresCdcLarge, --actions=200000]
+            # Runs into upload size limits of Buildkite
+            args: [--scenario=PostgresCdcLarge, --actions=100000]
 
     - id: zippy-mysql-cdc-large
       label: "Large Zippy MySqlCdc"
@@ -131,7 +132,8 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=BackupAndRestoreLarge, --actions=1000000]
+            # Runs out of disk
+            args: [--scenario=BackupAndRestoreLarge, --actions=500000]
 
 
     - id: zippy-kafka-parallel-insert
