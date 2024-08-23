@@ -37,7 +37,9 @@ use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{ApiToken, FronteggMockServer, TenantApiTokenConfig, UserConfig};
+use mz_frontegg_mock::{
+    models::ApiToken, models::TenantApiTokenConfig, models::UserConfig, FronteggMockServer,
+};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;

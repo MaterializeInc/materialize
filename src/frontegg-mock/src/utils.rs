@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::models::*;
+use crate::models::{ApiToken, AuthUserRequest, UserRole};
 use crate::server::Context;
 use jsonwebtoken::TokenData;
 use mz_frontegg_auth::{ClaimMetadata, ClaimTokenType, Claims};

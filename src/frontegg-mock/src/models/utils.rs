@@ -9,16 +9,6 @@
 
 use serde::Serialize;
 
-pub mod scim;
-pub mod sso;
-pub mod token;
-pub mod user;
-
-pub use scim::*;
-pub use sso::*;
-pub use token::*;
-pub use user::*;
-
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub errors: Vec<String>,
