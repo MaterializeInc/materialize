@@ -719,11 +719,9 @@ mod codec_impls {
     use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
     use bytes::Bytes;
     use mz_persist_types::codec_impls::{
-        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
-        SimpleEncoder, SimpleSchema,
+        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
     };
-    use mz_persist_types::columnar::{ColumnPush, Schema, Schema2};
-    use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
+    use mz_persist_types::columnar::Schema2;
     use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
 
@@ -779,23 +777,6 @@ mod codec_impls {
 
     #[derive(Debug, PartialEq)]
     pub struct MaelstromKeySchema;
-
-    impl Schema<MaelstromKey> for MaelstromKeySchema {
-        type Encoder = SimpleEncoder<MaelstromKey, u64>;
-        type Decoder = SimpleDecoder<MaelstromKey, u64>;
-
-        fn columns(&self) -> DynStructCfg {
-            SimpleSchema::<MaelstromKey, u64>::columns(&())
-        }
-
-        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
-            SimpleSchema::<MaelstromKey, u64>::decoder(cols, |val, ret| ret.0 = val)
-        }
-
-        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
-            SimpleSchema::<MaelstromKey, u64>::encoder(cols, |val| val.0)
-        }
-    }
 
     impl Schema2<MaelstromKey> for MaelstromKeySchema {
         type ArrowColumn = UInt64Array;
@@ -864,28 +845,6 @@ mod codec_impls {
 
     #[derive(Debug, PartialEq)]
     pub struct MaelstromValSchema;
-
-    impl Schema<MaelstromVal> for MaelstromValSchema {
-        type Encoder = SimpleEncoder<MaelstromVal, Vec<u8>>;
-        type Decoder = SimpleDecoder<MaelstromVal, Vec<u8>>;
-
-        fn columns(&self) -> DynStructCfg {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::columns(&())
-        }
-
-        fn decoder(&self, cols: ColumnsRef) -> Result<Self::Decoder, String> {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::decoder(cols, |val, ret| {
-                *ret = MaelstromVal::decode(val, &MaelstromValSchema)
-                    .expect("should be valid MaelstromVal")
-            })
-        }
-
-        fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
-            SimpleSchema::<MaelstromVal, Vec<u8>>::push_encoder(cols, |col, val| {
-                ColumnPush::<Vec<u8>>::push(col, &val.encode_to_vec())
-            })
-        }
-    }
 
     impl Schema2<MaelstromVal> for MaelstromValSchema {
         type ArrowColumn = BinaryArray;

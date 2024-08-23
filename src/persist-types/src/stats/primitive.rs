@@ -9,19 +9,14 @@
 
 use std::fmt::{self, Debug};
 
-use arrow::array::{Array, BinaryArray, BooleanArray, PrimitiveArray, StringArray};
-use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::ArrowPrimitiveType;
-use mz_ore::assert_none;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;
 use serde::Serialize;
 
-use crate::dyn_struct::ValidityRef;
 use crate::stats::{
     proto_primitive_stats, BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
-    OptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats, StatsFrom, TrimStats,
+    OptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats, TrimStats,
 };
 use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
@@ -200,17 +195,6 @@ macro_rules! stats_primitive {
             fn none_count(&self) -> usize {
                 0
             }
-            fn downcast(stats: &super::ColumnarStats) -> Option<Self>
-            where
-                Self: Sized,
-            {
-                match stats.as_non_null_values()? {
-                    ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => {
-                        Some(prim.clone())
-                    }
-                    _ => None,
-                }
-            }
         }
 
         impl ColumnStats for OptionStats<PrimitiveStats<$data>> {
@@ -224,19 +208,6 @@ macro_rules! stats_primitive {
             }
             fn none_count(&self) -> usize {
                 self.none
-            }
-            fn downcast(stats: &super::ColumnarStats) -> Option<Self>
-            where
-                Self: Sized,
-            {
-                let prim = match &stats.values {
-                    ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => prim,
-                    _ => return None,
-                };
-                Some(OptionStats {
-                    some: prim.clone(),
-                    none: stats.nulls.as_ref().map_or(0, |n| n.count),
-                })
             }
         }
 
@@ -260,156 +231,6 @@ stats_primitive!(i64, i64, clone, I64);
 stats_primitive!(f32, f32, clone, F32);
 stats_primitive!(f64, f64, clone, F64);
 stats_primitive!(String, &'a str, as_str, String);
-
-impl StatsFrom<BooleanBuffer> for PrimitiveStats<bool> {
-    fn stats_from(col: &BooleanBuffer, validity: ValidityRef) -> Self {
-        let array = BooleanArray::new(col.clone(), validity.0.as_ref().cloned());
-        let lower = arrow::compute::min_boolean(&array).unwrap_or_default();
-        let upper = arrow::compute::max_boolean(&array).unwrap_or_default();
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl StatsFrom<BooleanArray> for OptionStats<PrimitiveStats<bool>> {
-    fn stats_from(col: &BooleanArray, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-        let lower = arrow::compute::min_boolean(col).unwrap_or_default();
-        let upper = arrow::compute::max_boolean(col).unwrap_or_default();
-        let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
-
-impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>> for PrimitiveStats<T::Native> {
-    fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-
-        // Create a new array with the provided validity.
-        let array = PrimitiveArray::<T>::new(col.values().clone(), validity.0.as_ref().cloned());
-
-        let lower = arrow::compute::min(&array).unwrap_or_default();
-        let upper = arrow::compute::max(&array).unwrap_or_default();
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>>
-    for OptionStats<PrimitiveStats<T::Native>>
-{
-    fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-        let lower = arrow::compute::min::<T>(col).unwrap_or_default();
-        let upper = arrow::compute::max::<T>(col).unwrap_or_default();
-        let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
-
-impl StatsFrom<StringArray> for PrimitiveStats<String> {
-    fn stats_from(col: &StringArray, validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-
-        // Create a new array with the provided validity.
-        let array = StringArray::new(
-            col.offsets().clone(),
-            col.values().clone(),
-            validity.0.as_ref().cloned(),
-        );
-
-        let lower = arrow::compute::min_string(&array).unwrap_or_default();
-        let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        let upper = arrow::compute::max_string(&array).unwrap_or_default();
-        let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl StatsFrom<StringArray> for OptionStats<PrimitiveStats<String>> {
-    fn stats_from(col: &StringArray, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-        let lower = arrow::compute::min_string(col).unwrap_or_default();
-        let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        let upper = arrow::compute::max_string(col).unwrap_or_default();
-        let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-        let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
-
-impl StatsFrom<BinaryArray> for PrimitiveStats<Vec<u8>> {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-
-        // Create a new array with the provided validity.
-        let array = BinaryArray::new(
-            col.offsets().clone(),
-            col.values().clone(),
-            validity.0.as_ref().cloned(),
-        );
-
-        let lower = arrow::compute::min_binary(&array).unwrap_or_default();
-        let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-
-        let upper = arrow::compute::max_binary(&array).unwrap_or_default();
-        let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-
-        PrimitiveStats { lower, upper }
-    }
-}
-
-impl StatsFrom<BinaryArray> for OptionStats<PrimitiveStats<Vec<u8>>> {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-        let lower = arrow::compute::min_binary(col).unwrap_or_default();
-        let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        let upper = arrow::compute::max_binary(col).unwrap_or_default();
-        let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-            // NB: The cost+trim stuff will remove the column entirely if
-            // it's still too big (also this should be extremely rare in
-            // practice).
-            .unwrap_or_else(|| upper.to_owned());
-
-        let none = col
-            .logical_nulls()
-            .as_ref()
-            .map_or(0, |nulls| nulls.null_count());
-        OptionStats {
-            none,
-            some: PrimitiveStats { lower, upper },
-        }
-    }
-}
 
 /// This macro implements the [`RustType`] trait for all variants of [`PrimitiveStats`].
 macro_rules! primitive_stats_rust_type {
@@ -720,6 +541,7 @@ pub(crate) fn any_primitive_vec_u8_stats() -> impl Strategy<Value = PrimitiveSta
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{BinaryArray, StringArray};
     use proptest::prelude::*;
 
     use super::*;

@@ -9,18 +9,16 @@
 
 use std::fmt::Debug;
 
-use arrow::array::BinaryArray;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::strategy::{Just, Strategy, Union};
 use serde::Serialize;
 
-use crate::dyn_struct::ValidityRef;
 use crate::stats::json::{any_json_stats, JsonStats};
 use crate::stats::primitive::{any_primitive_vec_u8_stats, PrimitiveStats};
 use crate::stats::{
     proto_bytes_stats, proto_fixed_size_bytes_stats, ColumnStatKinds, ColumnStats, ColumnarStats,
     DynStats, OptionStats, ProtoAtomicBytesStats, ProtoBytesStats, ProtoFixedSizeBytesStats,
-    StatsFrom, TrimStats,
+    TrimStats,
 };
 
 /// `PrimitiveStats<Vec<u8>>` that cannot safely be trimmed.
@@ -206,15 +204,6 @@ impl ColumnStats for BytesStats {
     fn none_count(&self) -> usize {
         0
     }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        match stats.as_non_null_values()? {
-            ColumnStatKinds::Bytes(bytes) => Some(bytes.clone()),
-            _ => None,
-        }
-    }
 }
 
 impl ColumnStats for OptionStats<BytesStats> {
@@ -228,35 +217,6 @@ impl ColumnStats for OptionStats<BytesStats> {
     }
     fn none_count(&self) -> usize {
         self.none
-    }
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let inner = match &stats.values {
-            ColumnStatKinds::Bytes(s) => s,
-            _ => return None,
-        };
-        Some(OptionStats {
-            some: inner.clone(),
-            none: stats.nulls.as_ref().map_or(0, |n| n.count),
-        })
-    }
-}
-
-impl StatsFrom<BinaryArray> for BytesStats {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        BytesStats::Primitive(<PrimitiveStats<Vec<u8>>>::stats_from(col, validity))
-    }
-}
-
-impl StatsFrom<BinaryArray> for OptionStats<BytesStats> {
-    fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-        let stats = OptionStats::<PrimitiveStats<Vec<u8>>>::stats_from(col, validity);
-        OptionStats {
-            none: stats.none,
-            some: BytesStats::Primitive(stats.some),
-        }
     }
 }
 

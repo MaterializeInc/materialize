@@ -54,9 +54,6 @@ pub use crate::relation::{
     ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationType,
 };
 pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
-pub use crate::row::encoding::{
-    DatumDecoderT, DatumEncoderT, DatumToPersist, DatumToPersistFn, RowDecoder, RowEncoder,
-};
 pub use crate::row::encoding2::{RowColumnarDecoder, RowColumnarEncoder};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{

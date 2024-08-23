@@ -13,7 +13,7 @@
 
 use std::fmt::Debug;
 
-use arrow::array::Array;
+use anyhow::Context;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::{assert_none, metric};
@@ -23,10 +23,8 @@ use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use prost::Message;
 
-use crate::columnar::Data;
-use crate::dyn_col::DynColumnRef;
-use crate::dyn_struct::ValidityRef;
-use crate::part::Part;
+use crate::columnar::{ColumnDecoder, Schema2};
+use crate::part::Part2;
 use crate::stats::bytes::any_bytes_stats;
 use crate::stats::primitive::any_primitive_stats;
 
@@ -58,12 +56,6 @@ impl ColumnarStats {
         nulls: None,
         values: ColumnStatKinds::None,
     };
-
-    /// Downcast this instasnce of [`ColumnarStats`] into `T::Stats`, if the
-    /// inner type is a `T::Stats`.
-    pub fn downcast<T: Data>(&self) -> Option<T::Stats> {
-        T::Stats::downcast(self)
-    }
 
     /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
     pub fn as_non_null_values(&self) -> Option<&ColumnStatKinds> {
@@ -290,43 +282,6 @@ impl PartStatsMetrics {
     }
 }
 
-/// The logic to use when computing stats for a column of `T: Data`.
-///
-/// If Custom is used, the DynStats returned must be a`<T as Data>::Stats`.
-pub enum StatsFn {
-    Default,
-    Custom(fn(&DynColumnRef, ValidityRef) -> Result<ColumnarStats, String>),
-}
-
-#[cfg(debug_assertions)]
-impl PartialEq for StatsFn {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (StatsFn::Default, StatsFn::Default) => true,
-            (StatsFn::Custom(s), StatsFn::Custom(o)) => {
-                let s: fn(&'static DynColumnRef, ValidityRef) -> Result<ColumnarStats, String> = *s;
-                let o: fn(&'static DynColumnRef, ValidityRef) -> Result<ColumnarStats, String> = *o;
-                // I think this is not always correct, but it's only used in
-                // debug_assertions so as long as CI is happy with it, probably
-                // good enough.
-                s == o
-            }
-            (StatsFn::Default, StatsFn::Custom(_)) | (StatsFn::Custom(_), StatsFn::Default) => {
-                false
-            }
-        }
-    }
-}
-
-impl std::fmt::Debug for StatsFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Default => write!(f, "Default"),
-            Self::Custom(_) => f.debug_struct("Custom").finish_non_exhaustive(),
-        }
-    }
-}
-
 /// Aggregate statistics about a column of type `T`.
 pub trait ColumnStats: DynStats {
     /// Type returned as the stat bounds.
@@ -349,15 +304,6 @@ pub trait ColumnStats: DynStats {
     fn upper<'a>(&'a self) -> Option<Self::Ref<'a>>;
     /// The number of `None`s if this column is optional or 0 if it isn't.
     fn none_count(&self) -> usize;
-
-    /// Downcast an instance of [`ColumnarStats`] into `Self`, if
-    /// [`ColumnarStats`] contains `Self`.
-    ///
-    /// Note: This method is intended to help bridge the gap between [`Data`]
-    /// and [`crate::columnar::Schema2`].
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized;
 }
 
 /// Type that can be used to represent some [`ColumnStats`].
@@ -378,18 +324,6 @@ pub trait DynStats: Debug + Send + Sync + 'static {
     fn into_columnar_stats(self) -> ColumnarStats;
 }
 
-/// A source of aggregate statistics about a column of data.
-pub trait StatsFrom<T> {
-    /// Computes statistics from a column of data.
-    ///
-    /// The validity, if given, indicates which values in the columns are and
-    /// are not used for stats. This allows us to model non-nullable columns in
-    /// a nullable struct. For optional columns (i.e. ones with their own
-    /// validity) it _must be a subset_ of the column's validity, otherwise this
-    /// panics.
-    fn stats_from(col: &T, validity: ValidityRef) -> Self;
-}
-
 /// Trim, possibly in a lossy way, statistics to reduce the serialization costs.
 pub trait TrimStats: Message {
     /// Attempts to reduce the serialization costs of these stats.
@@ -400,10 +334,10 @@ pub trait TrimStats: Message {
     fn trim(&mut self);
 }
 
-/// Aggregate statistics about data contained in a [Part].
+/// Aggregate statistics about data contained in a [Part2].
 #[derive(Arbitrary, Debug)]
 pub struct PartStats {
-    /// Aggregate statistics about key data contained in a [Part].
+    /// Aggregate statistics about key data contained in a [Part2].
     pub key: StructStats,
 }
 
@@ -415,10 +349,17 @@ impl serde::Serialize for PartStats {
 }
 
 impl PartStats {
-    /// Calculates and returns stats for the given [Part].
-    pub fn new(part: &Part) -> Result<Self, String> {
-        let key = part.key_stats()?;
-        Ok(PartStats { key })
+    /// Calculates and returns stats for the given [`Part2`].
+    pub fn new<T, K>(part: &Part2, desc: &K) -> Result<Self, anyhow::Error>
+    where
+        K: Schema2<T, Statistics = StructStats>,
+    {
+        let decoder = K::decoder_any(desc, &part.key).context("decoder_any")?;
+        let stats = decoder
+            .stats()
+            .into_struct_stats()
+            .expect("schema should generate StructStats");
+        Ok(PartStats { key: stats })
     }
 }
 
@@ -494,16 +435,6 @@ impl ColumnStats for NoneStats {
     fn none_count(&self) -> usize {
         0
     }
-
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        match stats.as_non_null_values()? {
-            ColumnStatKinds::None => Some(NoneStats),
-            _ => None,
-        }
-    }
 }
 
 impl ColumnStats for OptionStats<NoneStats> {
@@ -519,42 +450,6 @@ impl ColumnStats for OptionStats<NoneStats> {
 
     fn none_count(&self) -> usize {
         self.none
-    }
-
-    fn downcast(stats: &ColumnarStats) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let inner = match &stats.values {
-            ColumnStatKinds::None => NoneStats,
-            _ => return None,
-        };
-        Some(OptionStats {
-            some: inner,
-            none: stats.nulls.as_ref().map_or(0, |n| n.count),
-        })
-    }
-}
-
-impl<T: Array> StatsFrom<T> for NoneStats {
-    fn stats_from(col: &T, _validity: ValidityRef) -> Self {
-        assert_none!(col.logical_nulls());
-        NoneStats
-    }
-}
-
-impl<T: Array> StatsFrom<T> for OptionStats<NoneStats> {
-    fn stats_from(col: &T, validity: ValidityRef) -> Self {
-        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-        let none = col
-            .logical_nulls()
-            .as_ref()
-            .map_or(0, |nulls| nulls.null_count());
-
-        OptionStats {
-            none,
-            some: NoneStats,
-        }
     }
 }
 

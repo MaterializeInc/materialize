@@ -7,170 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
-use arrow::array::Array;
-use mz_persist_types::columnar::{ColumnGet, Data};
-use mz_persist_types::dyn_struct::ValidityRef;
-use mz_persist_types::stats::{JsonMapElementStats, JsonStats, PrimitiveStats};
-use prost::Message;
-
-use crate::row::encoding::{DatumToPersist, NullableProtoDatumToPersist};
-use crate::row::ProtoDatum;
-use crate::{Datum, Row, RowArena};
-
-fn as_optional_datum<'a>(row: &'a Row) -> Option<Datum<'a>> {
-    let mut datums = row.iter();
-    let datum = datums.next()?;
-    if let Some(_) = datums.next() {
-        panic!("too many datums in: {}", row);
-    }
-    Some(datum)
-}
-
-/// Returns the min, max, and null_count for the column of Datums.
-///
-/// Each entry in the column is a single Datum encoded as a ProtoDatum. The min
-/// and max and similarly returned encoded via ProtoDatum. If the column is
-/// empty, the returned min and max will be Datum::Null, otherwise they will
-/// never be null.
-///
-/// NB: `Vec<u8>` and `Option<Vec<u8>>` happen to use the same type for Col.
-/// It's a bit odd to use the Option version for both, but it happens to work
-/// because the non-option version won't generate any Nulls.
-pub(crate) fn proto_datum_min_max_nulls(
-    col: &<Option<Vec<u8>> as Data>::Col,
-    validity: ValidityRef,
-) -> (Vec<u8>, Vec<u8>, usize) {
-    let (mut min, mut max) = (Row::default(), Row::default());
-    let mut null_count = 0;
-
-    let mut buf = Row::default();
-    for idx in 0..col.len() {
-        let val = ColumnGet::<Option<Vec<u8>>>::get(col, idx);
-        if !validity.get(idx) {
-            assert!(val.map_or(true, |x| x.is_empty()));
-            continue;
-        }
-        NullableProtoDatumToPersist::decode(val, &mut buf.packer());
-        let datum = as_optional_datum(&buf).expect("not enough datums");
-        if datum == Datum::Null {
-            null_count += 1;
-            continue;
-        }
-        if as_optional_datum(&min).map_or(true, |min| datum < min) {
-            min.packer().push(datum);
-        }
-        if as_optional_datum(&max).map_or(true, |max| datum > max) {
-            max.packer().push(datum);
-        }
-    }
-
-    let min = as_optional_datum(&min).unwrap_or(Datum::Null);
-    let max = as_optional_datum(&max).unwrap_or(Datum::Null);
-    let min = ProtoDatum::from(min).encode_to_vec();
-    let max = ProtoDatum::from(max).encode_to_vec();
-    (min, max, null_count)
-}
-
-/// Returns the JsonStats and null_count for the column of `ScalarType::Jsonb`.
-///
-/// Each entry in the column is a single Datum encoded as a ProtoDatum.
-///
-/// NB: `Vec<u8>` and `Option<Vec<u8>>` happen to use the same type for Col.
-/// It's a bit odd to use the Option version for both, but it happens to work
-/// because the non-option version won't generate any Nulls.
-pub(crate) fn jsonb_stats_nulls(
-    col: &<Option<Vec<u8>> as Data>::Col,
-    validity: ValidityRef,
-) -> Result<(JsonStats, usize), String> {
-    let mut datums = JsonDatums::default();
-    let mut null_count = 0;
-
-    let arena = RowArena::new();
-    for idx in 0..col.len() {
-        let val = ColumnGet::<Option<Vec<u8>>>::get(col, idx);
-        if !validity.get(idx) {
-            assert!(val.map_or(true, |x| x.is_empty()));
-            continue;
-        }
-        let datum = arena.make_datum(|r| NullableProtoDatumToPersist::decode(val, r));
-        // Datum::Null only shows up at the top level of Jsonb, so we handle it
-        // here instead of in the recursing function.
-        if let Datum::Null = datum {
-            null_count += 1;
-        } else {
-            let () = datums.push(datum);
-        }
-    }
-    Ok((datums.to_stats(), null_count))
-}
-
-#[derive(Default)]
-struct JsonDatums<'a> {
-    count: usize,
-    min_max: Option<(Datum<'a>, Datum<'a>)>,
-    nested: BTreeMap<String, JsonDatums<'a>>,
-}
-
-impl<'a> JsonDatums<'a> {
-    fn push(&mut self, datum: Datum<'a>) {
-        self.count += 1;
-        self.min_max = match self.min_max.take() {
-            None => Some((datum, datum)),
-            Some((min, max)) => Some((min.min(datum), max.max(datum))),
-        };
-        if let Datum::Map(map) = datum {
-            for (key, val) in map.iter() {
-                let val_datums = self.nested.entry(key.to_owned()).or_default();
-                val_datums.push(val);
-            }
-        }
-    }
-    fn to_stats(self) -> JsonStats {
-        match self.min_max {
-            None => JsonStats::None,
-            Some((Datum::JsonNull, Datum::JsonNull)) => JsonStats::JsonNulls,
-            Some((min @ (Datum::True | Datum::False), max @ (Datum::True | Datum::False))) => {
-                JsonStats::Bools(PrimitiveStats {
-                    lower: min.unwrap_bool(),
-                    upper: max.unwrap_bool(),
-                })
-            }
-            Some((Datum::String(min), Datum::String(max))) => JsonStats::Strings(PrimitiveStats {
-                lower: min.to_owned(),
-                upper: max.to_owned(),
-            }),
-            Some((min @ Datum::Numeric(_), max @ Datum::Numeric(_))) => {
-                JsonStats::Numerics(PrimitiveStats {
-                    lower: ProtoDatum::from(min).encode_to_vec(),
-                    upper: ProtoDatum::from(max).encode_to_vec(),
-                })
-            }
-            Some((Datum::List(_), Datum::List(_))) => JsonStats::Lists,
-            Some((Datum::Map(_), Datum::Map(_))) => JsonStats::Maps(
-                self.nested
-                    .into_iter()
-                    .map(|(key, value)| {
-                        (
-                            key,
-                            JsonMapElementStats {
-                                len: value.count,
-                                stats: value.to_stats(),
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-            Some(_) => JsonStats::Mixed,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use arrow::array::AsArray;
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::part::PartBuilder;
+    use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+    use mz_persist_types::part::PartBuilder2;
     use mz_persist_types::stats::{ProtoStructStats, StructStats, TrimStats};
     use mz_proto::RustType;
     use proptest::prelude::*;
@@ -181,14 +23,23 @@ mod tests {
         schema: &RelationDesc,
         datums: impl IntoIterator<Item = &'a Row>,
     ) {
-        let mut builder = PartBuilder::new(schema, &UnitSchema).expect("success");
+        let mut builder = PartBuilder2::new(schema, &UnitSchema);
         for datum in datums {
             builder.push(datum, &(), 1u64, 1i64);
         }
         let part = builder.finish();
 
-        let expected = part.key_stats().unwrap();
-        let mut actual: ProtoStructStats = RustType::into_proto(&expected);
+        let key_col = part.key.as_struct();
+        let decoder =
+            <RelationDesc as Schema2<Row>>::decoder(schema, key_col.clone()).expect("success");
+        let stats = decoder.stats();
+
+        let expected = stats
+            .try_as_optional_struct()
+            .expect("key col is StructStats")
+            .some;
+        let mut actual: ProtoStructStats = RustType::into_proto(expected);
+
         // It's not particularly easy to give StructStats a PartialEq impl, but
         // verifying that there weren't any panics gets us pretty far.
 

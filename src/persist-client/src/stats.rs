@@ -14,9 +14,8 @@ use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
-use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceUpdates};
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist_types::columnar::{codec_to_schema2, ColumnDecoder, Schema2};
-use mz_persist_types::part::PartBuilder;
 use mz_persist_types::stats::{ColumnStatKinds, PartStats};
 use mz_persist_types::Codec;
 
@@ -124,11 +123,9 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
 }
 
 /// Encodes a [`BlobTraceUpdates`] and calculates [`PartStats`].
-/// We also return structured data iff [BatchColumnarFormat::is_structured] is enabled.
 pub(crate) fn encode_updates<K, V>(
     schemas: &Schemas<K, V>,
     updates: &BlobTraceUpdates,
-    format: &BatchColumnarFormat,
 ) -> Result<(Option<ColumnarRecordsStructuredExt>, PartStats), String>
 where
     K: Codec,
@@ -136,46 +133,29 @@ where
 {
     let records = updates.records();
 
-    if format.is_structured() {
-        let ext = match updates.structured() {
-            Some(ext) => ext.clone(),
-            None => ColumnarRecordsStructuredExt {
-                key: codec_to_schema2::<K>(schemas.key.as_ref(), records.keys())
-                    .map_err(|e| e.to_string())?,
-                val: codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
-                    .map_err(|e| e.to_string())?,
-            },
-        };
+    let ext = match updates.structured() {
+        Some(ext) => ext.clone(),
+        None => ColumnarRecordsStructuredExt {
+            key: codec_to_schema2::<K>(schemas.key.as_ref(), records.keys())
+                .map_err(|e| e.to_string())?,
+            val: codec_to_schema2::<V>(schemas.val.as_ref(), records.vals())
+                .map_err(|e| e.to_string())?,
+        },
+    };
 
-        let key_stats = schemas
-            .key
-            .decoder_any(ext.key.as_ref())
-            .map_err(|e| e.to_string())?
-            .stats();
-        let key_stats = match key_stats.into_non_null_values() {
-            Some(ColumnStatKinds::Struct(stats)) => stats,
-            key_stats => Err(format!(
-                "found non-StructStats when encoding updates, {key_stats:?}"
-            ))?,
-        };
+    let key_stats = schemas
+        .key
+        .decoder_any(ext.key.as_ref())
+        .map_err(|e| e.to_string())?
+        .stats();
+    let key_stats = match key_stats.into_non_null_values() {
+        Some(ColumnStatKinds::Struct(stats)) => stats,
+        key_stats => Err(format!(
+            "found non-StructStats when encoding updates, {key_stats:?}"
+        ))?,
+    };
 
-        Ok((Some(ext), PartStats { key: key_stats }))
-    } else {
-        let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
-        for ((k, v), t, d) in records.iter() {
-            let k = K::decode(k, &schemas.key)?;
-            let v = V::decode(v, &schemas.val)?;
-            let t = i64::from_le_bytes(t);
-            let d = i64::from_le_bytes(d);
-
-            builder.push(&k, &v, t, d);
-        }
-
-        let part = builder.finish();
-        let stats = PartStats::new(&part)?;
-
-        Ok((None, stats))
-    }
+    Ok((Some(ext), PartStats { key: key_stats }))
 }
 
 /// Statistics about the contents of a shard as_of some time.

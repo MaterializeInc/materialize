@@ -1386,9 +1386,9 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
     }
 }
 
-/// Format we'll use when decoding a [`Part`].
+/// Format we'll use when decoding a [`Part2`].
 ///
-/// [`Part`]: mz_persist_types::part::Part
+/// [`Part2`]: mz_persist_types::part::Part2
 #[derive(Debug, Copy, Clone)]
 pub enum PartDecodeFormat {
     /// Decode from opaque `Codec` data.
