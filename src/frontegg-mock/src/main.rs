@@ -12,15 +12,16 @@
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
 
-use anyhow::Context as AnyhowContext;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use anyhow::Context;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_frontegg_mock::models::{UserConfig, UserRole};
 use mz_frontegg_mock::server::FronteggMockServer;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Frontegg mock server", long_about = None)]
