@@ -26,6 +26,7 @@ use clap::{ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
+use mz_adapter::ResultExt;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
@@ -1012,7 +1013,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Testing options.
                 now,
             })
-            .await?;
+            .await
+            .maybe_terminate("booting server")?;
         Ok::<_, anyhow::Error>(server)
     })?;
     info!(

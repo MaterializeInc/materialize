@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use mz_adapter::ResultExt;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
 use mz_ore::channel::trigger;
 use mz_ore::exit;
@@ -207,12 +207,7 @@ pub async fn preflight_0dt(
                     },
                 )
                 .await
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "unexpected error while fencing out old deployment: {:?}",
-                        error
-                    )
-                });
+                .unwrap_or_terminate("unexpected error while fencing out old deployment");
 
             // Reboot as the leader.
             halt!("fenced out old deployment; rebooting as leader")

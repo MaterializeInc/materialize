@@ -71,7 +71,7 @@ pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::{load_remote_system_parameters, serve, Config};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;
-pub use crate::util::verify_datum_desc;
+pub use crate::util::{verify_datum_desc, ResultExt};
 pub use crate::webhook::{
     AppendWebhookError, AppendWebhookResponse, AppendWebhookValidator, WebhookAppenderCache,
 };
