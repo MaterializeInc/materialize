@@ -17,8 +17,17 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-if [[ $# -ne 1 ]]; then
-    die "usage: $0 VERSION"
+if [[ $# -ne 1 && $# -ne 2 ]]; then
+    die "usage: $0 VERSION [--no-commit]"
+fi
+
+commit=true
+if [[ $# -eq 2 ]]; then
+    if [[ "$2" == "--no-commit" ]]; then
+        commit=false
+    else
+        die "invalid flag: $2, only --no-commit is supported"
+    fi
 fi
 
 if ! run git diff HEAD --compact-summary --exit-code; then
@@ -55,4 +64,6 @@ cargo update --workspace
 
 bin/bazel gen
 
-git commit -am "release: bump to version v$version"
+if $commit; then
+    git commit -am "release: bump to version v$version"
+fi

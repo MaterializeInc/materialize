@@ -8,7 +8,13 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.checks.actions import Action, Initialize, Manipulate, Validate
+from materialize.checks.actions import (
+    Action,
+    BumpVersion,
+    Initialize,
+    Manipulate,
+    Validate,
+)
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
@@ -143,6 +149,43 @@ class ZeroDowntimeUpgradeEntireMz(Scenario):
             start_mz_read_only(
                 self,
                 tag=None,
+                deploy_generation=2,
+                mz_service="mz_3",
+                system_parameter_defaults=system_parameter_defaults,
+            ),
+            Validate(self, mz_service="mz_2"),
+            *wait_ready_and_promote("mz_3"),
+            Validate(self, mz_service="mz_3"),
+        ]
+
+
+class ZeroDowntimeBumpedVersion(Scenario):
+    """0dt upgrade of the entire Mz instance from the current version to a
+    version with just the version number bumped."""
+
+    def actions(self) -> list[Action]:
+        system_parameter_defaults = get_default_system_parameters(
+            self.base_version(), zero_downtime=True
+        )
+        return [
+            StartMz(
+                self,
+                mz_service="mz_1",
+                system_parameter_defaults=system_parameter_defaults,
+            ),
+            Initialize(self, mz_service="mz_1"),
+            start_mz_read_only(
+                self,
+                deploy_generation=1,
+                mz_service="mz_2",
+                system_parameter_defaults=system_parameter_defaults,
+            ),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            BumpVersion(),
+            *wait_ready_and_promote("mz_2"),
+            Manipulate(self, phase=2, mz_service="mz_2"),
+            start_mz_read_only(
+                self,
                 deploy_generation=2,
                 mz_service="mz_3",
                 system_parameter_defaults=system_parameter_defaults,
