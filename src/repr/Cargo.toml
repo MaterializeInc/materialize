@@ -37,7 +37,6 @@ chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 compact_bytes = "0.1.2"
 dec = "0.4.8"
 differential-dataflow = "0.12.0"
-enum_dispatch = "0.3.11"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
 flatcontainer = "0.5.0"
