@@ -85,6 +85,12 @@ pub struct TimelyContainer<C, R, A> {
     _worker_guards: WorkerGuards<()>,
 }
 
+impl<C, R, A> Drop for TimelyContainer<C, R, A> {
+    fn drop(&mut self) {
+        panic!("Timely container must never drop");
+    }
+}
+
 /// Threadsafe reference to an optional TimelyContainer
 pub type TimelyContainerRef<C, R, A> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C, R, A>>>>;
 
@@ -269,8 +275,8 @@ where
         let tracing_handle = Arc::clone(&self.tracing_handle);
 
         let worker_config = self.worker.clone();
-        let mut timely_lock = self.timely_container.lock().await;
-        let timely = match timely_lock.take() {
+        let mut timely_container = self.timely_container.lock().await;
+        match &*timely_container {
             Some(existing) => {
                 if config != existing.config {
                     halt!(
@@ -280,23 +286,28 @@ where
                     );
                 }
                 info!("Timely already initialized; re-using.",);
-                existing
             }
-            None => Self::build_timely(
-                worker_config,
-                config,
-                epoch,
-                persist_clients,
-                txns_ctx,
-                tracing_handle,
-                handle,
-            )
-            .await
-            .map_err(|e| {
-                warn!("timely initialization failed: {}", e.display_with_causes());
-                e
-            })?,
+            None => {
+                let timely = Self::build_timely(
+                    worker_config,
+                    config,
+                    epoch,
+                    persist_clients,
+                    txns_ctx,
+                    tracing_handle,
+                    handle,
+                )
+                .await
+                .map_err(|e| {
+                    warn!("timely initialization failed: {}", e.display_with_causes());
+                    e
+                })?;
+
+                *timely_container = Some(timely);
+            }
         };
+
+        let timely = timely_container.as_ref().expect("set above");
 
         let mut command_txs = Vec::with_capacity(workers);
         let mut response_rxs = Vec::with_capacity(workers);
@@ -315,8 +326,6 @@ where
             response_rxs.push(resp_rx);
             activators.push(activator);
         }
-
-        *timely_lock = Some(timely);
 
         self.inner = Some(LocalClient::new_partitioned(
             response_rxs,
