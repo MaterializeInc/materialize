@@ -53,4 +53,6 @@ rm -f src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancer
 
 cargo update --workspace
 
+bin/bazel gen
+
 git commit -am "release: bump to version v$version"
