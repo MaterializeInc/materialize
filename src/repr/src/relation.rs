@@ -348,7 +348,7 @@ impl proptest::arbitrary::Arbitrary for ColumnName {
         ]));
 
         name_length
-            .prop_flat_map(move |length| proptest::collection::vec(char_strat.clone(), length))
+            .prop_flat_map(move |length| proptest::collection::vec(Rc::clone(&char_strat), length))
             .prop_map(|chars| ColumnName(chars.into_iter().collect::<String>()))
             .no_shrink()
             .boxed()
@@ -812,7 +812,7 @@ pub fn arb_relation_desc_diff(
         })
         .prop_map(|(cols, types)| {
             cols.into_iter()
-                .zip(types.into_iter())
+                .zip(types)
                 .map(|(name, typ)| PropRelationDescDiff::ChangeType { name, typ })
                 .collect::<Vec<_>>()
         });
@@ -826,10 +826,10 @@ pub fn arb_relation_desc_diff(
     )
         .prop_map(|(adds, drops, moves, toggles, changes)| {
             adds.into_iter()
-                .chain(drops.into_iter())
-                .chain(moves.into_iter())
-                .chain(toggles.into_iter())
-                .chain(changes.into_iter())
+                .chain(drops)
+                .chain(moves)
+                .chain(toggles)
+                .chain(changes)
                 .collect::<Vec<_>>()
         })
         .prop_shuffle()
