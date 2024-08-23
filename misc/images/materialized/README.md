@@ -14,12 +14,6 @@ The Materialize Emulator is an all-in-one Docker image available on Docker Hub, 
 | **Horizontal scalability** | ❌                                                                          | ✔️                                                                           |
 | **GUI**                    | ❌                                                                          | ✔️ Materialize Console                                                       |
 
-## License and Privacy Policy
-
-* Use of the Docker image is subject to Materialize’s [BSL License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
-* By downloading the Docker image, you are agreeing to Materialize’s [privacy policy](https://materialize.com/privacy-policy/).
-
-
 ## Usage
 
 To launch the Docker container:
@@ -44,3 +38,12 @@ To view logs for the embedded CockroachDB server:
 ```
 docker exec <CONTAINER-ID> cat /mzdata/cockroach/logs/cockroach.log
 ```
+
+## Technical Support
+For questions, discussions, or general technical support, join the [Materialize Community on Slack](https://materialize.com/s/chat).
+
+## License and Privacy Policy
+
+* Use of the Docker image is subject to Materialize’s [BSL License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
+* By downloading the Docker image, you are agreeing to Materialize’s [privacy policy](https://materialize.com/privacy-policy/).
+
