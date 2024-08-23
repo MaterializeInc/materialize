@@ -2050,6 +2050,18 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn backward_compatible_empty_add_column() {
+        let old = RelationDesc::empty();
+        let new = RelationDesc::from_names_and_types([("a", ScalarType::Bool.nullable(true))]);
+
+        let old_data_type = get_data_type(&old);
+        let new_data_type = get_data_type(&new);
+
+        let migration = backward_compatible(&old_data_type, &new_data_type);
+        assert!(migration.is_some());
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn backward_compatible_migrate1() {
         let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
@@ -2072,7 +2084,7 @@ mod tests {
     fn backward_compatible_migrate_from_common() {
         fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
             // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
-            let should_be_compatible = diffs.iter().any(|diff| match diff {
+            let should_be_compatible = diffs.iter().all(|diff| match diff {
                 // We only support adding nullable columns.
                 PropRelationDescDiff::AddColumn {
                     typ: ColumnType { nullable, .. },
