@@ -7,12 +7,12 @@ The Materialize Emulator is an all-in-one Docker image available on Docker Hub, 
 | **Performance**            | ❌ Limited. Services are bundled in a single container.                     | ✔️ High. Services are scaled across many machines.                           |
 | **Dedicated Support**      | ❌                                                                          | ✔️                                                                           |
 | **Sample data**            | ✔️ Quickstart data source                                                   | ✔️ Quickstart data source                                                    |
-| **Data sources**           | ✔️ Connect using SQL configuration                                          | ✔️ Connect using a streamlined GUI                                           |
+| **Data sources**           | ✔️ Manual configuration using SQL only                                      | ✔️ Streamlined GUI-based setup                                               |
 | **Version upgrades**       | ✔️ Manual, with no data persistence                                         | ✔️ Automated, with data persistence                                          |
 | **Use case isolation**     | ❌                                                                          | ✔️                                                                           |
 | **Fault tolerance**        | ❌                                                                          | ✔️                                                                           |
 | **Horizontal scalability** | ❌                                                                          | ✔️                                                                           |
-| **GUI**                    | ❌                                                                          | ✔️ Materialize Console                                                       |
+| **GUI**                    | ❌                                                                          | ✔️ Materialize Console (dedicated web app).                                  |
 
 ## License and Privacy Policy
 
