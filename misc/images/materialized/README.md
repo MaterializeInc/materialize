@@ -40,8 +40,4 @@ To connect to the SQL interface using `psql`:
 psql postgres://materialize@localhost:6875/materialize
 ```
 
-To view logs for the embedded CockroachDB server:
-
-```
-docker exec <CONTAINER-ID> cat /mzdata/cockroach/logs/cockroach.log
-```
+To view logs for the embedded
