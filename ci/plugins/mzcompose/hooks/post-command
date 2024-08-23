@@ -79,7 +79,9 @@ unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 # Continue even if ci-annotate-errors fails
 CI_ANNOTATE_ERRORS_RESULT=0
 # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
-buildkite-agent artifact upload "$artifacts_str"
+# Uploading large files currently sometimes hangs, as a temporary workaround
+# timeout and don't fail, TODO(def-) Remove timeout again
+timeout 300 buildkite-agent artifact upload "$artifacts_str" || true
 bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
 buildkite-agent artifact upload "ci-annotate-errors.log"
 
