@@ -7,8 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub mod handlers;
-pub mod middleware;
-pub mod models;
-pub mod server;
-pub mod utils;
+pub mod auth;
+pub mod scim;
+pub mod sso;
+pub mod user;
+
+pub use auth::*;
+pub use scim::*;
+pub use sso::*;
+pub use user::*;
