@@ -21,7 +21,7 @@ include_dir = "0.7.3"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
 prometheus = { version = "0.13.3", default-features = false }
 serde = "1.0.152"
-serde_json = { version = "1.0.89" }
+serde_json = { version = "1.0.125" }
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
