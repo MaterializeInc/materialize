@@ -1701,8 +1701,31 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
                 };
                 self.row_decoder.decode(idx, row);
             }
-            (true, true) => panic!("should have one of 'ok' or 'err'"),
-            (false, false) => panic!("cannot have both 'ok' and 'err'"),
+            (true, true) => panic!(
+                "should have one of 'ok' or 'err' @ {idx} \n\n {:?} \n\n {:?}",
+                self.row_decoder, self.err_decoder
+            ),
+            (false, false) => {
+                // When Persist migrates a `RelationDesc` with no columns to one with columns it
+                // replaces the single arrow::NullArray with an arrow::StructArray where all inner
+                // fields entirely Null. We sniff that scenario out here.
+                //
+                // TODO(parkmycar): Add more validation here once we have a versioned RelationDesc.
+
+                let SourceDataRowColumnarDecoder::Row(decoder) = &self.row_decoder else {
+                    panic!("found non-Row decoder when we have both 'ok' and 'err' values");
+                };
+                if !decoder.all_null() {
+                    panic!("cannot have both 'ok' and 'err'");
+                }
+
+                let err = self.err_decoder.value(idx);
+                let err = ProtoDataflowError::decode(err)
+                    .expect("proto should be valid")
+                    .into_rust()
+                    .expect("error should be valid");
+                val.0 = Err(err);
+            }
         }
     }
 
@@ -2003,6 +2026,68 @@ mod tests {
         });
     }
 
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn migrated_source_data_roundtrips() {
+        fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
+            let mut new = old.clone();
+            for diff in diffs.into_iter() {
+                diff.apply(&mut new);
+            }
+            let old_data_type = get_data_type(&old);
+            let new_data_type = get_data_type(&new);
+
+            let Some(migration) = backward_compatible(&old_data_type, &new_data_type) else {
+                // womp womp.
+                return;
+            };
+
+            // Encode data with our original schema.
+            let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&old).unwrap();
+            for data in &datas {
+                encoder.append(data);
+            }
+
+            // Migrate the columnar data.
+            let col = encoder.finish();
+            let col = migration.migrate(Arc::new(col));
+
+            // Make sure we can decode it with the new schema.
+            let decoder = <RelationDesc as Schema2<SourceData>>::decoder_any(&new, &col).unwrap();
+            let mut rnd_data = SourceData(Ok(Row::default()));
+            for (idx, og_data) in datas.iter().enumerate() {
+                decoder.decode(idx, &mut rnd_data);
+
+                // TODO(parkmycar): Add logic to make sure the migration did what we expect at
+                // the Row level.
+                match (&og_data, &rnd_data) {
+                    (SourceData(Ok(_)), SourceData(Ok(_))) => (),
+                    (SourceData(Err(og_err)), SourceData(Err(rnd_err))) => {
+                        assert_eq!(og_err, rnd_err)
+                    }
+                    (og, rnd) => {
+                        panic!("SourceData changed type during migration! {og:?}, {rnd:?}")
+                    }
+                }
+            }
+        }
+
+        let strat = any::<RelationDesc>()
+            .prop_flat_map(|desc| {
+                proptest::collection::vec(arb_source_data_for_relation_desc(&desc), 0..8)
+                    .no_shrink()
+                    .prop_map(move |datas| (desc.clone(), datas))
+            })
+            .prop_flat_map(|(desc, datas)| {
+                arb_relation_desc_diff(&desc)
+                    .prop_map(move |diffs| (desc.clone(), diffs, datas.clone()))
+            });
+
+        proptest!(|((desc, diffs, source_datas) in strat)| {
+            test_case(desc, diffs, source_datas);
+        });
+    }
+
     fn is_sorted(array: &dyn Array) -> bool {
         let Ok(cmp) = build_compare(array, array) else {
             // TODO: arrow v51.0.0 doesn't support comparing structs. When
@@ -2015,6 +2100,22 @@ mod tests {
         (0..array.len())
             .tuple_windows()
             .all(|(i, j)| cmp(i, j).is_le())
+    }
+
+    /// Returns if we should be able to migrate a [`RelationDesc`] with the
+    /// provided set of [`PropRelationDescDiff`]s.
+    fn should_be_able_to_migrate(diffs: &Vec<PropRelationDescDiff>) -> bool {
+        // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
+        diffs.iter().all(|diff| match diff {
+            // We only support adding nullable columns.
+            PropRelationDescDiff::AddColumn {
+                typ: ColumnType { nullable, .. },
+                ..
+            } => *nullable,
+            // TODO(parkmycar): Re-enable DropColumn.
+            // PropRelationDescDiff::DropColumn { .. } => true,
+            _ => false,
+        })
     }
 
     fn get_data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
@@ -2083,17 +2184,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn backward_compatible_migrate_from_common() {
         fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
-            // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
-            let should_be_compatible = diffs.iter().all(|diff| match diff {
-                // We only support adding nullable columns.
-                PropRelationDescDiff::AddColumn {
-                    typ: ColumnType { nullable, .. },
-                    ..
-                } => *nullable,
-                // TODO(parkmycar): Re-enable DropColumn.
-                // PropRelationDescDiff::DropColumn { .. } => true,
-                _ => false,
-            });
+            let should_be_compatible = should_be_able_to_migrate(&diffs);
 
             let mut new = old.clone();
             for diff in diffs.into_iter() {

@@ -139,10 +139,12 @@ impl StructArrayMigration {
                 *fields = f.finish().fields;
             }
             DropField { name } => {
-                let (idx, _) = fields
+                let (idx, field) = fields
                     .find(name)
                     .unwrap_or_else(|| panic!("expected to find field {} in {:?}", name, fields));
-                arrays.remove(idx);
+                let array = arrays.remove(idx);
+                // Defensive check to make sure we removed the correct array.
+                assert_eq!(array.data_type(), field.data_type());
                 let mut f = SchemaBuilder::from(&*fields);
                 f.remove(idx);
                 *fields = f.finish().fields;
