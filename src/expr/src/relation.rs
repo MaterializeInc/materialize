@@ -2590,7 +2590,7 @@ impl AggregateExpr {
                 self.on_unique_ranking_window_funcs(input_type, "?dense_rank?")
             }
 
-            // The input type for LagLead is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
+            // The input type for LagLead is ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
             AggregateFunc::LagLead { lag_lead, .. } => {
                 let tuple = self
                     .expr
@@ -2598,65 +2598,40 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Get the overall return type
-                let return_type = self
+                let return_type_with_orig_row = self
                     .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let lag_lead_return_type = return_type.unwrap_record_element_type()[0].clone();
+                let lag_lead_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
-                let column_name = match lag_lead {
-                    LagLeadType::Lag => "?lag?",
-                    LagLeadType::Lead => "?lead?",
-                };
-
                 // Extract the encoded args
                 let encoded_args =
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
-                let expr = encoded_args
-                    .clone()
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-                let offset = encoded_args
-                    .clone()
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
-                let default_value =
-                    encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2)));
 
-                // In this case, the window always has only one element, so if the offset is not null and
-                // not zero, the default value should be returned instead.
-                let value = offset
-                    .clone()
-                    .call_binary(
-                        MirScalarExpr::literal_ok(Datum::Int32(0), ScalarType::Int32),
-                        crate::BinaryFunc::Eq,
-                    )
-                    .if_then_else(expr, default_value);
-                let null_offset_check = offset
-                    .call_unary(crate::UnaryFunc::IsNull(crate::func::IsNull))
-                    .if_then_else(MirScalarExpr::literal_null(lag_lead_return_type), value);
+                let (result_expr, column_name) =
+                    Self::on_unique_lag_lead(lag_lead, encoded_args, lag_lead_return_type.clone());
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: return_type,
+                        elem_type: return_type_with_orig_row,
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from(column_name),
-                                ColumnName::from("?record?"),
-                            ],
+                            field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![null_offset_check, original_row],
+                        exprs: vec![result_expr, original_row],
                     }],
                 }
             }
 
-            // The input type for FirstValue is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for FirstValue is ((OriginalRow, InputValue), OrderByExprs...)
             AggregateFunc::FirstValue { window_frame, .. } => {
                 let tuple = self
                     .expr
@@ -2664,12 +2639,13 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Get the overall return type
-                let return_type = self
+                let return_type_with_orig_row = self
                     .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let first_value_return_type = return_type.unwrap_record_element_type()[0].clone();
+                let first_value_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2677,32 +2653,28 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the input value
-                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let arg = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                // If the window frame includes the current (single) row, return its value, null otherwise
-                let value = if window_frame.includes_current_row() {
-                    expr
-                } else {
-                    MirScalarExpr::literal_null(first_value_return_type)
-                };
+                let (result_expr, column_name) = Self::on_unique_first_value_last_value(
+                    window_frame,
+                    arg,
+                    first_value_return_type,
+                );
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: return_type,
+                        elem_type: return_type_with_orig_row,
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?first_value?"),
-                                ColumnName::from("?record?"),
-                            ],
+                            field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![value, original_row],
+                        exprs: vec![result_expr, original_row],
                     }],
                 }
             }
 
-            // The input type for LastValue is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for LastValue is ((OriginalRow, InputValue), OrderByExprs...)
             AggregateFunc::LastValue { window_frame, .. } => {
                 let tuple = self
                     .expr
@@ -2710,12 +2682,13 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Get the overall return type
-                let return_type = self
+                let return_type_with_orig_row = self
                     .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone();
-                let last_value_return_type = return_type.unwrap_record_element_type()[0].clone();
+                let last_value_return_type =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
 
                 // Extract the original row
                 let original_row = tuple
@@ -2723,32 +2696,28 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the input value
-                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let arg = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                // If the window frame includes the current (single) row, return its value, null otherwise
-                let value = if window_frame.includes_current_row() {
-                    expr
-                } else {
-                    MirScalarExpr::literal_null(last_value_return_type)
-                };
+                let (result_expr, column_name) = Self::on_unique_first_value_last_value(
+                    window_frame,
+                    arg,
+                    last_value_return_type,
+                );
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
-                        elem_type: return_type,
+                        elem_type: return_type_with_orig_row,
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?last_value?"),
-                                ColumnName::from("?record?"),
-                            ],
+                            field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![value, original_row],
+                        exprs: vec![result_expr, original_row],
                     }],
                 }
             }
 
-            // The input type for window aggs is a ((OriginalRow, InputValue), OrderByExprs...)
+            // The input type for window aggs is ((OriginalRow, InputValue), OrderByExprs...)
             // See an example MIR in `window_func_applied_to`.
             AggregateFunc::WindowAggregate {
                 wrapped_aggregate,
@@ -2807,6 +2776,103 @@ impl AggregateExpr {
                 }
             }
 
+            // The input type is ((OriginalRow, (Args1, Args2, ...)), OrderByExprs...)
+            AggregateFunc::FusedValueWindowFunc {
+                funcs,
+                order_by: outer_order_by,
+            } => {
+                // Throw away OrderByExprs
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the encoded args of the fused call
+                let all_encoded_args =
+                    tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                let return_type_with_orig_row = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+
+                let all_func_return_types =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
+                let mut func_result_exprs = Vec::new();
+                let mut col_names = Vec::new();
+                for (idx, func) in funcs.iter().enumerate() {
+                    let args_for_func = all_encoded_args
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
+                    let return_type_for_func =
+                        all_func_return_types.unwrap_record_element_type()[idx].clone();
+                    let (result, column_name) = match func {
+                        AggregateFunc::LagLead {
+                            lag_lead,
+                            order_by,
+                            ignore_nulls: _,
+                        } => {
+                            assert_eq!(order_by, outer_order_by);
+                            Self::on_unique_lag_lead(lag_lead, args_for_func, return_type_for_func)
+                        }
+                        AggregateFunc::FirstValue {
+                            window_frame,
+                            order_by,
+                        } => {
+                            assert_eq!(order_by, outer_order_by);
+                            Self::on_unique_first_value_last_value(
+                                window_frame,
+                                args_for_func,
+                                return_type_for_func,
+                            )
+                        }
+                        AggregateFunc::LastValue {
+                            window_frame,
+                            order_by,
+                        } => {
+                            assert_eq!(order_by, outer_order_by);
+                            Self::on_unique_first_value_last_value(
+                                window_frame,
+                                args_for_func,
+                                return_type_for_func,
+                            )
+                        }
+                        _ => panic!("unknown function in FusedValueWindowFunc"),
+                    };
+                    func_result_exprs.push(result);
+                    col_names.push(column_name);
+                }
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type_with_orig_row,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?fused_value_window_func?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate {
+                                    field_names: col_names,
+                                },
+                                exprs: func_result_exprs,
+                            },
+                            original_row,
+                        ],
+                    }],
+                }
+            }
+
             // All other variants should return the argument to the aggregation.
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16
@@ -2852,7 +2918,7 @@ impl AggregateExpr {
     }
 
     /// `on_unique` for ROW_NUMBER, RANK, DENSE_RANK
-    pub fn on_unique_ranking_window_funcs(
+    fn on_unique_ranking_window_funcs(
         &self,
         input_type: &[ColumnType],
         col_name: &str,
@@ -2890,6 +2956,55 @@ impl AggregateExpr {
                 ],
             }],
         }
+    }
+
+    fn on_unique_lag_lead(
+        lag_lead: &LagLeadType,
+        encoded_args: MirScalarExpr,
+        return_type: ScalarType,
+    ) -> (MirScalarExpr, ColumnName) {
+        let expr = encoded_args
+            .clone()
+            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+        let offset = encoded_args
+            .clone()
+            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+        let default_value =
+            encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2)));
+
+        // In this case, the window always has only one element, so if the offset is not null and
+        // not zero, the default value should be returned instead.
+        let value = offset
+            .clone()
+            .call_binary(
+                MirScalarExpr::literal_ok(Datum::Int32(0), ScalarType::Int32),
+                crate::BinaryFunc::Eq,
+            )
+            .if_then_else(expr, default_value);
+        let result_expr = offset
+            .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
+            .if_then_else(MirScalarExpr::literal_null(return_type), value);
+
+        let column_name = ColumnName::from(match lag_lead {
+            LagLeadType::Lag => "?lag?",
+            LagLeadType::Lead => "?lead?",
+        });
+
+        (result_expr, column_name)
+    }
+
+    fn on_unique_first_value_last_value(
+        window_frame: &WindowFrame,
+        arg: MirScalarExpr,
+        return_type: ScalarType,
+    ) -> (MirScalarExpr, ColumnName) {
+        // If the window frame includes the current (single) row, return its value, null otherwise
+        let result_expr = if window_frame.includes_current_row() {
+            arg
+        } else {
+            MirScalarExpr::literal_null(return_type)
+        };
+        (result_expr, ColumnName::from("?first_value?"))
     }
 
     /// Returns whether the expression is COUNT(*) or not.  Note that

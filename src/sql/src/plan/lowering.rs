@@ -190,6 +190,7 @@ impl HirRelationExpr {
                     let mut id_gen = mz_ore::id_gen::IdGen::default();
                     transform_expr::split_subquery_predicates(&mut other);
                     transform_expr::try_simplify_quantified_comparisons(&mut other);
+                    transform_expr::fuse_window_functions(&mut other)?;
                     MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
                         .let_in_fallible(&mut id_gen, |id_gen, get_outer| {
                             other.applied_to(
@@ -455,6 +456,7 @@ impl HirRelationExpr {
                                 requires_nonexistent_column
                             })
                             .unwrap_or(scalars.len());
+                        assert!(end_idx > 0, "a Map expression references itself or a later column; lowered_arity: {}, expressions: {:?}", lowered_arity, scalars);
 
                         lowered_arity = lowered_arity + end_idx;
                         let scalars = scalars.drain(0..end_idx).collect_vec();

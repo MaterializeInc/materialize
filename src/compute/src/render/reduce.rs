@@ -2414,7 +2414,8 @@ mod monoids {
             | AggregateFunc::LagLead { .. }
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
-            | AggregateFunc::WindowAggregate { .. } => None,
+            | AggregateFunc::WindowAggregate { .. }
+            | AggregateFunc::FusedValueWindowFunc { .. } => None,
         }
     }
 }

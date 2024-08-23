@@ -28,6 +28,7 @@ pub use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::separated;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::*;
@@ -536,6 +537,8 @@ pub struct ValueWindowExpr {
     /// If the argument list has a single element (e.g., for `first_value`), then it's that element.
     /// If the argument list has multiple elements (e.g., for `lag`), then it's encoded in a record,
     /// e.g., `row(#1, 3, null)`.
+    /// If it's a fused window function, then the arguments of each of the constituent function
+    /// calls are wrapped in an outer record.
     pub args: Box<HirScalarExpr>,
     /// See comment on `WindowExpr::order_by`.
     pub order_by: Vec<ColumnOrder>,
@@ -550,6 +553,7 @@ impl Display for ValueWindowFunc {
             ValueWindowFunc::Lead => write!(f, "lead"),
             ValueWindowFunc::FirstValue => write!(f, "first_value"),
             ValueWindowFunc::LastValue => write!(f, "last_value"),
+            ValueWindowFunc::Fused(funcs) => write!(f, "fused[{}]", separated(", ", funcs)),
         }
     }
 }
@@ -580,30 +584,12 @@ impl ValueWindowExpr {
         self.func.output_type(self.args.typ(outers, inner, params))
     }
 
+    /// Converts into `mz_expr::AggregateFunc`.
     pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
         (
             self.args,
-            match self.func {
-                // Lag and Lead are fundamentally the same function, just with opposite directions
-                ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
-                    order_by: self.order_by,
-                    lag_lead: mz_expr::LagLeadType::Lag,
-                    ignore_nulls: self.ignore_nulls,
-                },
-                ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
-                    order_by: self.order_by,
-                    lag_lead: mz_expr::LagLeadType::Lead,
-                    ignore_nulls: self.ignore_nulls,
-                },
-                ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
-                    order_by: self.order_by,
-                    window_frame: self.window_frame,
-                },
-                ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
-                    order_by: self.order_by,
-                    window_frame: self.window_frame,
-                },
-            },
+            self.func
+                .into_expr(self.order_by, self.window_frame, self.ignore_nulls),
         )
     }
 }
@@ -647,6 +633,7 @@ pub enum ValueWindowFunc {
     Lead,
     FirstValue,
     LastValue,
+    Fused(Vec<ValueWindowFunc>),
 }
 
 impl ValueWindowFunc {
@@ -661,6 +648,56 @@ impl ValueWindowFunc {
             ValueWindowFunc::FirstValue | ValueWindowFunc::LastValue => {
                 input_type.scalar_type.nullable(true)
             }
+            ValueWindowFunc::Fused(funcs) => {
+                let input_types = input_type.scalar_type.unwrap_record_element_column_type();
+                ScalarType::Record {
+                    fields: funcs
+                        .iter()
+                        .zip_eq(input_types)
+                        .map(|(f, t)| (ColumnName::from(""), f.output_type(t.clone())))
+                        .collect(),
+                    custom_id: None,
+                }
+                .nullable(false)
+            }
+        }
+    }
+
+    pub fn into_expr(
+        self,
+        order_by: Vec<ColumnOrder>,
+        window_frame: WindowFrame,
+        ignore_nulls: bool,
+    ) -> mz_expr::AggregateFunc {
+        match self {
+            // Lag and Lead are fundamentally the same function, just with opposite directions
+            ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
+                order_by,
+                lag_lead: mz_expr::LagLeadType::Lag,
+                ignore_nulls,
+            },
+            ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
+                order_by,
+                lag_lead: mz_expr::LagLeadType::Lead,
+                ignore_nulls,
+            },
+            ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
+                order_by,
+                window_frame,
+            },
+            ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
+                order_by,
+                window_frame,
+            },
+            ValueWindowFunc::Fused(funcs) => mz_expr::AggregateFunc::FusedValueWindowFunc {
+                funcs: funcs
+                    .into_iter()
+                    .map(|func| {
+                        func.into_expr(order_by.clone(), window_frame.clone(), ignore_nulls)
+                    })
+                    .collect(),
+                order_by,
+            },
         }
     }
 }
@@ -3156,6 +3193,46 @@ impl HirScalarExpr {
          -> Result<(), ()> {
             if let HirScalarExpr::Column(col) = e {
                 f(depth, col)
+            }
+            Ok(())
+        });
+    }
+
+    /// Visits those column references in this scalar expression that refer to the root
+    /// level. These include column references that are at the root level, as well as column
+    /// references that are at a deeper subquery nesting depth, but refer back to the root level.
+    /// (Note that even if `self` is embedded inside a larger expression, we consider the
+    /// "root level" to be `self`'s level.)
+    pub fn visit_columns_referring_to_root_level<F>(&self, f: &mut F)
+    where
+        F: FnMut(usize),
+    {
+        #[allow(deprecated)]
+        let _ = self.visit_recursively(0, &mut |depth: usize,
+                                                e: &HirScalarExpr|
+         -> Result<(), ()> {
+            if let HirScalarExpr::Column(col) = e {
+                if col.level == depth {
+                    f(col.column)
+                }
+            }
+            Ok(())
+        });
+    }
+
+    /// Like `visit_columns_referring_to_root_level`, but permits mutating the column references.
+    pub fn visit_columns_referring_to_root_level_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut usize),
+    {
+        #[allow(deprecated)]
+        let _ = self.visit_recursively_mut(0, &mut |depth: usize,
+                                                    e: &mut HirScalarExpr|
+         -> Result<(), ()> {
+            if let HirScalarExpr::Column(col) = e {
+                if col.level == depth {
+                    f(&mut col.column)
+                }
             }
             Ok(())
         });

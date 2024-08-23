@@ -7043,7 +7043,112 @@ NULL
 NULL
 NULL
 
-# Complex tests with array_agg and then unnesting the array
+# Test `on_unique` for lag/lead
+query T multiline
+EXPLAIN
+SELECT
+  lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9;
+----
+Explained Query:
+  Project (#2)
+    Map (record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Project (#2)
+          Map (list[row(case when (#1) IS NULL then null else case when (#1 = 0) then #0 else 100 end end, row(#0, #1))])
+            ReadStorage materialize.public.t9
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT
+  lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9;
+----
+NULL
+NULL
+NULL
+100
+100
+100
+100
+100
+100
+
+query I
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x ORDER BY x)
+FROM t9;
+----
+NULL
+NULL
+NULL
+1
+120
+120
+120
+120
+120
+
+# Test `on_unique` for `FusedValueWindowFunc`. There should be NO window function call in the following plan.
+query T multiline
+EXPLAIN
+SELECT
+  x,
+  y,
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,110)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  first_value(y)  OVER (PARTITION BY x ORDER BY y+y),
+  last_value(y)   OVER (PARTITION BY x ORDER BY y+y),
+  lead(x,y-2,120) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9
+ORDER BY x;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0..=#7]
+    Project (#3, #4, #9, #10, #9, #8, #7, #6)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1), record_get[0](#5), record_get[1](#5), record_get[2](#5), record_get[3](#5), record_get[4](#5))
+        FlatMap unnest_list(#0)
+          Project (#3)
+            Map ((#1) IS NULL, list[row(row(case when #2 then null else case when (0 = (#1 - 2)) then #0 else 120 end end, #1, #1, case when #2 then null else case when (#1 = 0) then #0 else 100 end end, case when #2 then null else case when (#1 = 0) then #0 else 110 end end), row(#0, #1))])
+              ReadStorage materialize.public.t9
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+query IIIIIIII
+SELECT
+  x,
+  y,
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,110)    OVER (PARTITION BY x ORDER BY y+y),
+  lag(x,y,100)    OVER (PARTITION BY x ORDER BY y+y),
+  first_value(y)  OVER (PARTITION BY x ORDER BY y+y),
+  last_value(y)   OVER (PARTITION BY x ORDER BY y+y),
+  lead(x,y-2,120) OVER (PARTITION BY x ORDER BY y+y)
+FROM t9
+ORDER BY x;
+----
+1  2  100  110  100  2  2  1
+3  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+5  6  100  110  100  6  6  120
+7  8  100  110  100  8  8  120
+9  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+11  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+13  14  100  110  100  14  14  120
+15  16  100  110  100  16  16  120
+17  18  100  110  100  18  18  120
+
+
+## Complex tests with array_agg and then unnesting the array
 
 query R
 SELECT avg(u)
@@ -7221,3 +7326,153 @@ where (case when (((select "collection_timestamp" from mz_internal.mz_storage_us
          end
        end
     );
+
+## Tests for window function fusion
+
+query T multiline
+EXPLAIN
+SELECT
+  *,
+  lag(x)          OVER (ORDER BY x),
+  first_value(x)  OVER (ORDER BY x),
+  last_value(x)   OVER (ORDER BY x),
+  x*y,
+  lag(y)          OVER (ORDER BY x),
+  lag(x+x,1,null) OVER (PARTITION BY x ORDER BY y),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS FIRST),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS LAST),
+  x+y,
+  lag(x+x,2,null) OVER (PARTITION BY x ORDER BY y)
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#11]
+    Project (#3, #4, #13, #12, #11, #14, #10, #6, #8, #7, #15, #5)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[3](#2), record_get[4](#2), record_get[6](#2), record_get[8](#2), record_get[0](#1), record_get[0](#9), record_get[1](#9), record_get[2](#9), record_get[3](#9), (#3 * #4), (#3 + #4))
+        FlatMap unnest_list(#0)
+          Reduce aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], last_value[order_by=[#0 asc nulls_last]], first_value[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row(record_get[1](record_get[1](#0)), 1, null), record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)), row(record_get[0](record_get[1](#0)), 1, null))), record_get[0](record_get[1](#0))))]
+            Project (#1)
+              FlatMap unnest_list(#0)
+                Project (#1)
+                  Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_first]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
+                    Project (#1)
+                      FlatMap unnest_list(#0)
+                        Project (#1)
+                          Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
+                            Project (#1)
+                              FlatMap unnest_list(#0)
+                                Project (#1)
+                                  Reduce group_by=[#0] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(row((#0 + #0), 2, null), row((#0 + #0), 1, null))), #1))]
+                                    ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+query IIIIIIIIIIII
+SELECT
+  *,
+  lag(x)          OVER (ORDER BY x),
+  first_value(x)  OVER (ORDER BY x),
+  last_value(x)   OVER (ORDER BY x),
+  x*y,
+  lag(y)          OVER (ORDER BY x),
+  lag(x+x,1,null) OVER (PARTITION BY x ORDER BY y),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS FIRST),
+  lead(x,2,null)  OVER (PARTITION BY x ORDER BY -y NULLS LAST),
+  x+y,
+  lag(x+x,2,null) OVER (PARTITION BY x ORDER BY y)
+FROM t7
+ORDER BY x,y;
+----
+1  2  NULL  1  1  2  NULL  NULL  NULL  NULL  3  NULL
+3  NULL  1  1  3  NULL  2  NULL  NULL  NULL  NULL  NULL
+5  6  3  1  5  30  NULL  NULL  NULL  NULL  11  NULL
+7  8  5  1  7  56  6  NULL  NULL  NULL  15  NULL
+9  NULL  7  1  9  NULL  8  NULL  NULL  NULL  NULL  NULL
+10  -50  9  1  10  -500  NULL  NULL  NULL  NULL  -40  NULL
+10  -40  10  1  10  -400  -50  20  NULL  NULL  -30  NULL
+11  NULL  10  1  11  NULL  -40  NULL  NULL  NULL  NULL  NULL
+13  14  11  1  13  182  NULL  NULL  NULL  NULL  27  NULL
+15  16  13  1  15  240  14  NULL  NULL  NULL  31  NULL
+17  18  15  1  17  306  16  NULL  NULL  NULL  35  NULL
+
+# In the following query, currently we only fuse the two inner `lag`s.
+# In theory, we could also fuse the two `last_value`s.
+query T multiline
+EXPLAIN
+SELECT
+  *,
+  first_value(
+    lag(x*x,y,1111) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y),
+  x*y,
+  last_value(
+    lag(x*x,y,2222) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y+y),
+  last_value(x+y) OVER (PARTITION BY x ORDER BY y+y),
+  lag(y)          OVER (ORDER BY x),
+  x+y
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#7]
+    Project (#3, #4, #8, #9, #7, #6, #5, #10)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[8](#2), record_get[0](#1), (#3 * #4), (#3 + #4))
+        FlatMap unnest_list(#0)
+          Project (#1)
+            Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[first_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[6](record_get[1](#0))), record_get[1](record_get[1](#0))))]
+              Project (#1)
+                FlatMap unnest_list(#0)
+                  Project (#1)
+                    Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), record_get[0](record_get[0](#0))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
+                      Project (#1)
+                        FlatMap unnest_list(#0)
+                          Project (#1)
+                            Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 2222), row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 1111))), record_get[1](record_get[1](#0))))]
+                              Project (#1)
+                                FlatMap unnest_list(#0)
+                                  Project (#1)
+                                    Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), (record_get[0](record_get[1](#0)) + record_get[1](record_get[1](#0)))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
+                                      Project (#1)
+                                        FlatMap unnest_list(#0)
+                                          Reduce aggregates=[lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#1, 1, null)), #0))]
+                                            ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+query IIIIIIII
+SELECT
+  *,
+  first_value(
+    lag(x*x,y,1111) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y),
+  x*y,
+  last_value(
+    lag(x*x,y,2222) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y+y),
+  last_value(x+y) OVER (PARTITION BY x ORDER BY y+y),
+  lag(y)          OVER (ORDER BY x),
+  x+y
+FROM t7
+ORDER BY x,y;
+----
+1  2  1111  2  2222  3  NULL  3
+3  NULL  NULL  NULL  NULL  NULL  2  NULL
+5  6  1111  30  2222  11  NULL  11
+7  8  1111  56  2222  15  6  15
+9  NULL  NULL  NULL  NULL  NULL  8  NULL
+10  -50  1111  -500  2222  -40  NULL  -40
+10  -40  1111  -400  2222  -30  -50  -30
+11  NULL  NULL  NULL  NULL  NULL  -40  NULL
+13  14  1111  182  2222  27  NULL  27
+15  16  1111  240  2222  31  14  31
+17  18  1111  306  2222  35  16  35

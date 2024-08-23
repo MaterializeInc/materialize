@@ -39,7 +39,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
-use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders};
+use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders, ProtoFusedValueWindowFunc};
 use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
     compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
@@ -453,7 +453,27 @@ where
     })
 }
 
-// The expected input is in the format of [((OriginalRow, EncodedArgs), OrderByExprs...)]
+/// The expected input is in the format of `[((OriginalRow, EncodedArgs), OrderByExprs...)]`
+/// For example,
+///
+/// lag(x*y, 1, null) over (partition by x+y order by x-y, x/y)
+///
+/// list of:
+/// row(
+///   row(
+///     row(#0, #1),
+///     row((#0 * #1), 1, null)
+///   ),
+///   (#0 - #1),
+///   (#0 / #1)
+/// )
+///
+/// The output is in the format of `[result_value, original_row]`, e.g.
+/// list of:
+/// row(
+///   42,
+///   row(7, 8)
+/// )
 fn lag_lead<'a, I>(
     datums: I,
     temp_storage: &'a RowArena,
@@ -467,29 +487,59 @@ where
     // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, EncodedArgs) record
     let datums = order_aggregate_datums(datums, order_by);
 
-    // Decode the input (OriginalRow, EncodedArgs) into separate datums
+    // Take the (OriginalRow, EncodedArgs) records and unwrap them into separate datums.
     // EncodedArgs = (InputValue, Offset, DefaultValue) for Lag/Lead
-    let datums = datums
+    // (`OriginalRow` is kept in a record form, as we don't need to look inside that.)
+    let (orig_rows, unwrapped_args): (Vec<_>, Vec<_>) = datums
         .into_iter()
         .map(|d| {
             let mut iter = d.unwrap_list().iter();
             let original_row = iter.next().unwrap();
-            let mut encoded_args = iter.next().unwrap().unwrap_list().iter();
-            let (input_value, offset, default_value) = (
-                encoded_args.next().unwrap(),
-                encoded_args.next().unwrap(),
-                encoded_args.next().unwrap(),
-            );
-
-            (input_value, offset, default_value, original_row)
+            let (input_value, offset, default_value) =
+                unwrap_lag_lead_encoded_args(iter.next().unwrap());
+            (original_row, (input_value, offset, default_value))
         })
-        .collect_vec();
+        .unzip();
 
-    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(datums.len());
-    for (idx, (_, offset, default_value, original_row)) in datums.iter().enumerate() {
+    let result = lag_lead_inner(unwrapped_args, lag_lead_type, ignore_nulls);
+
+    let result = result
+        .into_iter()
+        .zip_eq(orig_rows)
+        .map(|(result_value, original_row)| {
+            temp_storage.make_datum(|packer| {
+                packer.push_list(vec![result_value, original_row]);
+            })
+        });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(result);
+    })
+}
+
+/// lag/lead's arguments are in a record. This function unwraps this record.
+fn unwrap_lag_lead_encoded_args(encoded_args: Datum) -> (Datum, Datum, Datum) {
+    let mut encoded_args_iter = encoded_args.unwrap_list().iter();
+    let (input_value, offset, default_value) = (
+        encoded_args_iter.next().unwrap(),
+        encoded_args_iter.next().unwrap(),
+        encoded_args_iter.next().unwrap(),
+    );
+    (input_value, offset, default_value)
+}
+
+/// Each element of `args` has the 3 arguments evaluated for a single input row.
+/// Returns the results for each input row.
+fn lag_lead_inner<'a>(
+    args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
+    lag_lead_type: &LagLeadType,
+    ignore_nulls: &bool,
+) -> Vec<Datum<'a>> {
+    let mut result: Vec<Datum> = Vec::with_capacity(args.len());
+    for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
         if offset.is_null() {
-            result.push((*offset, *original_row));
+            result.push(*offset);
             continue;
         }
 
@@ -504,7 +554,7 @@ where
         // Get a Datum from `datums`. Return None if index is out of range.
         let datums_get = |i: i64| -> Option<Datum> {
             match u64::try_from(i) {
-                Ok(i) => datums
+                Ok(i) => args
                     .get(usize::cast_from(i))
                     .map(|d| Some(d.0)) // succeeded in getting a Datum from the vec
                     .unwrap_or(None), // overindexing
@@ -542,21 +592,13 @@ where
             }
         };
 
-        result.push((lagged_value, *original_row));
+        result.push(lagged_value);
     }
 
-    let result = result.into_iter().map(|(result_value, original_row)| {
-        temp_storage.make_datum(|packer| {
-            packer.push_list(vec![result_value, original_row]);
-        })
-    });
-
-    temp_storage.make_datum(|packer| {
-        packer.push_list(result);
-    })
+    result
 }
 
-// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
+/// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
 fn first_value<'a, I>(
     datums: I,
     temp_storage: &'a RowArena,
@@ -570,20 +612,38 @@ where
     let datums = order_aggregate_datums(datums, order_by);
 
     // Decode the input (OriginalRow, InputValue) into separate datums
-    let datums = datums
+    let (orig_rows, args): (Vec<_>, Vec<_>) = datums
         .into_iter()
         .map(|d| {
             let mut iter = d.unwrap_list().iter();
             let original_row = iter.next().unwrap();
             let input_value = iter.next().unwrap();
 
-            (input_value, original_row)
+            (original_row, input_value)
         })
-        .collect_vec();
+        .unzip();
 
+    let results = first_value_inner(args, window_frame);
+
+    let results_with_orig_rows =
+        results
+            .into_iter()
+            .zip_eq(orig_rows)
+            .map(|(result_value, original_row)| {
+                temp_storage.make_datum(|packer| {
+                    packer.push_list(vec![result_value, original_row]);
+                })
+            });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(results_with_orig_rows);
+    })
+}
+
+fn first_value_inner<'a>(datums: Vec<Datum<'a>>, window_frame: &WindowFrame) -> Vec<Datum<'a>> {
     let length = datums.len();
-    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
-    for (idx, (current_datum, original_row)) in datums.iter().enumerate() {
+    let mut result: Vec<Datum> = Vec::with_capacity(length);
+    for (idx, current_datum) in datums.iter().enumerate() {
         let first_value = match &window_frame.start_bound {
             // Always return the current value
             WindowFrameBound::CurrentRow => *current_datum,
@@ -595,10 +655,10 @@ where
                     if idx < end_offset {
                         Datum::Null
                     } else {
-                        datums[0].0
+                        datums[0]
                     }
                 } else {
-                    datums[0].0
+                    datums[0]
                 }
             }
             WindowFrameBound::OffsetPreceding(offset) => {
@@ -611,10 +671,10 @@ where
                     if start_offset < end_offset || idx < end_offset {
                         Datum::Null
                     } else {
-                        datums[start_idx].0
+                        datums[start_idx]
                     }
                 } else {
-                    datums[start_idx].0
+                    datums[start_idx]
                 }
             }
             WindowFrameBound::OffsetFollowing(offset) => {
@@ -625,31 +685,24 @@ where
                     if offset > end_offset || start_idx >= length {
                         Datum::Null
                     } else {
-                        datums[start_idx].0
+                        datums[start_idx]
                     }
                 } else {
-                    datums.get(start_idx).map(|d| d.0).unwrap_or(Datum::Null)
+                    datums
+                        .get(start_idx)
+                        .map(|d| d.clone())
+                        .unwrap_or(Datum::Null)
                 }
             }
             // Forbidden during planning
             WindowFrameBound::UnboundedFollowing => unreachable!(),
         };
-
-        result.push((first_value, *original_row));
+        result.push(first_value);
     }
-
-    let result = result.into_iter().map(|(result_value, original_row)| {
-        temp_storage.make_datum(|packer| {
-            packer.push_list(vec![result_value, original_row]);
-        })
-    });
-
-    temp_storage.make_datum(|packer| {
-        packer.push_list(result);
-    })
+    result
 }
 
-// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
+/// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
 fn last_value<'a, I>(
     datums: I,
     temp_storage: &'a RowArena,
@@ -664,20 +717,42 @@ where
     let datums = order_aggregate_datums_with_rank(datums, order_by);
 
     // Decode the input (OriginalRow, InputValue) into separate datums, while keeping the OrderByRow
-    let datums = datums
+    let mut args = Vec::new();
+    let mut original_rows = Vec::new();
+    let mut order_by_rows = Vec::new();
+    for (d, order_by_row) in datums.into_iter() {
+        let mut iter = d.unwrap_list().iter();
+        let original_row = iter.next().unwrap();
+        let input_value = iter.next().unwrap();
+        order_by_rows.push(order_by_row);
+        original_rows.push(original_row);
+        args.push(input_value);
+    }
+
+    let results = last_value_inner(args, &order_by_rows, window_frame);
+
+    let result = results
         .into_iter()
-        .map(|(d, order_by_row)| {
-            let mut iter = d.unwrap_list().iter();
-            let original_row = iter.next().unwrap();
-            let input_value = iter.next().unwrap();
+        .zip_eq(original_rows)
+        .map(|(result_value, original_row)| {
+            temp_storage.make_datum(|packer| {
+                packer.push_list(vec![result_value, original_row]);
+            })
+        });
 
-            (input_value, original_row, order_by_row)
-        })
-        .collect_vec();
+    temp_storage.make_datum(|packer| {
+        packer.push_list(result);
+    })
+}
 
-    let length = datums.len();
-    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
-    for (idx, (current_datum, original_row, order_by_row)) in datums.iter().enumerate() {
+fn last_value_inner<'a>(
+    args: Vec<Datum<'a>>,
+    order_by_rows: &Vec<Row>,
+    window_frame: &WindowFrame,
+) -> Vec<Datum<'a>> {
+    let length = args.len();
+    let mut results: Vec<Datum> = Vec::with_capacity(length);
+    for (idx, (current_datum, order_by_row)) in args.iter().zip_eq(order_by_rows).enumerate() {
         let last_value = match &window_frame.end_bound {
             WindowFrameBound::CurrentRow => match &window_frame.units {
                 // Always return the current value when in ROWS mode
@@ -687,12 +762,15 @@ where
                     // The peer group is the group of rows with the same ORDER BY value
                     // Note: Range is only supported for the default window frame (RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
                     // which is why it does not appear in the other branches
-                    datums[idx..]
+                    let target_idx = order_by_rows[idx..]
                         .iter()
-                        .take_while(|(_, _, row)| row == order_by_row)
+                        .enumerate()
+                        .take_while(|(_, row)| *row == order_by_row)
                         .last()
                         .unwrap()
                         .0
+                        + idx;
+                    args[target_idx]
                 }
                 // GROUPS is not supported, and forbidden during planning
                 WindowFrameUnits::Groups => unreachable!(),
@@ -705,10 +783,10 @@ where
                     if idx + start_offset > length - 1 {
                         Datum::Null
                     } else {
-                        datums[length - 1].0
+                        args[length - 1]
                     }
                 } else {
-                    datums[length - 1].0
+                    args[length - 1]
                 }
             }
             WindowFrameBound::OffsetFollowing(offset) => {
@@ -723,16 +801,10 @@ where
                         Datum::Null
                     } else {
                         // Return the last valid element in the window
-                        datums
-                            .get(end_idx)
-                            .map(|d| d.0)
-                            .unwrap_or(datums[length - 1].0)
+                        args.get(end_idx).unwrap_or(&args[length - 1]).clone()
                     }
                 } else {
-                    datums
-                        .get(end_idx)
-                        .map(|d| d.0)
-                        .unwrap_or(datums[length - 1].0)
+                    args.get(end_idx).unwrap_or(&args[length - 1]).clone()
                 }
             }
             WindowFrameBound::OffsetPreceding(offset) => {
@@ -748,27 +820,113 @@ where
                     if offset > start_offset {
                         Datum::Null
                     } else {
-                        datums[end_idx].0
+                        args[end_idx]
                     }
                 } else {
-                    datums[end_idx].0
+                    args[end_idx]
                 }
             }
             // Forbidden during planning
             WindowFrameBound::UnboundedPreceding => unreachable!(),
         };
+        results.push(last_value);
+    }
+    results
+}
 
-        result.push((last_value, *original_row));
+/// Executes `FusedValueWindowFunc` on a reduction group.
+/// The expected input is in the format of `[((OriginalRow, (Args1, Args2, ...)), OrderByExprs...)]`
+/// where `Args1`, `Args2`, are the arguments of each of the fused functions. For functions that
+/// have only a single argument (first_value/last_value), these are simple values. For functions
+/// that have multiple arguments (lag/lead), these are also records.
+fn fused_value_window_func<'a, I>(
+    input_datums: I,
+    callers_temp_storage: &'a RowArena,
+    funcs: &Vec<AggregateFunc>,
+    order_by: &Vec<ColumnOrder>,
+) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Let's create a new RowArena, to avoid flooding the caller's arena with stuff proportional to
+    // the window partition size. We will use our own arena for internal evaluations, and will use
+    // the caller's at the very end to return the final result Datum.
+    let temp_storage = RowArena::new();
+
+    let has_last_value = funcs
+        .iter()
+        .any(|f| matches!(f, AggregateFunc::LastValue { .. }));
+
+    let input_datums_with_ranks = order_aggregate_datums_with_rank(input_datums, order_by);
+
+    let mut encoded_argsss = vec![Vec::new(); funcs.len()];
+    let mut original_rows = Vec::new();
+    let mut order_by_rows = Vec::new();
+    for (d, order_by_row) in input_datums_with_ranks {
+        let mut iter = d.unwrap_list().iter();
+        let original_row = iter.next().unwrap();
+        original_rows.push(original_row);
+        let mut argss_iter = iter.next().unwrap().unwrap_list().iter();
+        for i in 0..funcs.len() {
+            let encoded_args = argss_iter.next().unwrap();
+            encoded_argsss[i].push(encoded_args);
+        }
+        if has_last_value {
+            order_by_rows.push(order_by_row);
+        }
     }
 
-    let result = result.into_iter().map(|(result_value, original_row)| {
+    let mut results_per_row = vec![Vec::new(); original_rows.len()];
+    for (func, encoded_argss) in funcs.iter().zip_eq(encoded_argsss) {
+        let results = match func {
+            AggregateFunc::LagLead {
+                order_by: inner_order_by,
+                lag_lead,
+                ignore_nulls,
+            } => {
+                assert_eq!(order_by, inner_order_by);
+                let unwrapped_argss = encoded_argss
+                    .into_iter()
+                    .map(|encoded_args| unwrap_lag_lead_encoded_args(encoded_args))
+                    .collect();
+                lag_lead_inner(unwrapped_argss, lag_lead, ignore_nulls)
+            }
+            AggregateFunc::FirstValue {
+                order_by: inner_order_by,
+                window_frame,
+            } => {
+                assert_eq!(order_by, inner_order_by);
+                // (No unwrapping to do on the args here, because there is only 1 arg, so it's not
+                // wrapped into a record.)
+                first_value_inner(encoded_argss, window_frame)
+            }
+            AggregateFunc::LastValue {
+                order_by: inner_order_by,
+                window_frame,
+            } => {
+                assert_eq!(order_by, inner_order_by);
+                // (No unwrapping to do on the args here, because there is only 1 arg, so it's not
+                // wrapped into a record.)
+                last_value_inner(encoded_argss, &order_by_rows, window_frame)
+            }
+            _ => panic!("unknown window function in FusedValueWindowFunc"),
+        };
+        for (i, r) in results.into_iter().enumerate() {
+            results_per_row[i].push(r);
+        }
+    }
+
+    let results_with_orig_rows = results_per_row.into_iter().enumerate().map(|(i, results)| {
         temp_storage.make_datum(|packer| {
-            packer.push_list(vec![result_value, original_row]);
+            packer.push_list(vec![
+                temp_storage.make_datum(|packer| packer.push_list(results)),
+                original_rows[i],
+            ]);
         })
     });
 
-    temp_storage.make_datum(|packer| {
-        packer.push_list(result);
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(results_with_orig_rows);
     })
 }
 
@@ -1321,6 +1479,13 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
     },
+    /// Several value window functions fused into one function, to amortize overheads.
+    FusedValueWindowFunc {
+        funcs: Vec<AggregateFunc>,
+        /// Currently, all the fused functions must have the same `order_by`. (We can later
+        /// eliminate this limitation.)
+        order_by: Vec<ColumnOrder>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -1572,6 +1737,12 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     order_by: Some(order_by.into_proto()),
                     window_frame: Some(window_frame.into_proto()),
                 })),
+                AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
+                    Kind::FusedValueWindowFunc(ProtoFusedValueWindowFunc {
+                        funcs: funcs.into_proto(),
+                        order_by: Some(order_by.into_proto()),
+                    })
+                }
                 AggregateFunc::Dummy => Kind::Dummy(()),
             }),
         }
@@ -1703,6 +1874,12 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     .window_frame
                     .into_rust_if_some("ProtoWindowAggregate::window_frame")?,
             },
+            Kind::FusedValueWindowFunc(fvwf) => AggregateFunc::FusedValueWindowFunc {
+                funcs: fvwf.funcs.into_rust()?,
+                order_by: fvwf
+                    .order_by
+                    .into_rust_if_some("ProtoFusedValueWindowFunc::order_by")?,
+            },
             Kind::Dummy(()) => AggregateFunc::Dummy,
         })
     }
@@ -1806,6 +1983,9 @@ impl AggregateFunc {
                 order_by,
                 window_frame,
             ),
+            AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
+                fused_value_window_func(datums, temp_storage, funcs, order_by)
+            }
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -1866,6 +2046,7 @@ impl AggregateFunc {
             AggregateFunc::FirstValue { .. } => Datum::empty_list(),
             AggregateFunc::LastValue { .. } => Datum::empty_list(),
             AggregateFunc::WindowAggregate { .. } => Datum::empty_list(),
+            AggregateFunc::FusedValueWindowFunc { .. } => Datum::empty_list(),
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
@@ -1960,26 +2141,20 @@ impl AggregateFunc {
             AggregateFunc::DenseRank { .. } => {
                 AggregateFunc::output_type_ranking_window_funcs(&input_type, "?dense_rank?")
             }
-            AggregateFunc::LagLead { lag_lead, .. } => {
-                // The input type for Lag is a ((OriginalRow, EncodedArgs), OrderByExprs...)
+            AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
+                // The input type for Lag is ((OriginalRow, EncodedArgs), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
                     .clone()
                     .nullable(false);
-                let value_type = fields[0].unwrap_record_element_type()[1]
-                    .unwrap_record_element_type()[0]
-                    .clone()
-                    .nullable(true);
-                let column_name = match lag_lead {
-                    LagLeadType::Lag => "?lag?",
-                    LagLeadType::Lead => "?lead?",
-                };
+                let output_type_inner = Self::lag_lead_output_type_inner_from_encoded_args(fields[0].unwrap_record_element_type()[1]);
+                let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
-                            (ColumnName::from(column_name), value_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (column_name, output_type_inner),
+                            (ColumnName::from("?orig_row?"), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -1987,20 +2162,20 @@ impl AggregateFunc {
                 }
             }
             AggregateFunc::FirstValue { .. } => {
-                // The input type for FirstValue is ((OriginalRow, EncodedArgs), OrderByExprs...)
+                // The input type for FirstValue is ((OriginalRow, Arg), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
                     .clone()
                     .nullable(false);
                 let value_type = fields[0].unwrap_record_element_type()[1]
                     .clone()
-                    .nullable(true);
+                    .nullable(true); // null when the partition is empty
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from("?first_value?"), value_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (ColumnName::from("?orig_row?"), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -2008,20 +2183,20 @@ impl AggregateFunc {
                 }
             }
             AggregateFunc::LastValue { .. } => {
-                // The input type for LastValue is ((OriginalRow, EncodedArgs), OrderByExprs...)
+                // The input type for LastValue is ((OriginalRow, Arg), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
                     .clone()
                     .nullable(false);
                 let value_type = fields[0].unwrap_record_element_type()[1]
                     .clone()
-                    .nullable(true);
+                    .nullable(true); // null when the partition is empty
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from("?last_value?"), value_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (ColumnName::from("?orig_row?"), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -2045,7 +2220,54 @@ impl AggregateFunc {
                     element_type: Box::new(ScalarType::Record {
                         fields: vec![
                             (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
-                            (ColumnName::from("?record?"), original_row_type),
+                            (ColumnName::from("?orig_row?"), original_row_type),
+                        ],
+                        custom_id: None,
+                    }),
+                    custom_id: None,
+                }
+            }
+            AggregateFunc::FusedValueWindowFunc { funcs, order_by: _ } => {
+                // The input type is ((OriginalRow, EncodedArgs), OrderByExprs...)
+                // where EncodedArgs is a record, where each element is the argument to one of the
+                // function calls that got fused. This is a record for lag/lead, and a simple type
+                // for first_value/last_value.
+                let fields = input_type.scalar_type.unwrap_record_element_type();
+                let original_row_type = fields[0].unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(false);
+                let encoded_args_type = fields[0].unwrap_record_element_type()[1].unwrap_record_element_type();
+
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (ColumnName::from("?fused_value_window_func?"), ScalarType::Record {
+                                fields: encoded_args_type.into_iter().zip_eq(funcs).map(|(arg_type, func)| {
+                                    match func {
+                                        AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
+                                            (
+                                                Self::lag_lead_result_column_name(lag_lead_type),
+                                                Self::lag_lead_output_type_inner_from_encoded_args(arg_type)
+                                            )
+                                        },
+                                        AggregateFunc::FirstValue { .. } => {
+                                            (
+                                                ColumnName::from("?first_value?"),
+                                                arg_type.clone().nullable(true),
+                                            )
+                                        }
+                                        AggregateFunc::LastValue { .. } => {
+                                            (
+                                                ColumnName::from("?last_value?"),
+                                                arg_type.clone().nullable(true),
+                                            )
+                                        }
+                                        _ => panic!("FusedValueWindowFunc has an unknown function"),
+                                    }
+                                }).collect(),
+                                custom_id: None,
+                            }.nullable(false)),
+                            (ColumnName::from("?orig_row?"), original_row_type),
                         ],
                         custom_id: None,
                     }),
@@ -2123,7 +2345,7 @@ impl AggregateFunc {
                             ColumnName::from(col_name),
                             ScalarType::Int64.nullable(false),
                         ),
-                        (ColumnName::from("?record?"), {
+                        (ColumnName::from("?orig_row?"), {
                             let inner = match &fields[0].1.scalar_type {
                                 ScalarType::List { element_type, .. } => element_type.clone(),
                                 _ => unreachable!(),
@@ -2137,6 +2359,25 @@ impl AggregateFunc {
             },
             _ => unreachable!(),
         }
+    }
+
+    /// Given the `EncodedArgs` part of `((OriginalRow, EncodedArgs), OrderByExprs...)`,
+    /// this computes the type of the first field of the output type. (The first field is the
+    /// real result, the rest is the original row.)
+    fn lag_lead_output_type_inner_from_encoded_args(encoded_args_type: &ScalarType) -> ColumnType {
+        // lag/lead have 3 arguments, and the output type is
+        // the same as the first of these, but always nullable. (It's null when the
+        // lag/lead computation reaches over the bounds of the window partition.)
+        encoded_args_type.unwrap_record_element_type()[0]
+            .clone()
+            .nullable(true)
+    }
+
+    fn lag_lead_result_column_name(lag_lead_type: &LagLeadType) -> ColumnName {
+        ColumnName::from(match lag_lead_type {
+            LagLeadType::Lag => "?lag?",
+            LagLeadType::Lead => "?lead?",
+        })
     }
 
     /// Returns true if the non-null constraint on the aggregation can be
@@ -2451,6 +2692,7 @@ impl AggregateFunc {
             Self::FirstValue { .. } => "first_value",
             Self::LastValue { .. } => "last_value",
             Self::WindowAggregate { .. } => "window_agg",
+            Self::FusedValueWindowFunc { .. } => "fused_value_window_func",
             Self::Dummy => "dummy",
         }
     }
@@ -2530,6 +2772,15 @@ where
                 if *window_frame != WindowFrame::default() {
                     write!(f, " {}", window_frame)?;
                 }
+                f.write_str("]")
+            }
+            FusedValueWindowFunc { funcs, order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
+                let funcs = separated(", ", funcs.iter().map(|func| self.child(func)));
+                f.write_str(name)?;
+                f.write_str("[")?;
+                write!(f, "{} ", funcs)?;
+                write!(f, "order_by=[{}]", separated(", ", order_by))?;
                 f.write_str("]")
             }
             _ => f.write_str(name),
