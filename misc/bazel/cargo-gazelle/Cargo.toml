@@ -25,7 +25,7 @@ protobuf-parse = "3.4.0"
 quote = "1.0.23"
 syn = { version = "1.0.107", features = ["extra-traits", "full"] }
 serde = "1.0.152"
-serde_json = "1.0.89"
+serde_json = "1.0.125"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }
 workspace-hack = { version = "0.0.0", path = "../../../src/workspace-hack", optional = true }
