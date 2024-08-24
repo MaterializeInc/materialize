@@ -18,12 +18,15 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 if [[ $# -lt 2 ]]; then
-    die "usage: $0 DOCKER-HUB-USERNAME TAG [arguments for mzimage]"
+    die "usage: $0 DOCKER-HUB-USERNAME ADDITIONAL-BUILD-METADATA [arguments for mzimage]"
 fi
 username=$1
 shift
-tag=$1
+additional_build_metadata=$1
 shift
+
+version=$(bin/pyactivate -c "from materialize.mz_version import MzVersion; print(MzVersion.parse_cargo())")
+tag="$version--local.$additional_build_metadata"
 
 for image in environmentd clusterd; do
     bin/mzimage acquire --arch=aarch64 "$image" "$@"
