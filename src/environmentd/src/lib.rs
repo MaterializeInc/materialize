@@ -14,12 +14,12 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::BTreeMap;
-use std::{env, io};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::{env, io};
 
 use anyhow::{anyhow, bail, Context};
 use derivative::Derivative;
