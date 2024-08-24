@@ -14,7 +14,7 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::BTreeMap;
-use std::env;
+use std::{env, io};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -237,7 +237,7 @@ impl Listeners {
             internal_sql_listen_addr,
             internal_http_listen_addr,
         }: ListenersConfig,
-    ) -> Result<Listeners, anyhow::Error> {
+    ) -> Result<Listeners, io::Error> {
         let sql = mz_server_core::listen(&sql_listen_addr).await?;
         let http = mz_server_core::listen(&http_listen_addr).await?;
         let balancer_sql = mz_server_core::listen(&balancer_sql_listen_addr).await?;
@@ -256,7 +256,7 @@ impl Listeners {
 
     /// Like [`Listeners::bind`], but binds each ports to an arbitrary free
     /// local address.
-    pub async fn bind_any_local() -> Result<Listeners, anyhow::Error> {
+    pub async fn bind_any_local() -> Result<Listeners, io::Error> {
         Listeners::bind(ListenersConfig {
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
