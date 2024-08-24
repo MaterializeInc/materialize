@@ -21,10 +21,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, io};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use derivative::Derivative;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
-use mz_adapter::load_remote_system_parameters;
+use mz_adapter::{load_remote_system_parameters, AdapterError};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT, WITH_0DT_DEPLOYMENT_MAX_WAIT};
 use mz_build_info::{build_info, BuildInfo};
@@ -272,7 +272,7 @@ impl Listeners {
     ///
     /// Returns a handle to the server once it is fully booted.
     #[instrument(name = "environmentd::serve")]
-    pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
+    pub async fn serve(self, config: Config) -> Result<Server, AdapterError> {
         let serve_start = Instant::now();
         info!("startup: envd serve: beginning");
         info!("startup: envd serve: preamble beginning");
@@ -340,7 +340,8 @@ impl Listeners {
             .catalog_config
             .persist_clients
             .open(config.controller.persist_location.clone())
-            .await?;
+            .await
+            .context("opening persist client")?;
         let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
             persist_client.clone(),
             config.environment_id.organization_id(),
@@ -545,7 +546,7 @@ impl Listeners {
             .0
             .contains_key(&config.bootstrap_default_cluster_replica_size)
         {
-            bail!("bootstrap default cluster replica size is unknown");
+            return Err(anyhow!("bootstrap default cluster replica size is unknown").into());
         }
         let envd_epoch = adapter_storage.epoch();
 

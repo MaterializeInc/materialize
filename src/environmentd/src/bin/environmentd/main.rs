@@ -949,7 +949,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
         };
-        listeners
+        let server = listeners
             .serve(mz_environmentd::Config {
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
@@ -1012,7 +1012,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Testing options.
                 now,
             })
-            .await
+            .await?;
+        Ok::<_, anyhow::Error>(server)
     })?;
     info!(
         "startup: envd init: serving complete in {:?}",
