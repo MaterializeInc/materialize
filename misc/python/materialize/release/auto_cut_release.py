@@ -9,29 +9,31 @@
 
 """Start a new minor release series."""
 
-import os
+import argparse
 import sys
-from datetime import datetime, timedelta
-from pathlib import Path
 
 from materialize import MZ_ROOT, git, spawn
 from materialize.mz_version import MzVersion
-
-VERSION_FILE_TEXT = """---
-title: "Materialize $VERSION"
-date: $DATE
-released: false
-_build:
-  render: never
----
-"""
+from materialize.release.util import doc_file_path
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("release_version")
+    parser.add_argument("next_version")
+    parser.add_argument("next_date")
+    args = parser.parse_args()
+
     remote = git.get_remote()
     latest_version = git.get_latest_version(version_type=MzVersion)
-    release_version = latest_version.bump_minor()
-    next_version = MzVersion.parse_mz(f"{release_version.bump_minor()}-dev.0")
+    release_version = MzVersion.parse_mz(f"{args.release_version}.0")
+    next_version = MzVersion.parse_mz(f"{args.next_version}.0-dev.0")
+
+    if latest_version >= release_version:
+        print(
+            f"Latest version ({latest_version}) is greater than or equal to release version ({release_version}); nothing to do"
+        )
+        return 0
 
     print("Pulling latest main...")
     spawn.runv(["git", "pull", remote, "main"])
@@ -54,40 +56,28 @@ def main():
     print(f"Bumping version on main to {next_version}...")
     spawn.runv([MZ_ROOT / "bin" / "bump-version", str(next_version)])
 
-    # Create the release page in the docs for the next version after the one that was just
-    # cut, which will be released in ~two weeks (not the next Thursday, but the following
-    # one).
-    next_version_final = str(next_version).removesuffix(".0-dev.0")
-    print(f"Creating {next_version_final}.md in the docs")
-    today = datetime.today()
-    two_thursdays_from_now = today + timedelta(
-        days=(7 + ((3 - today.weekday()) % 7 or 7))
-    )
-    next_version_doc_file = Path(
-        MZ_ROOT / "doc" / "user" / "content" / "releases" / f"{next_version_final}.md"
-    )
+    # Create the release page in the docs for the next version after the one
+    # that was just cut.
+    print(f"Creating {args.next_version}.md in the docs...")
+    next_version_doc_file = doc_file_path(args.next_version)
     if not next_version_doc_file.exists():
-        text = VERSION_FILE_TEXT.replace("$VERSION", str(next_version_final)).replace(
-            "$DATE", two_thursdays_from_now.strftime("%Y-%m-%d")
+        next_version_doc_file.write_text(
+            f"""---
+title: "Materialize {args.next_version}"
+date: {args.next_date}
+released: false
+_build:
+  render: never
+---
+"""
         )
-        next_version_doc_file.write_text(text)
         git.add_file(str(next_version_doc_file))
-        git.commit_all_changed(f"release: create doc file for {next_version_final}")
+        git.commit_all_changed(f"release: create doc file for {args.next_version}")
 
     print(f"Pushing to {remote}...")
     spawn.runv(["git", "push", remote, "main"])
 
-    github_output = os.getenv("GITHUB_OUTPUT")
-    if github_output:
-        print("Emitting GitHub output...")
-        Path(github_output).write_text(
-            "".join(
-                [
-                    f"release_version={release_version}\n",
-                    f"next_version={next_version}\n",
-                ]
-            )
-        )
+    return 0
 
 
 if __name__ == "__main__":
