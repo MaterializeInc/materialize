@@ -1167,6 +1167,13 @@ impl RowColumnarDecoder {
             nullability: col.logical_nulls(),
         })
     }
+
+    /// Returns if all of the resulting [`Row`]s would be composed entirely of [`Datum::Null`].
+    pub fn all_null(&self) -> bool {
+        self.decoders
+            .iter()
+            .all(|(_name, null_count, _decoder)| *null_count == Some(self.len))
+    }
 }
 
 impl ColumnDecoder<Row> for RowColumnarDecoder {
