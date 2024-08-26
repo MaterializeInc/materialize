@@ -73,9 +73,9 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
     ```
 
     ```
-       id   |                                 principal
-    --------+---------------------------------------------------------------------------
-     u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+                                     principal
+    ---------------------------------------------------------------------------
+     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
     ```
 
     Follow the instructions in the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html)
