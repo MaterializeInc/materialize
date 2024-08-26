@@ -17,8 +17,13 @@ a shorthand for the underlying query.
 
 Type |
 -----|------------
-[**Views**](#views) | Results are **not** persisted in durable storage. Views can be indexed to compute and incrementally update results in memory within a cluster.
-[**Materialized views**](#materialized-views) | Results **are** persisted and incrementally updated in durable storage. Materialized views can be indexed to maintain the results in memory.
+[**Views**](#views) | Results are recomputed from scratch each time the view is
+accessed. You can create an **[index](/concepts/indexes/)** on a view to keep
+its results incrementally updated and available in memory within a cluster.
+[**Materialized views**](#materialized-views) | Results are persisted
+in **durable storage** and **incrementally updated**. You can create an
+ **[index](/concepts/indexes/)** on a materialized view to make the results
+available in memory within a cluster.
 
 ## Views
 
@@ -36,16 +41,15 @@ CREATE VIEW my_view_name AS
 ```
 
 However, in Materialize, you can create an [index](/concepts/indexes/) on a view
-to **compute and, as new data arrives, incrementally update** its results in
-memory within a cluster.
+to keep view results **incrementally updated** in memory within a cluster.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 ```
 
-Once indexed, queries within that cluster can use the index to access already
-up-to-date view results from memory; i.e., they are comutationally free. See
-[Indexes and views](#indexes-and-views) for more information.
+When you create an index on a view, Materialize can use the index for query
+optimization within that cluster. See [Indexes and views](#indexes-and-views)
+for more information.
 
 See also:
 
