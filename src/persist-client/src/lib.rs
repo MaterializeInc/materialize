@@ -23,7 +23,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -140,6 +140,16 @@ mod internal {
 
 /// Persist build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
+
+pub(crate) const DANGEROUS_ENABLE_SCHEMA_EVOLUTION: Config<bool> = Config::new(
+    "persist_dangerous_enable_schema_evolution",
+    false,
+    "\
+DANGEROUS DO NOT ENABLE IN PRODUCTION ENVIRONMENTS!
+
+Enable evolving the schema of a Persist shard. Currently dangerous because \
+compaction does not yet handle batches of data with different schemas.",
+);
 
 // Re-export for convenience.
 pub use mz_persist_types::{PersistLocation, ShardId};
@@ -639,6 +649,10 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        if !DANGEROUS_ENABLE_SCHEMA_EVOLUTION.get(&self.cfg.configs) {
+            panic!("tried to evolve the schema of a Persist shard without the feature enabled");
+        }
+
         let mut machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
