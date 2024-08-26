@@ -47,6 +47,7 @@ rust_test(
 	name = "mz_service_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_service",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

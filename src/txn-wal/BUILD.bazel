@@ -44,6 +44,7 @@ rust_test(
 	name = "mz_txn_wal_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_txn_wal",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

@@ -42,6 +42,7 @@ rust_test(
 	name = "mz_lsp_server_lib_tests",
 	version = "0.3.0",
 	crate = ":mz_lsp_server",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -90,6 +91,7 @@ rust_test(
 	version = "0.3.0",
 	crate_name = "test",
 	srcs = ["tests/test.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

@@ -52,6 +52,10 @@ rust_test(
 	name = "mz_balancerd_lib_tests",
 	version = "0.115.0-dev.0",
 	crate = ":mz_balancerd",
+	crate_features = [
+		"default",
+		"mz-alloc-default",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -118,6 +122,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "server",
 	srcs = ["tests/server.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

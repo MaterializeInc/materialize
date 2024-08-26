@@ -42,6 +42,7 @@ rust_test(
 	name = "mz_timestamp_oracle_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_timestamp_oracle",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

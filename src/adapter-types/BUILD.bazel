@@ -41,6 +41,7 @@ rust_test(
 	name = "mz_adapter_types_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_adapter_types",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

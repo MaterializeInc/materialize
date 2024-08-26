@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_lowertest_derive_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_lowertest_derive",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

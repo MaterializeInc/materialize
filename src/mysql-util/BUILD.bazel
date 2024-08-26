@@ -44,6 +44,7 @@ rust_test(
 	name = "mz_mysql_util_lib_tests",
 	version = "0.1.0",
 	crate = ":mz_mysql_util",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

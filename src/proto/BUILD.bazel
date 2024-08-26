@@ -45,6 +45,12 @@ rust_test(
 	name = "mz_proto_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_proto",
+	crate_features = [
+		"chrono",
+		"chrono-tz",
+		"default",
+		"tokio-postgres",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_persist_proc_lib_tests",
 	version = "0.1.0",
 	crate = ":mz_persist_proc",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

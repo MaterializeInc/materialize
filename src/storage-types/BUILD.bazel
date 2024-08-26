@@ -61,6 +61,7 @@ rust_test(
 	name = "mz_storage_types_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_storage_types",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

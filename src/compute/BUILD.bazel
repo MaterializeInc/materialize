@@ -54,6 +54,7 @@ rust_test(
 	name = "mz_compute_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_compute",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

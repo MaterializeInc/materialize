@@ -49,6 +49,7 @@ rust_test(
 	name = "mz_storage_operators_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_storage_operators",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

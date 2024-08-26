@@ -41,6 +41,7 @@ rust_test(
 	name = "mz_pgrepr_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_pgrepr",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

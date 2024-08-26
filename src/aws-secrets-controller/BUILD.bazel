@@ -40,6 +40,7 @@ rust_test(
 	name = "mz_aws_secrets_controller_lib_tests",
 	version = "0.1.0",
 	crate = ":mz_aws_secrets_controller",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

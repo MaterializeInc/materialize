@@ -41,6 +41,7 @@ rust_test(
 	name = "mz_transform_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_transform",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -93,6 +94,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "test_runner",
 	srcs = ["tests/test_runner.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -129,6 +131,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "test_transforms",
 	srcs = ["tests/test_transforms.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

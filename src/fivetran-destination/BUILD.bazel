@@ -42,6 +42,7 @@ rust_test(
 	name = "mz_fivetran_destination_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_fivetran_destination",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

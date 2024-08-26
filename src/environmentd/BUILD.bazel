@@ -89,6 +89,18 @@ rust_test(
 	name = "mz_environmentd_lib_tests",
 	version = "0.115.0-dev.0",
 	crate = ":mz_environmentd",
+	crate_features = [
+		"default",
+		"mz-alloc-default",
+		"mz-frontegg-mock",
+		"mz-tracing",
+		"postgres",
+		"postgres-openssl",
+		"regex",
+		"test",
+		"tokio-console",
+		"tracing-capture",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -223,6 +235,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "auth",
 	srcs = ["tests/auth.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -290,6 +303,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "cli",
 	srcs = ["tests/cli.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -357,6 +371,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "pgwire",
 	srcs = ["tests/pgwire.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -424,6 +439,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "server",
 	srcs = ["tests/server.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -491,6 +507,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "sql",
 	srcs = ["tests/sql.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -558,6 +575,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "timezones",
 	srcs = ["tests/timezones.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -625,6 +643,7 @@ rust_test(
 	version = "0.115.0-dev.0",
 	crate_name = "tracing",
 	srcs = ["tests/tracing.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

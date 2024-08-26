@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_ccsr_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_ccsr",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -78,6 +79,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "client",
 	srcs = ["tests/client.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

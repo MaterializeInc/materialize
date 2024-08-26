@@ -61,6 +61,7 @@ rust_test(
 	name = "mz_catalog_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_catalog",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -168,6 +169,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "debug",
 	srcs = ["tests/debug.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -221,6 +223,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "open",
 	srcs = ["tests/open.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -274,6 +277,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "read_write",
 	srcs = ["tests/read-write.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

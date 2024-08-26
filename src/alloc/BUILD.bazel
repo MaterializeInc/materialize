@@ -52,6 +52,19 @@ rust_test(
 	name = "mz_alloc_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_alloc",
+	crate_features = ["default"] + select({
+		"@//misc/bazel/platforms:linux_arm": [
+			"jemalloc",
+			"mz-prof",
+			"tikv-jemallocator",
+		],
+		"@//misc/bazel/platforms:linux_x86_64": [
+			"jemalloc",
+			"mz-prof",
+			"tikv-jemallocator",
+		],
+		"//conditions:default": [],
+	}),
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

@@ -42,6 +42,7 @@ rust_test(
 	name = "mz_lib_tests",
 	version = "0.3.0",
 	crate = ":mz",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -90,6 +91,7 @@ rust_test(
 	version = "0.3.0",
 	crate_name = "local",
 	srcs = ["tests/local.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

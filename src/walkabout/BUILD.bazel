@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_walkabout_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_walkabout",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -72,6 +73,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "walkabout",
 	srcs = ["tests/walkabout.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

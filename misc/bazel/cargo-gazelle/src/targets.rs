@@ -148,7 +148,7 @@ impl RustLibrary {
         }
 
         // For every library we also generate the tests targets.
-        let unit_test = RustTest::library(config, metadata, crate_config)?;
+        let unit_test = RustTest::library(config, metadata, crate_config, features.clone())?;
         let doc_tests = RustDocTest::generate(config, metadata, crate_config)?;
 
         // Extend with any extra config specified in the Cargo.toml.
@@ -398,6 +398,7 @@ pub struct RustTest {
     name: Field<QuotedString>,
     version: Field<QuotedString>,
     kind: RustTestKind,
+    features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
@@ -420,6 +421,7 @@ impl RustTest {
         config: &GlobalConfig,
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
+        crate_features: List<QuotedString>,
         name: &str,
         kind: RustTestKind,
         size: RustTestSize,
@@ -494,6 +496,7 @@ impl RustTest {
             name: Field::new("name", name),
             version: Field::new("version", metadata.version().to_string().into()),
             kind,
+            features: Field::new("crate_features", crate_features),
             aliases: Field::new("aliases", aliases),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
@@ -510,12 +513,14 @@ impl RustTest {
         config: &GlobalConfig,
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
+        crate_features: List<QuotedString>,
     ) -> Result<Option<Self>, anyhow::Error> {
         let crate_name = metadata.name().to_case(Case::Snake);
         Self::common(
             config,
             metadata,
             crate_config,
+            crate_features,
             "lib",
             RustTestKind::library(crate_name),
             RustTestSize::Medium,
@@ -547,6 +552,7 @@ impl RustTest {
             config,
             metadata,
             crate_config,
+            List::new::<String, _>([]),
             target.name(),
             RustTestKind::integration(target.name(), [test_target.to_string()]),
             RustTestSize::Large,
@@ -565,6 +571,7 @@ impl ToBazelDefinition for RustTest {
             self.name.format(&mut w)?;
             self.version.format(&mut w)?;
             self.kind.format(&mut w)?;
+            self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;

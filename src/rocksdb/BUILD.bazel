@@ -40,6 +40,7 @@ rust_test(
 	name = "mz_rocksdb_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_rocksdb",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -84,6 +85,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "basic",
 	srcs = ["tests/basic.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

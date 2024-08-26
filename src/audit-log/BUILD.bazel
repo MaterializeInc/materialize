@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_audit_log_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_audit_log",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

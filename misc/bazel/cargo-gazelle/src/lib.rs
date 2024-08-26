@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Debug, Write};
+use std::rc::Rc;
 
 use crate::platforms::PlatformVariant;
 use crate::targets::RustTarget;
@@ -188,10 +189,10 @@ impl<T: ToBazelDefinition> ToBazelDefinition for Field<T> {
 /// let deps: List<QuotedString> = List::new(vec![QuotedString::new("tokio")]);
 /// assert_eq!(deps.to_bazel_definition(), "[\"tokio\"]");
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct List<T> {
     items: Vec<T>,
-    objects: Vec<Box<dyn ToBazelDefinition>>,
+    objects: Vec<Rc<dyn ToBazelDefinition>>,
 }
 
 impl<T> List<T> {
@@ -213,7 +214,7 @@ impl<T> List<T> {
     /// TODO(parkmcar): This feels a bit off, maybe the API should be something like
     /// `LinkedList`?
     pub fn concat_other(mut self, other: impl ToBazelDefinition + 'static) -> Self {
-        self.objects.push(Box::new(other));
+        self.objects.push(Rc::new(other));
         self
     }
 

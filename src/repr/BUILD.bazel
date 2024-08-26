@@ -49,6 +49,11 @@ rust_test(
 	name = "mz_repr_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_repr",
+	crate_features = [
+		"default",
+		"tracing-subscriber",
+		"tracing_",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -147,6 +152,7 @@ rust_test(
 	version = "0.0.0",
 	crate_name = "strconv",
 	srcs = ["tests/strconv.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

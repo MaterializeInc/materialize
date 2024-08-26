@@ -39,6 +39,7 @@ rust_test(
 	name = "mz_frontegg_auth_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_frontegg_auth",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
