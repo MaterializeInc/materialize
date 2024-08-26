@@ -34,8 +34,12 @@ You can resize a cluster to respond to changes in your workload.
 
 {{< note >}}
 
-Resizing incurs downtime, as it requires all objects in the cluster to hydrate.
-In the future, it will be possible to resize clusters with no downtime {{% gh 20010 %}}.
+Resizing incurs downtime as it requires all objects in the cluster to hydrate.
+
+**Private Preview**: For clusters that do not contain sources and sinks but only
+compute objects (e.g., indexes, views, and materialized views), [graceful
+reconfiguration](/sql/alter-cluster/#no-downtime-reconfiguration) is available
+in [private preview](https://materialize.com/preview-terms/).
 
 {{</ note >}}
 
