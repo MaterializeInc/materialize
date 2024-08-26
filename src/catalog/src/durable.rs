@@ -323,10 +323,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ReplicaId::System(id))
     }
 
-    /// Allocates and returns a storage usage ID.
-    async fn allocate_storage_usage_id(&mut self) -> Result<u64, CatalogError> {
-        let id = self.allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, 1).await?;
-        Ok(id.into_element())
+    /// Allocates and returns storage usage IDs.
+    async fn allocate_storage_usage_ids(&mut self, amount: u64) -> Result<Vec<u64>, CatalogError> {
+        self.allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, amount).await
     }
 }
 
