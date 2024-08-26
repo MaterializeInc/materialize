@@ -137,6 +137,7 @@ where
 
     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
     pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&mut self, mut f: F) -> R {
+        self.metrics.cmds.fetch_upper_count.inc();
         self.fetch_and_update_state(None).await;
         self.upper(|_seqno, upper| f(upper))
     }

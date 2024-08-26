@@ -420,6 +420,10 @@ impl MetricsVecs {
             merge_res: self.cmd_metrics("merge_res"),
             become_tombstone: self.cmd_metrics("become_tombstone"),
             compare_and_evolve_schema: self.cmd_metrics("compare_and_evolve_schema"),
+            fetch_upper_count: registry.register(metric!(
+                name: "mz_persist_cmd_fetch_upper_count",
+                help: "count of fetch_upper calls",
+            ))
         }
     }
 
@@ -622,6 +626,7 @@ pub struct CmdsMetrics {
     pub(crate) merge_res: CmdMetrics,
     pub(crate) become_tombstone: CmdMetrics,
     pub(crate) compare_and_evolve_schema: CmdMetrics,
+    pub(crate) fetch_upper_count: IntCounter,
 }
 
 #[derive(Debug)]
