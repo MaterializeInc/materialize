@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use guppy::graph::PackageMetadata;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::targets::{AdditiveContent, RustTestSize};
 
@@ -117,12 +117,12 @@ impl CrateConfig {
     }
 
     pub fn test(&self, name: &str) -> &TestConfig {
-        static EMPTY_TEST: Lazy<TestConfig> = Lazy::new(TestConfig::default);
+        static EMPTY_TEST: LazyLock<TestConfig> = LazyLock::new(TestConfig::default);
         self.tests.get(name).unwrap_or(&*EMPTY_TEST)
     }
 
     pub fn binary(&self, name: &str) -> &BinaryConfig {
-        static EMPTY_BINARY: Lazy<BinaryConfig> = Lazy::new(BinaryConfig::default);
+        static EMPTY_BINARY: LazyLock<BinaryConfig> = LazyLock::new(BinaryConfig::default);
         self.binaries.get(name).unwrap_or(&*EMPTY_BINARY)
     }
 }

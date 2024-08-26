@@ -12,6 +12,7 @@
 //! Consult [ReducePlan] documentation for details.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
@@ -35,7 +36,6 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion, TimelyStack};
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -1631,7 +1631,7 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
     }
 }
 
-static FLOAT_SCALE: Lazy<f64> = Lazy::new(|| f64::from(1 << 24));
+static FLOAT_SCALE: LazyLock<f64> = LazyLock::new(|| f64::from(1 << 24));
 
 fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
     match aggregate_func {

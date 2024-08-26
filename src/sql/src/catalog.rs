@@ -17,6 +17,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -33,7 +34,6 @@ use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::sources::{SourceDesc, SourceExportDetails};
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1054,7 +1054,7 @@ impl FromStr for EnvironmentId {
     type Err = InvalidEnvironmentIdError;
 
     fn from_str(s: &str) -> Result<EnvironmentId, InvalidEnvironmentIdError> {
-        static MATCHER: Lazy<Regex> = Lazy::new(|| {
+        static MATCHER: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(
                 "^(?P<cloud_provider>[[:alnum:]]+)-\
                   (?P<cloud_provider_region>[[:alnum:]\\-]+)-\

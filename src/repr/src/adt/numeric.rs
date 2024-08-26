@@ -14,6 +14,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::LazyLock;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
@@ -21,7 +22,6 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +51,7 @@ pub const NUMERIC_AGG_MAX_PRECISION: u8 = NUMERIC_AGG_WIDTH * 3;
 /// A double-width version of [`Numeric`] for use in aggregations.
 pub type NumericAgg = Decimal<NUMERIC_AGG_WIDTH_USIZE>;
 
-static CX_DATUM: Lazy<Context<Numeric>> = Lazy::new(|| {
+static CX_DATUM: LazyLock<Context<Numeric>> = LazyLock::new(|| {
     let mut cx = Context::<Numeric>::default();
     cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1))
         .unwrap();
@@ -59,7 +59,7 @@ static CX_DATUM: Lazy<Context<Numeric>> = Lazy::new(|| {
         .unwrap();
     cx
 });
-static CX_AGG: Lazy<Context<NumericAgg>> = Lazy::new(|| {
+static CX_AGG: LazyLock<Context<NumericAgg>> = LazyLock::new(|| {
     let mut cx = Context::<NumericAgg>::default();
     cx.set_max_exponent(isize::from(NUMERIC_AGG_MAX_PRECISION - 1))
         .unwrap();
@@ -67,12 +67,12 @@ static CX_AGG: Lazy<Context<NumericAgg>> = Lazy::new(|| {
         .unwrap();
     cx
 });
-static U128_SPLITTER_DATUM: Lazy<Numeric> = Lazy::new(|| {
+static U128_SPLITTER_DATUM: LazyLock<Numeric> = LazyLock::new(|| {
     let mut cx = Numeric::context();
     // 1 << 128
     cx.parse("340282366920938463463374607431768211456").unwrap()
 });
-static U128_SPLITTER_AGG: Lazy<NumericAgg> = Lazy::new(|| {
+static U128_SPLITTER_AGG: LazyLock<NumericAgg> = LazyLock::new(|| {
     let mut cx = NumericAgg::context();
     // 1 << 128
     cx.parse("340282366920938463463374607431768211456").unwrap()

@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
 
@@ -35,7 +36,6 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
@@ -839,7 +839,7 @@ fn substitute_vars(
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
     let mut err = None;
     let out = RE.replace_all(msg, |caps: &Captures| {
         let name = &caps[1];

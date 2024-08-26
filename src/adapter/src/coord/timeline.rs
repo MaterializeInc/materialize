@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -33,7 +34,6 @@ use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
 use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
-use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 
@@ -646,7 +646,7 @@ impl Coordinator {
 /// Convenience function for calculating the current upper bound that we want to
 /// prevent the global timestamp from exceeding.
 fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
-    const TIMESTAMP_INTERVAL: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
+    const TIMESTAMP_INTERVAL: LazyLock<mz_repr::Timestamp> = LazyLock::new(|| {
         Duration::from_secs(5)
             .as_millis()
             .try_into()

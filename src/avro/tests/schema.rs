@@ -26,13 +26,13 @@
 //!     - https://github.com/apache/avro/tree/master/lang/c/tests/schema_tests
 use std::collections::BTreeMap;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use chrono::DateTime;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
-use once_cell::sync::Lazy;
 
-static UNPARSEABLE_SCHEMAS: Lazy<Vec<&'static str>> = Lazy::new(|| {
+static UNPARSEABLE_SCHEMAS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
         // Primitive examples
         r#""True""#,
@@ -84,14 +84,14 @@ static UNPARSEABLE_SCHEMAS: Lazy<Vec<&'static str>> = Lazy::new(|| {
     ]
 });
 
-static UNPARSEABLE_LOGICAL_TYPES: Lazy<Vec<&'static str>> = Lazy::new(|| {
+static UNPARSEABLE_LOGICAL_TYPES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
         // Decimal logical type
         r#"{"type": "fixed", "logicalType": "decimal", "name": "TestDecimal2", "precision": 2, "scale": 2, "size": -2}"#,
     ]
 });
 
-static VALID_SCHEMAS: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
+static VALID_SCHEMAS: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
     vec![
         // Primitive examples
         (r#""null""#, Value::Null),
@@ -307,7 +307,7 @@ static VALID_SCHEMAS: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
     ]
 });
 
-static VALID_LOGICAL_TYPES: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
+static VALID_LOGICAL_TYPES: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
     vec![
         // Decimal logical type
         (
@@ -359,7 +359,7 @@ static VALID_LOGICAL_TYPES: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
 //  underlying Avro type. If a logical type is invalid, for example a decimal with scale greater
 //  than its precision, then implementations should ignore the logical type and use the underlying
 //  Avro type."
-static IGNORED_LOGICAL_TYPES: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
+static IGNORED_LOGICAL_TYPES: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
     vec![
         // Unknown logical type
         (

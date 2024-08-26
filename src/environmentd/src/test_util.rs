@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs, iter};
 
@@ -44,7 +45,6 @@ use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use mz_tracing::CloneableEnvFilter;
-use once_cell::sync::Lazy;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -75,8 +75,8 @@ use url::Url;
 
 use crate::{CatalogConfig, FronteggAuthentication, WebSocketAuth, WebSocketResponse};
 
-pub static KAFKA_ADDRS: Lazy<String> =
-    Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
+pub static KAFKA_ADDRS: LazyLock<String> =
+    LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
 
 /// Entry point for creating and configuring an `environmentd` test harness.
 #[derive(Clone)]

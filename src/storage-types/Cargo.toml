@@ -55,7 +55,6 @@ mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
 native-tls = "0.2.11"
 num_enum = "0.5.7"
-once_cell = "1.16.0"
 openssl = { version = "0.10.48", features = ["vendored"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }

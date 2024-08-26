@@ -10,6 +10,7 @@
 use std::error::Error;
 use std::fmt;
 use std::mem::size_of;
+use std::sync::LazyLock;
 
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
@@ -22,7 +23,6 @@ use mz_repr::adt::timestamp::{
 use mz_repr::adt::varchar::{InvalidVarCharMaxLengthError, VarCharMaxLength};
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::ScalarType;
-use once_cell::sync::Lazy;
 
 use crate::oid;
 
@@ -384,7 +384,7 @@ impl fmt::Display for NumericConstraints {
 }
 
 /// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYARRAY`].
-pub static LIST: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static LIST: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "list".to_owned(),
         // OID chosen to be the first OID not considered stable by
@@ -398,7 +398,7 @@ pub static LIST: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYARRAY`].
-pub static MAP: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static MAP: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "map".to_owned(),
         // OID chosen to follow our "LIST" type.
@@ -409,7 +409,7 @@ pub static MAP: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
-pub static ANYCOMPATIBLELIST: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static ANYCOMPATIBLELIST: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "anycompatiblelist".to_owned(),
         oid::TYPE_ANYCOMPATIBLELIST_OID,
@@ -419,7 +419,7 @@ pub static ANYCOMPATIBLELIST: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
-pub static ANYCOMPATIBLEMAP: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static ANYCOMPATIBLEMAP: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "anycompatiblemap".to_owned(),
         oid::TYPE_ANYCOMPATIBLEMAP_OID,
@@ -429,7 +429,7 @@ pub static ANYCOMPATIBLEMAP: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::UInt2`], akin to [`postgres_types::Type::INT2`].
-pub static UINT2: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static UINT2: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "uint2".to_owned(),
         oid::TYPE_UINT2_OID,
@@ -439,7 +439,7 @@ pub static UINT2: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::UInt4`], akin to [`postgres_types::Type::INT4`].
-pub static UINT4: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static UINT4: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "uint4".to_owned(),
         oid::TYPE_UINT4_OID,
@@ -449,7 +449,7 @@ pub static UINT4: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::UInt8`], akin to [`postgres_types::Type::INT8`].
-pub static UINT8: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static UINT8: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "uint8".to_owned(),
         oid::TYPE_UINT8_OID,
@@ -459,7 +459,7 @@ pub static UINT8: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT2_ARRAY`].
-pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static UINT2_ARRAY: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "_uint2".to_owned(),
         oid::TYPE_UINT2_ARRAY_OID,
@@ -469,7 +469,7 @@ pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT4_ARRAY`].
-pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static UINT4_ARRAY: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "_uint4".to_owned(),
         oid::TYPE_UINT4_ARRAY_OID,
@@ -479,7 +479,7 @@ pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::INT8_ARRAY`].
-pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static UINT8_ARRAY: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "_uint8".to_owned(),
         oid::TYPE_UINT8_ARRAY_OID,
@@ -489,7 +489,7 @@ pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::MzTimestamp`], akin to [`postgres_types::Type::TEXT`].
-pub static MZ_TIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static MZ_TIMESTAMP: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "mz_timestamp".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_OID,
@@ -499,7 +499,7 @@ pub static MZ_TIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
-pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static MZ_TIMESTAMP_ARRAY: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "_mz_timestamp".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
@@ -509,7 +509,7 @@ pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::MzAclItem`], akin to [`postgres_types::Type::TEXT`].
-pub static MZ_ACL_ITEM: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static MZ_ACL_ITEM: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "mz_aclitem".to_owned(),
         oid::TYPE_MZ_ACL_ITEM_OID,
@@ -519,7 +519,7 @@ pub static MZ_ACL_ITEM: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
-pub static MZ_ACL_ITEM_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static MZ_ACL_ITEM_ARRAY: LazyLock<postgres_types::Type> = LazyLock::new(|| {
     postgres_types::Type::new(
         "_mz_aclitem".to_owned(),
         oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,

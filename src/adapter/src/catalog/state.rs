@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use itertools::Itertools;
@@ -78,7 +79,6 @@ use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
 use mz_storage_types::connections::ConnectionContext;
-use once_cell::sync::Lazy;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -1642,9 +1642,9 @@ impl CatalogState {
         name: &PartialItemName,
         conn_id: &ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
-        static NON_PG_CATALOG_TYPES: Lazy<
+        static NON_PG_CATALOG_TYPES: LazyLock<
             BTreeMap<&'static str, &'static BuiltinType<NameReference>>,
-        > = Lazy::new(|| {
+        > = LazyLock::new(|| {
             BUILTINS::types()
                 .filter(|typ| typ.schema != PG_CATALOG_SCHEMA)
                 .map(|typ| (typ.name, typ))

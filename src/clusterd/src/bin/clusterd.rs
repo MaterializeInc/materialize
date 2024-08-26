@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::Context;
 use axum::http::StatusCode;
@@ -37,13 +38,12 @@ use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use once_cell::sync::Lazy;
 use tower::Service;
 use tracing::{error, info};
 
 const BUILD_INFO: BuildInfo = build_info!();
 
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
 
 /// Independent cluster server for Materialize.
 #[derive(clap::Parser)]

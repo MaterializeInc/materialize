@@ -30,11 +30,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use digest::Digest;
 use itertools::Itertools;
 use mz_ore::assert_none;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Serialize, Serializer};
@@ -600,8 +600,8 @@ impl Name {
     ///
     /// See: <https://avro.apache.org/docs/1.11.1/specification/#names>
     pub fn is_valid(name: &str) -> bool {
-        static MATCHER: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$").unwrap());
+        static MATCHER: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$").unwrap());
         MATCHER.is_match(name)
     }
 

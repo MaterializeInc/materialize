@@ -11,13 +11,13 @@ use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
 
 use super::{MONITOR_REDACTED_SELECT, SUPPORT_SELECT};
 
-pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
+pub static MZ_OPTIMIZER_NOTICES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     use ScalarType::{List, String, TimestampTz};
 
     BuiltinTable {
@@ -61,7 +61,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
 /// notices, the idea is to evolve it over time as sketched in the design doc[^1].
 ///
 /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20231113_optimizer_notice_catalog.md>
-pub static MZ_NOTICES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_notices",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_OID,
@@ -87,7 +87,7 @@ FROM
 /// A redacted version of [`MZ_NOTICES`] that is made safe to be viewed by
 /// Materialize staff because it binds the `redacted_~` from [`MZ_NOTICES`] as
 /// `~`.
-pub static MZ_NOTICES_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+pub static MZ_NOTICES_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_notices_redacted",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_REDACTED_OID,

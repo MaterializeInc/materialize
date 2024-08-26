@@ -11,13 +11,13 @@
 
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::iter::IteratorExt;
-use once_cell::sync::Lazy;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::metrics::ColumnarMetrics;
@@ -37,7 +37,7 @@ use crate::metrics::ColumnarMetrics;
 /// time after year 2200). Using a i64 might be a pessimization for a
 /// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
 /// u64::MAX]`, but realtime sources are overwhelmingly the common case.
-pub static SCHEMA_ARROW_RS_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
+pub static SCHEMA_ARROW_RS_KVTD: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     let schema = Schema::new(vec![
         Field::new("k", DataType::Binary, false),
         Field::new("v", DataType::Binary, false),

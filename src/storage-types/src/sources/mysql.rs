@@ -12,12 +12,12 @@
 use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
+use std::sync::LazyLock;
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
-use once_cell::sync::Lazy;
 use proptest::prelude::any;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
@@ -65,7 +65,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
     }
 }
 
-pub static MYSQL_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MYSQL_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column("source_id_lower", ScalarType::Uuid.nullable(false))
         .with_column("source_id_upper", ScalarType::Uuid.nullable(false))

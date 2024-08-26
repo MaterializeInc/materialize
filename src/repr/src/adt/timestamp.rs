@@ -21,6 +21,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::ops::Sub;
+use std::sync::LazyLock;
 
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
@@ -31,7 +32,6 @@ use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -594,10 +594,10 @@ impl<T: Serialize> Serialize for CheckedTimestamp<T> {
 // Thus on the low end we have 4713-12-31 BC from Postgres, and on the high end
 // 262142-12-31 from chrono.
 
-pub static LOW_DATE: Lazy<NaiveDate> =
-    Lazy::new(|| NaiveDate::from_ymd_opt(-4713, 12, 31).unwrap());
-pub static HIGH_DATE: Lazy<NaiveDate> =
-    Lazy::new(|| NaiveDate::from_ymd_opt(262142, 12, 31).unwrap());
+pub static LOW_DATE: LazyLock<NaiveDate> =
+    LazyLock::new(|| NaiveDate::from_ymd_opt(-4713, 12, 31).unwrap());
+pub static HIGH_DATE: LazyLock<NaiveDate> =
+    LazyLock::new(|| NaiveDate::from_ymd_opt(262142, 12, 31).unwrap());
 
 impl<T: TimestampLike> CheckedTimestamp<T> {
     pub fn from_timestamplike(t: T) -> Result<Self, TimestampError> {

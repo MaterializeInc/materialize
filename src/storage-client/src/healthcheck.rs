@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use mz_repr::{RelationDesc, ScalarType};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
-pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("session_id", ScalarType::Uuid.nullable(false))
@@ -24,7 +24,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(||
         .with_column("throttled_count", ScalarType::UInt64.nullable(false))
 });
 
-pub static MZ_SQL_TEXT_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_SQL_TEXT_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column(
             "prepared_day",
@@ -35,7 +35,7 @@ pub static MZ_SQL_TEXT_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("redacted_sql", ScalarType::String.nullable(false))
 });
 
-pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_SESSION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column(
@@ -55,7 +55,7 @@ pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
 //
 // The `redacted` views should contain only those columns that should
 // be queryable by support.
-pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
@@ -97,7 +97,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|
         .with_column("execution_strategy", ScalarType::String.nullable(true))
 });
 
-pub static MZ_SOURCE_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_SOURCE_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column(
             "occurred_at",
@@ -109,7 +109,7 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
 
-pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         .with_column(
             "occurred_at",
@@ -121,8 +121,8 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
 
-pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: Lazy<RelationDesc> =
-    Lazy::new(|| {
+pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: LazyLock<RelationDesc> =
+    LazyLock::new(|| {
         RelationDesc::empty()
             .with_column(
                 "occurred_at",

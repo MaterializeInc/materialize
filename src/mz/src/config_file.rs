@@ -18,11 +18,11 @@
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::{collections::BTreeMap, str::FromStr};
 
 use maplit::btreemap;
 use mz_ore::str::StrExt;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::{value, Document};
@@ -44,12 +44,13 @@ static KEYCHAIN_SERVICE_NAME: &str = "Materialize";
 static OLD_KEYCHAIN_SERVICE_NAME: &str = "Materialize mz CLI";
 
 #[cfg(target_os = "macos")]
-static DEFAULT_VAULT_VALUE: Lazy<Option<&str>> = Lazy::new(|| Some(Vault::Keychain.as_str()));
+static DEFAULT_VAULT_VALUE: LazyLock<Option<&str>> =
+    LazyLock::new(|| Some(Vault::Keychain.as_str()));
 
 #[cfg(not(target_os = "macos"))]
-static DEFAULT_VAULT_VALUE: Lazy<Option<&str>> = Lazy::new(|| Some(Vault::Inline.as_str()));
+static DEFAULT_VAULT_VALUE: LazyLock<Option<&str>> = LazyLock::new(|| Some(Vault::Inline.as_str()));
 
-static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
+static GLOBAL_PARAMS: LazyLock<BTreeMap<&'static str, GlobalParam>> = LazyLock::new(|| {
     btreemap! {
         "profile" => GlobalParam {
             get: |config_file| {
@@ -324,7 +325,7 @@ impl ConfigFile {
     }
 }
 
-static PROFILE_PARAMS: Lazy<BTreeMap<&'static str, ProfileParam>> = Lazy::new(|| {
+static PROFILE_PARAMS: LazyLock<BTreeMap<&'static str, ProfileParam>> = LazyLock::new(|| {
     btreemap! {
         "app-password" => ProfileParam {
             get: |t| t.app_password.as_deref(),

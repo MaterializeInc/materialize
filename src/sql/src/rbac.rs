@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
+use std::sync::LazyLock;
 
 use itertools::Itertools;
 use maplit::btreeset;
@@ -19,7 +20,6 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
-use once_cell::sync::Lazy;
 use tracing::debug;
 
 use crate::catalog::{
@@ -95,17 +95,17 @@ fn filter_requirements(
 }
 
 // The default item types that most statements require USAGE privileges for.
-static DEFAULT_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
+static DEFAULT_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(|| {
     btreeset! {CatalogItemType::Secret, CatalogItemType::Connection}
 });
 // CREATE statements require USAGE privileges on the default item types and USAGE privileges on
 // Types.
-pub static CREATE_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
+pub static CREATE_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(|| {
     let mut items = DEFAULT_ITEM_USAGE.clone();
     items.insert(CatalogItemType::Type);
     items
 });
-pub static EMPTY_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(BTreeSet::new);
+pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(BTreeSet::new);
 
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]

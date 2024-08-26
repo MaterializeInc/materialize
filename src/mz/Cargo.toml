@@ -22,7 +22,6 @@ mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
-once_cell = "1.16.0"
 open = "3.2.0"
 openssl-probe = "0.1.2"
 hyper = "1.4.1"

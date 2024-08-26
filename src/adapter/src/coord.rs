@@ -82,6 +82,7 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroI64;
 use std::ops::Neg;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -150,7 +151,6 @@ use mz_timestamp_oracle::postgres_oracle::{
 };
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
-use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp as _};
@@ -3716,7 +3716,7 @@ pub fn serve(
         // Initializing the builtins can be an expensive process and consume a lot of memory. We
         // forcibly initialize it early while the stack is relatively empty to avoid stack
         // overflows later.
-        let _builtins = Lazy::force(&BUILTINS_STATIC);
+        let _builtins = LazyLock::force(&BUILTINS_STATIC);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();

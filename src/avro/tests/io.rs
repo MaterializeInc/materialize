@@ -25,6 +25,7 @@
 
 use std::io::Cursor;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDate};
 use mz_avro::error::Error as AvroError;
@@ -32,9 +33,8 @@ use mz_avro::schema::resolve_schemas;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::{from_avro_datum, to_avro_datum, Schema, ValidationError};
 use mz_ore::assert_err;
-use once_cell::sync::Lazy;
 
-static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
+static SCHEMAS_TO_VALIDATE: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new(|| {
     vec![
         (r#""null""#, Value::Null),
         (r#""boolean""#, Value::Boolean(true)),
@@ -89,7 +89,7 @@ static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
     ]
 });
 
-static BINARY_ENCODINGS: Lazy<Vec<(i64, Vec<u8>)>> = Lazy::new(|| {
+static BINARY_ENCODINGS: LazyLock<Vec<(i64, Vec<u8>)>> = LazyLock::new(|| {
     vec![
         (0, vec![0x00]),
         (-1, vec![0x01]),
@@ -103,44 +103,45 @@ static BINARY_ENCODINGS: Lazy<Vec<(i64, Vec<u8>)>> = Lazy::new(|| {
     ]
 });
 
-static DEFAULT_VALUE_EXAMPLES: Lazy<Vec<(&'static str, &'static str, Value)>> = Lazy::new(|| {
-    vec![
-        (r#""null""#, "null", Value::Null),
-        (r#""boolean""#, "true", Value::Boolean(true)),
-        (r#""string""#, r#""foo""#, Value::String("foo".to_string())),
-        //(r#""bytes""#, r#""\u00FF\u00FF""#, Value::Bytes(vec![0xff, 0xff])),
-        (r#""int""#, "5", Value::Int(5)),
-        (r#""long""#, "5", Value::Long(5)),
-        (r#""float""#, "1.1", Value::Float(1.1)),
-        (r#""double""#, "1.1", Value::Double(1.1)),
-        //(r#"{"type": "fixed", "name": "F", "size": 2}"#, r#""\u00FF\u00FF""#, Value::Bytes(vec![0xff, 0xff])),
-        //(r#"{"type": "enum", "name": "F", "symbols": ["FOO", "BAR"]}"#, r#""FOO""#, Value::Enum(0, "FOO".to_string())),
-        (
-            r#"{"type": "array", "items": "int"}"#,
-            "[1, 2, 3]",
-            Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
-        ),
-        (
-            r#"{"type": "map", "values": "int"}"#,
-            r#"{"a": 1, "b": 2}"#,
-            Value::Map(
-                [
-                    ("a".to_string(), Value::Int(1)),
-                    ("b".to_string(), Value::Int(2)),
-                ]
-                .into(),
+static DEFAULT_VALUE_EXAMPLES: LazyLock<Vec<(&'static str, &'static str, Value)>> =
+    LazyLock::new(|| {
+        vec![
+            (r#""null""#, "null", Value::Null),
+            (r#""boolean""#, "true", Value::Boolean(true)),
+            (r#""string""#, r#""foo""#, Value::String("foo".to_string())),
+            //(r#""bytes""#, r#""\u00FF\u00FF""#, Value::Bytes(vec![0xff, 0xff])),
+            (r#""int""#, "5", Value::Int(5)),
+            (r#""long""#, "5", Value::Long(5)),
+            (r#""float""#, "1.1", Value::Float(1.1)),
+            (r#""double""#, "1.1", Value::Double(1.1)),
+            //(r#"{"type": "fixed", "name": "F", "size": 2}"#, r#""\u00FF\u00FF""#, Value::Bytes(vec![0xff, 0xff])),
+            //(r#"{"type": "enum", "name": "F", "symbols": ["FOO", "BAR"]}"#, r#""FOO""#, Value::Enum(0, "FOO".to_string())),
+            (
+                r#"{"type": "array", "items": "int"}"#,
+                "[1, 2, 3]",
+                Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
             ),
-        ),
-        //(r#"["int", "null"]"#, "5", Value::Union(Box::new(Value::Int(5)))),
-        (
-            r#"{"type": "record", "name": "F", "fields": [{"name": "A", "type": "int"}]}"#,
-            r#"{"A": 5}"#,
-            Value::Record(vec![("A".to_string(), Value::Int(5))]),
-        ),
-    ]
-});
+            (
+                r#"{"type": "map", "values": "int"}"#,
+                r#"{"a": 1, "b": 2}"#,
+                Value::Map(
+                    [
+                        ("a".to_string(), Value::Int(1)),
+                        ("b".to_string(), Value::Int(2)),
+                    ]
+                    .into(),
+                ),
+            ),
+            //(r#"["int", "null"]"#, "5", Value::Union(Box::new(Value::Int(5)))),
+            (
+                r#"{"type": "record", "name": "F", "fields": [{"name": "A", "type": "int"}]}"#,
+                r#"{"A": 5}"#,
+                Value::Record(vec![("A".to_string(), Value::Int(5))]),
+            ),
+        ]
+    });
 
-static LONG_RECORD_SCHEMA: Lazy<Schema> = Lazy::new(|| {
+static LONG_RECORD_SCHEMA: LazyLock<Schema> = LazyLock::new(|| {
     Schema::from_str(
         r#"
     {
@@ -161,7 +162,7 @@ static LONG_RECORD_SCHEMA: Lazy<Schema> = Lazy::new(|| {
     .unwrap()
 });
 
-static LONG_RECORD_DATUM: Lazy<Value> = Lazy::new(|| {
+static LONG_RECORD_DATUM: LazyLock<Value> = LazyLock::new(|| {
     Value::Record(vec![
         ("A".to_string(), Value::Int(1)),
         ("B".to_string(), Value::Int(2)),

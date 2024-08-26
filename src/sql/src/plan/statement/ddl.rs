@@ -158,8 +158,8 @@ mod connection;
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
 
-const MANAGED_REPLICA_PATTERN: once_cell::sync::Lazy<regex::Regex> =
-    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
+const MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
 
 pub fn describe_create_database(
     _: &StatementContext,

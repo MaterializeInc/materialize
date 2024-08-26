@@ -7,23 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{RelationDesc, ScalarType};
-use once_cell::sync::Lazy;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
+use std::sync::LazyLock;
 
 use mz_persist_types::Codec;
+use mz_repr::{RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
-static PROTO_DIRECTORY: Lazy<String> =
-    Lazy::new(|| format!("{}/protos", env!("CARGO_MANIFEST_DIR")));
+static PROTO_DIRECTORY: LazyLock<String> =
+    LazyLock::new(|| format!("{}/protos", env!("CARGO_MANIFEST_DIR")));
 const PROTO_EXT: &str = "proto";
 
-static SNAPSHOT_DIRECTORY: Lazy<String> = Lazy::new(|| {
+static SNAPSHOT_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{}/src/durable/upgrade/snapshots",
         env!("CARGO_MANIFEST_DIR")

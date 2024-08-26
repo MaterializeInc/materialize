@@ -17,16 +17,16 @@
 //! The proto conversions for this types are in the `client` module, for now.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-use once_cell::sync::Lazy;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.statistics.rs"));
 
-pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         // Id of the source (or subsource).
         .with_column("id", ScalarType::String.nullable(false))
@@ -92,7 +92,7 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("offset_committed", ScalarType::UInt64.nullable(true))
 });
 
-pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::empty()
         // Id of the sink.
         .with_column("id", ScalarType::String.nullable(false))

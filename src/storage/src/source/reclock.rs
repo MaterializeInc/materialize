@@ -625,6 +625,7 @@ where
 mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
+    use std::sync::LazyLock;
     use std::time::Duration;
 
     use futures::Stream;
@@ -643,7 +644,6 @@ mod tests {
     use mz_storage_types::sources::kafka::{self, RangeBound};
     use mz_storage_types::sources::{MzOffset, SourceData};
     use mz_timely_util::order::Partitioned;
-    use once_cell::sync::Lazy;
     use timely::progress::Timestamp as _;
 
     use super::*;
@@ -651,7 +651,7 @@ mod tests {
     // 15 minutes
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
 
-    static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
+    static PERSIST_CACHE: LazyLock<Arc<PersistClientCache>> = LazyLock::new(|| {
         let persistcfg = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.set_reader_lease_duration(PERSIST_READER_LEASE_TIMEOUT_MS);
         Arc::new(PersistClientCache::new(
@@ -661,7 +661,7 @@ mod tests {
         ))
     });
 
-    static PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    static PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
         RelationDesc::empty()
             .with_column(
                 "partition",

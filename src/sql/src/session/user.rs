@@ -8,39 +8,39 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
-use once_cell::sync::Lazy;
 use serde::Serialize;
 
 pub const SYSTEM_USER_NAME: &str = "mz_system";
-pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
+pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
 });
 
 pub const SUPPORT_USER_NAME: &str = "mz_support";
-pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
+pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
 });
 
 pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
-pub static ANALYTICS_USER: Lazy<User> = Lazy::new(|| User {
+pub static ANALYTICS_USER: LazyLock<User> = LazyLock::new(|| User {
     name: ANALYTICS_USER_NAME.into(),
     external_metadata: None,
 });
 
-pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
+pub static INTERNAL_USER_NAMES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
     [&SYSTEM_USER, &SUPPORT_USER, &ANALYTICS_USER]
         .into_iter()
         .map(|user| user.name.clone())
         .collect()
 });
 
-pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>> =
-    Lazy::new(|| {
+pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: LazyLock<BTreeMap<String, String>> =
+    LazyLock::new(|| {
         [
             (&SYSTEM_USER, "mz_system"),
             (&SUPPORT_USER, "mz_catalog_server"),
@@ -51,7 +51,7 @@ pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>>
         .collect()
     });
 
-pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
+pub static HTTP_DEFAULT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: "anonymous_http_user".into(),
     external_metadata: None,
 });

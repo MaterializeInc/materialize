@@ -27,7 +27,6 @@ mz-secrets = { path = "../secrets" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-ore = { path = "../ore" }
-once_cell = "1.16.0"
 os_info = "3.5.1"
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}

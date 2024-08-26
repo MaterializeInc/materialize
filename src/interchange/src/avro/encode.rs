@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::LazyLock;
 
 use anyhow::Ok;
 use byteorder::{NetworkEndian, WriteBytesExt};
@@ -20,7 +21,6 @@ use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
-use once_cell::sync::Lazy;
 use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
@@ -33,7 +33,7 @@ use crate::json::{build_row_schema_json, SchemaOptions};
 // for more information. We chose to omit this field because it is redundant
 // for sinks where each consistency topic corresponds to exactly one sink.
 // We will need to add it in order to be able to reingest sinked topics.
-static DEBEZIUM_TRANSACTION_SCHEMA: Lazy<Schema> = Lazy::new(|| {
+static DEBEZIUM_TRANSACTION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| {
     Schema::parse(&json!({
         "type": "record",
         "name": "envelope",

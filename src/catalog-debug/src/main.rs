@@ -15,6 +15,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -51,14 +52,13 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 use url::Url;
 use uuid::Uuid;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
 
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]

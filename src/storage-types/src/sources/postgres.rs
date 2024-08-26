@@ -13,10 +13,10 @@ use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
-use once_cell::sync::Lazy;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -59,8 +59,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
     }
 }
 
-pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
-    Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
+pub static PG_PROGRESS_DESC: LazyLock<RelationDesc> =
+    LazyLock::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
 
 impl PostgresSourceConnection {
     pub async fn fetch_write_frontier(

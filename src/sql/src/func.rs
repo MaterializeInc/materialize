@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::LazyLock;
 
 use itertools::Itertools;
 use mz_expr::func;
@@ -21,7 +22,6 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
-use once_cell::sync::Lazy;
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
@@ -1762,7 +1762,7 @@ macro_rules! privilege_fn {
 }
 
 /// Correlates a built-in function name to its implementations.
-pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     let mut builtins = builtins! {
@@ -3465,12 +3465,13 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
     builtins
 });
 
-pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
-    use ParamType::*;
-    builtins! {
-        "_pg_expandarray" => Table {
-            // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
-            params!(ArrayAny) => sql_impl_table_func("
+pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> =
+    LazyLock::new(|| {
+        use ParamType::*;
+        builtins! {
+            "_pg_expandarray" => Table {
+                // See: https://github.com/postgres/postgres/blob/16e3ad5d143795b05a21dc887c2ab384cce4bcb8/src/backend/catalog/information_schema.sql#L43
+                params!(ArrayAny) => sql_impl_table_func("
                     SELECT
                         $1[s] AS x,
                         s - pg_catalog.array_lower($1, 1) + 1 AS n
@@ -3479,11 +3480,11 @@ pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Laz
                         pg_catalog.array_upper($1, 1),
                         1) as g(s)
                 ") => ReturnType::set_of(RecordAny), oid::FUNC_PG_EXPAND_ARRAY;
+            }
         }
-    }
-});
+    });
 
-pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -3895,7 +3896,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
     }
 });
 
-pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -4282,7 +4283,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
     }
 });
 
-pub static MZ_UNSAFE_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -4401,7 +4402,7 @@ fn array_to_string(
 }
 
 /// Correlates an operator with all of its implementations.
-pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
     use ScalarBaseType::*;

@@ -10,18 +10,18 @@
 //! A parser for sqllogictest.
 
 use std::borrow::ToOwned;
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, bail};
 use mz_repr::ColumnName;
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 
-static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
-static DOUBLE_LINE_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
-static EOF_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
+static QUERY_OUTPUT_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\r?\n----").unwrap());
+static DOUBLE_LINE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
+static EOF_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
 
 #[derive(Debug, Clone)]
 pub struct Parser<'a> {
@@ -79,8 +79,8 @@ impl<'a> Parser<'a> {
 
         let line_number = self.curline;
 
-        static COMMENT_AND_LINE_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap());
+        static COMMENT_AND_LINE_REGEX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap());
         let first_line = self.split_at(&COMMENT_AND_LINE_REGEX)?.trim();
 
         if first_line.is_empty() {
@@ -248,9 +248,9 @@ impl<'a> Parser<'a> {
             bail!("multiline option is incompatible with all other options");
         }
         let label = words.next();
-        static LINE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("\r?(\n|$)").unwrap());
-        static HASH_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
+        static LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new("\r?(\n|$)").unwrap());
+        static HASH_REGEX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
         let mut output_str = self
             .split_at(if multiline {
@@ -414,8 +414,8 @@ fn parse_types(input: &str) -> Result<Vec<Type>, anyhow::Error> {
 }
 
 fn parse_expected_error(line: &str) -> &str {
-    static PGCODE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new("(statement|query) error( pgcode [a-zA-Z0-9]{5})? ?").unwrap());
+    static PGCODE_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("(statement|query) error( pgcode [a-zA-Z0-9]{5})? ?").unwrap());
     // TODO(benesch): one day this should record the expected pgcode, if
     // specified.
     let pos = PGCODE_RE.find(line).unwrap().end();

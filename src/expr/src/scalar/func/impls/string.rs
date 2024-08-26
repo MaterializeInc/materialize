@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_lowertest::MzReflect;
@@ -26,7 +27,6 @@ use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -713,7 +713,7 @@ impl fmt::Display for CastStringToVarChar {
 
 // If we support another vector type, this should likely get hoisted into a
 // position akin to array parsing.
-static INT2VECTOR_CAST_EXPR: Lazy<MirScalarExpr> = Lazy::new(|| MirScalarExpr::CallUnary {
+static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScalarExpr::CallUnary {
     func: UnaryFunc::CastStringToInt16(CastStringToInt16),
     expr: Box::new(MirScalarExpr::Column(0)),
 });

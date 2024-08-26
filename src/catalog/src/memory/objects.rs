@@ -14,6 +14,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
+use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
@@ -55,7 +56,6 @@ use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDetails,
     Timeline,
 };
-use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -1029,7 +1029,7 @@ impl CatalogItem {
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
     pub fn references(&self) -> &ResolvedIds {
-        static EMPTY: Lazy<ResolvedIds> = Lazy::new(|| ResolvedIds(BTreeSet::new()));
+        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(|| ResolvedIds(BTreeSet::new()));
         match self {
             CatalogItem::Func(_) => &*EMPTY,
             CatalogItem::Index(idx) => &idx.resolved_ids,

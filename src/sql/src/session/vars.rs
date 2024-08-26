@@ -68,6 +68,7 @@ use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::string::ToString;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -82,7 +83,6 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
 use mz_repr::user::ExternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
@@ -1133,8 +1133,8 @@ impl SystemVars {
     /// Set of [`SystemVar`]s that can also get set at a per-Session level.
     ///
     /// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
-    const SESSION_VARS: Lazy<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
-        Lazy::new(|| {
+    const SESSION_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
+        LazyLock::new(|| {
             [
                 &APPLICATION_NAME,
                 &CLIENT_ENCODING,

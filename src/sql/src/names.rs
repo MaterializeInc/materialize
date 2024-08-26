@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use anyhow::anyhow;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -23,7 +24,6 @@ use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ident;
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
@@ -907,7 +907,7 @@ impl FromStr for DatabaseId {
     }
 }
 
-pub static PUBLIC_ROLE_NAME: Lazy<&UncasedStr> = Lazy::new(|| UncasedStr::new("PUBLIC"));
+pub static PUBLIC_ROLE_NAME: LazyLock<&UncasedStr> = LazyLock::new(|| UncasedStr::new("PUBLIC"));
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum ObjectId {

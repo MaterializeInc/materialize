@@ -74,6 +74,7 @@ use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -96,7 +97,6 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
-use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
@@ -123,7 +123,8 @@ use crate::source::types::{
 use crate::source::RawSourceCreationConfig;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
-static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
+static PG_EPOCH: LazyLock<SystemTime> =
+    LazyLock::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
 
 // A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN of the replication
 // slot. This is accomplished by emitting `(data, 0, -diff)` for all updates `(data, lsn, diff)`

@@ -10,6 +10,7 @@
 //! Profiling HTTP endpoints.
 
 use std::env;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use askama::Template;
@@ -19,7 +20,6 @@ use cfg_if::cfg_if;
 use http::StatusCode;
 use mz_build_info::BuildInfo;
 use mz_prof::StackProfileExt;
-use once_cell::sync::Lazy;
 use pprof_util::{ProfStartTime, StackProfile};
 
 cfg_if! {
@@ -30,7 +30,7 @@ cfg_if! {
     }
 }
 
-static EXECUTABLE: Lazy<String> = Lazy::new(|| {
+static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
     {
         env::current_exe()
             .ok()

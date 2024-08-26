@@ -19,7 +19,6 @@ cargo_toml = "0.19.1"
 clap = { version = "3.2.24", features = ["derive"] }
 convert_case = "0.6"
 guppy = "0.17.5"
-once_cell = "1.16.0"
 proc-macro2 = "1.0.60"
 protobuf-parse = "3.4.0"
 quote = "1.0.23"

@@ -32,6 +32,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fmt, ops, str, thread};
 
@@ -78,7 +79,6 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser;
 use mz_storage_types::connections::ConnectionContext;
-use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -370,7 +370,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                     "FAIL"
                 }
             )?;
-            static NAMES: Lazy<Vec<&'static str>> = Lazy::new(|| {
+            static NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
                 vec![
                     "unsupported",
                     "parse-failure",
@@ -1269,8 +1269,8 @@ impl<'a> RunnerInner<'a> {
         sql: &'r str,
         location: Location,
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        static UNSUPPORTED_INDEX_STATEMENT_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
+        static UNSUPPORTED_INDEX_STATEMENT_REGEX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
         if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
             // sure, we totally made you an index
             return Ok(Outcome::Success);

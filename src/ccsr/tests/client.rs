@@ -9,6 +9,7 @@
 
 use std::env;
 use std::net::Ipv4Addr;
+use std::sync::LazyLock;
 
 use hyper::{service, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -17,11 +18,10 @@ use mz_ccsr::{
     Client, CompatibilityLevel, DeleteError, GetByIdError, GetBySubjectError,
     GetSubjectConfigError, PublishError, SchemaReference, SchemaType,
 };
-use once_cell::sync::Lazy;
 use tokio::net::TcpListener;
 
-pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
-    Lazy::new(|| match env::var("SCHEMA_REGISTRY_URL") {
+pub static SCHEMA_REGISTRY_URL: LazyLock<reqwest::Url> =
+    LazyLock::new(|| match env::var("SCHEMA_REGISTRY_URL") {
         Ok(addr) => addr.parse().expect("unable to parse SCHEMA_REGISTRY_URL"),
         _ => "http://localhost:8081".parse().unwrap(),
     });
