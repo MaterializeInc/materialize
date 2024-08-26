@@ -7,10 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub mod handlers;
-pub mod middleware;
-pub mod models;
-pub mod server;
-pub mod utils;
+pub mod auth;
+pub mod group;
+pub mod scim;
+pub mod sso;
+pub mod user;
 
-pub use server::FronteggMockServer;
+pub use auth::*;
+pub use group::*;
+pub use scim::*;
+pub use sso::*;
+pub use user::*;

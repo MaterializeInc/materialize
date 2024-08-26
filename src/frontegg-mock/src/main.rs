@@ -17,7 +17,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_frontegg_mock::{FronteggMockServer, UserConfig, UserRole};
+use mz_frontegg_mock::models::{UserConfig, UserRole};
+use mz_frontegg_mock::server::FronteggMockServer;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
