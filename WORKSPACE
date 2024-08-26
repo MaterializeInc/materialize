@@ -200,7 +200,7 @@ llvm_toolchain(
     sha256 = {
         "darwin-aarch64": "c538f0a8e359f6fec68f4fb6a7e1a36cbb1e7fd1d74640d6b413c204c599d4f4",
         "linux-aarch64": "e899e3e40748d4c9e704316f0e14b565b2646a0d2d2525a5d9cbe3dcf5389842",
-        "linux-x86_64": "",
+        "linux-x86_64": "737b3eaf4d0247bc7a29411906b8f55a779928803847b2a3f754c038c782a7d3",
     },
 )
 
