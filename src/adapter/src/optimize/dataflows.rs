@@ -61,10 +61,10 @@ impl ComputeInstanceSnapshot {
     pub fn new(controller: &Controller, id: ComputeInstanceId) -> Result<Self, InstanceMissing> {
         controller
             .compute
-            .instance_ref(id)
-            .map(|instance| ComputeInstanceSnapshot {
+            .collection_ids(id)
+            .map(|collection_ids| Self {
                 instance_id: id,
-                collections: BTreeSet::from_iter(instance.collections().map(|(id, _state)| *id)),
+                collections: collection_ids.collect(),
             })
     }
 

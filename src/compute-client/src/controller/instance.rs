@@ -274,8 +274,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .expect("collection must exist")
     }
 
-    pub fn collections_iter(&self) -> impl Iterator<Item = (&GlobalId, &CollectionState<T>)> {
-        self.collections.iter()
+    pub fn collections_iter(&self) -> impl Iterator<Item = (GlobalId, &CollectionState<T>)> {
+        self.collections.iter().map(|(id, coll)| (*id, coll))
     }
 
     /// Add a collection to the instance state.
@@ -566,7 +566,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         for (id, _collection) in self.collections_iter() {
-            if id.is_transient() || exclude_collections.contains(id) {
+            if id.is_transient() || exclude_collections.contains(&id) {
                 continue;
             }
 
@@ -577,7 +577,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 }
                 let collection_state = replica_state
                     .collections
-                    .get(id)
+                    .get(&id)
                     .expect("missing collection state");
 
                 if collection_state.hydrated() {
@@ -618,7 +618,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let mut all_caught_up = true;
 
         for (id, collection) in self.collections_iter() {
-            if id.is_transient() || exclude_collections.contains(id) {
+            if id.is_transient() || exclude_collections.contains(&id) {
                 // These have no relation to dataflows running on previous
                 // deployments.
                 continue;
@@ -628,7 +628,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
             // WIP: Assumes that the String representation remains stable. Is
             // that okay?
-            let live_write_frontier = match live_frontiers.get(id) {
+            let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {
                     // The collection didn't previously exist, so consider
@@ -705,9 +705,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                     && self
                         .replicas
                         .values()
-                        .all(|r| r.collection_frontiers_empty(**id))
+                        .all(|r| r.collection_frontiers_empty(*id))
             })
-            .map(|(id, _collection)| *id)
+            .map(|(id, _collection)| id)
             .collect();
 
         for id in to_remove {
@@ -716,7 +716,10 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     }
 
     /// List compute collections that depend on the given collection.
-    pub fn collection_reverse_dependencies(&self, id: GlobalId) -> impl Iterator<Item = &GlobalId> {
+    pub fn collection_reverse_dependencies(
+        &self,
+        id: GlobalId,
+    ) -> impl Iterator<Item = GlobalId> + '_ {
         self.collections_iter().filter_map(move |(id2, state)| {
             if state.compute_dependencies.contains_key(&id) {
                 Some(id2)

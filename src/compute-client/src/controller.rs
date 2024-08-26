@@ -50,7 +50,6 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
-use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
@@ -63,9 +62,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
-    ReplicaDropError, SubscribeTargetError,
+    CollectionLookupError, CollectionUpdateError, DataflowCreationError, InstanceExists,
+    InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
 };
 use crate::controller::instance::Instance;
 use crate::controller::replica::ReplicaConfig;
@@ -294,15 +293,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         self.instances.get_mut(&id).ok_or(InstanceMissing(id))
     }
 
-    /// Return a read-only handle to the indicated compute instance.
-    pub fn instance_ref(
+    /// List the IDs of all collections in the identified compute instance.
+    pub fn collection_ids(
         &self,
-        id: ComputeInstanceId,
-    ) -> Result<ComputeInstanceRef<T>, InstanceMissing> {
-        self.instance(id).map(|instance| ComputeInstanceRef {
-            instance_id: id,
-            instance,
-        })
+        instance_id: ComputeInstanceId,
+    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
+        let instance = self.instance(instance_id)?;
+        let ids = instance.collections_iter().map(|(id, _)| id);
+        Ok(ids)
     }
 
     /// Return a read-only handle to the indicated collection.
@@ -332,7 +330,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         &self,
         instance_id: ComputeInstanceId,
         id: GlobalId,
-    ) -> Result<impl Iterator<Item = &GlobalId>, InstanceMissing> {
+    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
         Ok(self
             .instance(instance_id)?
             .collection_reverse_dependencies(id))
@@ -406,7 +404,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// clearly intentional that they have no replicas.
     pub fn collections_hydrated_for_replicas(
         &self,
-        cluster: StorageInstanceId,
+        cluster: ComputeInstanceId,
         replicas: Vec<ReplicaId>,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, anyhow::Error> {
@@ -422,7 +420,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map(|(id, collection)| {
                 let since = collection.read_frontier().to_owned();
                 let upper = collection.write_frontier().to_owned();
-                (*id, (since, upper))
+                (id, (since, upper))
             })
             .collect()
     }
@@ -921,30 +919,6 @@ where
         // dropping of state, which can can cause introspection retractions, which lower the volume
         // of data we have to record.
         self.record_introspection_updates(storage);
-    }
-}
-
-/// A read-only handle to a compute instance.
-#[derive(Clone, Copy)]
-pub struct ComputeInstanceRef<'a, T: Timestamp> {
-    instance_id: ComputeInstanceId,
-    instance: &'a Instance<T>,
-}
-
-impl<T: ComputeControllerTimestamp> ComputeInstanceRef<'_, T> {
-    /// Return the ID of this compute instance.
-    pub fn instance_id(&self) -> ComputeInstanceId {
-        self.instance_id
-    }
-
-    /// Return a read-only handle to the indicated collection.
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
-        self.instance.collection(id)
-    }
-
-    /// Return an iterator over the installed collections.
-    pub fn collections(&self) -> impl Iterator<Item = (&GlobalId, &CollectionState<T>)> {
-        self.instance.collections_iter()
     }
 }
 
