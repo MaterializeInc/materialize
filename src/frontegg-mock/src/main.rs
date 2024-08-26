@@ -22,6 +22,7 @@ use mz_frontegg_mock::server::FronteggMockServer;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Frontegg mock server", long_about = None)]
@@ -60,10 +61,17 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     let args: Args = cli::parse_args(CliConfig::default());
     let res = run(args).await;
     if let Err(err) = res {
-        eprintln!("frontegg-mock: fatal: {}", err.display_with_causes());
+        tracing::error!("frontegg-mock: fatal: {}", err.display_with_causes());
         std::process::exit(1);
     }
 }

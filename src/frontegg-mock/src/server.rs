@@ -235,6 +235,7 @@ impl FronteggMockServer {
                 SCIM_CONFIGURATION_PATH,
                 delete(handle_delete_scim_configuration),
             )
+            .layer(middleware::from_fn(logging_middleware))
             .layer(middleware::from_fn_with_state(
                 Arc::clone(&context),
                 latency_middleware,

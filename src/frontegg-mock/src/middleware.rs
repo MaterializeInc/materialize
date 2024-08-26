@@ -8,7 +8,9 @@
 // by the Apache License, Version 2.0.
 
 pub mod latency;
+pub mod logging;
 pub mod role_update;
 
 pub use latency::*;
+pub use logging::*;
 pub use role_update::*;
