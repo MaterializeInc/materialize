@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
+from materialize.feature_benchmark.benchmark import ReportMeasurement
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 
 
@@ -20,10 +21,10 @@ class FeatureBenchmarkResultEntry:
     scenario_version: str
     cycle: int
     scale: str
-    wallclock: float | None
-    messages: int | None
-    memory_mz: float | None
-    memory_clusterd: float | None
+    wallclock: ReportMeasurement[float]
+    messages: ReportMeasurement[int]
+    memory_mz: ReportMeasurement[float]
+    memory_clusterd: ReportMeasurement[float]
 
 
 class FeatureBenchmarkResultStorage(BaseDataStorage):
@@ -53,7 +54,11 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     wallclock,
                     messages,
                     memory_mz,
-                    memory_clusterd
+                    memory_clusterd,
+                    wallclock_min,
+                    wallclock_max,
+                    wallclock_mean,
+                    wallclock_variance
                 )
                 SELECT
                     '{job_id}',
@@ -63,10 +68,14 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     '{result_entry.scenario_version}',
                     {result_entry.cycle},
                     '{result_entry.scale}',
-                    {result_entry.wallclock or 'NULL::DOUBLE'},
-                    {result_entry.messages or 'NULL::INT'},
-                    {result_entry.memory_mz or 'NULL::DOUBLE'},
-                    {result_entry.memory_clusterd or 'NULL::DOUBLE'}
+                    {result_entry.wallclock.result or 'NULL::DOUBLE'},
+                    {result_entry.messages.result or 'NULL::INT'},
+                    {result_entry.memory_mz.result or 'NULL::DOUBLE'},
+                    {result_entry.memory_clusterd.result or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.min or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.max or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.mean or 'NULL::DOUBLE'},
+                    {result_entry.wallclock.variance or 'NULL::DOUBLE'}
                 ;
                 """
             )
@@ -96,16 +105,24 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     wallclock,
                     messages,
                     memory_mz,
-                    memory_clusterd
+                    memory_clusterd,
+                    wallclock_min,
+                    wallclock_max,
+                    wallclock_mean,
+                    wallclock_variance
                 )
                 SELECT
                     '{job_id}',
                     '{discarded_entry.scenario_name}',
                     {discarded_entry.cycle},
-                    {discarded_entry.wallclock or 'NULL::DOUBLE'},
-                    {discarded_entry.messages or 'NULL::INT'},
-                    {discarded_entry.memory_mz or 'NULL::DOUBLE'},
-                    {discarded_entry.memory_clusterd or 'NULL::DOUBLE'}
+                    {discarded_entry.wallclock.result or 'NULL::DOUBLE'},
+                    {discarded_entry.messages.result or 'NULL::INT'},
+                    {discarded_entry.memory_mz.result or 'NULL::DOUBLE'},
+                    {discarded_entry.memory_clusterd.result or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.min or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.max or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.mean or 'NULL::DOUBLE'},
+                    {discarded_entry.wallclock.variance or 'NULL::DOUBLE'}
                 ;
                 """
             )
