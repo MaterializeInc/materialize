@@ -73,8 +73,8 @@ rust_test(
 	),
 	size = "medium",
 	compile_data = [],
-	data = [],
-	env = {},
+	data = [] + glob(["src/adt/snapshots/*"]),
+	env = { "INSTA_WORKSPACE_ROOT": "." },
 	rustc_flags = [],
 	rustc_env = {},
 )
