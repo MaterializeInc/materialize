@@ -143,10 +143,34 @@ rules_foreign_cc_dependencies(make_version = "4.2")
 TOOLCHAINS_LLVM_VERSION = "1.0.0"
 TOOLCHAINS_LLVM_INTEGRITY = "sha256-6RxDYfmQEaVIFOGvvlxDbg0ymHEUajzVjCOitK+1Bzc="
 
+# System roots that we use, this is where clang will search for things like libc.
+
+_SYSROOT_DARWIN_BUILD_FILE = """
+filegroup(
+    name = "sysroot",
+    srcs = glob(
+        include = ["**"],
+        exclude = ["**/*:*"],
+    ),
+    visibility = ["//visibility:public"],
+)
+"""
+
+DARWIN_SYSROOT_VERSION = "14.5"
+DARWIN_SYSROOT_INTEGRITY = "sha256-k8OxF+DSVq0L1dy1S9TPqhFxDHF/bT32Ust3a1ldat8="
+
+http_archive(
+    name = "sysroot_darwin_universal",
+    build_file_content = _SYSROOT_DARWIN_BUILD_FILE,
+    integrity = DARWIN_SYSROOT_INTEGRITY,
+    strip_prefix = "MacOSX{0}.sdk".format(DARWIN_SYSROOT_VERSION),
+    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/macos-sysroot-sdk-{0}/MacOSX{0}.sdk.tar.zst".format(DARWIN_SYSROOT_VERSION)],
+)
+
 # Version of clang/llvm we use.
 #
-# At the moment this is the newest version that is pre-compiled for all of the platforms we support.
-LLVM_VERSION = "16.0.0"
+# We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
+LLVM_VERSION = "18.1.8"
 
 maybe(
     http_archive,
@@ -164,6 +188,20 @@ load("@toolchains_llvm//toolchain:rules.bzl", "llvm_toolchain")
 llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
+    sysroot = {
+        "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
+        "darwin-x86_64": "@sysroot_darwin_universal//:sysroot",
+    },
+    urls = {
+        "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
+        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_aarch64.tar.zst".format(LLVM_VERSION)],
+        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_x86_64.tar.zst".format(LLVM_VERSION)],
+    },
+    sha256 = {
+        "darwin-aarch64": "c538f0a8e359f6fec68f4fb6a7e1a36cbb1e7fd1d74640d6b413c204c599d4f4",
+        "linux-aarch64": "e899e3e40748d4c9e704316f0e14b565b2646a0d2d2525a5d9cbe3dcf5389842",
+        "linux-x86_64": "",
+    },
 )
 
 load("@llvm_toolchain//:toolchains.bzl", "llvm_register_toolchains")
@@ -296,7 +334,7 @@ crates_repository(
                 ":rocksdb_include",
                 ":snappy_lib",
             ],
-            compile_data = [":rocksdb_lib", ":snappy_lib"],
+            compile_data = [":rocksdb_lib", ":rocksdb_include", ":snappy_lib"],
         )],
         # TODO(parkmycar): Re-enable linking with a jemalloc built by Bazel.
         # "tikv-jemalloc-sys": [crate.annotation(

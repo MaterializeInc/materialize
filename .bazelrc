@@ -2,6 +2,17 @@
 # `build:[ linux | macos | windows | freebsd | openbsd ]`
 common --enable_platform_specific_config
 
+# C Toolchain Configuration
+common --compiler=clang++
+common --cxxopt=-stdlib=libc++
+
+# LLVM's libc++ has different assertion modes which can be configured to catch
+# undefined behavior. See: <https://libcxx.llvm.org/Hardening.html>
+#
+# TODO(parkmycar): Configure this differently for Debug and CI builds.
+build --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST"
+build --host_cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST"
+
 # Required for remote caching to be effective.
 #
 # Otherwise Bazel will passthrough the current system's PATH in the execution
