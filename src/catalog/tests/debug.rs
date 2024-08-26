@@ -7,20 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::future::BoxFuture;
-use futures::FutureExt;
+use std::fmt::{Debug, Formatter};
+
 use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingCollection, Trace};
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
-    test_bootstrap_args, test_persist_backed_catalog_state, CatalogError, DurableCatalogError,
-    Epoch, OpenableDurableCatalogState, CATALOG_VERSION,
+    test_bootstrap_args, CatalogError, DurableCatalogError, Epoch, TestCatalogStateBuilder,
+    CATALOG_VERSION,
 };
 use mz_ore::now::NOW_ZERO;
 use mz_persist_client::PersistClient;
 use mz_repr::{Diff, Timestamp};
-use std::fmt::{Debug, Formatter};
-use uuid::Uuid;
 
 /// A new type for [`Trace`] that excludes the user_version from the debug output. The user_version
 /// changes frequently, so it's useful to print the contents excluding the user_version to avoid
@@ -102,20 +100,13 @@ impl Debug for HiddenUserVersionTrace<'_> {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_debug() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-
-    test_debug(persist_openable_state1, move || {
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed()
-    })
-    .await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_debug(state_builder).await;
 }
 
-async fn test_debug<'a>(
-    mut openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state_generator: impl Fn() -> BoxFuture<'a, Box<dyn OpenableDurableCatalogState>>,
-) {
+async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut openable_state1 = state_builder.clone().unwrap_build().await;
     // Check initial empty trace.
     let err = openable_state1.trace_unconsolidated().await.unwrap_err();
     assert_eq!(
@@ -131,14 +122,13 @@ async fn test_debug<'a>(
     );
 
     // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-    let deploy_generation = 0;
     let _ = openable_state1
-        .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
         .await
         .unwrap();
 
     // Check epoch
-    let mut openable_state2 = openable_state_generator().await;
+    let mut openable_state2 = state_builder.clone().unwrap_build().await;
     let epoch = openable_state2.epoch().await.unwrap();
     assert_eq!(Epoch::new(2).unwrap(), epoch);
 
@@ -158,7 +148,7 @@ async fn test_debug<'a>(
 
     let mut debug_state = openable_state2.open_debug().await.unwrap();
 
-    let mut openable_state_reader = openable_state_generator().await;
+    let mut openable_state_reader = state_builder.clone().unwrap_build().await;
     assert_eq!(
         openable_state_reader.trace_unconsolidated().await.unwrap(),
         unconsolidated_trace,
@@ -181,7 +171,7 @@ async fn test_debug<'a>(
         .await
         .unwrap();
     assert_eq!(prev, None);
-    let mut openable_state_reader = openable_state_generator().await;
+    let mut openable_state_reader = state_builder.clone().unwrap_build().await;
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
@@ -222,7 +212,7 @@ async fn test_debug<'a>(
             value: "initial".to_string(),
         })
     );
-    let mut openable_state_reader = openable_state_generator().await;
+    let mut openable_state_reader = state_builder.clone().unwrap_build().await;
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
@@ -252,7 +242,7 @@ async fn test_debug<'a>(
         })
         .await
         .unwrap();
-    let mut openable_state_reader = openable_state_generator().await;
+    let mut openable_state_reader = state_builder.clone().unwrap_build().await;
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);

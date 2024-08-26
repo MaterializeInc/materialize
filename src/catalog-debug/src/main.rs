@@ -185,6 +185,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         persist_client,
         organization_id,
         BUILD_INFO.semver_version(),
+        None,
         metrics,
     )
     .await?;
@@ -492,7 +493,6 @@ async fn upgrade_check(
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
-    let deploy_generation = 0;
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state
         .open_savepoint(
@@ -502,7 +502,6 @@ async fn upgrade_check(
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
                 bootstrap_role: None,
             },
-            deploy_generation,
             None,
         )
         .await?;

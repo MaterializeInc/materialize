@@ -345,6 +345,7 @@ impl Listeners {
             persist_client.clone(),
             config.environment_id.organization_id(),
             BUILD_INFO.semver_version(),
+            Some(config.controller.deploy_generation),
             Arc::clone(&config.catalog_config.metrics),
         )
         .await?;
@@ -510,12 +511,7 @@ impl Listeners {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
-                .open_savepoint(
-                    boot_ts,
-                    &bootstrap_args,
-                    config.controller.deploy_generation,
-                    None,
-                )
+                .open_savepoint(boot_ts, &bootstrap_args, None)
                 .await?;
 
             // In read-only mode, we intentionally do not call `set_is_leader`,
@@ -525,12 +521,7 @@ impl Listeners {
             adapter_storage
         } else {
             let adapter_storage = openable_adapter_storage
-                .open(
-                    boot_ts,
-                    &bootstrap_args,
-                    config.controller.deploy_generation,
-                    None,
-                )
+                .open(boot_ts, &bootstrap_args, None)
                 .await?;
 
             // Once we have successfully opened the adapter storage in

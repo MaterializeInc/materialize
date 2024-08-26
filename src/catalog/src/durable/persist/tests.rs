@@ -15,9 +15,7 @@ use uuid::Uuid;
 use crate::durable::persist::{
     fetch_catalog_upgrade_shard_version, shard_id, CATALOG_SEED, UPGRADE_SEED,
 };
-use crate::durable::{
-    test_bootstrap_args, test_persist_backed_catalog_state_with_version, DurableCatalogError,
-};
+use crate::durable::{test_bootstrap_args, DurableCatalogError, TestCatalogStateBuilder};
 
 /// Test that the catalog forces users to upgrade one version at a time.
 #[mz_ore::test(tokio::test)]
@@ -44,15 +42,14 @@ async fn test_upgrade_shard() {
         fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await
     );
 
-    let persist_openable_state = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        first_version.clone(),
-    )
-    .await
-    .expect("failed to create persist catalog");
+    let persist_openable_state = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(deploy_generation)
+        .with_version(first_version.clone())
+        .expect_build("failed to create persist catalog")
+        .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
         .await
         .expect("failed to open persist catalog");
 
@@ -67,13 +64,13 @@ async fn test_upgrade_shard() {
         .open(PersistLocation::new_in_mem())
         .await
         .expect("in-mem location is valid");
-    let err = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        third_version.clone(),
-    )
-    .await
-    .expect_err("skipping versions should error");
+    let err = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(deploy_generation)
+        .with_version(third_version.clone())
+        .build()
+        .await
+        .expect_err("skipping versions should error");
     assert!(
         matches!(
             &err,
@@ -91,28 +88,28 @@ async fn test_upgrade_shard() {
         .open(PersistLocation::new_in_mem())
         .await
         .expect("in-mem location is valid");
-    test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        second_dev_version.clone(),
-    )
-    .await
-    .expect("failed to create persist catalog");
+    TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(deploy_generation)
+        .with_version(second_dev_version.clone())
+        .expect_build("failed to create persist catalog")
+        .await;
 
     persist_cache.cfg.build_version = second_version.clone();
     let persist_client = persist_cache
         .open(PersistLocation::new_in_mem())
         .await
         .expect("in-mem location is valid");
-    let persist_openable_state = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        second_version.clone(),
-    )
-    .await
-    .expect("failed to create persist catalog");
+    let state_builder = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(deploy_generation)
+        .with_version(second_version.clone());
+    let persist_openable_state = state_builder
+        .clone()
+        .expect_build("failed to create persist catalog")
+        .await;
     let _persist_state = persist_openable_state
-        .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+        .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
         .await
         .expect("failed to open savepoint persist catalog");
 
@@ -122,13 +119,10 @@ async fn test_upgrade_shard() {
         "opening a savepoint catalog should not increment the upgrade version"
     );
 
-    let persist_openable_state = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        second_version.clone(),
-    )
-    .await
-    .expect("failed to create persist catalog");
+    let persist_openable_state = state_builder
+        .clone()
+        .expect_build("failed to create persist catalog")
+        .await;
     let _persist_state = persist_openable_state
         .open_read_only(&test_bootstrap_args())
         .await
@@ -140,15 +134,11 @@ async fn test_upgrade_shard() {
         "opening a readonly catalog should not increment the upgrade version"
     );
 
-    let persist_openable_state = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        second_version.clone(),
-    )
-    .await
-    .expect("failed to create persist catalog");
+    let persist_openable_state = state_builder
+        .expect_build("failed to create persist catalog")
+        .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
         .await
         .expect("failed to open readonly persist catalog");
 
@@ -181,15 +171,14 @@ async fn test_version_regression() {
         fetch_catalog_upgrade_shard_version(&persist_client, catalog_shard_id).await
     );
 
-    let persist_openable_state = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        first_version.clone(),
-    )
-    .await
-    .expect("failed to create persist catalog");
+    let persist_openable_state = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(deploy_generation)
+        .with_version(first_version.clone())
+        .expect_build("failed to create persist catalog")
+        .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
         .await
         .expect("failed to open persist catalog");
 
@@ -203,15 +192,14 @@ async fn test_version_regression() {
         .open(PersistLocation::new_in_mem())
         .await
         .expect("in-mem location is valid");
-    let persist_openable_state = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        second_version.clone(),
-    )
-    .await
-    .expect("failed to create persist catalog");
+    let persist_openable_state = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(deploy_generation)
+        .with_version(second_version.clone())
+        .expect_build("failed to create persist catalog")
+        .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
         .await
         .expect("failed to open readonly persist catalog");
 
@@ -225,13 +213,13 @@ async fn test_version_regression() {
         .open(PersistLocation::new_in_mem())
         .await
         .expect("in-mem location is valid");
-    let err = test_persist_backed_catalog_state_with_version(
-        persist_client.clone(),
-        organization_id.clone(),
-        first_version.clone(),
-    )
-    .await
-    .expect_err("skipping versions should error");
+    let err = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_organization_id(organization_id)
+        .with_deploy_generation(deploy_generation)
+        .with_version(first_version.clone())
+        .build()
+        .await
+        .expect_err("skipping versions should error");
     assert!(
         matches!(
             &err,
