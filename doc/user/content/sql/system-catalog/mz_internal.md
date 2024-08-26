@@ -471,6 +471,8 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 | ----------------------- | ------------ | --------                                                                                                              |
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
 | `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+| `shortest_distance`     | [`bigint`]   | The minumum number of dependencies between the dependent object and the referenced object                             |
+| `longest_distance`      | [`bigint`]   | The maximumm number of dependencies between the dependent object and the referenced object                            |
 
 ## `mz_notices`
 

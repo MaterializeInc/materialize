@@ -277,6 +277,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 ----
 1  object_id  text
 2  referenced_object_id  text
+3  shortest_distance  bigint
+4  longest_distance  bigint
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices' ORDER BY position

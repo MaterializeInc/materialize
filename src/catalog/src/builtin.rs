@@ -3628,20 +3628,25 @@ WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
     name: "mz_object_transitive_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_OID,
     column_defs: None,
     sql: "
 WITH MUTUALLY RECURSIVE
-  reach(object_id text, referenced_object_id text) AS (
-    SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies
+  reach(object_id text, referenced_object_id text, depth bigint) AS (
+    SELECT object_id, referenced_object_id, 1 FROM mz_internal.mz_object_dependencies
     UNION
-    SELECT x, z FROM reach r1(x, y) JOIN reach r2(y, z) USING(y)
+    SELECT x, z, d1 + d2 FROM reach r1(x, y, d1) JOIN reach r2(y, z, d2) USING(y)
   )
-SELECT object_id, referenced_object_id FROM reach;",
+
+SELECT object_id, referenced_object_id, MIN(depth) AS shortest_distance, MAX(depth) AS longest_distance FROM reach
+GROUP BY object_id, referenced_object_id
+OPTIONS (AGGREGATE INPUT GROUP SIZE = 256);",
     access: vec![PUBLIC_SELECT],
+}
 });
 
 pub static MZ_COMPUTE_EXPORTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
