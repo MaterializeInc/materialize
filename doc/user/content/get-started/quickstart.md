@@ -28,7 +28,14 @@ store first-hand:
 
 ## Prerequisite
 
-A Materialize account. If you do not have an account, you can [sign up for a free trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+A Materialize account. If you do not have an account, you can [sign up for a
+free
+trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+
+Alternatively, you can [download the Materialize
+Emulator](/get-started/install-materialize-emulator/) to test locally. However,
+the Materialize Emulator does not provide the full experience of using
+Materialize.
 
 ## Step 0. Sign in to Materialize
 
@@ -217,8 +224,10 @@ fraudulent accounts.
    and pop open another SQL Shell.
 
 1. To see results change over time, let's `SUBSCRIBE` to a query that returns
-the Top 5 auction winners, overall.
+   the Top 5 auction winners, overall.
 
+   {{< tabs >}}
+   {{< tab "Materialize Console" >}}
    ```mzsql
    SUBSCRIBE TO (
      SELECT buyer, count(*)
@@ -228,6 +237,22 @@ the Top 5 auction winners, overall.
      ORDER BY 2 DESC LIMIT 5
    );
    ```
+   {{< /tab >}}
+   {{< tab "Other Clients" >}}
+   If running against the Materialize Emulator, run the following command in
+   your preferred SQL client:
+
+   ```mzsql
+   COPY (SUBSCRIBE (
+   SELECT buyer, count(*)
+   FROM winning_bids
+   WHERE buyer NOT IN (SELECT id FROM fraud_accounts)
+   GROUP BY buyer
+   ORDER BY 2 DESC LIMIT 5
+   )) TO STDOUT;
+   ```
+   {{< /tab >}}
+   {{< /tabs >}}
 
    You can keep an eye on the results, but these may not change much at the
    moment. You'll fix that in the next step!
@@ -281,17 +306,35 @@ operational use case: profit & loss alerts.
 spot that results are correct and consistent. As an example, the total credit
 and total debit amounts should always add up.
 
-    ```mzsql
-    SELECT SUM(credits), SUM(debits) FROM funds_movement;
-    ```
+   ```mzsql
+   SELECT SUM(credits), SUM(debits) FROM funds_movement;
+   ```
 
-    You can also `SUBSCRIBE` to this query, and watch the sums change in lock step as auctions close.
+   You can also `SUBSCRIBE` to this query, and watch the sums change in lock step as auctions close.
 
-    ```mzsql
-    SUBSCRIBE TO (
-        SELECT SUM(credits), SUM(debits) FROM funds_movement
-    );
-    ```
+   {{< tabs >}}
+   {{< tab "Materialize Console" >}}
+
+   ```mzsql
+     SUBSCRIBE TO (
+         SELECT SUM(credits), SUM(debits) FROM funds_movement
+     );
+   ```
+
+   {{< /tab >}}
+   {{< tab "Other Clients" >}}
+
+   If running against the Materialize Emulator, run the following command in
+   your preferred SQL client:
+
+   ```mzsql
+     COPY (SUBSCRIBE TO (
+         SELECT SUM(credits), SUM(debits) FROM funds_movement
+     )) TO STDOUT;
+   ```
+
+   {{< /tab >}}
+   {{< /tabs >}}
 
    It is never wrong, is it?
 

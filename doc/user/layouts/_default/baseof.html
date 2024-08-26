@@ -133,6 +133,7 @@ Apache License, Version 2.0. */}}
           setTimeout(function () {
             _this.removeClass("success").text("Copy");
           }, 1000);
+          window.analytics && window.analytics.track('Button Clicked');
         });
       });
 

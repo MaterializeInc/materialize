@@ -1198,3 +1198,10 @@ body.dark {
         }
     }
 }
+
+.caption {
+    font-size: rem(1.2);
+    font-weight: 300;
+    padding: var(--nano);
+    font-style: italic;
+}
