@@ -46,4 +46,3 @@ For questions, discussions, or general technical support, join the [Materialize 
 
 * Use of the Docker image is subject to Materialize’s [BSL License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
 * By downloading the Docker image, you are agreeing to Materialize’s [privacy policy](https://materialize.com/privacy-policy/).
-
