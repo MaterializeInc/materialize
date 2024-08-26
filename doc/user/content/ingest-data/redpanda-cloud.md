@@ -223,9 +223,9 @@ created:
     <p></p>
 
     ```
-       id   |                                 principal
-    --------+---------------------------------------------------------------------------
-     u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+                                     principal
+    ---------------------------------------------------------------------------
+     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
     ```
 
 1. Patch your Redpanda Cloud cluster to accept connections from the AWS
