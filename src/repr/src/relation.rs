@@ -378,7 +378,7 @@ impl RelationVersion {
         RelationVersion(0)
     }
 
-    /// Returns and instance of [`ColumnVersion`] which is "one" higher than `self`.
+    /// Returns an instance of [`RelationVersion`] which is "one" higher than `self`.
     pub fn bump(&self) -> Self {
         let next_version = self
             .0
