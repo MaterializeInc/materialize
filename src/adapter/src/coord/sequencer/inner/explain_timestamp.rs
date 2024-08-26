@@ -261,7 +261,7 @@ impl Coordinator {
                         .unwrap_or_else(|| id.to_string());
                     sources.push(TimestampSource {
                         name: format!("{name} ({id}, compute)"),
-                        read_frontier: state.read_capability().elements().to_vec(),
+                        read_frontier: state.read_frontier().to_vec(),
                         write_frontier: state.write_frontier().to_vec(),
                     });
                 }

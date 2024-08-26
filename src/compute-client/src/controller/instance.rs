@@ -2058,11 +2058,6 @@ pub struct CollectionState<T: Timestamp> {
 }
 
 impl<T: Timestamp> CollectionState<T> {
-    /// Reports the current read capability.
-    pub fn read_capability(&self) -> &Antichain<T> {
-        self.implied_read_hold.since()
-    }
-
     /// Reports the current read frontier.
     pub fn read_frontier(&self) -> AntichainRef<T> {
         self.read_capabilities.frontier()

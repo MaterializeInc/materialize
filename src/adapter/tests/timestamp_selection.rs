@@ -91,14 +91,6 @@ impl TimestampProvider for Frontiers {
         self.compute.get(&(instance, id)).unwrap().read.borrow()
     }
 
-    fn compute_read_capability<'a>(
-        &'a self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> &'a timely::progress::Antichain<Timestamp> {
-        &self.compute.get(&(instance, id)).unwrap().read
-    }
-
     fn compute_write_frontier<'a>(
         &'a self,
         instance: ComputeInstanceId,

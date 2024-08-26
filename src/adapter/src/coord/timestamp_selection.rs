@@ -150,19 +150,6 @@ impl TimestampProvider for Coordinator {
             .read_frontier()
     }
 
-    /// Reports a collection's current read capability.
-    fn compute_read_capability<'a>(
-        &'a self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> &'a Antichain<Timestamp> {
-        self.controller
-            .compute
-            .collection(instance, id)
-            .expect("id does not exist")
-            .read_capability()
-    }
-
     /// Reports a collection's current write frontier.
     fn compute_write_frontier<'a>(
         &'a self,
@@ -202,11 +189,6 @@ pub trait TimestampProvider {
         instance: ComputeInstanceId,
         id: GlobalId,
     ) -> AntichainRef<'a, Timestamp>;
-    fn compute_read_capability<'a>(
-        &'a self,
-        instance: ComputeInstanceId,
-        id: GlobalId,
-    ) -> &'a Antichain<Timestamp>;
     fn compute_write_frontier<'a>(
         &'a self,
         instance: ComputeInstanceId,
