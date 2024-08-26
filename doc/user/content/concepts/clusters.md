@@ -38,7 +38,7 @@ Resizing incurs downtime as it requires all objects in the cluster to hydrate.
 
 **Private Preview**: For clusters that do not contain sources and sinks but only
 compute objects (e.g., indexes, views, and materialized views), [graceful
-reconfiguration](/sql/alter-cluster/#no-downtime-reconfiguration) is available
+reconfiguration](/sql/alter-cluster/#graceful-reconfiguration) is available
 in [private preview](https://materialize.com/preview-terms/).
 
 {{</ note >}}

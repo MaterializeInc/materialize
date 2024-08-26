@@ -28,7 +28,7 @@ cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).
 Field                         | Value                 | Description
 ------------------------------|-----------------------|-------------------------------------
 **TIMEOUT**                   | `duration`            | The maximum duration to wait for the new replicas to be ready.
-**ON TIMEOUT**                | [`COMMIT`,`ROLLBACK`] | The action to take on timeout. `COMMIT` will cutover to the new replicas regardless of their hydration status, which may lead to downtime.  `ROLLBACK` will remove any pending replicas and return a timeout error.
+**ON TIMEOUT**                | [`COMMIT`,`ROLLBACK`] | The action to take on timeout. <br><ul><li>`COMMIT` will cutover to the new replicas regardless of their hydration status, which may lead to downtime.</li><li>`ROLLBACK` will remove any pending replicas and return a timeout error.</li><li>Defaults to `COMMIT`.</li></ul>
 
 ## Examples
 
@@ -60,7 +60,7 @@ See the reference documentation for [`CREATE CLUSTER`](../create-cluster/#schedu
 or [`CREATE MATERIALIZED VIEW`](../create-materialized-view/#refresh-strategies)
 for more details on scheduled clusters.
 
-### No-downtime reconfiguration
+### Graceful reconfiguration
 
 {{< private-preview />}}
 Changing the configuration of a cluster using the `ALTER CLUSTER` command
@@ -75,11 +75,11 @@ to perform operations like cluster resizing with **no downtime**.
 ALTER CLUSTER c1 SET (SIZE '100CC') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'))
 ````
 
-The `ALTER` statement will block while the new replica becomes ready, which
-could take as long as the specified timeout. During this operation, any other
-reconfiguration command will block, and any connection interruption or
-statement cancelation will cause a rollback — no configuration changes will
-take effect in that case.
+The `ALTER` statement is blocking and will return only when the new replica
+becomes ready. This could take as long as the specified timeout. During this
+operation, any other reconfiguration command issued against this cluster will
+fail. Additionally, any connection interruption or statement cancelation will
+cause a rollback — no configuration changes will take effect in that case.
 
 
 ## Converting unmanaged to managed clusters
