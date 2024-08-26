@@ -1,33 +1,33 @@
 ---
-title: "MySQL"
-description: "Connect and ingest data from MySQL."
+title: "PostgreSQL"
+description: "Connect and ingest data from PostgreSQL."
 ---
 
 The following section contains documentation on connecting and ingesting data
-from MySQL.
+from PostgreSQL.
 
-### Native support for MySQL
+### Native support for PostgreSQL
 
-Materialize provides native support for the following MySQL:
+Materialize provides native support for the following PostgreSQL:
 
 |                          |
 | ------------------------------------------- |
-| {{% ingest-data/mysql-native-support %}} |
+| {{% ingest-data/postgres-native-support %}} |
 
 ### Support via Kafka and Debezium
 
 {{< tip >}}
 
 If possible, use Materialize's [native support for
-MySQL](#native-support-for-mysql) instead.
+PostgreSQL](#native-support-for-postgresql) instead.
 
 {{</ tip >}}
 
 You can use Debezium and the Kafka source to propagate Change Data Capture (CDC)
-data from MySQL to Materialize.
+data from PostgreSQL to Materialize.
 
 | Debezium + Kafka                            |
 | ------------------------------------------- |
-| [MySQL CDC using Kafka and Debezium](/ingest-data/mysql/mysql-debezium/) |
+| [PostgreSQL CDC using Kafka and Debezium](/ingest-data/postgres/postgres-debezium/) |
 
 ### Section contents

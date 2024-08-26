@@ -6,17 +6,17 @@ aliases:
   - /integrations/cdc-mysql/
   - /connect-sources/cdc-mysql/
   - /ingest-data/cdc-mysql/
-  - /ingest-data/mysql/debezium/
 menu:
   main:
-    parent: "ingest-data-appendix"
-    name: "MySQL: Using Kafka and Debezium"
+    parent: "mysql"
+    name: "Using Kafka and Debezium"
     identifier: "mysql-dbz"
 ---
 
 {{< tip >}}
-- As an alternative to using Kafka and Debezium, Materialize also provides
-  native support for MySQL.
+- As alternative to using Kafka and Debezium, Materialize also
+  provides native support for MySQL. If possible, use Materialize's native
+  support for MySQL instead.
 
 - {{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}

@@ -4,18 +4,18 @@ description: "How to propagate Change Data Capture (CDC) data from a PostgreSQL 
 aliases:
   - /connect-sources/cdc-postgres-kafka-debezium/
   - /ingest-data/cdc-postgres-kafka-debezium/
-  - /ingest-data/postgres/debezium/
 
 menu:
   main:
-    parent: "ingest-data-appendix"
-    name: "PosgreSQL: Using Kafka and Debezium"
+    parent: "postgresql"
+    name: "Using Kafka and Debezium"
     identifier: "pg-dbz"
 ---
 
 {{< tip >}}
-- As an alternative to using Kafka and Debezium, Materialize also provides
-  native support for PostgreSQL.
+- **Recommended**. As alternative to using Kafka and Debezium, Materialize also
+  provides native support for PostgreSQL. If possible, use Materialize's native
+  support for PostgreSQL instead.
 
 - {{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
