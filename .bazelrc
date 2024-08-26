@@ -42,6 +42,13 @@ build --workspace_status_command "python3 misc/bazel/build-info/workspace_status
 # Note: We used to have 'stream' here, but that forces Bazel to serialize test execution.
 test --test_output=all
 
+# Allows spaces to in filenames, without this Rust Doc tests fail to build.
+build:macos --experimental_inprocess_symlink_creation
+# Tracks stashed sandboxes in-memory so it uses less I/O on reuse.
+#
+# Bazel's sandbox performance on macOS doesn't scale very well, see: <https://github.com/bazelbuild/bazel/issues/8230>
+build:macos --experimental_inmemory_sandbox_stashes
+
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
 common --explain=bazel-explain.log
 common --verbose_explanations
@@ -53,5 +60,5 @@ common --experimental_remote_cache_compression_threshold=2097152
 common --experimental_remote_merkle_tree_cache
 # Number of merkle trees to memoize (default 1000).
 common --experimental_remote_merkle_tree_cache_size=5000
-
+# Tells `xz` to use all available cores.
 action_env=XZ_OPT=-T0
