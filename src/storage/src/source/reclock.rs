@@ -662,7 +662,7 @@ mod tests {
     });
 
     static PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column(
                 "partition",
                 ScalarType::Range {
@@ -671,6 +671,7 @@ mod tests {
                 .nullable(false),
             )
             .with_column("offset", ScalarType::UInt64.nullable(true))
+            .finish()
     });
 
     async fn make_test_operator(

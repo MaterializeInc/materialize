@@ -27,7 +27,7 @@ use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.statistics.rs"));
 
 pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         // Id of the source (or subsource).
         .with_column("id", ScalarType::String.nullable(false))
         //
@@ -90,10 +90,11 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new
         // A gauge of the number of _values_ (source defined unit) we have committed.
         // Never resets. Not to be confused with any of the counters above.
         .with_column("offset_committed", ScalarType::UInt64.nullable(true))
+        .finish()
 });
 
 pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         // Id of the sink.
         .with_column("id", ScalarType::String.nullable(false))
         //
@@ -111,6 +112,7 @@ pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         // A counter of the bytes we have committed.
         // Never resets.
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
+        .finish()
 });
 
 // Types of statistics (counter and various types of gauges), that have different semantics

@@ -173,11 +173,11 @@ impl RustType<ProtoDataEncoding> for DataEncoding {
 }
 
 pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> RelationDesc {
-    let mut desc = RelationDesc::empty();
+    let mut desc = RelationDesc::builder();
     for (name, ty) in included_columns {
         desc = desc.with_column(name, ty);
     }
-    desc
+    desc.finish()
 }
 
 impl<C: ConnectionAccess> DataEncoding<C> {
@@ -199,12 +199,12 @@ impl<C: ConnectionAccess> DataEncoding<C> {
     fn desc(&self) -> Result<RelationDesc, anyhow::Error> {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
-            Self::Bytes => {
-                RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
-            }
-            Self::Json => {
-                RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
-            }
+            Self::Bytes => RelationDesc::builder()
+                .with_column("data", ScalarType::Bytes.nullable(false))
+                .finish(),
+            Self::Json => RelationDesc::builder()
+                .with_column("data", ScalarType::Jsonb.nullable(false))
+                .finish(),
             Self::Avro(AvroEncoding { schema, .. }) => {
                 let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
                 avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
@@ -216,9 +216,10 @@ impl<C: ConnectionAccess> DataEncoding<C> {
             }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.to_owned())?
                 .columns()
                 .iter()
-                .fold(RelationDesc::empty(), |desc, (name, ty)| {
+                .fold(RelationDesc::builder(), |desc, (name, ty)| {
                     desc.with_column(name, ty.clone())
-                }),
+                })
+                .finish(),
             Self::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
                 .enumerate()
@@ -227,28 +228,32 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                 // just surround their entire regex in an explicit capture
                 // group.
                 .skip(1)
-                .fold(RelationDesc::empty(), |desc, (i, name)| {
+                .fold(RelationDesc::builder(), |desc, (i, name)| {
                     let name = match name {
                         None => format!("column{}", i),
                         Some(name) => name.to_owned(),
                     };
                     let ty = ScalarType::String.nullable(true);
                     desc.with_column(name, ty)
-                }),
+                })
+                .finish(),
             Self::Csv(CsvEncoding { columns, .. }) => match columns {
-                ColumnSpec::Count(n) => (1..=*n).fold(RelationDesc::empty(), |desc, i| {
-                    desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
-                }),
+                ColumnSpec::Count(n) => (1..=*n)
+                    .fold(RelationDesc::builder(), |desc, i| {
+                        desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
+                    })
+                    .finish(),
                 ColumnSpec::Header { names } => names
                     .iter()
                     .map(|s| &**s)
-                    .fold(RelationDesc::empty(), |desc, name| {
+                    .fold(RelationDesc::builder(), |desc, name| {
                         desc.with_column(name, ScalarType::String.nullable(false))
-                    }),
+                    })
+                    .finish(),
             },
-            Self::Text => {
-                RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
-            }
+            Self::Text => RelationDesc::builder()
+                .with_column("text", ScalarType::String.nullable(false))
+                .finish(),
         })
     }
 

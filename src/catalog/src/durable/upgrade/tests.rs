@@ -62,7 +62,9 @@ fn test_proto_serialization_stability() {
     }
 
     let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
-    let relation_desc = RelationDesc::empty().with_column("a", ScalarType::Jsonb.nullable(false));
+    let relation_desc = RelationDesc::builder()
+        .with_column("a", ScalarType::Jsonb.nullable(false))
+        .finish();
     for snapshot_file in snapshot_files {
         let encoded_bytes = fs::read(format!("{}/{}.txt", SNAPSHOT_DIRECTORY, snapshot_file))
             .expect("unable to read encoded file");

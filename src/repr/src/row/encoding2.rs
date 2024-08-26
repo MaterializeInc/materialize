@@ -1674,7 +1674,7 @@ mod tests {
         datum: impl Iterator<Item = Datum<'a>>,
         metrics: &ColumnarMetrics,
     ) {
-        let desc = RelationDesc::empty().with_column("a", ty);
+        let desc = RelationDesc::builder().with_column("a", ty).finish();
         let rows = datum.map(|d| Row::pack_slice(&[d])).collect();
         roundtrip_rows(&desc, rows, metrics)
     }
@@ -1852,7 +1852,7 @@ mod tests {
 
     #[mz_ore::test]
     fn smoketest_row() {
-        let desc = RelationDesc::empty()
+        let desc = RelationDesc::builder()
             .with_column("a", ScalarType::Int64.nullable(true))
             .with_column("b", ScalarType::String.nullable(true))
             .with_column("c", ScalarType::Bool.nullable(true))
@@ -1871,7 +1871,8 @@ mod tests {
                     custom_id: None,
                 }
                 .nullable(true),
-            );
+            )
+            .finish();
         let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
@@ -1910,17 +1911,19 @@ mod tests {
 
     #[mz_ore::test]
     fn test_nested_list() {
-        let desc = RelationDesc::empty().with_column(
-            "a",
-            ScalarType::List {
-                element_type: Box::new(ScalarType::List {
-                    element_type: Box::new(ScalarType::Int64),
+        let desc = RelationDesc::builder()
+            .with_column(
+                "a",
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::List {
+                        element_type: Box::new(ScalarType::Int64),
+                        custom_id: None,
+                    }),
                     custom_id: None,
-                }),
-                custom_id: None,
-            }
-            .nullable(false),
-        );
+                }
+                .nullable(false),
+            )
+            .finish();
         let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();
@@ -1945,25 +1948,27 @@ mod tests {
 
     #[mz_ore::test]
     fn test_record() {
-        let desc = RelationDesc::empty().with_column(
-            "a",
-            ScalarType::Record {
-                fields: vec![
-                    (ColumnName::from("foo"), ScalarType::Int64.nullable(false)),
-                    (ColumnName::from("bar"), ScalarType::String.nullable(true)),
-                    (
-                        ColumnName::from("baz"),
-                        ScalarType::List {
-                            element_type: Box::new(ScalarType::UInt32),
-                            custom_id: None,
-                        }
-                        .nullable(false),
-                    ),
-                ],
-                custom_id: None,
-            }
-            .nullable(true),
-        );
+        let desc = RelationDesc::builder()
+            .with_column(
+                "a",
+                ScalarType::Record {
+                    fields: vec![
+                        (ColumnName::from("foo"), ScalarType::Int64.nullable(true)),
+                        (ColumnName::from("bar"), ScalarType::String.nullable(false)),
+                        (
+                            ColumnName::from("baz"),
+                            ScalarType::List {
+                                element_type: Box::new(ScalarType::UInt32),
+                                custom_id: None,
+                            }
+                            .nullable(false),
+                        ),
+                    ],
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish();
         let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
 
         let mut og_row = Row::default();

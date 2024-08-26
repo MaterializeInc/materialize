@@ -104,14 +104,19 @@ pub fn describe_show_variable(
     ShowVariableStatement { variable, .. }: ShowVariableStatement,
 ) -> Result<StatementDesc, PlanError> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("setting", ScalarType::String.nullable(false))
             .with_column("description", ScalarType::String.nullable(false))
+            .finish()
     } else if variable.as_str() == SCHEMA_ALIAS {
-        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(true))
+        RelationDesc::builder()
+            .with_column(variable.as_str(), ScalarType::String.nullable(true))
+            .finish()
     } else {
-        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
+        RelationDesc::builder()
+            .with_column(variable.as_str(), ScalarType::String.nullable(false))
+            .finish()
     };
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -133,7 +138,9 @@ pub fn describe_inspect_shard(
     _: &StatementContext,
     InspectShardStatement { .. }: InspectShardStatement,
 ) -> Result<StatementDesc, PlanError> {
-    let desc = RelationDesc::empty().with_column("state", ScalarType::Jsonb.nullable(false));
+    let desc = RelationDesc::builder()
+        .with_column("state", ScalarType::Jsonb.nullable(false))
+        .finish();
     Ok(StatementDesc::new(Some(desc)))
 }
 

@@ -366,9 +366,10 @@ impl proptest::arbitrary::Arbitrary for ColumnName {
 /// ```
 /// use mz_repr::{ColumnType, RelationDesc, ScalarType};
 ///
-/// let desc = RelationDesc::empty()
+/// let desc = RelationDesc::builder()
 ///     .with_column("id", ScalarType::Int64.nullable(false))
-///     .with_column("price", ScalarType::Float64.nullable(true));
+///     .with_column("price", ScalarType::Float64.nullable(true))
+///     .finish();
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
@@ -410,6 +411,11 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
 }
 
 impl RelationDesc {
+    /// Returns a [`RelationDescBuilder`] that can be used to construct a [`RelationDesc`].
+    pub fn builder() -> RelationDescBuilder {
+        RelationDescBuilder::default()
+    }
+
     /// Constructs a new `RelationDesc` that represents the empty relation
     /// with no columns and no keys.
     pub fn empty() -> Self {
@@ -452,6 +458,7 @@ impl RelationDesc {
         let typ = RelationType::new(types);
         Self::new(typ, names)
     }
+
     /// Concatenates a `RelationDesc` onto the end of this `RelationDesc`.
     pub fn concat(mut self, other: Self) -> Self {
         let self_len = self.typ.column_types.len();
@@ -461,16 +468,6 @@ impl RelationDesc {
             let k = k.into_iter().map(|idx| idx + self_len).collect();
             self = self.with_key(k);
         }
-        self
-    }
-
-    /// Appends a column with the specified name and type.
-    pub fn with_column<N>(mut self, name: N, column_type: ColumnType) -> Self
-    where
-        N: Into<ColumnName>,
-    {
-        self.typ.column_types.push(column_type);
-        self.names.push(name.into());
         self
     }
 
@@ -654,6 +651,76 @@ impl fmt::Display for NotNullViolation {
             "null value in column {} violates not-null constraint",
             self.0.as_str().quoted()
         )
+    }
+}
+
+/// A builder for a [`RelationDesc`].
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct RelationDescBuilder {
+    /// Columns of the relation.
+    columns: Vec<(ColumnName, ColumnType)>,
+    /// Sets of indices that are "keys" for the collection.
+    keys: Vec<Vec<usize>>,
+}
+
+impl RelationDescBuilder {
+    /// Appends a column with the specified name and type.
+    pub fn with_column<N: Into<ColumnName>>(
+        mut self,
+        name: N,
+        ty: ColumnType,
+    ) -> RelationDescBuilder {
+        let name = name.into();
+        self.columns.push((name, ty));
+        self
+    }
+
+    /// Appends the provided columns to the builder.
+    pub fn with_columns<I, T, N>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = (N, T)>,
+        T: Into<ColumnType>,
+        N: Into<ColumnName>,
+    {
+        self.columns
+            .extend(iter.into_iter().map(|(name, ty)| (name.into(), ty.into())));
+        self
+    }
+
+    /// Adds a new key for the relation.
+    pub fn with_key(mut self, mut indices: Vec<usize>) -> RelationDescBuilder {
+        indices.sort_unstable();
+        if !self.keys.contains(&indices) {
+            self.keys.push(indices);
+        }
+        self
+    }
+
+    /// Removes all previously inserted keys.
+    pub fn without_keys(mut self) -> RelationDescBuilder {
+        self.keys.clear();
+        assert_eq!(self.keys.len(), 0);
+        self
+    }
+
+    /// Concatenates a [`RelationDescBuilder`] onto the end of this [`RelationDescBuilder`].
+    pub fn concat(mut self, other: Self) -> Self {
+        let self_len = self.columns.len();
+
+        self.columns.extend(other.columns.into_iter());
+        for k in other.keys {
+            let k = k.into_iter().map(|idx| idx + self_len).collect();
+            self = self.with_key(k);
+        }
+
+        self
+    }
+
+    /// Finish the builder, returning a [`RelationDesc`].
+    pub fn finish(self) -> RelationDesc {
+        let mut desc = RelationDesc::from_names_and_types(self.columns.into_iter());
+        desc.typ = desc.typ.with_keys(self.keys);
+        desc
     }
 }
 

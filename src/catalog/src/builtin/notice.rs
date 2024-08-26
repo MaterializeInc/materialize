@@ -24,7 +24,7 @@ pub static MZ_OPTIMIZER_NOTICES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         name: "mz_optimizer_notices",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::TABLE_MZ_OPTIMIZER_NOTICES_OID,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("id", String.nullable(false))
             .with_column("notice_type", String.nullable(false))
             .with_column("message", String.nullable(false))
@@ -47,7 +47,8 @@ pub static MZ_OPTIMIZER_NOTICES: LazyLock<BuiltinTable> = LazyLock::new(|| {
                 "created_at",
                 TimestampTz { precision: None }.nullable(false),
             )
-            .with_key(vec![0]),
+            .with_key(vec![0])
+            .finish(),
         is_retained_metrics_object: false,
         access: vec![MONITOR_SELECT],
     }

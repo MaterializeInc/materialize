@@ -59,8 +59,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
     }
 }
 
-pub static PG_PROGRESS_DESC: LazyLock<RelationDesc> =
-    LazyLock::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
+pub static PG_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
+        .with_column("lsn", ScalarType::UInt64.nullable(true))
+        .finish()
+});
 
 impl PostgresSourceConnection {
     pub async fn fetch_write_frontier(

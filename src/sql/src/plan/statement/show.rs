@@ -51,9 +51,10 @@ pub fn describe_show_create_view(
     _: ShowCreateViewStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 
@@ -69,9 +70,10 @@ pub fn describe_show_create_materialized_view(
     _: ShowCreateMaterializedViewStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 
@@ -93,9 +95,10 @@ pub fn describe_show_create_table(
     _: ShowCreateTableStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 
@@ -140,9 +143,10 @@ pub fn describe_show_create_source(
     _: ShowCreateSourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 
@@ -158,9 +162,10 @@ pub fn describe_show_create_sink(
     _: ShowCreateSinkStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 
@@ -176,9 +181,10 @@ pub fn describe_show_create_index(
     _: ShowCreateIndexStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 
@@ -194,9 +200,10 @@ pub fn describe_show_create_connection(
     _: ShowCreateConnectionStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 
@@ -220,9 +227,10 @@ pub fn describe_show_create_cluster(
     _: ShowCreateClusterStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false)),
+            .with_column("create_sql", ScalarType::String.nullable(false))
+            .finish(),
     )))
 }
 

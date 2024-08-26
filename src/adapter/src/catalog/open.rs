@@ -1365,9 +1365,10 @@ mod builtin_migration_tests {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
                     create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
-                    desc: RelationDesc::empty()
+                    desc: RelationDesc::builder()
                         .with_column("a", ScalarType::Int32.nullable(true))
-                        .with_key(vec![0]),
+                        .with_key(vec![0])
+                        .finish(),
                     defaults: vec![Expr::null(); 1],
                     conn_id: None,
                     resolved_ids: ResolvedIds(BTreeSet::new()),
@@ -1403,9 +1404,10 @@ mod builtin_migration_tests {
                                 keys: Vec::new(),
                             },
                         }),
-                        desc: RelationDesc::empty()
+                        desc: RelationDesc::builder()
                             .with_column("a", ScalarType::Int32.nullable(true))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                         resolved_ids: ResolvedIds(resolved_ids),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],

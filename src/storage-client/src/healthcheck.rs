@@ -11,7 +11,7 @@ use mz_repr::{RelationDesc, ScalarType};
 use std::sync::LazyLock;
 
 pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -22,10 +22,11 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock
         )
         .with_column("statement_type", ScalarType::String.nullable(true))
         .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+        .finish()
 });
 
 pub static MZ_SQL_TEXT_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column(
             "prepared_day",
             ScalarType::TimestampTz { precision: None }.nullable(false),
@@ -33,10 +34,11 @@ pub static MZ_SQL_TEXT_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
         .with_column("sql_hash", ScalarType::Bytes.nullable(false))
         .with_column("sql", ScalarType::String.nullable(false))
         .with_column("redacted_sql", ScalarType::String.nullable(false))
+        .finish()
 });
 
 pub static MZ_SESSION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column(
             "connected_at",
@@ -47,6 +49,7 @@ pub static MZ_SESSION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
             ScalarType::String.nullable(false),
         )
         .with_column("authenticated_user", ScalarType::String.nullable(false))
+        .finish()
 });
 
 // NOTE: Update the views `mz_statement_execution_history_redacted`
@@ -56,7 +59,7 @@ pub static MZ_SESSION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
 // The `redacted` views should contain only those columns that should
 // be queryable by support.
 pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
         .with_column("sample_rate", ScalarType::Float64.nullable(false))
@@ -95,10 +98,11 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLoc
         .with_column("error_message", ScalarType::String.nullable(true))
         .with_column("rows_returned", ScalarType::Int64.nullable(true))
         .with_column("execution_strategy", ScalarType::String.nullable(true))
+        .finish()
 });
 
 pub static MZ_SOURCE_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column(
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
@@ -107,10 +111,11 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
+        .finish()
 });
 
 pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column(
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
@@ -119,15 +124,17 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
+        .finish()
 });
 
 pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: LazyLock<RelationDesc> =
     LazyLock::new(|| {
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column(
                 "occurred_at",
                 ScalarType::TimestampTz { precision: None }.nullable(false),
             )
             .with_column("connection_id", ScalarType::String.nullable(false))
             .with_column("status", ScalarType::String.nullable(false))
+            .finish()
     });

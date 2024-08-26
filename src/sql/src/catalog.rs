@@ -867,7 +867,7 @@ impl CatalogType<IdReference> {
     pub fn desc(&self, catalog: &dyn SessionCatalog) -> Result<Option<RelationDesc>, PlanError> {
         match &self {
             CatalogType::Record { fields } => {
-                let mut desc = RelationDesc::empty();
+                let mut desc = RelationDesc::builder();
                 for f in fields {
                     let name = f.name.clone();
                     let ty = query::scalar_type_from_catalog(
@@ -880,7 +880,7 @@ impl CatalogType<IdReference> {
                     let ty = ty.nullable(true);
                     desc = desc.with_column(name, ty);
                 }
-                Ok(Some(desc))
+                Ok(Some(desc.finish()))
             }
             _ => Ok(None),
         }

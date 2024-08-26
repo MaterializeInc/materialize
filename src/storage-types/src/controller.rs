@@ -375,10 +375,11 @@ pub struct TxnsCodecRow;
 
 impl TxnsCodecRow {
     pub fn desc() -> RelationDesc {
-        RelationDesc::empty()
+        RelationDesc::builder()
             .with_column("shard_id", ScalarType::String.nullable(false))
             .with_column("ts", ScalarType::UInt64.nullable(false))
             .with_column("batch", ScalarType::Bytes.nullable(true))
+            .finish()
     }
 }
 
