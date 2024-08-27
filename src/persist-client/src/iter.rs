@@ -40,7 +40,7 @@ use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
-use crate::internal::state::BatchPart;
+use crate::internal::state::{BatchPart, RunMeta, RunOrder};
 use crate::metrics::Metrics;
 use crate::ShardId;
 
@@ -53,6 +53,7 @@ pub const MINIMUM_CONSOLIDATED_VERSION: Version = Version::new(0, 67, 0);
 /// to send between threads.
 #[derive(Debug, Clone)]
 pub(crate) struct FetchData<T> {
+    run_meta: RunMeta,
     part_desc: Description<T>,
     part: BatchPart<T>,
 }
@@ -132,13 +133,22 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
     type KV<'a> = (&'a [u8], &'a [u8]);
 
     fn desired_sort(data: &FetchData<T>) -> bool {
-        let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
-        match data.part.writer_key() {
-            // Old hollow parts may have used a different sort
-            Some(key) => key >= min_version,
-            // Inline parts are all recent enough to have been sorted using the latest ordering,
-            // if they're sorted at all.
-            None => true,
+        match &data.run_meta.order {
+            Some(RunOrder::Codec) => true,
+            Some(_) => false,
+            None => {
+                // Returns false iff we were using a different ordering for data or timestamps
+                // when the part was created. This means parts or runs may not be ordered according to
+                // our modern definition, even if the metadata indicates they've been compacted before.
+                let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
+                match data.part.writer_key() {
+                    // Old hollow parts may have used a different sort
+                    Some(key) => key >= min_version,
+                    // Inline parts are all recent enough to have been sorted using the latest ordering,
+                    // if they're sorted at all.
+                    None => true,
+                }
+            }
         }
     }
 
@@ -204,9 +214,8 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     type Updates = StructuredUpdates;
     type KV<'a> = (ArrayIdx<'a>, ArrayIdx<'a>);
 
-    fn desired_sort(_data: &FetchData<T>) -> bool {
-        // TODO: add blob metadata that specifies the actual sort.
-        false
+    fn desired_sort(data: &FetchData<T>) -> bool {
+        data.run_meta.order == Some(RunOrder::Structured)
     }
 
     fn kv_lower(_data: &FetchData<T>) -> Option<Self::KV<'_>> {
@@ -461,6 +470,7 @@ where
     pub fn enqueue_run(
         &mut self,
         desc: &Description<T>,
+        run_meta: &RunMeta,
         parts: impl IntoIterator<Item = BatchPart<T>>,
     ) {
         let run = parts
@@ -489,6 +499,7 @@ where
                     }
                     part => ConsolidationPart::Queued {
                         data: FetchData {
+                            run_meta: run_meta.clone(),
                             part_desc: desc.clone(),
                             part,
                         },
@@ -1182,7 +1193,7 @@ mod tests {
                         })
                     })
                     .collect();
-                consolidator.enqueue_run(&desc, parts)
+                consolidator.enqueue_run(&desc, &RunMeta::default(), parts)
             }
 
             // No matter what, the budget should be respected.

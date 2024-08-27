@@ -720,10 +720,9 @@ where
             prefetch_budget_bytes,
         );
 
-        for (desc, _meta, parts) in runs {
-            // TODO: use the metadata in the consolidator
-            consolidator.enqueue_run(desc, parts.iter().cloned());
-        }
+            for (desc, meta, parts) in runs {
+                consolidator.enqueue_run(desc, meta, parts.iter().cloned());
+            }
 
         let remaining_budget = consolidator.start_prefetches();
         if remaining_budget.is_none() {

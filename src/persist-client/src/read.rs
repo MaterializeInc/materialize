@@ -1004,9 +1004,10 @@ where
 
         let lease = self.lease_seqno();
         for batch in batches {
-            for (_meta, run) in batch.runs() {
+            for (meta, run) in batch.runs() {
                 consolidator.enqueue_run(
                     &batch.desc,
+                    meta,
                     run.into_iter()
                         .filter(|p| should_fetch_part(p.stats()))
                         .cloned(),
