@@ -471,6 +471,20 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
             })
             .unzip();
 
+        // `metadata` Migration Logic: We wrote some `ProtoRelationDesc`s into Persist before the
+        // metadata field was added. To make sure our serialization roundtrips the same as before
+        // we added the field, we omit `metadata` if all of the values are equal to the default.
+        //
+        // Note: This logic needs to exist approximately forever.
+        let is_all_default_metadata = metadata.iter().all(|meta| {
+            meta.added == Some(RelationVersion::root().into_proto()) && meta.dropped == None
+        });
+        let metadata = if is_all_default_metadata {
+            Vec::new()
+        } else {
+            metadata
+        };
+
         ProtoRelationDesc {
             typ: Some(self.typ.into_proto()),
             names,
@@ -479,7 +493,11 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
     }
 
     fn from_proto(proto: ProtoRelationDesc) -> Result<Self, TryFromProtoError> {
-        // Handle `ProtoRelationDesc`s that were created before we added `metadata`.
+        // `metadata` Migration Logic: We wrote some `ProtoRelationDesc`s into Persist before the
+        // metadata field was added. If the field doesn't exist we fill it in with default values,
+        // and when converting into_proto we omit these fields so the serialized bytes roundtrip.
+        //
+        // Note: This logic needs to exist approximately forever.
         let proto_metadata: Box<dyn Iterator<Item = _>> = if proto.metadata.is_empty() {
             let val = ProtoColumnMetadata {
                 added: Some(RelationVersion::root().into_proto()),
