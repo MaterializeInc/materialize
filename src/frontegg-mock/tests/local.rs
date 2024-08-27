@@ -143,7 +143,7 @@ async fn authenticate(ctx: &TestContext) -> Result<String, Box<dyn std::error::E
 
 // Authentication Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_auth_api_token() {
     let ctx = setup_test_context().await;
 
@@ -168,7 +168,7 @@ async fn test_auth_api_token() {
     assert!(body.get("expiresIn").is_some());
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_invalid_authentication() {
     let ctx = setup_test_context().await;
 
@@ -186,7 +186,7 @@ async fn test_invalid_authentication() {
     assert_eq!(response.status(), 401);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_token_refresh() {
     let ctx = setup_test_context().await;
 
@@ -227,7 +227,7 @@ async fn test_token_refresh() {
 
 // User Profile Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_user_profile() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -247,7 +247,7 @@ async fn test_get_user_profile() {
 
 // User API Token Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_user_api_token() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -272,7 +272,7 @@ async fn test_create_user_api_token() {
     assert!(body.get("secret").is_some());
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_list_user_api_tokens() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -293,7 +293,7 @@ async fn test_list_user_api_tokens() {
     assert!(body.as_array().is_some());
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_user_api_token() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -333,7 +333,7 @@ async fn test_delete_user_api_token() {
 
 // Tenant API Token Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_tenant_api_token() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -359,7 +359,7 @@ async fn test_create_tenant_api_token() {
     assert!(body.get("secret").is_some());
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_list_tenant_api_tokens() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -380,7 +380,7 @@ async fn test_list_tenant_api_tokens() {
     assert!(body.as_array().is_some());
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_tenant_api_token() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -421,7 +421,7 @@ async fn test_delete_tenant_api_token() {
 
 // User Management Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_user() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -443,7 +443,7 @@ async fn test_create_user() {
     assert_eq!(body["email"], new_user_email);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_user() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -481,7 +481,7 @@ async fn test_get_user() {
     assert_eq!(body["email"], new_user_email);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_user() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -531,7 +531,7 @@ async fn test_delete_user() {
     assert_eq!(get_response.status(), 404);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_update_user_roles() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -575,7 +575,7 @@ async fn test_update_user_roles() {
 
 // SSO Configuration Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_list_sso_configs() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -628,7 +628,7 @@ async fn test_list_sso_configs() {
     }
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_sso_config() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -658,7 +658,7 @@ async fn test_create_sso_config() {
     assert!(body.get("id").is_some());
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_sso_config() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -704,7 +704,7 @@ async fn test_get_sso_config() {
     assert_eq!(body["id"], config_id);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_update_sso_config() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -755,7 +755,7 @@ async fn test_update_sso_config() {
     assert_eq!(body["ssoEndpoint"], "https://example.com/new-sso");
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_sso_config() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -815,7 +815,7 @@ async fn test_delete_sso_config() {
 
 // Group Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_add_users_to_group() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -889,7 +889,7 @@ async fn test_add_users_to_group() {
     assert_eq!(group_users.len(), 2);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_list_groups() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -936,7 +936,7 @@ async fn test_list_groups() {
     }
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_group() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -961,7 +961,7 @@ async fn test_create_group() {
     assert_eq!(body["name"], "Test Group");
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_group() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1002,7 +1002,7 @@ async fn test_get_group() {
     assert_eq!(body["name"], "Test Group");
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_update_group() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1048,7 +1048,7 @@ async fn test_update_group() {
     assert_eq!(body["description"], "An updated test group");
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_group() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1101,7 +1101,7 @@ async fn test_delete_group() {
     assert_eq!(get_response.status(), 404);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_add_roles_to_group() {
     let ctx = setup_test_context().await;
     let default_roles = ctx.roles.clone();
@@ -1162,7 +1162,7 @@ async fn test_add_roles_to_group() {
     assert!(body["roles"].as_array().unwrap().len() >= 2);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_remove_roles_from_group() {
     let ctx = setup_test_context().await;
     let default_roles = ctx.roles.clone();
@@ -1249,7 +1249,7 @@ async fn test_remove_roles_from_group() {
 
 // SCIM Configuration Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_scim_configuration() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1276,7 +1276,7 @@ async fn test_create_scim_configuration() {
     assert_eq!(body["connectionName"], "Test SCIM Connection");
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_list_scim_configurations() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1314,7 +1314,7 @@ async fn test_list_scim_configurations() {
     assert!(body.as_array().unwrap().len() > 0);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_scim_configuration() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1375,7 +1375,7 @@ async fn test_delete_scim_configuration() {
 
 // Roles Tests
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_roles() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1402,7 +1402,7 @@ async fn test_get_roles() {
 
 // Latency Test
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_latency() {
     let ctx = setup_test_context().await;
 
@@ -1416,7 +1416,7 @@ async fn test_latency() {
     );
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_sso_domain() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1465,7 +1465,7 @@ async fn test_create_sso_domain() {
     assert_eq!(body["domain"], "example.com");
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_sso_domains() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1524,7 +1524,7 @@ async fn test_get_sso_domains() {
     assert!(body.as_array().unwrap().len() > 0);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_update_sso_domain() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1592,7 +1592,7 @@ async fn test_update_sso_domain() {
     assert_eq!(body["validated"], true);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_sso_domain() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1672,7 +1672,7 @@ async fn test_delete_sso_domain() {
         .any(|domain| domain["id"] == domain_id));
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_create_sso_group_mapping() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1722,7 +1722,7 @@ async fn test_create_sso_group_mapping() {
     assert_eq!(body["group"], "TestGroup");
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_sso_group_mappings() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1782,7 +1782,7 @@ async fn test_get_sso_group_mappings() {
     assert!(body.as_array().unwrap().len() > 0);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_update_sso_group_mapping() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1854,7 +1854,7 @@ async fn test_update_sso_group_mapping() {
     assert_eq!(body["enabled"], true);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_delete_sso_group_mapping() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1936,7 +1936,7 @@ async fn test_delete_sso_group_mapping() {
         .any(|group| group["id"] == group_id));
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_sso_default_roles() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -1982,7 +1982,7 @@ async fn test_get_sso_default_roles() {
     assert!(body.get("roleIds").is_some());
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_set_sso_default_roles() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -2046,7 +2046,7 @@ async fn test_set_sso_default_roles() {
     assert_eq!(get_body["roleIds"].as_array().unwrap().len(), 2);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_remove_users_from_group() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
@@ -2133,7 +2133,7 @@ async fn test_remove_users_from_group() {
     assert_eq!(group_users[0]["id"], user_ids[1]);
 }
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
 async fn test_get_users_v3() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
