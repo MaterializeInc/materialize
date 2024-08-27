@@ -76,6 +76,36 @@ rust_doc_test(
 	),
 )
 
+rust_test(
+	name = "mz_frontegg_mock_local_tests",
+	version = "0.0.0",
+	srcs = ["tests/local.rs"],
+	aliases = aliases(
+		normal = True,
+		normal_dev = True,
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	deps = [
+		":mz_frontegg_mock",
+		"//src/frontegg-auth:mz_frontegg_auth",
+		"//src/ore:mz_ore",
+	] + all_crate_deps(
+		normal = True,
+		normal_dev = True,
+	),
+	proc_macro_deps = [] + all_crate_deps(
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	size = "large",
+	compile_data = [],
+	data = [],
+	env = {},
+	rustc_flags = [],
+	rustc_env = {},
+)
+
 rust_binary(
 	name = "mz_frontegg_mock_bin",
 	version = "0.0.0",
