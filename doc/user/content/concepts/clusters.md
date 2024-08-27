@@ -30,18 +30,8 @@ the resource requirements of your workload. Larger clusters have more compute
 resources available and can therefore process data faster and handle larger data
 volumes.
 
-You can resize a cluster to respond to changes in your workload.
-
-{{< note >}}
-
-Resizing incurs downtime as it requires all objects in the cluster to hydrate.
-
-**Private Preview**: For clusters that do not contain sources and sinks but only
-compute objects (e.g., indexes, views, and materialized views), [graceful
-reconfiguration](/sql/alter-cluster/#graceful-reconfiguration) is available
-in [private preview](https://materialize.com/preview-terms/).
-
-{{</ note >}}
+You can [resize a cluster](/sql/create-cluster#cluster-resizing) to respond to
+changes in your workload.
 
 ## Key properties
 
