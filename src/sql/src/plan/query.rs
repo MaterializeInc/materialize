@@ -6257,7 +6257,7 @@ impl<'a> ExprContext<'a> {
         self.qcx.derived_context(scope, self.relation_type.clone())
     }
 
-    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+    pub fn require_feature_flag(&self, flag: &'static FeatureFlag) -> Result<(), PlanError> {
         self.qcx.scx.require_feature_flag(flag)
     }
 

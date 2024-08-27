@@ -426,7 +426,6 @@ Then
 Tick
 Ties
 Time
-Timeline
 Timeout
 Timestamp
 TimestampTz

@@ -181,20 +181,6 @@ def workflow_audit_log(c: Composition) -> None:
         raise Exception("audit logs emtpy or not equal after restart")
 
 
-# Test for GitHub issue #13726
-def workflow_timelines(c: Composition) -> None:
-    for _ in range(3):
-        c.up("zookeeper", "kafka", "schema-registry", "materialized")
-        c.run_testdrive_files("timelines.td")
-        c.rm(
-            "zookeeper",
-            "kafka",
-            "schema-registry",
-            "materialized",
-            destroy_volumes=True,
-        )
-
-
 def workflow_stash(c: Composition) -> None:
     c.rm(
         "testdrive",

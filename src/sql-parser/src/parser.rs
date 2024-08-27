@@ -2907,12 +2907,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, TIMELINE, TIMESTAMP, RETAIN])? {
-            IGNORE => {
-                self.expect_keyword(KEYS)?;
-                CreateSourceOptionName::IgnoreKeys
-            }
-            TIMELINE => CreateSourceOptionName::Timeline,
+        let name = match self.expect_one_of_keywords(&[TIMESTAMP, RETAIN])? {
             TIMESTAMP => {
                 self.expect_keyword(INTERVAL)?;
                 CreateSourceOptionName::TimestampInterval

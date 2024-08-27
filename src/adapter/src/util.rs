@@ -445,10 +445,7 @@ pub(crate) fn viewable_variables<'a>(
         .vars()
         .iter()
         .chain(catalog.system_config().iter())
-        .filter(|v| {
-            v.visible(session.user(), Some(catalog.system_config()))
-                .is_ok()
-        })
+        .filter(|v| v.visible(session.user(), catalog.system_config()).is_ok())
 }
 
 /// Verify that the rows in [`RowIterator`] match the expected [`RelationDesc`].
