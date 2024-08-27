@@ -109,6 +109,13 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
         Ok(())
     }
 
+    /// Checks that the given value matches the provided schema.
+    ///
+    /// A no-op default implementation is provided for convenience.
+    fn validate(_val: &Self, _schema: &Self::Schema) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Encode a schema for permanent storage.
     ///
     /// This must perfectly round-trip the schema through [Self::decode_schema].

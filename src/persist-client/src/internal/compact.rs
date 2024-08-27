@@ -746,6 +746,7 @@ where
                 key_vec.extend_from_slice(k);
                 val_vec.clear();
                 val_vec.extend_from_slice(v);
+                crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
                 batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
             }
             tokio::task::yield_now().await;

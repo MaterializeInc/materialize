@@ -666,7 +666,7 @@ mod tests {
             .with_column(
                 "partition",
                 ScalarType::Range {
-                    element_type: Box::new(ScalarType::Int32),
+                    element_type: Box::new(ScalarType::Numeric { max_scale: None }),
                 }
                 .nullable(false),
             )
