@@ -8,16 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt::{Debug, Formatter};
+use std::time::Duration;
 
 use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingCollection, Trace};
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, DurableCatalogError, Epoch, FenceError,
+    test_bootstrap_args, CatalogError, DurableCatalogError, DurableCatalogState, Epoch, FenceError,
     TestCatalogStateBuilder, CATALOG_VERSION,
 };
-use mz_ore::assert_ok;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
+use mz_ore::{assert_none, assert_ok};
 use mz_persist_client::PersistClient;
 use mz_repr::{Diff, Timestamp};
 
@@ -379,4 +380,115 @@ async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         ),
         "unexpected err: {err:?}"
     );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_concurrent_debugs() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_concurrent_debugs(state_builder).await;
+}
+
+async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
+    let key = proto::ConfigKey {
+        key: "mz".to_string(),
+    };
+    let value = proto::ConfigValue { value: 42 };
+
+    async fn run_state(state: &mut Box<dyn DurableCatalogState>) -> Result<(), CatalogError> {
+        let mut i = 0;
+        loop {
+            // Drain updates.
+            let _ = state.sync_to_current_updates().await?;
+            state.allocate_user_id().await?;
+            // After winning the race 100 times, sleep to give the debug state a chance to win the
+            // race.
+            if i > 100 {
+                tokio::time::sleep(Duration::from_nanos(1)).await;
+            }
+            i += 1;
+        }
+    }
+
+    let mut state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    let state_handle = mz_ore::task::spawn(|| "state", async move {
+        // Eventually this state should get fenced by the edit below.
+        let err = run_state(&mut state).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ))
+    });
+
+    // Edit should be successful without retrying, even though there is an active state.
+    let mut debug_state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_debug()
+        .await
+        .unwrap();
+    debug_state
+        .edit::<ConfigCollection>(key.clone(), value.clone())
+        .await
+        .unwrap();
+
+    state_handle.await.unwrap();
+
+    let mut state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    let configs = state.snapshot().await.unwrap().configs;
+    assert_eq!(configs.get(&key).unwrap(), &value);
+
+    let state_handle = mz_ore::task::spawn(|| "state", async move {
+        // Eventually this state should get fenced by the delete below.
+        let err = run_state(&mut state).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ))
+    });
+
+    // Delete should be successful without retrying, even though there is an active state.
+    let mut debug_state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_debug()
+        .await
+        .unwrap();
+    debug_state
+        .delete::<ConfigCollection>(key.clone())
+        .await
+        .unwrap();
+
+    state_handle.await.unwrap();
+
+    let configs = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap()
+        .snapshot()
+        .await
+        .unwrap()
+        .configs;
+    assert_none!(configs.get(&key));
 }

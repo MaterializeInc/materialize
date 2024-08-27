@@ -15,8 +15,8 @@ use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, Database, DurableCatalogError, Epoch, FenceError, Schema,
-    TestCatalogStateBuilder, CATALOG_VERSION,
+    test_bootstrap_args, CatalogError, Database, DurableCatalogError, DurableCatalogState, Epoch,
+    FenceError, Schema, TestCatalogStateBuilder, CATALOG_VERSION,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
@@ -887,4 +887,58 @@ async fn test_persist_version_fencing() {
     testcase("0.10.0", "0.10.0", Ok(())).await;
     testcase("0.10.0", "0.11.0", Ok(())).await;
     testcase("0.10.0", "0.12.0", Err(())).await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_concurrent_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_concurrent_open(state_builder).await;
+}
+
+async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    async fn run_state(state: &mut Box<dyn DurableCatalogState>) -> Result<(), CatalogError> {
+        let mut i = 0;
+        loop {
+            // Drain updates.
+            let _ = state.sync_to_current_updates().await?;
+            state.allocate_user_id().await?;
+            // After winning the race 100 times, sleep to give the debug state a chance to win the
+            // race.
+            if i > 100 {
+                tokio::time::sleep(Duration::from_nanos(1)).await;
+            }
+            i += 1;
+        }
+    }
+
+    let mut state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    let state_handle = mz_ore::task::spawn(|| "state", async move {
+        // Eventually this state should get fenced by the open below.
+        let err = run_state(&mut state).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ))
+    });
+
+    // Open should be successful without retrying, even though there is an active state.
+    let _state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+
+    state_handle.await.unwrap();
 }

@@ -338,7 +338,10 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
 
     // 4. Apply migration to catalog.
     if matches!(mode, Mode::Writable) {
-        unopened_catalog_state.compare_and_append(updates).await?;
+        unopened_catalog_state
+            .compare_and_append(updates)
+            .await
+            .map_err(|e| e.unwrap_fence_error())?;
     } else {
         let ts = unopened_catalog_state.upper;
         let updates = updates
