@@ -368,9 +368,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         while !shutdown {
             match self.client_rx.recv() {
                 Ok((rx, tx, activator_tx)) => {
-                    activator_tx
-                        .send(std::thread::current())
-                        .expect("activator_tx working");
+                    // This might fail if the client has already shut down, which is fine.
+                    // `run_client` knows how to handle a disconnected client.
+                    let _ = activator_tx.send(std::thread::current());
                     self.run_client(rx, tx)
                 }
                 Err(_) => {
