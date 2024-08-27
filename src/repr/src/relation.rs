@@ -374,6 +374,7 @@ static_assertions::assert_not_impl_all!(ColumnIndex: Arbitrary);
 pub struct RelationVersion(u64);
 
 impl RelationVersion {
+    /// Returns the "root" or "initial" version of a [`RelationDesc`].
     pub fn root() -> Self {
         RelationVersion(0)
     }
@@ -385,13 +386,6 @@ impl RelationVersion {
             .checked_add(1)
             .expect("added more than u64::MAX columns?");
         RelationVersion(next_version)
-    }
-
-    /// Returns the inner value.
-    ///
-    /// TODO(parkmycar): Remove this [`RelationVersion`] should be opaque.
-    pub fn inner(&self) -> &u64 {
-        &self.0
     }
 }
 
@@ -967,9 +961,13 @@ impl VersionedRelationDesc {
     /// Drops the column `name` from this [`RelationDesc`]. If there are multiple columns with
     /// `name` drops the left-most one.
     ///
+    /// TODO(parkmycar): Add better handling for multiple columns with the same `name`.
+    /// TODO(parkmycar): Add handling for dropping a column that is currently used as a key.
+    ///
     /// # Panics
     ///
-    /// Panics if a column with `name` does not exist or if the column was already dropped.
+    /// Panics if a column with `name` does not exist, if the column was already dropped, or the
+    /// dropped column was used as a key.
     #[must_use]
     pub fn drop_column<N>(&mut self, name: N) -> RelationVersion
     where
@@ -986,8 +984,18 @@ impl VersionedRelationDesc {
             .find(|meta| meta.name == name)
             .expect("column to exist");
 
+        // Make sure the column hadn't been previously dropped.
         assert_none!(col.dropped, "column was already dropped");
         col.dropped = Some(new_version);
+
+        // Make sure the column isn't being used as a key.
+        let dropped_key = self
+            .inner
+            .typ
+            .keys
+            .iter()
+            .any(|keys| keys.iter().any(|key| *key == col.typ_idx));
+        assert!(!dropped_key, "column being dropped was used as a key");
 
         self.validate();
         new_version
@@ -1023,6 +1031,10 @@ impl VersionedRelationDesc {
 
         // N.B. At this point we need to be careful because col_idx might not
         // equal typ_idx.
+        //
+        // For example, consider columns "a", "b", and "c" with indexes 0, 1,
+        // and 2. If we drop column "b" then we'll have "a" and "c" with column
+        // indexes 0 and 2, but their indices in RelationType will be 0 and 1.
         for (col_idx, meta) in valid_columns {
             let new_meta = ColumnMetadata {
                 name: meta.name.clone(),
@@ -1034,10 +1046,29 @@ impl VersionedRelationDesc {
             column_metas.insert(*col_idx, new_meta);
         }
 
-        let relation_type = RelationType {
-            column_types,
-            keys: self.inner.typ.keys.clone(),
-        };
+        // Remap keys in case a column with an index less than that of a key was
+        // dropped.
+        //
+        // For example, consider columns "a", "b", and "c" where "a" and "c" are
+        // keys and "b" was dropped.
+        let keys = self
+            .inner
+            .typ
+            .keys
+            .iter()
+            .map(|keys| {
+                keys.iter()
+                    .map(|key_idx| {
+                        let metadata = column_metas
+                            .get(&ColumnIndex(*key_idx))
+                            .expect("found key for column that doesn't exist");
+                        metadata.typ_idx
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let relation_type = RelationType { column_types, keys };
 
         RelationDesc {
             typ: relation_type,
@@ -1369,6 +1400,89 @@ mod tests {
             "typ_idx": 2,
             "added": 1,
             "dropped": null
+          }
+        }
+        "###);
+    }
+
+    #[mz_ore::test]
+    fn test_dropping_columns_with_keys() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::Bool.nullable(true))
+            .with_column("z", ScalarType::String.nullable(false))
+            .with_key(vec![1])
+            .finish();
+
+        let mut versioned_desc = VersionedRelationDesc {
+            inner: desc.clone(),
+        };
+        versioned_desc.validate();
+
+        let v1 = versioned_desc.drop_column("a");
+        assert_eq!(v1, RelationVersion(1));
+
+        // Make sure the key index for 'z' got remapped since 'a' was dropped.
+        let v1 = versioned_desc.at_version(RelationVersionSelector::Specific(v1));
+        insta::assert_json_snapshot!(v1, @r###"
+        {
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "String",
+                "nullable": false
+              }
+            ],
+            "keys": [
+              [
+                0
+              ]
+            ]
+          },
+          "metadata": {
+            "1": {
+              "name": "z",
+              "typ_idx": 0,
+              "added": 0,
+              "dropped": null
+            }
+          }
+        }
+        "###);
+
+        // Make sure the key index of 'z' is correct when all columns are present.
+        let v0 = versioned_desc.at_version(RelationVersionSelector::specific(0));
+        insta::assert_json_snapshot!(v0, @r###"
+        {
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "Bool",
+                "nullable": true
+              },
+              {
+                "scalar_type": "String",
+                "nullable": false
+              }
+            ],
+            "keys": [
+              [
+                1
+              ]
+            ]
+          },
+          "metadata": {
+            "0": {
+              "name": "a",
+              "typ_idx": 0,
+              "added": 0,
+              "dropped": 1
+            },
+            "1": {
+              "name": "z",
+              "typ_idx": 1,
+              "added": 0,
+              "dropped": null
+            }
           }
         }
         "###);
