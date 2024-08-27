@@ -79,6 +79,15 @@ pub enum DurableCatalogError {
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
     Storage(StorageError<Timestamp>),
+    /// Catalog encountered an upper mismatch when trying to write to the catalog. This should only
+    /// happen while trying to fence out other catalogs.
+    #[error(
+        "expected catalog upper {expected_upper:?} did not match actual catalog upper {actual_upper:?}"
+    )]
+    UpperMismatch {
+        expected_upper: Timestamp,
+        actual_upper: Timestamp,
+    },
     /// An internal programming error.
     #[error("Internal catalog error: {0}")]
     Internal(String),
@@ -91,7 +100,8 @@ impl DurableCatalogError {
             DurableCatalogError::Fence(_)
             | DurableCatalogError::IncompatibleDataVersion { .. }
             | DurableCatalogError::IncompatiblePersistVersion { .. }
-            | DurableCatalogError::Proto(_) => true,
+            | DurableCatalogError::Proto(_)
+            | DurableCatalogError::UpperMismatch { .. } => true,
             DurableCatalogError::Uninitialized
             | DurableCatalogError::NotWritable(_)
             | DurableCatalogError::DuplicateKey
@@ -131,6 +141,15 @@ impl From<TryFromProtoError> for DurableCatalogError {
     }
 }
 
+impl From<UpperMismatch<Timestamp>> for DurableCatalogError {
+    fn from(upper_mismatch: UpperMismatch<Timestamp>) -> Self {
+        Self::UpperMismatch {
+            expected_upper: antichain_to_timestamp(upper_mismatch.expected),
+            actual_upper: antichain_to_timestamp(upper_mismatch.current),
+        }
+    }
+}
+
 /// An error that indicates the durable catalog has been fenced.
 ///
 /// The order of this enum indicates the most information to the least information.
@@ -150,21 +169,6 @@ pub enum FenceError {
     Epoch {
         current_epoch: Epoch,
         fence_epoch: Epoch,
-    },
-    // It's very likely that if we were to read the latest updates after this error, then we'd see
-    // a higher epoch/deploy generation from the other writer and get fenced through that. We could
-    // potentially always do that and eliminate this fence variant. However, the catalog debug tool
-    // is able to write to the catalog without incrementing the epoch and therefore would not be
-    // able to fence this instance. It's technically possible for this instance to survive and
-    // respond to a write from the catalog debug tool, but until more thought is put into it, the
-    // safest thing to do is crash and reboot.
-    /// This instance was fenced while trying to write to the catalog by some other writer.
-    #[error(
-        "current catalog upper {expected_upper:?} fenced by new catalog upper {actual_upper:?}"
-    )]
-    Upper {
-        expected_upper: Timestamp,
-        actual_upper: Timestamp,
     },
     /// This instance was fenced while writing to the migration shard during 0dt builtin table
     /// migrations.
@@ -216,16 +220,10 @@ mod tests {
         };
         assert!(deploy_generation < epoch);
 
-        let upper = FenceError::Upper {
-            expected_upper: 70.into(),
-            actual_upper: 71.into(),
-        };
-        assert!(epoch < upper);
-
         let migration = FenceError::MigrationUpper {
             expected_upper: 60.into(),
             actual_upper: 61.into(),
         };
-        assert!(upper < migration);
+        assert!(epoch < migration);
     }
 }

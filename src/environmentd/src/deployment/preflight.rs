@@ -215,22 +215,22 @@ pub async fn preflight_0dt(
 
                 match res {
                     Ok(_catalog) => break,
-                    Err(error) => {
-                        match error {
-                            CatalogError::Durable(
-                                mz_catalog::durable::DurableCatalogError::Fence(error),
-                            ) => {
-                                tracing::info!("fenced while trying to fence out old deployment ({}), retrying...", error);
-                                continue;
-                            }
-                            error => {
-                                panic!(
-                                    "unexpected error while fencing out old deployment: {:?}",
-                                    error
-                                );
-                            }
+                    Err(error) => match error {
+                        CatalogError::Durable(
+                            error @ mz_catalog::durable::DurableCatalogError::UpperMismatch {
+                                ..
+                            },
+                        ) => {
+                            tracing::info!("upper mismatch while trying to fence out old deployment ({}), retrying...", error);
+                            continue;
                         }
-                    }
+                        error => {
+                            panic!(
+                                "unexpected error while fencing out old deployment: {:?}",
+                                error
+                            );
+                        }
+                    },
                 }
             }
 

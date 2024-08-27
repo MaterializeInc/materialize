@@ -13,10 +13,11 @@ use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingColle
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
-    test_bootstrap_args, CatalogError, DurableCatalogError, Epoch, TestCatalogStateBuilder,
-    CATALOG_VERSION,
+    test_bootstrap_args, CatalogError, DurableCatalogError, Epoch, FenceError,
+    TestCatalogStateBuilder, CATALOG_VERSION,
 };
-use mz_ore::now::NOW_ZERO;
+use mz_ore::assert_ok;
+use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
 use mz_repr::{Diff, Timestamp};
 
@@ -251,4 +252,129 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
     let consolidated_trace = openable_state_reader.trace_consolidated().await.unwrap();
     let settings = consolidated_trace.settings.values;
     assert_eq!(settings.len(), 1);
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_debug_edit_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_debug_edit_fencing(state_builder).await;
+}
+
+async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
+    let mut state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+
+    let mut debug_state = state_builder
+        .unwrap_build()
+        .await
+        .open_debug()
+        .await
+        .unwrap();
+
+    // State isn't fenced yet.
+    assert_ok!(state.snapshot().await);
+    assert_ok!(state.transaction().await);
+
+    // Edit catalog via debug_state.
+    debug_state
+        .edit::<SettingCollection>(
+            proto::SettingKey {
+                name: "joe".to_string(),
+            },
+            proto::SettingValue {
+                value: "koshakow".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Now state should be fenced.
+    let err = state.snapshot().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_debug_delete_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_debug_delete_fencing(state_builder).await;
+}
+
+async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
+    let mut state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    // Drain state updates.
+    let _ = state.sync_to_current_updates().await;
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("joe".to_string(), Some(666)).unwrap();
+    txn.commit().await.unwrap();
+
+    let mut debug_state = state_builder
+        .unwrap_build()
+        .await
+        .open_debug()
+        .await
+        .unwrap();
+
+    // State isn't fenced yet.
+    assert_ok!(state.snapshot().await);
+    assert_ok!(state.transaction().await);
+
+    // Delete from catalog via debug_state.
+    debug_state
+        .delete::<SettingCollection>(proto::SettingKey {
+            name: "joe".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Now state should be fenced.
+    let err = state.snapshot().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
 }
