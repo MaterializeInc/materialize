@@ -37,9 +37,9 @@ use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::state::{BatchPart, HollowBatch, RunMeta};
+use crate::internal::state::{BatchPart, HollowBatch, RunMeta, RunOrder};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::iter::{CodecSort, Consolidator};
+use crate::iter::{CodecSort, Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -82,7 +82,7 @@ impl CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
-            batch: BatchBuilderConfig::new(value, writer_id),
+            batch: BatchBuilderConfig::new(value, writer_id, true),
         };
         // Use compaction as a method of getting inline writes out of state, to
         // make room for more inline writes. We could instead do this at the end
@@ -698,55 +698,119 @@ where
             cfg.version.clone(),
             desc.since().clone(),
             Some(desc.upper().clone()),
-            true,
         );
 
-        let mut consolidator = Consolidator::<T, D>::new(
-            format!(
-                "{}[lower={:?},upper={:?}]",
-                shard_id,
-                desc.lower().elements(),
-                desc.upper().elements()
-            ),
-            *shard_id,
-            CodecSort::default(),
-            blob,
-            Arc::clone(&metrics),
-            shard_metrics,
-            metrics.read.compaction.clone(),
-            FetchBatchFilter::Compaction {
-                since: desc.since().clone(),
-            },
-            prefetch_budget_bytes,
-        );
+        // Duplicating a large codepath here during the migration.
+        // TODO(#23942): dedup once the migration is complete.
+        if cfg.batch.expected_order == RunOrder::Structured {
+            // If we're not writing down the record metadata, we must always use the old compaction
+            // order. (Since that's the default when the metadata's not present.)
+            let mut consolidator = Consolidator::new(
+                format!(
+                    "{}[lower={:?},upper={:?}]",
+                    shard_id,
+                    desc.lower().elements(),
+                    desc.upper().elements()
+                ),
+                *shard_id,
+                StructuredSort::<K, V, T, D>::new(real_schemas.clone()),
+                blob,
+                Arc::clone(&metrics),
+                shard_metrics,
+                metrics.read.compaction.clone(),
+                FetchBatchFilter::Compaction {
+                    since: desc.since().clone(),
+                },
+                prefetch_budget_bytes,
+            );
 
             for (desc, meta, parts) in runs {
                 consolidator.enqueue_run(desc, meta, parts.iter().cloned());
             }
 
-        let remaining_budget = consolidator.start_prefetches();
-        if remaining_budget.is_none() {
-            metrics.compaction.not_all_prefetched.inc();
-        }
-
-        // Reuse the allocations for individual keys and values
-        let mut key_vec = vec![];
-        let mut val_vec = vec![];
-        loop {
-            let fetch_start = Instant::now();
-            let Some(updates) = consolidator.next().await? else {
-                break;
-            };
-            timings.part_fetching += fetch_start.elapsed();
-            for ((k, v), t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
-                key_vec.clear();
-                key_vec.extend_from_slice(k);
-                val_vec.clear();
-                val_vec.extend_from_slice(v);
-                crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
-                batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+            let remaining_budget = consolidator.start_prefetches();
+            if remaining_budget.is_none() {
+                metrics.compaction.not_all_prefetched.inc();
             }
-            tokio::task::yield_now().await;
+
+            // Reuse the allocations for individual keys and values
+            let mut key_vec = vec![];
+            let mut val_vec = vec![];
+            loop {
+                let fetch_start = Instant::now();
+                let Some(updates) = consolidator
+                    .next_chunk(cfg.compaction_yield_after_n_updates)
+                    .await?
+                else {
+                    break;
+                };
+                timings.part_fetching += fetch_start.elapsed();
+                for ((k, v), t, d) in updates.records().iter() {
+                    key_vec.clear();
+                    key_vec.extend_from_slice(k);
+                    val_vec.clear();
+                    val_vec.extend_from_slice(v);
+                    crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
+                    batch
+                        .add(
+                            &real_schemas,
+                            &key_vec,
+                            &val_vec,
+                            &T::decode(t),
+                            &D::decode(d),
+                        )
+                        .await?;
+                }
+                tokio::task::yield_now().await;
+            }
+        } else {
+            let mut consolidator = Consolidator::<T, D>::new(
+                format!(
+                    "{}[lower={:?},upper={:?}]",
+                    shard_id,
+                    desc.lower().elements(),
+                    desc.upper().elements()
+                ),
+                *shard_id,
+                CodecSort::default(),
+                blob,
+                Arc::clone(&metrics),
+                shard_metrics,
+                metrics.read.compaction.clone(),
+                FetchBatchFilter::Compaction {
+                    since: desc.since().clone(),
+                },
+                prefetch_budget_bytes,
+            );
+
+            for (desc, meta, parts) in runs {
+                consolidator.enqueue_run(desc, meta, parts.iter().cloned());
+            }
+
+            let remaining_budget = consolidator.start_prefetches();
+            if remaining_budget.is_none() {
+                metrics.compaction.not_all_prefetched.inc();
+            }
+
+            // Reuse the allocations for individual keys and values
+            let mut key_vec = vec![];
+            let mut val_vec = vec![];
+            loop {
+                let fetch_start = Instant::now();
+                let Some(updates) = consolidator.next().await? else {
+                    break;
+                };
+                timings.part_fetching += fetch_start.elapsed();
+                for ((k, v), t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
+                    key_vec.clear();
+                    key_vec.extend_from_slice(k);
+                    val_vec.clear();
+                    val_vec.extend_from_slice(v);
+                    crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
+                    batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+                }
+                tokio::task::yield_now().await;
+            }
         }
         let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
 

@@ -539,7 +539,7 @@ where
                     assert_eq!(received_inline_backpressure, false);
                     received_inline_backpressure = true;
 
-                    let cfg = BatchBuilderConfig::new(&self.cfg, &self.writer_id);
+                    let cfg = BatchBuilderConfig::new(&self.cfg, &self.writer_id, false);
                     // We could have a large number of inline parts (imagine the
                     // sharded persist_sink), do this flushing concurrently.
                     let flush_batches = batches
@@ -610,7 +610,7 @@ where
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::new(&self.cfg, &self.writer_id),
+            BatchBuilderConfig::new(&self.cfg, &self.writer_id, false),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
             self.metrics.user.clone(),
@@ -621,7 +621,6 @@ where
             self.cfg.build_version.clone(),
             Antichain::from_elem(T::minimum()),
             None,
-            false,
         );
         BatchBuilder {
             builder,

@@ -952,7 +952,7 @@ mod tests {
         let mut b1 = write.expect_batch(&data[..2], 0, 3).await;
         let mut b2 = write.expect_batch(&data[2..], 2, 5).await;
         if backpressure_would_flush {
-            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id);
+            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id, false);
             b1.flush_to_blob(
                 &cfg,
                 &client.metrics.user,

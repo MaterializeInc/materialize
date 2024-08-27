@@ -477,34 +477,13 @@ where
             .into_iter()
             .map(|part| {
                 let bytes = part.encoded_size_bytes();
-                let c_part = match part {
-                    BatchPart::Inline {
-                        updates,
-                        ts_rewrite,
-                        ..
-                    } => {
-                        let part = EncodedPart::from_inline(
-                            &*self.metrics,
-                            (*self.read_metrics).clone(),
-                            desc.clone(),
-                            &updates,
-                            ts_rewrite.as_ref(),
-                        );
-                        ConsolidationPart::from_encoded(
-                            part,
-                            true,
-                            &self.metrics.columnar,
-                            &self.sort,
-                        )
-                    }
-                    part => ConsolidationPart::Queued {
-                        data: FetchData {
-                            run_meta: run_meta.clone(),
-                            part_desc: desc.clone(),
-                            part,
-                        },
-                        task: None,
+                let c_part = ConsolidationPart::Queued {
+                    data: FetchData {
+                        run_meta: run_meta.clone(),
+                        part_desc: desc.clone(),
+                        part,
                     },
+                    task: None,
                 };
                 (c_part, bytes)
             })
