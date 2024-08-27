@@ -171,7 +171,7 @@ pub enum FenceError {
     #[error(
         "builtin table migration shard upper {expected_upper:?} fenced by new builtin table migration shard upper {actual_upper:?}"
     )]
-    Migration {
+    MigrationUpper {
         expected_upper: Timestamp,
         actual_upper: Timestamp,
     },
@@ -193,7 +193,7 @@ impl FenceError {
     }
 
     pub fn migration(err: UpperMismatch<Timestamp>) -> Self {
-        Self::Migration {
+        Self::MigrationUpper {
             expected_upper: antichain_to_timestamp(err.expected),
             actual_upper: antichain_to_timestamp(err.current),
         }
@@ -222,7 +222,7 @@ mod tests {
         };
         assert!(epoch < upper);
 
-        let migration = FenceError::Migration {
+        let migration = FenceError::MigrationUpper {
             expected_upper: 60.into(),
             actual_upper: 61.into(),
         };
