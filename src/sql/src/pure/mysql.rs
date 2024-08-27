@@ -27,7 +27,9 @@ use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
 use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
 
-use super::{PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport};
+use super::{
+    PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport, SourceReferencePolicy,
+};
 
 /// The name of the fake database that we use for MySQL sources
 /// to fit our model of a 3-layer catalog. MySQL doesn't have a concept
@@ -342,7 +344,7 @@ pub(super) async fn purify_source_exports(
     ignore_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
-    allow_empty_references: bool,
+    reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     // Determine which table schemas to request from mysql. Note that in mysql
     // a 'schema' is the same as a 'database', and a fully qualified table
@@ -368,7 +370,7 @@ pub(super) async fn purify_source_exports(
                 .collect::<Result<Vec<_>, MySqlSourcePurificationError>>()?,
         ),
         None => {
-            if !allow_empty_references {
+            if matches!(reference_policy, SourceReferencePolicy::Required) {
                 Err(MySqlSourcePurificationError::RequiresExternalReferences)?
             }
             return Ok(PurifiedSourceExports {

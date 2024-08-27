@@ -536,8 +536,6 @@ pub struct Table {
     pub create_sql: Option<String>,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Option<Vec<Expr<Aug>>>,
-    #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
@@ -558,7 +556,10 @@ impl Table {
 #[derive(Clone, Debug, Serialize)]
 pub enum TableDataSource {
     /// The table owns data created via INSERT/UPDATE/DELETE statements.
-    TableWrites,
+    TableWrites {
+        #[serde(skip)]
+        defaults: Vec<Expr<Aug>>,
+    },
 
     /// The table receives its data from the identified `DataSourceDesc`.
     /// This table type does not support INSERT/UPDATE/DELETE statements.
@@ -2388,8 +2389,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn table_details(&self) -> Option<&[Expr<Aug>]> {
-        if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
-            defaults.as_ref().map(|defaults| defaults.as_slice())
+        if let CatalogItem::Table(Table {
+            data_source: TableDataSource::TableWrites { defaults },
+            ..
+        }) = self.item()
+        {
+            Some(defaults.as_slice())
         } else {
             None
         }

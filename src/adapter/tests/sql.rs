@@ -95,12 +95,13 @@ async fn datadriven() {
                                                 test_case.input.trim_end()
                                             )),
                                             desc: RelationDesc::empty(),
-                                            defaults: Some(vec![]),
                                             conn_id: None,
                                             resolved_ids: ResolvedIds(BTreeSet::new()),
                                             custom_logical_compaction_window: None,
                                             is_retained_metrics_object: false,
-                                            data_source: TableDataSource::TableWrites,
+                                            data_source: TableDataSource::TableWrites {
+                                                defaults: vec![],
+                                            },
                                         }),
                                         owner_id: MZ_SYSTEM_ROLE_ID,
                                     }],

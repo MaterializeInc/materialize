@@ -2462,10 +2462,12 @@ impl Coordinator {
                     }
                     CatalogItem::Table(table) => {
                         let collection_desc = match &table.data_source {
-                            TableDataSource::TableWrites => CollectionDescription::from_desc(
-                                table.desc.clone(),
-                                DataSourceOther::TableWrites,
-                            ),
+                            TableDataSource::TableWrites { defaults: _ } => {
+                                CollectionDescription::from_desc(
+                                    table.desc.clone(),
+                                    DataSourceOther::TableWrites,
+                                )
+                            }
                             TableDataSource::DataSource(data_source_desc) => {
                                 source_desc(data_source_desc, &table.desc)
                             }

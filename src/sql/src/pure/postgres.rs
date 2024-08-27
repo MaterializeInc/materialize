@@ -38,7 +38,10 @@ use crate::plan::{
 };
 
 use super::error::PgSourcePurificationError;
-use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport};
+use super::{
+    PartialItemName, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport,
+    SourceReferencePolicy,
+};
 
 /// Ensure that we have select permissions on all tables; we have to do this before we
 /// start snapshotting because if we discover we cannot `COPY` from a table while
@@ -343,7 +346,7 @@ pub(super) async fn purify_source_exports(
     external_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
-    allow_empty_references: bool,
+    reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let publication_tables = mz_postgres_util::publication_info(client, publication).await?;
 
@@ -427,7 +430,7 @@ pub(super) async fn purify_source_exports(
             )?);
         }
         None => {
-            if !allow_empty_references {
+            if matches!(reference_policy, SourceReferencePolicy::Required) {
                 Err(PgSourcePurificationError::RequiresExternalReferences)?
             }
             return Ok(PurifiedSourceExports {

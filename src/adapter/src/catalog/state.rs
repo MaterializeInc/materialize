@@ -808,14 +808,15 @@ impl CatalogState {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: Some(table.create_sql),
                 desc: table.desc,
-                defaults: table.defaults,
                 conn_id: None,
                 resolved_ids,
                 custom_logical_compaction_window: custom_logical_compaction_window
                     .or(table.compaction_window),
                 is_retained_metrics_object,
                 data_source: match table.data_source {
-                    mz_sql::plan::TableDataSource::TableWrites => TableDataSource::TableWrites,
+                    mz_sql::plan::TableDataSource::TableWrites { defaults } => {
+                        TableDataSource::TableWrites { defaults }
+                    }
                     mz_sql::plan::TableDataSource::DataSource(data_source_desc) => {
                         match data_source_desc {
                             mz_sql::plan::DataSourceDesc::IngestionExport {

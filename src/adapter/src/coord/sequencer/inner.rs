@@ -888,7 +888,9 @@ impl Coordinator {
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
         let data_source = match table.data_source {
-            plan::TableDataSource::TableWrites => TableDataSource::TableWrites,
+            plan::TableDataSource::TableWrites { defaults } => {
+                TableDataSource::TableWrites { defaults }
+            }
             plan::TableDataSource::DataSource(data_source_plan) => match data_source_plan {
                 plan::DataSourceDesc::IngestionExport {
                     ingestion_id,
@@ -907,7 +909,6 @@ impl Coordinator {
         let table = Table {
             create_sql: Some(table.create_sql),
             desc: table.desc,
-            defaults: table.defaults,
             conn_id: conn_id.cloned(),
             resolved_ids,
             custom_logical_compaction_window: table.compaction_window,
@@ -927,7 +928,7 @@ impl Coordinator {
                 // by environmentd (e.g. with INSERT INTO statements) or by the storage layer
                 // (e.g. a source-fed table).
                 match table.data_source {
-                    TableDataSource::TableWrites => {
+                    TableDataSource::TableWrites { defaults: _ } => {
                         // Determine the initial validity for the table.
                         let register_ts = coord.get_local_write_ts().await.timestamp;
 

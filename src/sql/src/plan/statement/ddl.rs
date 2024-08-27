@@ -396,10 +396,9 @@ pub fn plan_create_table(
     let table = Table {
         create_sql,
         desc,
-        defaults: Some(defaults),
         temporary,
         compaction_window,
-        data_source: TableDataSource::TableWrites,
+        data_source: TableDataSource::TableWrites { defaults },
     };
     Ok(Plan::CreateTable(CreateTablePlan {
         name,
@@ -1544,7 +1543,6 @@ pub fn plan_create_table_from_source(
     let table = Table {
         create_sql,
         desc,
-        defaults: None,
         temporary: false,
         compaction_window: None,
         data_source: TableDataSource::DataSource(data_source),

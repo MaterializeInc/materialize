@@ -1384,12 +1384,13 @@ mod builtin_migration_tests {
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0])
                         .finish(),
-                    defaults: Some(vec![Expr::null(); 1]),
                     conn_id: None,
                     resolved_ids: ResolvedIds(BTreeSet::new()),
                     custom_logical_compaction_window: None,
                     is_retained_metrics_object: false,
-                    data_source: TableDataSource::TableWrites,
+                    data_source: TableDataSource::TableWrites {
+                        defaults: vec![Expr::null(); 1],
+                    },
                 }),
                 SimplifiedItem::MaterializedView { referenced_names } => {
                     let table_list = referenced_names

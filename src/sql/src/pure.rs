@@ -581,6 +581,17 @@ async fn purify_create_sink(
     Ok(PurifiedStatement::PurifiedCreateSink(create_sink_stmt))
 }
 
+/// Defines whether purification should enforce that at least one valid source
+/// reference is provided on the provided statement.
+pub(crate) enum SourceReferencePolicy {
+    /// Allow empty references, such as when creating a source that
+    /// will have tables added afterwards.
+    Optional,
+    /// Require that at least one reference is resolved to an upstream
+    /// object.
+    Required,
+}
+
 async fn purify_create_source(
     catalog: impl SessionCatalog,
     now: u64,
@@ -620,8 +631,14 @@ async fn purify_create_source(
     };
     let scx = StatementContext::new(None, &catalog);
 
-    let create_table_from_source_enabled =
-        scx.is_feature_flag_enabled(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE);
+    // If the user can use the `CREATE TABLE .. FROM SOURCE` statement to add tables
+    // after this source is created, then we don't need to enforce that
+    // any auto-generated subsources are created here.
+    let reference_policy = if scx.is_feature_flag_enabled(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE) {
+        SourceReferencePolicy::Optional
+    } else {
+        SourceReferencePolicy::Required
+    };
 
     match connection {
         CreateSourceConnection::Kafka {
@@ -813,10 +830,7 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 source_name,
-                // If the user can use the `CREATE TABLE .. FROM SOURCE` statement to add tables
-                // after this source is created, then we don't necessarily need to enforce that
-                // any auto-generated are created here.
-                create_table_from_source_enabled,
+                &reference_policy,
             )
             .await?;
 
@@ -940,10 +954,7 @@ async fn purify_create_source(
                 ignore_columns,
                 source_name,
                 initial_gtid_set.clone(),
-                // If the user can use the `CREATE TABLE .. FROM SOURCE` statement to add tables
-                // after this source is created, then we don't necessarily need to enforce that
-                // any auto-generated are created here.
-                create_table_from_source_enabled,
+                &reference_policy,
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -1004,9 +1015,9 @@ async fn purify_create_source(
                     Err(LoadGeneratorSourcePurificationError::ForTables)?
                 }
                 None => {
-                    // The user must provide an external reference clause if not able to use
-                    // source-fed tables.
-                    if !create_table_from_source_enabled && available_subsources.is_some() {
+                    if matches!(reference_policy, SourceReferencePolicy::Required)
+                        && available_subsources.is_some()
+                    {
                         Err(LoadGeneratorSourcePurificationError::MultiOutputRequiresForAllTables)?
                     }
                 }
@@ -1232,7 +1243,7 @@ async fn purify_alter_source(
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 &unresolved_source_name,
-                false,
+                &SourceReferencePolicy::Required,
             )
             .await?;
 
@@ -1278,7 +1289,7 @@ async fn purify_alter_source(
                 ignore_columns,
                 &unresolved_source_name,
                 initial_gtid_set,
-                false,
+                &SourceReferencePolicy::Required,
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -1455,7 +1466,7 @@ async fn purify_create_table_from_source(
                 &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
                 qualified_text_columns,
                 &unresolved_source_name,
-                false,
+                &SourceReferencePolicy::Required,
             )
             .await?;
             // There should be exactly one source_export returned for this statement
@@ -1498,7 +1509,7 @@ async fn purify_create_table_from_source(
                 qualified_ignore_columns,
                 &unresolved_source_name,
                 initial_gtid_set,
-                false,
+                &SourceReferencePolicy::Required,
             )
             .await?;
             // There should be exactly one source_export returned for this statement
