@@ -124,7 +124,7 @@ See also:
 - [Optimization](/transform-data/optimization)
 - [`CREATE INDEX`](/sql/create-index/)  for complete syntax information
 
-## Indexes on views vs. Materialized views
+## Indexes on views vs. materialized views
 
 {{% views-indexes/table-usage-pattern %}}
 
