@@ -3197,6 +3197,20 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("endpoint", ScalarType::String.nullable(true))
+        .with_column("region", ScalarType::String.nullable(true))
+        .with_column("access_key_id", ScalarType::String.nullable(true))
+        .with_column("access_key_id_secret_id", ScalarType::String.nullable(true))
+        .with_column(
+            "secret_access_key_secret_id",
+            ScalarType::String.nullable(true),
+        )
+        .with_column("session_token", ScalarType::String.nullable(true))
+        .with_column("session_token_secret_id", ScalarType::String.nullable(true))
+        .with_column("assume_role_arn", ScalarType::String.nullable(true))
+        .with_column(
+            "assume_role_session_name",
+            ScalarType::String.nullable(true),
+        )
         .with_column("principal", ScalarType::String.nullable(true))
         .with_column("external_id", ScalarType::String.nullable(true))
         .with_column("example_trust_policy", ScalarType::Jsonb.nullable(true))
