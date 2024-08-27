@@ -16,7 +16,6 @@ use mz_ore::now::NowFn;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::UnresolvedItemName;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -164,36 +163,6 @@ pub enum LoadGenerator {
 
 pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
 
-/// Returns the view of a load-generator source given an external reference
-/// from a `CREATE SUBSOURCE` statement, which is generated during purification
-/// by the `load_generator_ast_to_generator` function such that the
-/// external reference is (LOAD_GENERATOR_DATABASE_NAME, LoadGenerator::schema_name(), view_name)
-pub fn subsource_reference_to_output(
-    external_reference: &UnresolvedItemName,
-) -> LoadGeneratorOutput {
-    let inner = &external_reference.0;
-    assert_eq!(inner[0].as_str(), LOAD_GENERATOR_DATABASE_NAME);
-    match inner[1].as_str() {
-        "auction" => LoadGeneratorOutput::Auction(AuctionView::from(inner[2].as_str())),
-        "marketing" => LoadGeneratorOutput::Marketing(MarketingView::from(inner[2].as_str())),
-        "tpch" => LoadGeneratorOutput::Tpch(TpchView::from(inner[2].as_str())),
-        _ => LoadGeneratorOutput::Default,
-    }
-}
-
-/// Returns the view of a load-generator source given an external reference
-/// from a `CREATE TABLE .. FROM SOURCE` statement, which is generated during
-/// purification such that the external reference is (LoadGenerator::schema_name(), view_name)
-pub fn table_reference_to_output(external_reference: &UnresolvedItemName) -> LoadGeneratorOutput {
-    let inner = &external_reference.0;
-    match inner[0].as_str() {
-        "auction" => LoadGeneratorOutput::Auction(AuctionView::from(inner[1].as_str())),
-        "marketing" => LoadGeneratorOutput::Marketing(MarketingView::from(inner[1].as_str())),
-        "tpch" => LoadGeneratorOutput::Tpch(TpchView::from(inner[1].as_str())),
-        _ => LoadGeneratorOutput::Default,
-    }
-}
-
 impl LoadGenerator {
     pub fn schema_name(&self) -> &'static str {
         match self {
@@ -208,7 +177,7 @@ impl LoadGenerator {
     }
 
     /// Returns the list of table names and their column types that this generator generates
-    pub fn views(&self) -> Vec<(&str, RelationDesc)> {
+    pub fn views(&self) -> Vec<(&str, RelationDesc, LoadGeneratorOutput)> {
         match self {
             LoadGenerator::Auction => vec![
                 (
@@ -218,6 +187,7 @@ impl LoadGenerator {
                         .with_column("name", ScalarType::String.nullable(false))
                         .with_key(vec![0])
                         .finish(),
+                    LoadGeneratorOutput::Auction(AuctionView::Organizations),
                 ),
                 (
                     "users",
@@ -227,6 +197,7 @@ impl LoadGenerator {
                         .with_column("name", ScalarType::String.nullable(false))
                         .with_key(vec![0])
                         .finish(),
+                    LoadGeneratorOutput::Auction(AuctionView::Users),
                 ),
                 (
                     "accounts",
@@ -236,6 +207,7 @@ impl LoadGenerator {
                         .with_column("balance", ScalarType::Int64.nullable(false))
                         .with_key(vec![0])
                         .finish(),
+                    LoadGeneratorOutput::Auction(AuctionView::Accounts),
                 ),
                 (
                     "auctions",
@@ -249,6 +221,7 @@ impl LoadGenerator {
                         )
                         .with_key(vec![0])
                         .finish(),
+                    LoadGeneratorOutput::Auction(AuctionView::Auctions),
                 ),
                 (
                     "bids",
@@ -263,6 +236,7 @@ impl LoadGenerator {
                         )
                         .with_key(vec![0])
                         .finish(),
+                    LoadGeneratorOutput::Auction(AuctionView::Bids),
                 ),
             ],
             LoadGenerator::Clock => vec![],
@@ -277,6 +251,7 @@ impl LoadGenerator {
                             .with_column("income", ScalarType::Int64.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Marketing(MarketingView::Customers),
                     ),
                     (
                         "impressions",
@@ -290,6 +265,7 @@ impl LoadGenerator {
                             )
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Marketing(MarketingView::Impressions),
                     ),
                     (
                         "clicks",
@@ -300,6 +276,7 @@ impl LoadGenerator {
                                 ScalarType::TimestampTz { precision: None }.nullable(false),
                             )
                             .finish(),
+                        LoadGeneratorOutput::Marketing(MarketingView::Clicks),
                     ),
                     (
                         "leads",
@@ -317,6 +294,7 @@ impl LoadGenerator {
                             .with_column("conversion_amount", ScalarType::Int64.nullable(true))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Marketing(MarketingView::Leads),
                     ),
                     (
                         "coupons",
@@ -330,6 +308,7 @@ impl LoadGenerator {
                             .with_column("amount", ScalarType::Int64.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Marketing(MarketingView::Coupons),
                     ),
                     (
                         "conversion_predictions",
@@ -342,6 +321,7 @@ impl LoadGenerator {
                             )
                             .with_column("score", ScalarType::Float64.nullable(false))
                             .finish(),
+                        LoadGeneratorOutput::Marketing(MarketingView::ConversionPredictions),
                     ),
                 ]
             }
@@ -365,6 +345,7 @@ impl LoadGenerator {
                             .with_column("s_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Supplier),
                     ),
                     (
                         "part",
@@ -380,6 +361,7 @@ impl LoadGenerator {
                             .with_column("p_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Part),
                     ),
                     (
                         "partsupp",
@@ -391,6 +373,7 @@ impl LoadGenerator {
                             .with_column("ps_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0, 1])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Partsupp),
                     ),
                     (
                         "customer",
@@ -405,6 +388,7 @@ impl LoadGenerator {
                             .with_column("c_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Customer),
                     ),
                     (
                         "orders",
@@ -420,6 +404,7 @@ impl LoadGenerator {
                             .with_column("o_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Orders),
                     ),
                     (
                         "lineitem",
@@ -442,6 +427,7 @@ impl LoadGenerator {
                             .with_column("l_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0, 3])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Lineitem),
                     ),
                     (
                         "nation",
@@ -452,6 +438,7 @@ impl LoadGenerator {
                             .with_column("n_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Nation),
                     ),
                     (
                         "region",
@@ -461,6 +448,7 @@ impl LoadGenerator {
                             .with_column("r_comment", ScalarType::String.nullable(false))
                             .with_key(vec![0])
                             .finish(),
+                        LoadGeneratorOutput::Tpch(TpchView::Region),
                     ),
                 ]
             }
@@ -527,8 +515,9 @@ pub enum TpchView {
     Region,
 }
 
-/// Map from the table-names output by the `LoadGenerator::views()` method to the
-/// appropriate LoadGeneratorOutput enum variant
+// TODO(roshan): Remove these str mappings once the migration
+// `ast_rewrite_create_load_gen_subsource_details` is removed,
+// since these are only needed for the migration but should not otherwise be used.
 impl From<&str> for AuctionView {
     fn from(s: &str) -> Self {
         match s {

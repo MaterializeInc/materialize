@@ -55,6 +55,14 @@ message ProtoKeyValueLoadGenerator {
     optional string include_offset = 9;
 }
 
+// NOTE: this message is encoded and stored as part of source export
+// statement options
+// Be extra careful about changes, ensuring that all changes are backwards
+// compatible
+message ProtoLoadGeneratorSourceExportStatementDetails {
+    ProtoLoadGeneratorOutput output = 1;
+}
+
 message ProtoLoadGeneratorSourceExportDetails {
     ProtoLoadGeneratorOutput output = 1;
 }

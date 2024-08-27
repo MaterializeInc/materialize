@@ -91,7 +91,7 @@ use mz_storage_types::sources::envelope::{
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
-    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
+    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceConnection,
     LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
@@ -1409,13 +1409,8 @@ pub fn plan_create_subsource(
                     .map(|c| c.into_string())
                     .collect(),
             }),
-            SourceExportStatementDetails::LoadGenerator => {
-                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    output:
-                        mz_storage_types::sources::load_generator::subsource_reference_to_output(
-                            &external_reference,
-                        ),
-                })
+            SourceExportStatementDetails::LoadGenerator { output } => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
             }
         };
         DataSourceDesc::IngestionExport {
@@ -1518,15 +1513,8 @@ pub fn plan_create_table_from_source(
                 .map(|c| c.into_string())
                 .collect(),
         }),
-        SourceExportStatementDetails::LoadGenerator => {
-            // TODO(roshan): We shouldn't need to use the external_reference here, instead
-            // purification should store the correct output on the details protobuf like we
-            // do for Postgres and MySQL above.
-            SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                output: mz_storage_types::sources::load_generator::table_reference_to_output(
-                    external_reference,
-                ),
-            })
+        SourceExportStatementDetails::LoadGenerator { output } => {
+            SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
         }
     };
     let data_source = DataSourceDesc::IngestionExport {
@@ -1620,7 +1608,13 @@ pub(crate) fn load_generator_ast_to_generator(
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
     include_metadata: &[SourceIncludeMetadata],
-) -> Result<(LoadGenerator, Option<BTreeMap<FullItemName, RelationDesc>>), PlanError> {
+) -> Result<
+    (
+        LoadGenerator,
+        Option<BTreeMap<FullItemName, (RelationDesc, LoadGeneratorOutput)>>,
+    ),
+    PlanError,
+> {
     let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
     extracted.ensure_only_valid_options(loadgen)?;
 
@@ -1756,7 +1750,7 @@ pub(crate) fn load_generator_ast_to_generator(
     };
 
     let mut available_subsources = BTreeMap::new();
-    for (name, desc) in load_generator.views() {
+    for (name, desc, output) in load_generator.views() {
         let name = FullItemName {
             database: RawDatabaseSpecifier::Name(
                 mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
@@ -1764,7 +1758,7 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: load_generator.schema_name().into(),
             item: name.to_string(),
         };
-        available_subsources.insert(name, desc);
+        available_subsources.insert(name, (desc, output));
     }
     let available_subsources = if available_subsources.is_empty() {
         None
