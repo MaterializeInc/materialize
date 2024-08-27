@@ -46,6 +46,9 @@ class Comparator(Generic[T]):
     def this(self) -> T:
         return self._points[0]
 
+    def points_this(self) -> list[T]:
+        return self._points
+
     def this_as_str(self) -> str:
         if self.this() is None:
             return "           None"

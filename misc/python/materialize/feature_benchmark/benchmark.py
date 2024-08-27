@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from collections.abc import Iterable
-from typing import Any
+from statistics import mean, variance
+from typing import Generic, TypeVar
 
 from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
@@ -232,6 +233,25 @@ class Benchmark:
                 aggregation.append_measurement(memory_measurement)
 
 
+T = TypeVar("T", bound=int | float)
+
+
+class ReportMeasurement(Generic[T]):
+    result: T
+    min: T
+    max: T
+    mean: T
+    variance: float
+
+    def __init__(self, points: list[T]):
+        self.result = points[0]
+        if self.result is not None:
+            self.min = min(points)
+            self.max = max(points)
+            self.mean = mean(points)
+            self.variance = variance(points)
+
+
 class Report:
     def __init__(self, cycle_number: int) -> None:
         self.cycle_number = cycle_number
@@ -270,12 +290,14 @@ class Report:
     def __str__(self) -> str:
         return self.as_string(use_colors=False)
 
-    def measurements_of_this(self, scenario_name: str) -> dict[MeasurementType, Any]:
+    def measurements_of_this(
+        self, scenario_name: str
+    ) -> dict[MeasurementType, ReportMeasurement]:
         result = dict()
 
         for comparison in self._comparisons:
             if comparison.name == scenario_name:
-                result[comparison.type] = comparison.this()
+                result[comparison.type] = ReportMeasurement(comparison.points_this())
 
         return result
 

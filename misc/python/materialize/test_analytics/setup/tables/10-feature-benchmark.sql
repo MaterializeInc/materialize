@@ -20,7 +20,11 @@ CREATE TABLE feature_benchmark_result (
    wallclock DOUBLE,
    messages INT,
    memory_mz DOUBLE,
-   memory_clusterd DOUBLE
+   memory_clusterd DOUBLE,
+   wallclock_min DOUBLE,
+   wallclock_max DOUBLE,
+   wallclock_mean DOUBLE,
+   wallclock_variance DOUBLE
 );
 
 -- This table holds results of runs that were discarded.
@@ -31,7 +35,11 @@ CREATE TABLE feature_benchmark_discarded_result (
    wallclock DOUBLE,
    messages INT,
    memory_mz DOUBLE,
-   memory_clusterd DOUBLE
+   memory_clusterd DOUBLE,
+   wallclock_min DOUBLE,
+   wallclock_max DOUBLE,
+   wallclock_mean DOUBLE,
+   wallclock_variance DOUBLE
 );
 
 GRANT SELECT, INSERT, UPDATE ON TABLE feature_benchmark_result TO "hetzner-ci";
