@@ -3164,19 +3164,22 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_cluster_replica_metrics",
-    // TODO[btv] - make this public once we work out whether and how to fuse it with
-    // the corresponding Storage tables.
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_CLUSTER_REPLICA_METRICS_OID,
+    oid: oid::SOURCE_MZ_CLUSTER_REPLICA_METRICS_OID,
+    data_source: IntrospectionType::ReplicaMetrics,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
-        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
-    is_retained_metrics_object: true,
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "updated_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        ),
+    is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -5259,7 +5262,8 @@ SELECT
     m.process_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
-    m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
+    m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent,
+    m.updated_at
 FROM
     mz_catalog.mz_cluster_replicas AS r
         JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -7533,7 +7537,7 @@ pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_METRICS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_cluster_replica_metrics (replica_id)",
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 };
 
 pub const MZ_CLUSTER_REPLICA_HISTORY_IND: BuiltinIndex = BuiltinIndex {
@@ -7955,7 +7959,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
+        Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),

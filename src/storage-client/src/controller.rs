@@ -66,6 +66,7 @@ pub enum IntrospectionType {
 
     Frontiers,
     ReplicaFrontiers,
+    ReplicaMetrics,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.

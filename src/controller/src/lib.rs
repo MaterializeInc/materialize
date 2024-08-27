@@ -48,12 +48,14 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
+use mz_storage_client::controller::{
+    IntrospectionType, StorageController, StorageMetadata, StorageTxn,
+};
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -119,8 +121,6 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The worker's next response to a specified copy to.
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
-    /// Notification that new resource usage metrics are available for a given replica.
-    ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
     /// Notification that a watch set has finished. See
     /// [`Controller::install_compute_watch_set`] and
     /// [`Controller::install_storage_watch_set`] for details.
@@ -181,6 +181,9 @@ pub struct Controller<T: Timestamp = mz_repr::Timestamp> {
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
+
+    /// A function providing the current wallclock time.
+    now: NowFn,
 
     /// A map associating a global ID to the set of all the unfulfilled watch
     /// set ids that include it.
@@ -248,6 +251,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             frontiers_ticker: _,
             persist_pubsub_url: _,
             secrets_args: _,
+            now: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
             watch_set_id_gen: _,
@@ -534,11 +538,10 @@ where
             Readiness::NotReady => Ok(None),
             Readiness::Storage => self.process_storage_response(storage_metadata).await,
             Readiness::Compute => self.process_compute_response().await,
-            Readiness::Metrics => Ok(self
-                .metrics_rx
-                .next()
-                .await
-                .map(|(id, metrics)| ControllerResponse::ComputeReplicaMetrics(id, metrics))),
+            Readiness::Metrics => {
+                self.record_replica_metrics().await;
+                Ok(None)
+            }
             Readiness::Frontiers => {
                 self.record_frontiers().await;
                 Ok(None)
@@ -586,6 +589,36 @@ where
             }
         }
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
+    }
+
+    async fn record_replica_metrics(&mut self) {
+        let Some((replica_id, metrics)) = self.metrics_rx.next().await else {
+            return;
+        };
+
+        let now = mz_ore::now::to_datetime((self.now)());
+        let now_tz = now.try_into().expect("must fit");
+
+        let replica_id = replica_id.to_string();
+        let updates = metrics
+            .into_iter()
+            .zip(0..)
+            .map(|(m, process_id)| {
+                let row = Row::pack_slice(&[
+                    Datum::String(&replica_id),
+                    Datum::UInt64(process_id),
+                    m.cpu_nano_cores.into(),
+                    m.memory_bytes.into(),
+                    m.disk_usage_bytes.into(),
+                    Datum::TimestampTz(now_tz),
+                ]);
+                (row, 1)
+            })
+            .collect();
+
+        self.storage
+            .append_introspection_updates(IntrospectionType::ReplicaMetrics, updates)
+            .await;
     }
 
     async fn record_frontiers(&mut self) {
@@ -679,7 +712,7 @@ where
             config.build_info,
             config.persist_location,
             config.persist_clients,
-            config.now,
+            config.now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
@@ -723,6 +756,7 @@ where
             frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
             secrets_args: config.secrets_args,
+            now: config.now,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),
             watch_set_id_gen: Gen::default(),

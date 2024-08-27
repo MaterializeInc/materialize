@@ -58,7 +58,7 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::{Coordinator, ReplicaMetadata};
+use crate::coord::Coordinator;
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -793,24 +793,6 @@ impl Coordinator {
     }
 
     async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        if let Some(Some(ReplicaMetadata { metrics })) =
-            self.transient_replica_metadata.insert(replica_id, None)
-        {
-            let mut updates = vec![];
-            if let Some(metrics) = metrics {
-                let retractions = self
-                    .catalog()
-                    .state()
-                    .pack_replica_metric_updates(replica_id, &metrics, -1);
-                let retractions = self
-                    .catalog()
-                    .state()
-                    .resolve_builtin_table_updates(retractions);
-                updates.extend(retractions);
-            }
-            self.builtin_table_update().background(updates);
-        }
-
         self.drop_introspection_subscribes(replica_id).await;
 
         self.controller

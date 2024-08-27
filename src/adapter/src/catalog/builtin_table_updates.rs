@@ -17,17 +17,17 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS,
-    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
-    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCES,
-    MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES,
-    MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_CLUSTER_SCHEDULES,
+    MZ_CLUSTER_WORKLOAD_CLASSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
+    MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCES, MZ_POSTGRES_SOURCE_TABLES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -42,7 +42,7 @@ use mz_controller::clusters::{
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -1731,37 +1731,6 @@ impl CatalogState {
         let id = &MZ_EGRESS_IPS;
         let row = Row::pack_slice(&[Datum::String(&ip.to_string())]);
         Ok(BuiltinTableUpdate { id, row, diff: 1 })
-    }
-
-    pub fn pack_replica_metric_updates(
-        &self,
-        replica_id: ReplicaId,
-        updates: &[ServiceProcessMetrics],
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let id = &*MZ_CLUSTER_REPLICA_METRICS;
-        let rows = updates.iter().enumerate().map(
-            |(
-                process_id,
-                ServiceProcessMetrics {
-                    cpu_nano_cores,
-                    memory_bytes,
-                    disk_usage_bytes,
-                },
-            )| {
-                Row::pack_slice(&[
-                    Datum::String(&replica_id.to_string()),
-                    u64::cast_from(process_id).into(),
-                    (*cpu_nano_cores).into(),
-                    (*memory_bytes).into(),
-                    (*disk_usage_bytes).into(),
-                ])
-            },
-        );
-        let updates = rows
-            .map(|row| BuiltinTableUpdate { id, row, diff })
-            .collect();
-        updates
     }
 
     pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
