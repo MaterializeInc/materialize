@@ -33,9 +33,9 @@ You might want to create indexes when...
 
 {{% views-indexes/index-query-optimization-specific-instances %}}
 
-#### General considerations
+#### Best practices
 
-{{% views-indexes/index-considerations %}}
+{{% views-indexes/index-best-practices %}}
 
 ## Syntax
 
