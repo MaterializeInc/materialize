@@ -11,7 +11,7 @@
 > CREATE CLUSTER bar REPLICAS ()
 > CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE '4'))
 
-> SELECT
+> SELECT DISTINCT ON (c.name, r.name, u.process_id)
       c.name,
       r.name,
       u.process_id,
@@ -25,7 +25,7 @@
               mz_internal.mz_cluster_replica_utilization AS u
               ON r.id = u.replica_id
   WHERE c.name IN ( 'foo', 'bar', 'xyzzy' )
-  ORDER BY c.name, r.name, process_id
+  ORDER BY c.name, r.name, process_id, updated_at DESC
 foo size_1 0 true true <null>
 foo size_2_2 0 true true <null>
 foo size_2_2 1 true true <null>

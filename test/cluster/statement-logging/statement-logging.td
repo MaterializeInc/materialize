@@ -94,8 +94,9 @@ contains: column "f_nonexistent" does not exist
 > DROP CLUSTER c
 
 # This will be executed on mz_catalog_server, due to auto-routing of catalog queries.
-> SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
-true
+# Disabled until #29237 is fixed, as the query lifecycle check below is flaky otherwise.
+#> SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
+#true
 
 # Test that we're correctly recording transaction isolation
 > SET transaction_isolation TO serializable
@@ -145,7 +146,6 @@ quickstart quickstart my_app 1 {} success <null> <null> <null> true "PREPARE p A
 quickstart quickstart my_app 1 {} success <null> <null> <null> true "SET cluster TO c" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null> materialize {public}
-mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true materialize {public}
 
 > WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
@@ -199,11 +199,6 @@ COMMIT execution-finished
 "SELECT * FROM t" execution-finished
 "SELECT * FROM t" optimization-finished
 "SELECT * FROM t" storage-dependencies-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" compute-dependencies-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-began
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" optimization-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" storage-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" execution-began

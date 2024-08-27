@@ -1372,7 +1372,7 @@ fn test_transactional_explain_timestamps() {
     assert_eq!(*explain_timestamp, mz_now_timestamp);
 }
 
-// Test that the since for `mz_cluster_replica_utilization` is held back by at least
+// Test that the since for `mz_cluster_replicas` is held back by at least
 // 30 days, which is required for the frontend observability work.
 //
 // Feel free to modify this test if that product requirement changes,
@@ -1384,7 +1384,7 @@ async fn test_utilization_hold() {
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
     // The bool determines whether we are testing indexes.
     const CLUSTERS_TO_TRY: &[&str] = &["mz_catalog_server", "quickstart"];
-    const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_internal.mz_cluster_replica_statuses"];
+    const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_internal.mz_cluster_replicas"];
 
     let now_millis = 619388520000;
     let past_millis = now_millis - THIRTY_DAYS_MS;

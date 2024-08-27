@@ -208,6 +208,7 @@ mz_cluster_replica_metrics  disk_bytes
 mz_cluster_replica_metrics  memory_bytes
 mz_cluster_replica_metrics  process_id
 mz_cluster_replica_metrics  replica_id
+mz_cluster_replica_metrics  updated_at
 mz_cluster_replica_sizes  cpu_nano_cores
 mz_cluster_replica_sizes  credits_per_hour
 mz_cluster_replica_sizes  disk_bytes

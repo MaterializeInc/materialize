@@ -116,6 +116,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  cpu_nano_cores  uint8
 4  memory_bytes  uint8
 5  disk_bytes  uint8
+6  updated_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
@@ -134,6 +135,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  cpu_percent  double␠precision
 4  memory_percent  double␠precision
 5  disk_percent  double␠precision
+6  updated_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position

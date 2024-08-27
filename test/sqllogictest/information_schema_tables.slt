@@ -282,7 +282,7 @@ VIEW
 materialize
 mz_internal
 mz_cluster_replica_metrics
-BASE TABLE
+SOURCE
 materialize
 mz_internal
 mz_cluster_replica_statuses
