@@ -120,7 +120,7 @@ def inline_link(url: str, label: str | None = None) -> str:
 
 def inline_image(url: str, alt: str) -> str:
     """See https://buildkite.com/docs/pipelines/links-and-images-in-log-output#images-syntax-for-inlining-images"""
-    content = f"url='\"{url}\"';alt='\"{alt}\"'"
+    content = f"url='{url}';alt='{alt}'"
     # These escape codes are not supported by terminals
     return f"\033]1338;{content}\a" if is_in_buildkite() else f"{alt},{url}"
 
