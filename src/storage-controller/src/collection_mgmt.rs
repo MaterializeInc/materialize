@@ -74,10 +74,12 @@ use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::{TimestamplessUpdate, Update};
+use mz_storage_client::client::TimestamplessUpdate;
 use mz_storage_client::controller::{MonotonicAppender, StorageWriteOp};
+use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
@@ -85,7 +87,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-use crate::{persist_handles, StorageError};
+use crate::StorageError;
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
 const CHANNEL_CAPACITY: usize = 4096;
@@ -140,8 +142,6 @@ where
     append_only_collections:
         Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)>>>,
 
-    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
-
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -161,11 +161,7 @@ impl<T> CollectionManager<T>
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
-    pub(super) fn new(
-        read_only: bool,
-        write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
-        now: NowFn,
-    ) -> CollectionManager<T> {
+    pub(super) fn new(read_only: bool, now: NowFn) -> CollectionManager<T> {
         let batch_duration_ms: u64 = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT
             .as_millis()
             .try_into()
@@ -180,7 +176,6 @@ where
             hacky_always_false_watch: (always_false_tx, always_false_rx),
             differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
             append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
-            write_handle,
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }
@@ -211,6 +206,7 @@ where
     pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
         read_handle_fn: R,
         force_writable: bool,
     ) where
@@ -238,7 +234,7 @@ where
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = DifferentialWriteTask::spawn(
             id,
-            self.write_handle.clone(),
+            write_handle,
             read_handle_fn,
             read_only_rx,
             self.now.clone(),
@@ -258,7 +254,12 @@ where
     ///
     /// The [CollectionManager] will automatically advance the upper of every
     /// registered collection every second.
-    pub(super) fn register_append_only_collection(&self, id: GlobalId, force_writable: bool) {
+    pub(super) fn register_append_only_collection(
+        &self,
+        id: GlobalId,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        force_writable: bool,
+    ) {
         let mut guard = self
             .append_only_collections
             .lock()
@@ -279,7 +280,7 @@ where
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = append_only_write_task(
             id,
-            self.write_handle.clone(),
+            write_handle,
             Arc::clone(&self.user_batch_duration_ms),
             self.now.clone(),
             read_only_rx,
@@ -442,7 +443,7 @@ where
     /// The collection that we are writing to.
     id: GlobalId,
 
-    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+    write_handle: WriteHandle<SourceData, (), T, Diff>,
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
@@ -501,7 +502,7 @@ where
     /// handles for interacting with it.
     fn spawn(
         id: GlobalId,
-        write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
         read_handle_fn: R,
         read_only_watch: watch::Receiver<bool>,
         now: NowFn,
@@ -610,31 +611,28 @@ where
             return ControlFlow::Continue(());
         }
 
-        let request = vec![(self.id, vec![], self.current_upper.clone(), now.clone())];
-
         assert!(!self.read_only);
-        match self.write_handle.compare_and_append(request).await {
+        let res = self
+            .write_handle
+            .compare_and_append_batch(
+                &mut [],
+                Antichain::from_elem(self.current_upper.clone()),
+                Antichain::from_elem(now.clone()),
+            )
+            .await
+            .expect("valid usage");
+        match res {
             // All good!
-            Ok(Ok(())) => {
+            Ok(()) => {
                 tracing::debug!(%self.id, "bumped upper of differential collection");
                 self.current_upper = now;
             }
-            Ok(Err(StorageError::InvalidUppers(failed_ids))) => {
+            Err(err) => {
                 // Someone else wrote to the collection or bumped the upper. We
                 // need to sync to latest persist state and potentially patch up
                 // our `to_write`, based on what we learn and `desired`.
 
-                assert_eq!(
-                    failed_ids.len(),
-                    1,
-                    "received errors for more than one collection"
-                );
-                assert_eq!(
-                    failed_ids[0].id, self.id,
-                    "received errors for a different collection"
-                );
-
-                let actual_upper = if let Some(ts) = failed_ids[0].current_upper.as_option() {
+                let actual_upper = if let Some(ts) = err.current.as_option() {
                     ts.clone()
                 } else {
                     return ControlFlow::Break("upper is the empty antichain".to_string());
@@ -645,17 +643,6 @@ where
                 self.current_upper = actual_upper;
 
                 self.sync_to_persist().await;
-            }
-            Ok(Err(err)) => {
-                panic!(
-                    "unexpected error while trying to bump upper of {}: {:?}",
-                    self.id, err
-                );
-            }
-            // Sender hung up, this seems fine and can happen when shutting down.
-            Err(_recv_error) => {
-                // Exit the run loop because there is no other work we can do.
-                return ControlFlow::Break("persist worker is gone".to_string());
             }
         }
 
@@ -785,47 +772,35 @@ where
 
         loop {
             // Append updates to persist!
-            let updates_to_write = self
-                .to_write
-                .iter()
-                .map(|(row, diff)| Update {
-                    row: row.clone(),
-                    timestamp: self.current_upper.clone(),
-                    diff: diff.clone(),
-                })
-                .collect();
-
             let now = T::from((self.now)());
             let new_upper = std::cmp::max(
                 now,
                 TimestampManipulation::step_forward(&self.current_upper),
             );
 
-            let request = vec![(
-                self.id,
-                updates_to_write,
-                self.current_upper.clone(),
-                new_upper.clone(),
-            )];
+            let updates_to_write = self
+                .to_write
+                .iter()
+                .map(|(row, diff)| {
+                    (
+                        (SourceData(Ok(row.clone())), ()),
+                        self.current_upper.clone(),
+                        diff.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
 
             assert!(!self.read_only);
-            let append_result = match self.write_handle.compare_and_append(request.clone()).await {
-                // We got a response!
-                Ok(append_result) => append_result,
-                // Failed to receive which means the worker shutdown.
-                Err(_recv_error) => {
-                    // Sender hung up, this seems fine and can happen when
-                    // shutting down.
-                    notify_listeners(responders, || {
-                        Err(StorageError::ShuttingDown("PersistMonotonicWriteWorker"))
-                    });
-
-                    // End the task since we can no longer send writes to persist.
-                    return ControlFlow::Break("sender hung up".to_string());
-                }
-            };
-
-            match append_result {
+            let res = self
+                .write_handle
+                .compare_and_append(
+                    updates_to_write,
+                    Antichain::from_elem(self.current_upper.clone()),
+                    Antichain::from_elem(new_upper.clone()),
+                )
+                .await
+                .expect("valid usage");
+            match res {
                 // Everything was successful!
                 Ok(()) => {
                     // Notify all of our listeners.
@@ -843,22 +818,11 @@ where
                     break;
                 }
                 // Failed to write to some collections,
-                Err(StorageError::InvalidUppers(failed_ids)) => {
+                Err(err) => {
                     // Someone else wrote to the collection. We need to read
                     // from persist and update to_write based on that and the
                     // desired state.
-
-                    assert_eq!(
-                        failed_ids.len(),
-                        1,
-                        "received errors for more than one collection"
-                    );
-                    assert_eq!(
-                        failed_ids[0].id, self.id,
-                        "received errors for a different collection"
-                    );
-
-                    let actual_upper = if let Some(ts) = failed_ids[0].current_upper.as_option() {
+                    let actual_upper = if let Some(ts) = err.current.as_option() {
                         ts.clone()
                     } else {
                         return ControlFlow::Break("upper is the empty antichain".to_string());
@@ -869,11 +833,16 @@ where
                     // We've exhausted all of our retries, notify listeners and
                     // break out of the retry loop so we can wait for more data.
                     if retries.next().await.is_none() {
+                        let invalid_upper = InvalidUpper {
+                            id: self.id,
+                            current_upper: err.current,
+                        };
                         notify_listeners(responders, || {
-                            Err(StorageError::InvalidUppers(failed_ids.clone()))
+                            Err(StorageError::InvalidUppers(vec![invalid_upper.clone()]))
                         });
                         error!(
-                            "exhausted retries when appending to managed collection {failed_ids:?}"
+                            "exhausted retries when appending to managed collection {}",
+                            self.id
                         );
                         break;
                     }
@@ -882,14 +851,7 @@ where
 
                     self.sync_to_persist().await;
 
-                    debug!("Retrying invalid-uppers error while appending to differential collection {failed_ids:?}");
-                }
-                // Uh-oh, something else went wrong!
-                Err(other) => {
-                    panic!(
-                        "Unhandled error while appending to managed collection {:?}: {:?}",
-                        self.id, other
-                    )
+                    debug!("Retrying invalid-uppers error while appending to differential collection {}", self.id);
                 }
             }
         }
@@ -940,7 +902,7 @@ where
 /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
 fn append_only_write_task<T>(
     id: GlobalId,
-    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+    mut write_handle: WriteHandle<SourceData, (), T, Diff>,
     user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
     read_only: watch::Receiver<bool>,
@@ -1040,70 +1002,11 @@ where
                                 .flatten()
                                 .map(|(row, diff)| TimestamplessUpdate { row, diff })
                             .collect();
-                            let request = vec![(id, rows, T::from(now()))];
+                            let at_least = T::from(now());
 
-                            // We'll try really hard to succeed, but eventually stop.
-                            //
-                            // Note: it's very rare we should ever need to retry, and if we need to
-                            // retry it should only take 1 or 2 attempts. We set `max_tries` to be
-                            // high though because if we hit some edge case we want to try hard to
-                            // commit the data.
-                            let retries = Retry::default()
-                                .initial_backoff(Duration::from_secs(1))
-                                .clamp_backoff(Duration::from_secs(3))
-                                .factor(1.25)
-                                .max_tries(20)
-                                .into_retry_stream();
-                            let mut retries = Box::pin(retries);
-
-                            'append_retry: loop {
-                                let append_result = match write_handle.monotonic_append(request.clone()).await {
-                                    // We got a response!
-                                    Ok(append_result) => append_result,
-                                    // Failed to receive which means the worker shutdown.
-                                    Err(_recv_error) => {
-                                        // Sender hung up, this seems fine and can happen when shutting down.
-                                        notify_listeners(responders, || Err(StorageError::ShuttingDown("PersistMonotonicWriteWorker")));
-
-                                        // End the task since we can no longer send writes to persist.
-                                        break 'run;
-                                    }
-                                };
-
-                                match append_result {
-                                    // Everything was successful!
-                                    Ok(()) => {
-                                        // Notify all of our listeners.
-                                        notify_listeners(responders, || Ok(()));
-                                        // Break out of the retry loop so we can wait for more data.
-                                        break 'append_retry;
-                                    },
-                                    // Failed to write to some collections,
-                                    Err(StorageError::InvalidUppers(failed_ids)) => {
-                                        // It's fine to retry invalid-uppers errors here, since
-                                        // monotonic appends do not specify a particular upper or
-                                        // timestamp.
-
-                                        assert_eq!(failed_ids.len(), 1, "received errors for more than one collection");
-                                        assert_eq!(failed_ids[0].id, id, "received errors for a different collection");
-
-                                        // We've exhausted all of our retries, notify listeners
-                                        // and break out of the retry loop so we can wait for more
-                                        // data.
-                                        if retries.next().await.is_none() {
-                                            notify_listeners(responders, || Err(StorageError::InvalidUppers(failed_ids.clone())));
-                                            error!("exhausted retries when appending to managed collection {failed_ids:?}");
-                                            break 'append_retry;
-                                        }
-
-                                        debug!("Retrying invalid-uppers error while appending to managed collection {failed_ids:?}");
-                                    }
-                                    // Uh-oh, something else went wrong!
-                                    Err(other) => {
-                                        panic!("Unhandled error while appending to managed collection {id:?}: {other:?}")
-                                    }
-                                }
-                            }
+                            monotonic_append(&mut write_handle, rows, at_least).await;
+                            // Notify all of our listeners.
+                            notify_listeners(responders, || Ok(()));
 
                             // Wait until our artificial latency has completed.
                             //
@@ -1127,21 +1030,14 @@ where
 
                         // Update our collection.
                         let now = T::from(now());
-                        let updates = vec![(id, vec![], now.clone())];
+                        let updates = vec![];
+                        let at_least = now.clone();
 
                         // Failures don't matter when advancing collections' uppers. This might
                         // fail when a clusterd happens to be writing to this concurrently.
                         // Advancing uppers here is best-effort and only needs to succeed if no
                         // one else is advancing it; contention proves otherwise.
-                        match write_handle.monotonic_append(updates).await {
-                            // All good!
-                            Ok(_append_result) => (),
-                            // Sender hung up, this seems fine and can happen when shutting down.
-                            Err(_recv_error) => {
-                                // Exit the run loop because there is no other work we can do.
-                                break 'run;
-                            }
-                        }
+                        monotonic_append(&mut write_handle, updates, at_least).await;
                     },
                 }
             }
@@ -1151,6 +1047,55 @@ where
     );
 
     (tx, handle.abort_on_drop(), shutdown_tx)
+}
+
+async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
+    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    updates: Vec<TimestamplessUpdate>,
+    at_least: T,
+) {
+    let mut expected_upper = write_handle.shared_upper();
+    loop {
+        if updates.is_empty() && expected_upper.is_empty() {
+            // Ignore timestamp advancement for
+            // closed collections. TODO? Make this a
+            // correctable error
+            return;
+        }
+
+        let upper = expected_upper
+            .into_option()
+            .expect("cannot append data to closed collection");
+
+        let lower = if upper.less_than(&at_least) {
+            at_least.clone()
+        } else {
+            upper.clone()
+        };
+
+        let new_upper = TimestampManipulation::step_forward(&lower);
+        let updates = updates
+            .iter()
+            .map(|TimestamplessUpdate { row, diff }| {
+                ((SourceData(Ok(row.clone())), ()), lower.clone(), diff)
+            })
+            .collect::<Vec<_>>();
+        let res = write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(upper),
+                Antichain::from_elem(new_upper),
+            )
+            .await
+            .expect("valid usage");
+        match res {
+            Ok(()) => return,
+            Err(err) => {
+                expected_upper = err.current;
+                continue;
+            }
+        }
+    }
 }
 
 // Helper method for notifying listeners.
