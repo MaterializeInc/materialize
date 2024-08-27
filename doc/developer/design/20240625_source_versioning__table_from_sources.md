@@ -82,11 +82,6 @@ and why. This leads to crisper designs, and it aids in focusing the reviewer.
     accomplished during the process of replacing _subsources_ with _tables_ (see
     solution proposal below).
 
--   Dealing with Webhook sources. These are fundamentally different than the other
-    storage-owned source types whose operators implement the `SourceRender` trait,
-    and they do not contain a 'progress' collection. While they may also be
-    converted to use 'tables' in the future, that work is not in-scope for this proposal.
-
 ## Solution Proposal
 
 The concept of a _source_ will be unified around a single relation representing
@@ -353,7 +348,7 @@ the `details` it contains. It will be up to each source implementation to map th
 relevant upstream table to the correct `SourceExport`s using the `SourceExportDetails`
 and output to the correct `output_index`.
 
-#### Kafka Sources
+### Kafka Sources
 
 Kafka Sources will require more refactoring to move to a model where a single Kafka Source
 can output to more than one `SourceExport`.
@@ -379,7 +374,46 @@ for now. In the future we need to refactor the source dataflows to track progres
 on a per-export basis and do independent reclocking such that we can manage the
 timely capabilities / progress of each source export independently.
 
-#### Migration of source statements and collections
+Envelope and encoding/format options are currently specified on a per-source level.
+These options will be moved to the `CREATE TABLE .. FROM SOURCE` statements such that
+they can be independently set on a per-table basis. The `envelope` and `encoding` fields
+will be moved from the primary source config to each `SourceExport`, and the source
+rendering pipeline will use per-export encoding/envelope settings rather than assuming
+each export for a source requires the same config, as it currently does.
+
+### Webhook Sources
+
+Webhook sources do not currently behave like other source types, they do not actually
+exist in the storage layer and are not rendered as any sort of dataflow. Instead
+`environmentd` handles incoming HTTP requests bound for webhooks, validates the request
+against any webhook validation options (such as checking an HMAC), and then decodes
+the request body and writes the results directly to a persist collection.
+
+Webhook sources will be migrated to the new model at the SQL level, to allow for
+'schema changes' and multiple outputs using the same `CREATE TABLE .. FROM SOURCE`
+statement syntax as other sources.
+Since the `encoding` and `envelope` options will be moved to that table statement
+this will also allow a webhook request to be decoded differently for each table.
+
+Under the hood, we will continue to have `environmentd` receive Webhook requests
+and write directly to a persist collection. However this code will be modified
+to just do request validation and then write the _raw_ request body as bytes
+and a map of all headers to the persist collection without doing any decoding.
+
+We will then create a new `Persist Source` that operates exactly like all other source
+types such that the storage layer renders a dataflow and the source operator reads
+from an existing persist collection -- in this case the 'raw' webhook collection being
+written to by `environmentd`. This `Persist Source` can have multiple `SourceExports`
+like other sources, and each export can define its own `encoding` and `envelope` processing
+to convert the raw bytes of each request into the appropriate relation schema.
+The progress collection for the webhook source will essentially be the frontier of
+the underlying 'raw' persist collection that each request is written to.
+
+One open question is whether the external-reference in a `CREATE TABLE .. FROM SOURCE`
+statement of a Webhook source will have any meaning, since it's unclear what referencable
+objects are at the time of statement creation.
+
+### Migration of source statements and collections
 
 We would generate a catalog migration to generate new `CREATE TABLE` statements where
 necessary and shuffle the collections being pointed at by each statement. The intent
@@ -402,7 +436,7 @@ identifies each collection is updated. The migration would do the following:
     -   Drop the existing top-level collection tied to the source, since this is already
         unused and will no longer be owned by any statement
 
-#### Exposing available upstream references to users
+### Exposing available upstream references to users
 
 Since creating a source will no longer automatically create any subsources, users that
 do not already know all the upstream references available in their system may find it difficult
