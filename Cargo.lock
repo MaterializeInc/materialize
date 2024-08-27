@@ -5213,6 +5213,8 @@ dependencies = [
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
+ "openssl",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
