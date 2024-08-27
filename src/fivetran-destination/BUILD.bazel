@@ -84,12 +84,7 @@ rust_doc_test(
 cargo_build_script(
 	name = "mz_fivetran_destination_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-tools:mz_build_tools",
-		"//src/ore:mz_ore",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/sql-parser:mz_sql_parser",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

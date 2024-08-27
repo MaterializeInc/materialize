@@ -92,13 +92,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_pgcopy_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-tools:mz_build_tools",
-		"//src/ore:mz_ore",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/proto:mz_proto",
-		"//src/repr:mz_repr",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

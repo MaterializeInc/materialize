@@ -149,27 +149,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_compute_client_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-info:mz_build_info",
-		"//src/build-tools:mz_build_tools",
-		"//src/cluster-client:mz_cluster_client",
-		"//src/compute-types:mz_compute_types",
-		"//src/dyncfg:mz_dyncfg",
-		"//src/dyncfgs:mz_dyncfgs",
-		"//src/expr:mz_expr",
-		"//src/orchestrator:mz_orchestrator",
-		"//src/ore:mz_ore",
-		"//src/persist-client:mz_persist_client",
-		"//src/persist-types:mz_persist_types",
-		"//src/persist:mz_persist",
-		"//src/proto:mz_proto",
-		"//src/repr:mz_repr",
-		"//src/service:mz_service",
-		"//src/storage-client:mz_storage_client",
-		"//src/storage-types:mz_storage_types",
-		"//src/timely-util:mz_timely_util",
-		"//src/tracing:mz_tracing",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

@@ -112,15 +112,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_compute_types_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-tools:mz_build_tools",
-		"//src/dyncfg:mz_dyncfg",
-		"//src/expr:mz_expr",
-		"//src/ore:mz_ore",
-		"//src/proto:mz_proto",
-		"//src/repr:mz_repr",
-		"//src/storage-types:mz_storage_types",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

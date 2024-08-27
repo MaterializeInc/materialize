@@ -100,13 +100,7 @@ rust_doc_test(
 cargo_build_script(
 	name = "mz_prof_http_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-info:mz_build_info",
-		"//src/http-util:mz_http_util",
-		"//src/npm:mz_npm",
-		"//src/ore:mz_ore",
-		"//src/prof:mz_prof",
-	] + all_crate_deps(
+	deps = ["//src/npm:mz_npm"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),
