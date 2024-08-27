@@ -2173,6 +2173,9 @@ Trace {
             ),
         ],
     },
+    source_references: CollectionTrace {
+        values: [],
+    },
     system_object_mappings: CollectionTrace {
         values: [],
     },

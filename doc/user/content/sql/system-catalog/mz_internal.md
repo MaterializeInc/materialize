@@ -923,6 +923,8 @@ The `mz_source_statistics` view contains statistics about each source.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_with_history -->
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_references -->
+
 ### Counters
 `messages_received`, `messages_staged`, `updates_staged`, and `updates_committed` are all counters that monotonically increase. They are _only
 useful for calculating rates_, to understand the general performance of your source.

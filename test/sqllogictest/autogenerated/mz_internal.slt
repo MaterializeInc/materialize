@@ -653,6 +653,7 @@ mz_sink_statistics
 mz_sink_statistics_raw
 mz_sink_status_history
 mz_sink_statuses
+mz_source_references
 mz_source_statistics
 mz_source_statistics_raw
 mz_source_statistics_with_history

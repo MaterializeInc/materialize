@@ -66,6 +66,7 @@ pub enum CollectionType {
     Role,
     Schema,
     Setting,
+    SourceReferences,
     SystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
@@ -222,6 +223,14 @@ collection_impl!({
     update: StateUpdateKind::Setting,
 });
 collection_impl!({
+    name: SourceReferencesCollection,
+    key: proto::SourceReferencesKey,
+    value: proto::SourceReferencesValue,
+    collection_type: CollectionType::SourceReferences,
+    trace_field: source_references,
+    update: StateUpdateKind::SourceReferences,
+});
+collection_impl!({
     name: SystemConfigurationCollection,
     key: proto::ServerConfigurationKey,
     value: proto::ServerConfigurationValue,
@@ -302,6 +311,7 @@ pub struct Trace {
     pub roles: CollectionTrace<RoleCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
     pub settings: CollectionTrace<SettingCollection>,
+    pub source_references: CollectionTrace<SourceReferencesCollection>,
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
@@ -326,6 +336,7 @@ impl Trace {
             roles: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
             settings: CollectionTrace::new(),
+            source_references: CollectionTrace::new(),
             system_object_mappings: CollectionTrace::new(),
             system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),

@@ -1380,6 +1380,7 @@ Snapshot {
             value: "0.0.0",
         },
     },
+    source_references: {},
     system_object_mappings: {},
     system_configurations: {},
     default_privileges: {

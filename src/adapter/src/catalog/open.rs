@@ -374,6 +374,7 @@ impl Catalog {
                 BootstrapStateUpdateKind::Comment(_)
                 | BootstrapStateUpdateKind::AuditLog(_)
                 | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
+                | BootstrapStateUpdateKind::SourceReferences(_)
                 | BootstrapStateUpdateKind::UnfinalizedShard(_) => {
                     post_item_updates.push(StateUpdate {
                         kind: kind.into(),

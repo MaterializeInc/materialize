@@ -646,6 +646,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::Setting(key, value) => {
                         apply(&mut snapshot.settings, key, value, diff);
                     }
+                    StateUpdateKind::SourceReferences(key, value) => {
+                        apply(&mut snapshot.source_references, key, value, diff);
+                    }
                     StateUpdateKind::SystemConfiguration(key, value) => {
                         apply(&mut snapshot.system_configurations, key, value, diff);
                     }
@@ -1650,6 +1653,9 @@ impl Trace {
                 StateUpdateKind::Role(k, v) => trace.roles.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Schema(k, v) => trace.schemas.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Setting(k, v) => trace.settings.values.push(((k, v), ts, diff)),
+                StateUpdateKind::SourceReferences(k, v) => {
+                    trace.source_references.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::SystemConfiguration(k, v) => {
                     trace.system_configurations.values.push(((k, v), ts, diff))
                 }

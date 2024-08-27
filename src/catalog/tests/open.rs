@@ -59,6 +59,7 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             id_allocator,
             configs,
             settings,
+            source_references,
             system_object_mappings,
             system_configurations,
             default_privileges,
@@ -81,6 +82,7 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             .field("id_allocator", id_allocator)
             .field("configs", &configs)
             .field("settings", settings)
+            .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
             .field("default_privileges", default_privileges)

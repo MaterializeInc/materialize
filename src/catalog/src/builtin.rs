@@ -3314,6 +3314,30 @@ pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_source_references",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SOURCE_REFERENCES_OID,
+    desc: RelationDesc::empty()
+        .with_column("source_id", ScalarType::String.nullable(false))
+        .with_column("namespace", ScalarType::String.nullable(true))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(
+            "updated_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "columns",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(true),
+        ),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_webhook_sources",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7928,6 +7952,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::Table(&MZ_TABLES),
         Builtin::Table(&MZ_SOURCES),
+        Builtin::Table(&MZ_SOURCE_REFERENCES),
         Builtin::Table(&MZ_POSTGRES_SOURCES),
         Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
         Builtin::Table(&MZ_MYSQL_SOURCE_TABLES),

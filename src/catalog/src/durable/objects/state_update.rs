@@ -222,6 +222,7 @@ pub enum StateUpdateKind {
     Role(proto::RoleKey, proto::RoleValue),
     Schema(proto::SchemaKey, proto::SchemaValue),
     Setting(proto::SettingKey, proto::SettingValue),
+    SourceReferences(proto::SourceReferencesKey, proto::SourceReferencesValue),
     SystemConfiguration(
         proto::ServerConfigurationKey,
         proto::ServerConfigurationValue,
@@ -255,6 +256,7 @@ impl StateUpdateKind {
             StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
             StateUpdateKind::Schema(_, _) => Some(CollectionType::Schema),
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
+            StateUpdateKind::SourceReferences(_, _) => Some(CollectionType::SourceReferences),
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
@@ -375,6 +377,12 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             StateUpdateKind::Schema(key, value) => {
                 let schema = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Schema(schema))
+            }
+            StateUpdateKind::SourceReferences(key, value) => {
+                let source_references = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::SourceReferences(
+                    source_references,
+                ))
             }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 let storage_collection_metadata = into_durable(key, value)?;
@@ -546,6 +554,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         key: Some(key),
                         value: Some(value),
                     })
+                }
+                StateUpdateKind::SourceReferences(key, value) => {
+                    proto::state_update_kind::Kind::SourceReferences(
+                        proto::state_update_kind::SourceReferences {
+                            key: Some(key),
+                            value: Some(value),
+                        },
+                    )
                 }
                 StateUpdateKind::SystemConfiguration(key, value) => {
                     proto::state_update_kind::Kind::ServerConfiguration(
@@ -815,6 +831,18 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     (),
                     value.ok_or_else(|| {
                         TryFromProtoError::missing_field("state_update_kind::TxnWalShard::value")
+                    })?,
+                ),
+                proto::state_update_kind::Kind::SourceReferences(
+                    proto::state_update_kind::SourceReferences { key, value },
+                ) => StateUpdateKind::SourceReferences(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::SourceReferences::key")
+                    })?,
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::SourceReferences::value",
+                        )
                     })?,
                 ),
             },

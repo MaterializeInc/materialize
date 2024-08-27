@@ -25,11 +25,12 @@ use mz_catalog::builtin::{
     MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCES,
     MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES,
-    MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SOURCE_REFERENCES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
+use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogItem, ClusterReplicaProcessStatus, ClusterVariant, Connection, DataSourceDesc, Func,
@@ -1992,5 +1993,47 @@ impl CatalogState {
             ]),
             diff,
         }
+    }
+
+    pub fn pack_source_references_update(
+        &self,
+        source_references: &SourceReferences,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let source_id = source_references.source_id.to_string();
+        let updated_at = &source_references.updated_at;
+        source_references
+            .references
+            .iter()
+            .map(|reference| {
+                let mut row = Row::default();
+                let mut packer = row.packer();
+                packer.extend([
+                    Datum::String(&source_id),
+                    reference
+                        .namespace
+                        .as_ref()
+                        .map(|s| Datum::String(s))
+                        .unwrap_or(Datum::Null),
+                    Datum::String(&reference.name),
+                    Datum::TimestampTz(
+                        mz_ore::now::to_datetime(*updated_at)
+                            .try_into()
+                            .expect("must fit"),
+                    ),
+                ]);
+                if reference.columns.len() > 0 {
+                    packer.push_list(reference.columns.iter().map(|col| Datum::String(col)));
+                } else {
+                    packer.push(Datum::Null);
+                }
+
+                BuiltinTableUpdate {
+                    id: &*MZ_SOURCE_REFERENCES,
+                    row,
+                    diff,
+                }
+            })
+            .collect()
     }
 }

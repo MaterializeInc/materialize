@@ -57,6 +57,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             roles,
             schemas,
             settings,
+            source_references,
             system_object_mappings,
             system_configurations,
             system_privileges,
@@ -86,6 +87,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             .field("roles", roles)
             .field("schemas", schemas)
             .field("settings", settings)
+            .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
             .field("system_privileges", system_privileges)

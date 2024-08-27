@@ -30,7 +30,7 @@ use mz_catalog::durable::debug::{
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
     IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
-    StorageCollectionMetadataCollection, SystemConfigurationCollection,
+    SourceReferencesCollection, StorageCollectionMetadataCollection, SystemConfigurationCollection,
     SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
     UnfinalizedShardsCollection,
 };
@@ -258,6 +258,7 @@ macro_rules! for_collection {
             CollectionType::Role => $fn::<RoleCollection>($($arg),*).await?,
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
+            CollectionType::SourceReferences => $fn::<SourceReferencesCollection>($($arg),*).await?,
             CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
             CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
@@ -393,6 +394,7 @@ async fn dump(
         roles,
         schemas,
         settings,
+        source_references,
         system_object_mappings,
         system_configurations,
         system_privileges,
@@ -438,6 +440,13 @@ async fn dump(
     dump_col(&mut data, roles, &ignore, stats_only, consolidate);
     dump_col(&mut data, schemas, &ignore, stats_only, consolidate);
     dump_col(&mut data, settings, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        source_references,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
     dump_col(
         &mut data,
         system_configurations,
