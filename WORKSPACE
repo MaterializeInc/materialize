@@ -386,15 +386,7 @@ crates_repository(
         "protobuf-native": [crate.annotation(
             gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.protobuf-native.bazel",
-            deps = [
-                ":compiler-sys",
-                ":compiler-bridge",
-                ":io-sys",
-                ":io-bridge",
-                ":lib-sys",
-                ":lib-bridge",
-                ":internal-bridge",
-            ],
+            deps = [":protobuf-native-bridge"],
         )],
         "launchdarkly-server-sdk": [crate.annotation(
             build_script_env = {

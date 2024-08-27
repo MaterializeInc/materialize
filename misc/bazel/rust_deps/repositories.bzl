@@ -42,14 +42,6 @@ def rust_repositories():
         cargo_lockfile = "@cxxbridge-cmd//:Cargo.lock",
         lockfile = "//misc/bazel/rust_deps:cxxbridge-cmd/Cargo.cxxbridge-cmd.lock",
         manifests = ["@cxxbridge-cmd//:Cargo.toml"],
-        packages = {
-            # Any invocations of `cxx` depend on C-headers that this crate
-            # exports. It might not be included in the normal dependency tree,
-            # so we explicitly include it here.
-            "cxx": crate.spec(
-                version = CXX_VERSION,
-            ),
-        },
         isolated = False,
         # Only used if developing rules_rust.
         # generator = "@cargo_bazel_bootstrap//:cargo-bazel",

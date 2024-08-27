@@ -24,14 +24,14 @@ Ripped from the `cxx` repository.
 Please see the end of the file for the license.
 """
 
-def rust_cxx_bridge(name, src, deps = [], hdrs = []):
+def rust_cxx_bridge(name, src, deps = [], headers_prefix = ""):
     """A macro defining a cxx bridge library
 
     Args:
         name (string): The name of the new target
         src (string): The rust source file to generate a bridge for
         deps (list, optional): A list of dependencies for the underlying cc_library. Defaults to [].
-        hdrs (list, optional): A list of additional headers to the underlying cc_library. Defaults to [].
+        headers_prefix (string, optional): An `include_prefix` for the generated headers.
     """
     native.alias(
         name = "%s/header" % name,
@@ -63,15 +63,13 @@ def rust_cxx_bridge(name, src, deps = [], hdrs = []):
     cc_library(
         name = name,
         srcs = [src + ".cc"],
-        hdrs = hdrs,
-        linkstatic = True,
         deps = deps + [":%s/include" % name],
     )
 
     cc_library(
         name = "%s/include" % name,
-        hdrs = hdrs + [src + ".h"],
-        deps = deps,
+        hdrs = [src + ".h"],
+        include_prefix = headers_prefix,
     )
 
 """
