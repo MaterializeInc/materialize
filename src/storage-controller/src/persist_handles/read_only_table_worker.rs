@@ -22,6 +22,7 @@ use mz_storage_client::client::Update;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tracing::Span;
 
 use crate::persist_handles::{append_work, PersistTableWriteCmd};
@@ -262,12 +263,20 @@ async fn advance_uppers<T>(
         let expected_upper = write_handle.fetch_recent_upper().await.to_owned();
 
         // Avoid advancing the upper until the coordinator has a chance to back-fill the shard.
-        if expected_upper.elements() != &[T::minimum()] {
-            all_updates.insert(
-                *id,
-                (Span::none(), Vec::new(), expected_upper, upper.clone()),
-            );
+        if expected_upper.elements() == &[T::minimum()] {
+            continue;
         }
+
+        if PartialOrder::less_equal(&upper, &expected_upper) {
+            // Nothing to do, and append_work doesn't like being called with a
+            // new upper that is less_equal the current upper.
+            continue;
+        }
+
+        all_updates.insert(
+            *id,
+            (Span::none(), Vec::new(), expected_upper, upper.clone()),
+        );
     }
 
     let result = append_work(write_handles, all_updates).await;
