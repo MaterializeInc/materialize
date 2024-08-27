@@ -809,7 +809,7 @@ impl Coordinator {
     ///   containing timeline has advanced to that point in the future.
     ///   2. Confirming that we are still the current leader before sending results to the client.
     async fn message_linearize_reads(&mut self) {
-        let mut shortest_wait = Duration::from_millis(0);
+        let mut shortest_wait = Duration::MAX;
         let mut ready_txns = Vec::new();
 
         // Cache for `TimestampOracle::read_ts` calls. These are somewhat
