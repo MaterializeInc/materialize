@@ -25,7 +25,6 @@ use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use itertools::Itertools;
-use mz_dyncfg::Config;
 use mz_ore::task::JoinHandle;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::BlobTraceUpdates;
@@ -403,7 +402,6 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D> = CodecSort<T, D>> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D, Sort>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
-    split_old_runs: bool,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
@@ -411,12 +409,6 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D> = CodecSort<T, D>> {
     // to store the streaming iterator's work-in-progress state between runs.
     drop_stash: Option<Sort::Updates>,
 }
-
-pub(crate) const SPLIT_OLD_RUNS: Config<bool> = Config::new(
-    "persist_split_old_runs",
-    true,
-    "If set, split up runs that were written by older versions of Materialize and may not truly be consolidated."
-);
 
 impl<T, D, Sort> Consolidator<T, D, Sort>
 where
@@ -437,7 +429,6 @@ where
         read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
         prefetch_budget_bytes: usize,
-        split_old_runs: bool,
     ) -> Self {
         Self {
             context,
@@ -450,7 +441,6 @@ where
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
-            split_old_runs,
             drop_stash: None,
         }
     }
@@ -524,7 +514,7 @@ where
             self.metrics.consolidation.wrong_sort.inc();
         }
 
-        if run.len() > 1 && wrong_sort && self.split_old_runs {
+        if run.len() > 1 && wrong_sort {
             for part in run {
                 self.runs.push(VecDeque::from([part]));
             }
@@ -1106,7 +1096,6 @@ mod tests {
                         .collect::<Vec<_>>(),
                     filter,
                     budget: 0,
-                    split_old_runs: true,
                     drop_stash: None,
                 };
 
@@ -1173,7 +1162,6 @@ mod tests {
                     since: desc.since().clone(),
                 },
                 budget,
-                false,
             );
 
             for run in runs {

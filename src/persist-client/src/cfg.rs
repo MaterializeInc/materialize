@@ -354,7 +354,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
         .add(&crate::internal::state::WRITE_DIFFS_SUM)
         .add(&crate::internal::apply::ROUNDTRIP_SPINE)
-        .add(&crate::iter::SPLIT_OLD_RUNS)
         .add(&crate::operators::PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
