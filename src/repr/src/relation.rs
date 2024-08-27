@@ -1110,6 +1110,14 @@ impl VersionedRelationDesc {
                 }
             }
 
+            for keys in &desc.typ.keys {
+                for key in keys {
+                    if *key >= desc.typ.column_types.len() {
+                        anyhow::bail!("key index was out of bounds!");
+                    }
+                }
+            }
+
             let versions = desc
                 .metadata
                 .values()
