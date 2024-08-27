@@ -137,7 +137,7 @@ impl From<TryFromProtoError> for DurableCatalogError {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, thiserror::Error)]
 pub enum FenceError {
     /// This instance was fenced by another instance with a higher deployment generation. This
-    /// necessary means that the other instance also had a higher epoch. The instance that fenced
+    /// necessarily means that the other instance also had a higher epoch. The instance that fenced
     /// us believes that they are from a later generation than us.
     #[error("current catalog deployment generation {current_generation} fenced by new catalog epoch {fence_generation}")]
     DeployGeneration {
