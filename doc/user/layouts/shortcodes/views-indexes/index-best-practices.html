@@ -1,0 +1,16 @@
+Before creating an index, consider the following:
+
+- If you create stacked views (i.e., views that depend on other views) to
+  reduce SQL complexity, we recommend that you create an index **only** on the
+  view that will serve results, taking into account the expected data access
+  patterns.
+
+- Materialize can reuse indexes across queries that concurrently access the same
+  data in memory, which reduces redundancy and resource utilization per query.
+  In particular, this means that joins do **not** need to store data in memory
+  multiple times.
+
+- For queries that have no supporting indexes, Materialize uses the same
+  mechanics used by indexes to optimize computations. However, since this
+  underlying work is discarded after each query run, take into account the
+  expected data access patterns to determine if you need to index or not.

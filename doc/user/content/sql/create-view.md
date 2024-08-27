@@ -16,6 +16,10 @@ The results of a view can be incrementally maintained **in memory** within a
 This allows you to serve queries without the overhead of
 materializing the view.
 
+### Usage patterns
+
+{{% views-indexes/table-usage-pattern %}}
+
 ## Syntax
 
 {{< diagram "create-view.svg" >}}
