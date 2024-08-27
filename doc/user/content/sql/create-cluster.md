@@ -96,16 +96,21 @@ cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
 query the [`mz_cluster_replica_sizes`] table.
 
-
-Clusters of larger sizes can process data faster and handle larger data volumes.
-You can use [`ALTER CLUSTER`] to resize the cluster in order to respond to
-changes in the resource requirements of your workload.
-
-
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
+
+Clusters of larger sizes can process data faster and handle larger data volumes.
+
+#### Cluster resizing
+
+You can change the size of a cluster to respond to changes in your workload
+using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
+the cluster is hosting, this operation **might incur downtime**.
+
+See the reference documentation for [`ALTER CLUSTER`](/sql/alter-cluster#graceful-cluster-resizing)
+for more details on cluster resizing.
 
 #### Legacy sizes
 
@@ -332,9 +337,11 @@ Clusters have several known limitations:
 * Clusters containing sources and sinks can only have a replication factor of
   `0` or `1`.
 
+* Clusters containing sources and sinks cannot be resized without downtime.
+
 * When a cluster of size `3200cc` or larger uses multiple replicas, those
-  replicas are not guaranteed to be spread evenly across the underlying
-  cloud provider's availability zones.
+  replicas are not guaranteed to be spread evenly across the underlying cloud
+  provider's availability zones.
 
 We plan to remove these restrictions in future versions of Materialize.
 
