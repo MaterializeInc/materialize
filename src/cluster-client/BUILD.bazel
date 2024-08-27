@@ -86,11 +86,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_cluster_client_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-tools:mz_build_tools",
-		"//src/ore:mz_ore",
-		"//src/proto:mz_proto",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

@@ -123,19 +123,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_expr_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-tools:mz_build_tools",
-		"//src/lowertest:mz_lowertest",
-		"//src/ore:mz_ore",
-		"//src/persist-types:mz_persist_types",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/pgtz:mz_pgtz",
-		"//src/proto:mz_proto",
-		"//src/regexp:mz_regexp",
-		"//src/repr:mz_repr",
-		"//src/sql-parser:mz_sql_parser",
-		"//src/sql-pretty:mz_sql_pretty",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

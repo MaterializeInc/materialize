@@ -107,17 +107,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_service_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/aws-secrets-controller:mz_aws_secrets_controller",
-		"//src/build-info:mz_build_info",
-		"//src/build-tools:mz_build_tools",
-		"//src/orchestrator-kubernetes:mz_orchestrator_kubernetes",
-		"//src/orchestrator-process:mz_orchestrator_process",
-		"//src/ore:mz_ore",
-		"//src/proto:mz_proto",
-		"//src/repr:mz_repr",
-		"//src/secrets:mz_secrets",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

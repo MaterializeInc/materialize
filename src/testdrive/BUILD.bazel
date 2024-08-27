@@ -132,27 +132,7 @@ rust_doc_test(
 cargo_build_script(
 	name = "mz_testdrive_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/adapter:mz_adapter",
-		"//src/avro:mz_avro",
-		"//src/aws-util:mz_aws_util",
-		"//src/build-info:mz_build_info",
-		"//src/build-tools:mz_build_tools",
-		"//src/catalog:mz_catalog",
-		"//src/ccsr:mz_ccsr",
-		"//src/expr:mz_expr",
-		"//src/interchange:mz_interchange",
-		"//src/kafka-util:mz_kafka_util",
-		"//src/ore:mz_ore",
-		"//src/persist-client:mz_persist_client",
-		"//src/persist-types:mz_persist_types",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/repr:mz_repr",
-		"//src/sql-parser:mz_sql_parser",
-		"//src/sql:mz_sql",
-		"//src/storage-types:mz_storage_types",
-		"//src/tls-util:mz_tls_util",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

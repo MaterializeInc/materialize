@@ -94,9 +94,7 @@ cargo_build_script(
 	srcs = ["build.rs"],
 	deps = [
 		"//src/build-tools:mz_build_tools",
-		"//src/lowertest:mz_lowertest",
 		"//src/ore:mz_ore",
-		"//src/proto:mz_proto",
 	] + all_crate_deps(
 		normal = True,
 		build = True,

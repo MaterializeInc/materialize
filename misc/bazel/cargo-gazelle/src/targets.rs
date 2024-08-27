@@ -1045,11 +1045,15 @@ impl<'a> WorkspaceDependencies<'a> {
                     .links(DependencyDirection::Reverse)
                     // Filter down to only direct dependencies.
                     .filter(|link| link.from().id() == self.package.id())
-                    // Tests and build scipts can rely on normal dependencies, so always make sure they're
-                    // included.
-                    .filter(move |link| {
-                        link.req_for_kind(kind).is_present()
-                            || link.req_for_kind(DependencyKind::Normal).is_present()
+                    .filter(move |link| match kind {
+                        DependencyKind::Build | DependencyKind::Normal => {
+                            link.req_for_kind(kind).is_present()
+                        }
+                        // Tests can rely on normal dependencies, so also check those.
+                        DependencyKind::Development => {
+                            link.req_for_kind(kind).is_present()
+                                || link.req_for_kind(DependencyKind::Normal).is_present()
+                        }
                     })
                     .map(|link| link.to())
                     // Ignore deps filtered out by the global config.

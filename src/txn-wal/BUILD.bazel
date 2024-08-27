@@ -98,14 +98,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_txn_wal_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/build-tools:mz_build_tools",
-		"//src/dyncfg:mz_dyncfg",
-		"//src/ore:mz_ore",
-		"//src/persist-client:mz_persist_client",
-		"//src/persist-types:mz_persist_types",
-		"//src/timely-util:mz_timely_util",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),

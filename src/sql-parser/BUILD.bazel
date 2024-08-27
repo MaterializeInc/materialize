@@ -90,7 +90,6 @@ cargo_build_script(
 	srcs = ["build.rs"],
 	deps = [
 		"//src/ore:mz_ore",
-		"//src/sql-lexer:mz_sql_lexer",
 		"//src/walkabout:mz_walkabout",
 	] + all_crate_deps(
 		normal = True,

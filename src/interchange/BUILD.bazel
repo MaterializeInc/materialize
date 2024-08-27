@@ -95,14 +95,7 @@ filegroup(
 cargo_build_script(
 	name = "mz_interchange_build_script",
 	srcs = ["build.rs"],
-	deps = [
-		"//src/avro:mz_avro",
-		"//src/build-tools:mz_build_tools",
-		"//src/ccsr:mz_ccsr",
-		"//src/ore:mz_ore",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/repr:mz_repr",
-	] + all_crate_deps(
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
 		normal = True,
 		build = True,
 	),
