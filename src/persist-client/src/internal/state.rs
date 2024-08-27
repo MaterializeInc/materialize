@@ -19,6 +19,7 @@ use arrow::array::Array;
 use arrow::datatypes::DataType;
 use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
@@ -36,7 +37,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use tracing::info;
 use uuid::Uuid;
 
@@ -313,6 +314,26 @@ impl<T: Ord> Ord for BatchPart<T> {
     }
 }
 
+/// What order are the parts in this run in?
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub(crate) enum RunOrder {
+    /// They're in no particular order.
+    Unordered,
+    /// They're ordered based on the codec-encoded K/V bytes.
+    Codec,
+    /// They're ordered by the natural ordering of the structured data.
+    Structured,
+}
+
+/// Metadata shared across a run.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+pub struct RunMeta {
+    /// If none, Persist should infer the order based on the proto metadata.
+    pub(crate) order: Option<RunOrder>,
+    /// All parts in a run should have the same schema.
+    pub(crate) schema: Option<SchemaId>,
+}
+
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HollowBatchPart<T> {
@@ -376,7 +397,10 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
-    pub(crate) runs: Vec<usize>,
+    pub(crate) run_splits: Vec<usize>,
+    /// Run-level metadata: the first entry has metadata for the first run, and so on.
+    /// If there's no corresponding entry for a particular run, it's assumed to be [RunMeta::default()].
+    pub(crate) run_meta: Vec<RunMeta>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
@@ -385,7 +409,8 @@ impl<T: Debug> Debug for HollowBatch<T> {
             desc,
             parts,
             len,
-            runs,
+            run_splits: runs,
+            run_meta,
         } = self;
         f.debug_struct("HollowBatch")
             .field(
@@ -399,6 +424,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             .field("parts", &parts)
             .field("len", &len)
             .field("runs", &runs)
+            .field("run_meta", &run_meta)
             .finish()
     }
 }
@@ -410,7 +436,8 @@ impl<T: Serialize> serde::Serialize for HollowBatch<T> {
             len,
             // Both parts and runs are covered by the self.runs call.
             parts: _,
-            runs: _,
+            run_splits: _,
+            run_meta: _,
         } = self;
         let mut s = s.serialize_struct("HollowBatch", 5)?;
         let () = s.serialize_field("lower", &desc.lower().elements())?;
@@ -436,13 +463,15 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
-            runs: self_runs,
+            run_splits: self_runs,
+            run_meta: self_run_meta,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
-            runs: other_runs,
+            run_splits: other_runs,
+            run_meta: other_run_meta,
         } = other;
         (
             self_desc.lower().elements(),
@@ -451,6 +480,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_parts,
             self_len,
             self_runs,
+            self_run_meta,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -459,6 +489,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_parts,
                 other_len,
                 other_runs,
+                other_run_meta,
             ))
     }
 }
@@ -474,18 +505,48 @@ impl<T> HollowBatch<T> {
         desc: Description<T>,
         parts: Vec<BatchPart<T>>,
         len: usize,
-        runs: Vec<usize>,
+        run_meta: Vec<RunMeta>,
+        run_splits: Vec<usize>,
     ) -> Self {
-        debug_assert!(runs.is_sorted(), "run indices should be sorted");
         debug_assert!(
-            runs.last().iter().all(|i| **i <= parts.len()),
-            "run indices should be a valid indices into parts"
+            run_splits.is_strictly_sorted(),
+            "run indices should be strictly increasing"
         );
+        debug_assert!(
+            run_splits.first().map_or(true, |i| *i > 0),
+            "run indices should be positive"
+        );
+        debug_assert!(
+            run_splits.last().map_or(true, |i| *i < parts.len()),
+            "run indices should be valid indices into parts"
+        );
+        debug_assert!(
+            parts.is_empty() || run_meta.len() == run_splits.len() + 1,
+            "all metadata should correspond to a run"
+        );
+
         Self {
             desc,
             len,
             parts,
-            runs,
+            run_splits,
+            run_meta,
+        }
+    }
+
+    /// Construct a batch of a single run with default metadata. Mostly interesting for tests.
+    pub(crate) fn new_run(desc: Description<T>, parts: Vec<BatchPart<T>>, len: usize) -> Self {
+        let run_meta = if parts.is_empty() {
+            vec![]
+        } else {
+            vec![RunMeta::default()]
+        };
+        Self {
+            desc,
+            len,
+            parts,
+            run_splits: vec![],
+            run_meta,
         }
     }
 
@@ -495,24 +556,27 @@ impl<T> HollowBatch<T> {
             desc,
             len: 0,
             parts: vec![],
-            runs: vec![],
+            run_splits: vec![],
+            run_meta: vec![],
         }
     }
 
-    pub(crate) fn runs(&self) -> impl Iterator<Item = &[BatchPart<T>]> {
+    pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[BatchPart<T>])> {
         let run_ends = self
-            .runs
+            .run_splits
             .iter()
             .copied()
             .chain(std::iter::once(self.parts.len()));
-        run_ends
+        let run_metas = self.run_meta.iter();
+        let run_parts = run_ends
             .scan(0, |start, end| {
                 let range = *start..end;
                 *start = end;
                 Some(range)
             })
             .filter(|range| !range.is_empty())
-            .map(|range| &self.parts[range])
+            .map(|range| &self.parts[range]);
+        run_metas.zip(run_parts)
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {
@@ -2106,12 +2170,17 @@ pub(crate) mod tests {
                     (Antichain::from_elem(t1), Antichain::from_elem(t0))
                 };
                 let since = Antichain::from_elem(since);
-                let runs = if runs { vec![parts.len()] } else { vec![] };
-                HollowBatch {
-                    desc: Description::new(lower, upper, since),
-                    parts,
-                    len: len % 10,
-                    runs,
+                if runs && parts.len() > 2 {
+                    let split_at = parts.len() / 2;
+                    HollowBatch::new(
+                        Description::new(lower, upper, since),
+                        parts,
+                        len % 10,
+                        vec![RunMeta::default(), RunMeta::default()],
+                        vec![split_at],
+                    )
+                } else {
+                    HollowBatch::new_run(Description::new(lower, upper, since), parts, len % 10)
                 }
             },
         )
@@ -2328,7 +2397,7 @@ pub(crate) mod tests {
         keys: &[&str],
         len: usize,
     ) -> HollowBatch<T> {
-        HollowBatch::new(
+        HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(lower),
                 Antichain::from_elem(upper),
@@ -2349,7 +2418,6 @@ pub(crate) mod tests {
                 })
                 .collect(),
             len,
-            vec![],
         )
     }
 

@@ -45,10 +45,10 @@ use crate::internal::state::{
     ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState,
     ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge,
     ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
-    ProtoRollup, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, State,
+    StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -1297,11 +1297,18 @@ impl RustType<ProtoHandleDebugState> for HandleDebugState {
 
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
+        let mut run_meta = self.run_meta.into_proto();
+        // For backwards compatibility reasons, don't keep default metadata in the proto.
+        let run_meta_default = RunMeta::default().into_proto();
+        while run_meta.last() == Some(&run_meta_default) {
+            run_meta.pop();
+        }
         ProtoHollowBatch {
             desc: Some(self.desc.into_proto()),
             parts: self.parts.into_proto(),
             len: self.len.into_proto(),
-            runs: self.runs.into_proto(),
+            runs: self.run_splits.into_proto(),
+            run_meta,
             deprecated_keys: vec![],
         }
     }
@@ -1322,11 +1329,49 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 schema_id: None,
             })
         }));
+        // We discard default metadatas from the proto above; re-add them here.
+        let run_splits: Vec<usize> = proto.runs.into_rust()?;
+        let num_runs = if parts.is_empty() {
+            0
+        } else {
+            run_splits.len() + 1
+        };
+        let mut run_meta: Vec<RunMeta> = proto.run_meta.into_rust()?;
+        run_meta.resize(num_runs, RunMeta::default());
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
             len: proto.len.into_rust()?,
-            runs: proto.runs.into_rust()?,
+            run_splits,
+            run_meta,
+        })
+    }
+}
+
+impl RustType<ProtoRunMeta> for RunMeta {
+    fn into_proto(&self) -> ProtoRunMeta {
+        let order = match self.order {
+            None => ProtoRunOrder::Unknown,
+            Some(RunOrder::Unordered) => ProtoRunOrder::Unordered,
+            Some(RunOrder::Codec) => ProtoRunOrder::Codec,
+            Some(RunOrder::Structured) => ProtoRunOrder::Structured,
+        };
+        ProtoRunMeta {
+            order: order.into(),
+            schema_id: self.schema.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRunMeta) -> Result<Self, TryFromProtoError> {
+        let order = match ProtoRunOrder::try_from(proto.order)? {
+            ProtoRunOrder::Unknown => None,
+            ProtoRunOrder::Unordered => Some(RunOrder::Unordered),
+            ProtoRunOrder::Codec => Some(RunOrder::Codec),
+            ProtoRunOrder::Structured => Some(RunOrder::Structured),
+        };
+        Ok(Self {
+            order,
+            schema: proto.schema_id.into_rust()?,
         })
     }
 }
@@ -1696,7 +1741,7 @@ mod tests {
 
     #[mz_ore::test]
     fn hollow_batch_migration_keys() {
-        let x = HollowBatch::new(
+        let x = HollowBatch::new_run(
             Description::new(
                 Antichain::from_elem(1u64),
                 Antichain::from_elem(2u64),
@@ -1713,7 +1758,6 @@ mod tests {
                 schema_id: None,
             })],
             4,
-            vec![],
         );
         let mut old = x.into_proto();
         // Old ProtoHollowBatch had keys instead of parts.

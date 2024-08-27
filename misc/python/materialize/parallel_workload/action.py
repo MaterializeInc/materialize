@@ -1017,6 +1017,7 @@ class FlipFlagsAction(Action):
             "100",
         ]
         self.flags_with_values["persist_batch_record_part_format"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_batch_record_run_meta"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_part_decode_format"] = [
             "row_with_validate",
             "arrow",

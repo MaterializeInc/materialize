@@ -53,7 +53,8 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
-    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, WRITE_DIFFS_SUM,
+    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, RunMeta, RunOrder,
+    WRITE_DIFFS_SUM,
 };
 use crate::schema::SchemaId;
 use crate::stats::{
@@ -348,6 +349,7 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
+    pub(crate) record_run_meta: bool,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -385,6 +387,12 @@ pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new
     "persist_encoding_compression_format",
     "none",
     "A feature flag to enable compression of Parquet data (Materialize).",
+);
+
+pub(crate) const RECORD_RUN_META: Config<bool> = Config::new(
+    "persist_batch_record_run_meta",
+    false,
+    "If set, record actual run-level metadata like schema and ordering instead of defaults (Materialize).",
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -441,6 +449,7 @@ impl BatchBuilderConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
+            record_run_meta: RECORD_RUN_META.get(value),
         }
     }
 
@@ -448,6 +457,17 @@ impl BatchBuilderConfig {
         // [0, 100)
         let rand = || usize::cast_from(Uuid::new_v4().hashed()) % 100;
         self.batch_columnar_format.is_structured() && self.batch_columnar_format_percent > rand()
+    }
+
+    fn run_meta(&self, order: RunOrder, schema: Option<SchemaId>) -> RunMeta {
+        if self.record_run_meta {
+            RunMeta {
+                order: Some(order),
+                schema,
+            }
+        } else {
+            RunMeta::default()
+        }
     }
 }
 
@@ -589,6 +609,7 @@ where
 
     max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, T)>,
     runs: Vec<usize>,
+    run_meta: Vec<RunMeta>,
     parts_written: usize,
 
     num_updates: usize,
@@ -643,6 +664,7 @@ where
             max_kvt_in_run: None,
             parts_written: 0,
             runs: Vec::new(),
+            run_meta: Vec::new(),
             num_updates: 0,
             parts,
             shard_id,
@@ -693,18 +715,30 @@ where
         let remainder = self.buffer.drain();
         self.flush_part(stats_schemas, remainder).await;
 
+        let run_meta = self.parts.cfg.run_meta(
+            if self.expect_consolidated {
+                RunOrder::Codec
+            } else {
+                RunOrder::Unordered
+            },
+            stats_schemas.id,
+        );
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
         let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, registered_upper, self.since);
+        if self.parts_written != 0 {
+            // Record the metadata for the final / implicit run.
+            self.run_meta.push(run_meta)
+        }
         let batch = Batch::new(
             batch_delete_enabled,
             Arc::clone(&self.metrics),
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, parts, self.num_updates, self.runs),
+            HollowBatch::new(desc, parts, self.num_updates, self.run_meta, self.runs),
         );
 
         Ok(batch)
@@ -787,6 +821,11 @@ where
                 if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
                     soft_panic_or_log!("expected data in sorted order");
                     self.runs.push(self.parts_written);
+                    self.run_meta.push(
+                        self.parts
+                            .cfg
+                            .run_meta(RunOrder::Unordered, stats_schemas.id),
+                    )
                 }
 
                 // given the above check, whether or not we extended an existing run or
@@ -804,6 +843,11 @@ where
             // NB: there is an implicit run starting at index 0
             if self.parts_written > 0 {
                 self.runs.push(self.parts_written);
+                self.run_meta.push(
+                    self.parts
+                        .cfg
+                        .run_meta(RunOrder::Unordered, stats_schemas.id),
+                )
             }
         }
 

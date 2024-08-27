@@ -57,11 +57,30 @@ message ProtoInlineBatchPart {
     mz_persist.gen.persist.ProtoColumnarRecords updates = 3;
 }
 
+enum ProtoRunOrder {
+    // The ordering of the data is not available; it can only be determined heuristically
+    // once the part is fetched by inspecting the batch description.
+    UNKNOWN = 0;
+    // No particular order.
+    UNORDERED = 1;
+    // Ordered by the codec-encoded bytes of the key, value, and timestamp.
+    CODEC = 2;
+    // Ordered by the structured encoding of the key, value, and timestamp.
+    STRUCTURED = 3;
+}
+
+// Data that should be common across all parts in a run.
+message ProtoRunMeta {
+    ProtoRunOrder order = 1;
+    optional uint64 schema_id = 2;
+}
+
 message ProtoHollowBatch {
     ProtoU64Description desc = 1;
     repeated ProtoHollowBatchPart parts = 4;
     uint64 len = 3;
     repeated uint64 runs = 5;
+    repeated ProtoRunMeta run_meta = 6;
 
     repeated string deprecated_keys = 2;
 }

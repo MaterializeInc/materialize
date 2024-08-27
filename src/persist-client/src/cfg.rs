@@ -331,6 +331,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES)
         .add(&crate::batch::ENCODING_ENABLE_DICTIONARY)
         .add(&crate::batch::ENCODING_COMPRESSION_FORMAT)
+        .add(&crate::batch::RECORD_RUN_META)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)

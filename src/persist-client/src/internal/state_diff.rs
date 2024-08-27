@@ -1343,7 +1343,7 @@ mod tests {
                                 .into_iter()
                                 .flat_map(|p| p.batch.parts.clone())
                                 .collect();
-                            let output = HollowBatch::new(req.desc, parts, len, vec![]);
+                            let output = HollowBatch::new_run(req.desc, parts, len);
                             leader
                                 .collections
                                 .trace
@@ -1384,7 +1384,7 @@ mod tests {
     #[mz_ore::test]
     fn regression_15493_sniff_insert() {
         fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
-            HollowBatch::new(
+            HollowBatch::new_run(
                 Description::new(
                     Antichain::from_elem(lower),
                     Antichain::from_elem(upper),
@@ -1392,7 +1392,6 @@ mod tests {
                 ),
                 Vec::new(),
                 len,
-                Vec::new(),
             )
         }
 
@@ -1493,7 +1492,7 @@ mod tests {
                     Antichain::from_elem(*upper),
                     Antichain::from_elem(*since),
                 );
-                HollowBatch::new(desc, Vec::new(), *len, Vec::new())
+                HollowBatch::new_run(desc, Vec::new(), *len)
             }
             let replacement = batch(&replacement);
             let batches = spine.iter().map(batch).collect::<Vec<_>>();
@@ -1532,7 +1531,7 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1560,7 +1559,7 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

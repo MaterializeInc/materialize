@@ -20,6 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::num::{NonNeg, NonNegError};
 use num::Signed;
 use proptest::prelude::Strategy;
+use prost::UnknownEnumValue;
 use uuid::Uuid;
 
 #[cfg(feature = "chrono")]
@@ -106,6 +107,12 @@ impl From<NonNegError> for TryFromProtoError {
 impl From<CharTryFromError> for TryFromProtoError {
     fn from(error: CharTryFromError) -> Self {
         TryFromProtoError::CharTryFromError(error)
+    }
+}
+
+impl From<UnknownEnumValue> for TryFromProtoError {
+    fn from(UnknownEnumValue(n): UnknownEnumValue) -> Self {
+        TryFromProtoError::UnknownEnumVariant(format!("value {n}"))
     }
 }
 
