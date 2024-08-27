@@ -145,7 +145,7 @@ pub(crate) const DANGEROUS_ENABLE_SCHEMA_EVOLUTION: Config<bool> = Config::new(
     "persist_dangerous_enable_schema_evolution",
     false,
     "\
-DANGEROUS DO NOT ENABLE IN PRODUCTION ENVIRONMENTS!
+DANGEROUS DO NOT ENABLE IN PRODUCTION OR STAGING ENVIRONMENTS!
 
 Enable evolving the schema of a Persist shard. Currently dangerous because \
 compaction does not yet handle batches of data with different schemas.",
