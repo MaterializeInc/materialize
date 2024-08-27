@@ -13,8 +13,8 @@ use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
-    test_bootstrap_args, test_persist_backed_catalog_state, CatalogError, DurableCatalogError,
-    Item, OpenableDurableCatalogState, USER_ITEM_ALLOC_KEY,
+    test_bootstrap_args, CatalogError, DurableCatalogError, FenceError, Item,
+    TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
@@ -25,42 +25,30 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
-use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_confirm_leadership() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let openable_state2 = test_persist_backed_catalog_state(persist_client, organization_id).await;
-    test_confirm_leadership(openable_state1, openable_state2).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_confirm_leadership(state_builder).await;
 }
 
-async fn test_confirm_leadership(
-    openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: Box<dyn OpenableDurableCatalogState>,
-) {
-    let deploy_generation = 0;
-    let mut state1 = openable_state1
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut state1 = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     assert_ok!(state1.confirm_leadership().await);
 
-    let mut state2 = openable_state2
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+    let mut state2 = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     assert_ok!(state2.confirm_leadership().await);
@@ -68,7 +56,7 @@ async fn test_confirm_leadership(
     let err = state1.confirm_leadership().await.unwrap_err();
     assert!(matches!(
         err,
-        CatalogError::Durable(DurableCatalogError::Fence(_))
+        CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
     ));
 
     // Test that state1 can't start a transaction.
@@ -78,7 +66,7 @@ async fn test_confirm_leadership(
     };
     assert!(matches!(
         err,
-        CatalogError::Durable(DurableCatalogError::Fence(_))
+        CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
     ));
     Box::new(state1).expire().await;
     Box::new(state2).expire().await;
@@ -88,22 +76,18 @@ async fn test_confirm_leadership(
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_allocate_id() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    test_allocate_id(openable_state).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_allocate_id(state_builder).await;
 }
 
-async fn test_allocate_id(openable_state: Box<dyn OpenableDurableCatalogState>) {
-    let deploy_generation = 0;
+async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+
     let id_type = USER_ITEM_ALLOC_KEY;
-    let mut state = openable_state
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
 
@@ -132,13 +116,12 @@ async fn test_allocate_id(openable_state: Box<dyn OpenableDurableCatalogState>) 
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_audit_logs() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    test_audit_logs(openable_state).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_audit_logs(state_builder).await;
 }
 
-async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
+async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
     let audit_logs = [
         VersionedEvent::V1(EventV1 {
             id: 100,
@@ -178,14 +161,10 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
         }),
     ];
 
-    let deploy_generation = 0;
-    let mut state = openable_state
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     // Drain initial updates.
@@ -212,13 +191,12 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_items() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    test_items(openable_state).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_items(state_builder).await;
 }
 
-async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
+async fn test_items(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
     let items = [
         Item {
             id: GlobalId::User(100),
@@ -240,14 +218,10 @@ async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
         },
     ];
 
-    let deploy_generation = 0;
-    let mut state = openable_state
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     // Drain initial updates.
@@ -292,21 +266,16 @@ async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_schemas() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    test_schemas(openable_state).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_schemas(state_builder).await;
 }
 
-async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
-    let deploy_generation = 0;
-    let mut state = openable_state
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+async fn test_schemas(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     // Drain initial updates.
@@ -360,40 +329,30 @@ async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_non_writer_commits() {
     let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let openable_state3 = test_persist_backed_catalog_state(persist_client, organization_id).await;
-    test_non_writer_commits(openable_state1, openable_state2, openable_state3).await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_non_writer_commits(state_builder).await;
 }
 
-async fn test_non_writer_commits(
-    openable_state1: Box<dyn OpenableDurableCatalogState>,
-    openable_state2: Box<dyn OpenableDurableCatalogState>,
-    openable_state3: Box<dyn OpenableDurableCatalogState>,
-) {
-    let deploy_generation = 0;
-    let mut writer_state = openable_state1
-        .open(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut writer_state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
-    let mut savepoint_state = openable_state2
-        .open_savepoint(
-            SYSTEM_TIME(),
-            &test_bootstrap_args(),
-            deploy_generation,
-            None,
-        )
+    let mut savepoint_state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
-    let mut reader_state = openable_state3
+    let mut reader_state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
         .open_read_only(&test_bootstrap_args())
         .await
         .unwrap();

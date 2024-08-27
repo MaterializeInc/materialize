@@ -9,10 +9,14 @@
 
 use std::fmt::Debug;
 
+use mz_persist_client::error::UpperMismatch;
 use mz_proto::TryFromProtoError;
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_storage_types::controller::StorageError;
+
+use crate::durable::persist::antichain_to_timestamp;
+use crate::durable::Epoch;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -28,12 +32,19 @@ impl From<TryFromProtoError> for CatalogError {
     }
 }
 
+impl From<FenceError> for CatalogError {
+    fn from(err: FenceError) -> Self {
+        let err: DurableCatalogError = err.into();
+        err.into()
+    }
+}
+
 /// An error that can occur while interacting with a durable catalog.
 #[derive(Debug, thiserror::Error)]
 pub enum DurableCatalogError {
     /// Catalog has been fenced by another writer.
-    #[error("{0}")]
-    Fence(String),
+    #[error(transparent)]
+    Fence(#[from] FenceError),
     /// The persisted catalog's version is too old for the current catalog to migrate.
     #[error(
         "incompatible Catalog version {found_version}, minimum: {min_catalog_version}, current: {catalog_version}"
@@ -117,5 +128,104 @@ impl From<StorageError<Timestamp>> for DurableCatalogError {
 impl From<TryFromProtoError> for DurableCatalogError {
     fn from(e: TryFromProtoError) -> Self {
         DurableCatalogError::Proto(e)
+    }
+}
+
+/// An error that indicates the durable catalog has been fenced.
+///
+/// The order of this enum indicates the most information to the least information.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, thiserror::Error)]
+pub enum FenceError {
+    /// This instance was fenced by another instance with a higher deployment generation. This
+    /// necessarily means that the other instance also had a higher epoch. The instance that fenced
+    /// us believes that they are from a later generation than us.
+    #[error("current catalog deployment generation {current_generation} fenced by new catalog epoch {fence_generation}")]
+    DeployGeneration {
+        current_generation: u64,
+        fence_generation: u64,
+    },
+    /// This instance was fenced by another instance with a higher epoch. The instance that fenced
+    /// us may or may not be from a later generation than us, we were unable to determine.
+    #[error("current catalog epoch {current_epoch} fenced by new catalog epoch {fence_epoch}")]
+    Epoch {
+        current_epoch: Epoch,
+        fence_epoch: Epoch,
+    },
+    // It's very likely that if we were to read the latest updates after this error, then we'd see
+    // a higher epoch/deploy generation from the other writer and get fenced through that. We could
+    // potentially always do that and eliminate this fence variant. However, the catalog debug tool
+    // is able to write to the catalog without incrementing the epoch and therefore would not be
+    // able to fence this instance. It's technically possible for this instance to survive and
+    // respond to a write from the catalog debug tool, but until more thought is put into it, the
+    // safest thing to do is crash and reboot.
+    /// This instance was fenced while trying to write to the catalog by some other writer.
+    #[error(
+        "current catalog upper {expected_upper:?} fenced by new catalog upper {actual_upper:?}"
+    )]
+    Upper {
+        expected_upper: Timestamp,
+        actual_upper: Timestamp,
+    },
+    /// This instance was fenced while writing to the migration shard during 0dt builtin table
+    /// migrations.
+    #[error(
+        "builtin table migration shard upper {expected_upper:?} fenced by new builtin table migration shard upper {actual_upper:?}"
+    )]
+    MigrationUpper {
+        expected_upper: Timestamp,
+        actual_upper: Timestamp,
+    },
+}
+
+impl FenceError {
+    pub fn deploy_generation(current_generation: u64, fence_generation: u64) -> Self {
+        Self::DeployGeneration {
+            current_generation,
+            fence_generation,
+        }
+    }
+
+    pub fn epoch(current_epoch: Epoch, fence_epoch: Epoch) -> Self {
+        Self::Epoch {
+            current_epoch,
+            fence_epoch,
+        }
+    }
+
+    pub fn migration(err: UpperMismatch<Timestamp>) -> Self {
+        Self::MigrationUpper {
+            expected_upper: antichain_to_timestamp(err.expected),
+            actual_upper: antichain_to_timestamp(err.current),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::durable::{Epoch, FenceError};
+
+    #[mz_ore::test]
+    fn test_fence_err_ord() {
+        let deploy_generation = FenceError::DeployGeneration {
+            current_generation: 90,
+            fence_generation: 91,
+        };
+        let epoch = FenceError::Epoch {
+            current_epoch: Epoch::new(80).expect("non zero"),
+            fence_epoch: Epoch::new(81).expect("non zero"),
+        };
+        assert!(deploy_generation < epoch);
+
+        let upper = FenceError::Upper {
+            expected_upper: 70.into(),
+            actual_upper: 71.into(),
+        };
+        assert!(epoch < upper);
+
+        let migration = FenceError::MigrationUpper {
+            expected_upper: 60.into(),
+            actual_upper: 61.into(),
+        };
+        assert!(upper < migration);
     }
 }

@@ -77,7 +77,6 @@ pub async fn preflight_legacy(
                     default_cluster_replica_size: bootstrap_default_cluster_replica_size,
                     bootstrap_role,
                 },
-                deploy_generation,
                 None,
             )
             .await
@@ -95,6 +94,7 @@ pub async fn preflight_legacy(
                     persist_client,
                     environment_id.organization_id(),
                     BUILD_INFO.semver_version(),
+                    Some(deploy_generation),
                     Arc::clone(&catalog_metrics),
                 )
                 .await?);
@@ -113,6 +113,7 @@ pub async fn preflight_legacy(
             persist_client,
             environment_id.organization_id(),
             BUILD_INFO.semver_version(),
+            Some(deploy_generation),
             Arc::clone(&catalog_metrics),
         )
         .await?)
@@ -194,6 +195,7 @@ pub async fn preflight_0dt(
                     persist_client.clone(),
                     environment_id.organization_id(),
                     BUILD_INFO.semver_version(),
+                    Some(deploy_generation),
                     Arc::clone(&catalog_metrics),
                 )
                 .await
@@ -207,7 +209,6 @@ pub async fn preflight_0dt(
                                 .clone(),
                             bootstrap_role: bootstrap_role.clone(),
                         },
-                        deploy_generation,
                         None,
                     )
                     .await;

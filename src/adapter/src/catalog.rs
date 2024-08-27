@@ -28,7 +28,7 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
-use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
+use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, TestCatalogStateBuilder};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{CatalogEntry, Cluster, ClusterReplica, Database, Role, Schema};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -474,19 +474,15 @@ impl Catalog {
         organization_id: Uuid,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
-        let deploy_generation = 0;
         let epoch_lower_bound = None;
         let environment_id = None;
-        let openable_storage =
-            mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
-                .await;
+        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await?;
         let storage = openable_storage
-            .open(
-                now(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                epoch_lower_bound,
-            )
+            .open(now(), &test_bootstrap_args(), epoch_lower_bound)
             .await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
@@ -503,9 +499,10 @@ impl Catalog {
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
         let environment_id = None;
-        let openable_storage =
-            mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
-                .await;
+        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+            .with_organization_id(organization_id)
+            .build()
+            .await?;
         let storage = openable_storage
             .open_read_only(&test_bootstrap_args())
             .await?;
@@ -525,12 +522,11 @@ impl Catalog {
         system_parameter_defaults: BTreeMap<String, String>,
         version: semver::Version,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = mz_catalog::durable::test_persist_backed_catalog_state_with_version(
-            persist_client,
-            environment_id.organization_id(),
-            version,
-        )
-        .await?;
+        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+            .with_organization_id(environment_id.organization_id())
+            .with_version(version)
+            .build()
+            .await?;
         let storage = openable_storage
             .open_read_only(&test_bootstrap_args())
             .await?;
@@ -2004,7 +2000,7 @@ mod tests {
         Builtin, BuiltinType, UnsafeBuiltinTableFingerprintWhitespace, BUILTINS,
         UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
     };
-    use mz_catalog::durable::{CatalogError, DurableCatalogError};
+    use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError};
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
@@ -3370,7 +3366,7 @@ mod tests {
             .expect_err("sync_to_current_updates for fencer");
         assert!(matches!(
             write_fence_err,
-            CatalogError::Durable(DurableCatalogError::Fence(_))
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
         ));
         let read_fence_err = read_only_catalog
             .sync_to_current_updates()
@@ -3378,7 +3374,7 @@ mod tests {
             .expect_err("sync_to_current_updates after fencer");
         assert!(matches!(
             read_fence_err,
-            CatalogError::Durable(DurableCatalogError::Fence(_))
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
         ));
 
         writer_catalog.expire().await;

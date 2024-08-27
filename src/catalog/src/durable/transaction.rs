@@ -2646,9 +2646,8 @@ mod tests {
 
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::PersistClient;
-    use uuid::Uuid;
 
-    use crate::durable::{test_bootstrap_args, test_persist_backed_catalog_state};
+    use crate::durable::{test_bootstrap_args, TestCatalogStateBuilder};
     use crate::memory;
 
     #[mz_ore::test]
@@ -2939,31 +2938,22 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_savepoint() {
-        let deploy_generation = 0;
         let persist_client = PersistClient::new_for_tests().await;
-        let organization_id = Uuid::new_v4();
-        let openable_state1 =
-            test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-        let openable_state2 =
-            test_persist_backed_catalog_state(persist_client, organization_id).await;
+        let state_builder =
+            TestCatalogStateBuilder::new(persist_client).with_default_deploy_generation();
 
         // Initialize catalog.
-        let _ = openable_state1
-            .open(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+        let _ = state_builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap();
-        let mut savepoint_state = openable_state2
-            .open_savepoint(
-                SYSTEM_TIME(),
-                &test_bootstrap_args(),
-                deploy_generation,
-                None,
-            )
+        let mut savepoint_state = state_builder
+            .unwrap_build()
+            .await
+            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap();
 

@@ -45,6 +45,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
+use crate::durable::error::FenceError;
 use crate::durable::initialize::{
     DEPLOY_GENERATION, ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
@@ -125,61 +126,68 @@ pub(crate) enum Mode {
     Writable,
 }
 
-/// Enum representing a potentially fenced epoch.
+/// Enum representing a potentially fenced token.
 #[derive(Debug)]
-pub(crate) enum FenceableEpoch {
-    /// The current epoch, if one exists, has not been fenced.
-    Unfenced(Option<Epoch>),
-    /// The current epoch has been fenced.
-    Fenced {
-        current_epoch: Epoch,
-        fence_epoch: Epoch,
+pub(crate) enum FenceableToken<T: Ord + Copy + Clone + Debug> {
+    /// The current token, if one exists, has not been fenced.
+    Unfenced {
+        current_token: Option<T>,
+        err_fn: fn(T, T) -> FenceError,
     },
+    /// The current token has been fenced.
+    Fenced { current_token: T, err: FenceError },
 }
 
-impl FenceableEpoch {
-    /// Returns the current epoch if it is not fenced, otherwise returns an error.
-    fn validate(&self) -> Result<Option<Epoch>, DurableCatalogError> {
-        match self {
-            FenceableEpoch::Unfenced(epoch) => Ok(epoch.clone()),
-            FenceableEpoch::Fenced {
-                current_epoch,
-                fence_epoch,
-            } => Err(DurableCatalogError::Fence(format!(
-                "current catalog epoch {current_epoch} fenced by new catalog epoch {fence_epoch}",
-            ))),
+impl<T: Ord + Copy + Clone + Debug> FenceableToken<T> {
+    /// Returns a new unfenced token.
+    fn new(token: Option<T>, err_fn: fn(T, T) -> FenceError) -> Self {
+        Self::Unfenced {
+            current_token: token,
+            err_fn,
         }
     }
 
-    /// Returns the current epoch.
-    fn epoch(&self) -> Option<Epoch> {
+    /// Returns the current token if it is not fenced, otherwise returns an error.
+    fn validate(&self) -> Result<Option<T>, FenceError> {
         match self {
-            FenceableEpoch::Unfenced(epoch) => epoch.clone(),
-            FenceableEpoch::Fenced {
-                current_epoch,
-                fence_epoch: _,
-            } => Some(current_epoch.clone()),
+            FenceableToken::Unfenced { current_token, .. } => Ok(current_token.clone()),
+            FenceableToken::Fenced { err, .. } => Err(err.clone()),
         }
     }
 
-    /// Returns `Err` if `epoch` fences out `self`, `Ok` otherwise.
-    fn maybe_fence(&mut self, epoch: Epoch) -> Result<(), DurableCatalogError> {
+    /// Returns the current token.
+    fn token(&self) -> Option<T> {
         match self {
-            FenceableEpoch::Unfenced(Some(current_epoch)) => {
-                if epoch > *current_epoch {
-                    *self = FenceableEpoch::Fenced {
-                        current_epoch: *current_epoch,
-                        fence_epoch: epoch,
+            FenceableToken::Unfenced { current_token, .. } => current_token.clone(),
+            FenceableToken::Fenced { current_token, .. } => Some(current_token.clone()),
+        }
+    }
+
+    /// Returns `Err` if `token` fences out `self`, `Ok` otherwise.
+    fn maybe_fence(&mut self, token: T) -> Result<(), FenceError> {
+        match self {
+            FenceableToken::Unfenced {
+                current_token: Some(current_token),
+                err_fn,
+            } => {
+                if token > *current_token {
+                    *self = FenceableToken::Fenced {
+                        current_token: *current_token,
+                        err: err_fn(*current_token, token),
                     };
                     self.validate()?;
-                } else if epoch < *current_epoch {
-                    panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
                 }
             }
-            FenceableEpoch::Unfenced(None) => {
-                *self = FenceableEpoch::Unfenced(Some(epoch));
+            FenceableToken::Unfenced {
+                current_token: None,
+                err_fn,
+            } => {
+                *self = FenceableToken::Unfenced {
+                    current_token: Some(token),
+                    err_fn: *err_fn,
+                };
             }
-            FenceableEpoch::Fenced { .. } => {
+            FenceableToken::Fenced { .. } => {
                 self.validate()?;
             }
         }
@@ -195,10 +203,10 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
     fn apply_update(
         &mut self,
         update: StateUpdate<T>,
-        current_epoch: &mut FenceableEpoch,
-        current_catalog_content_version: &semver::Version,
+        current_epoch: &mut FenceableToken<Epoch>,
+        current_deploy_generation: &mut FenceableToken<u64>,
         metrics: &Arc<Metrics>,
-    ) -> Result<Option<StateUpdate<T>>, DurableCatalogError>;
+    ) -> Result<Option<StateUpdate<T>>, FenceError>;
 }
 
 /// A handle for interacting with the persist catalog shard.
@@ -236,8 +244,14 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     update_applier: U,
     /// The current upper of the persist shard.
     pub(crate) upper: Timestamp,
+    // TODO(jkosh44) Ideally the fencing token is a single totally ordered struct that contains
+    // both the deploy generation and the epoch. The deploy generation would be compared first and
+    // then the epoch. This would allow us to avoid tracking them separately and all the awkward
+    // implementations that come with it. However, that would require an annoying migration.
+    /// The deploy generation of the catalog, if one exists.
+    deploy_generation: FenceableToken<u64>,
     /// The epoch of the catalog, if one exists.
-    epoch: FenceableEpoch,
+    epoch: FenceableToken<Epoch>,
     /// The semantic version of the current binary.
     catalog_content_version: semver::Version,
     /// Metrics for the persist catalog.
@@ -285,13 +299,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     #[mz_ore::instrument]
     async fn current_upper(&mut self) -> Timestamp {
         match self.mode {
-            Mode::Writable | Mode::Readonly => self
-                .write_handle
-                .fetch_recent_upper()
-                .await
-                .as_option()
-                .cloned()
-                .expect("we use a totally ordered time and never finalize the shard"),
+            Mode::Writable | Mode::Readonly => {
+                let upper = self.write_handle.fetch_recent_upper().await;
+                antichain_to_timestamp(upper.clone())
+            }
             Mode::Savepoint => self.upper,
         }
     }
@@ -311,7 +322,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             ((Into::<SourceData>::into(kind), ()), self.upper, diff)
         });
         let next_upper = self.upper.step_forward();
-        self.write_handle
+        let res = self
+            .write_handle
             .compare_and_append(
                 updates,
                 Antichain::from_elem(self.upper),
@@ -319,12 +331,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
             .await
             .expect("invalid usage")
-            .map_err(|upper_mismatch| {
-                DurableCatalogError::Fence(format!(
-                    "current catalog upper {:?} fenced by new catalog upper {:?}",
-                    upper_mismatch.expected, upper_mismatch.current
-                ))
-            })?;
+            .map_err(|upper_mismatch| FenceError::Upper {
+                expected_upper: antichain_to_timestamp(upper_mismatch.expected),
+                actual_upper: antichain_to_timestamp(upper_mismatch.current),
+            });
+        // Try and get a more detailed fence error, if one exists, by syncing with the shard.
+        if let Err(e) = res {
+            self.sync_to_current_upper().await?;
+            return Err(e.into());
+        }
 
         // Lag the shard's upper by 1 to keep it readable.
         let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
@@ -382,7 +397,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     ///
     /// Returns an error if this instance has been fenced out.
     #[mz_ore::instrument]
-    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
+    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), FenceError> {
         let upper = self.current_upper().await;
         self.sync(upper).await
     }
@@ -391,10 +406,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     ///
     /// Returns an error if this instance has been fenced out.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn sync(
-        &mut self,
-        target_upper: Timestamp,
-    ) -> Result<(), DurableCatalogError> {
+    pub(crate) async fn sync(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
         self.metrics.syncs.inc();
         let counter = self.metrics.sync_latency_seconds.clone();
         self.sync_inner(target_upper)
@@ -404,7 +416,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), DurableCatalogError> {
+    async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
+        self.deploy_generation.validate()?;
         self.epoch.validate()?;
 
         // Savepoint catalogs do not yet know how to update themselves in response to concurrent
@@ -422,10 +435,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 match listen_event {
                     ListenEvent::Progress(upper) => {
                         debug!("synced up to {upper:?}");
-                        self.upper = upper
-                            .as_option()
-                            .cloned()
-                            .expect("we use a totally ordered time and never finalize the shard");
+                        self.upper = antichain_to_timestamp(upper);
                     }
                     ListenEvent::Updates(batch_updates) => {
                         debug!("syncing updates {batch_updates:?}");
@@ -452,7 +462,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     pub(crate) fn apply_updates(
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate<T>>,
-    ) -> Result<(), DurableCatalogError> {
+    ) -> Result<(), FenceError> {
         let mut updates: Vec<_> = updates
             .into_iter()
             .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
@@ -467,19 +477,30 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         // applied before insertions, or we might end up retracting the wrong value.
         updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
 
+        let mut errors = Vec::new();
+
         for (kind, ts, diff) in updates {
             if diff != 1 && diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
-            if let Some(StateUpdate { kind, ts, diff }) = self.update_applier.apply_update(
+            match self.update_applier.apply_update(
                 StateUpdate { kind, ts, diff },
                 &mut self.epoch,
-                &self.catalog_content_version,
+                &mut self.deploy_generation,
                 &self.metrics,
-            )? {
-                self.snapshot.push((kind, ts, diff));
+            ) {
+                Ok(Some(StateUpdate { kind, ts, diff })) => self.snapshot.push((kind, ts, diff)),
+                Ok(None) => {}
+                // Instead of returning immediately, we accumulate all the errors and return the one
+                // with the most information.
+                Err(err) => errors.push(err),
             }
+        }
+
+        errors.sort();
+        if let Some(err) = errors.into_iter().next() {
+            return Err(err);
         }
 
         self.consolidate();
@@ -695,10 +716,10 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKindJson>,
-        current_epoch: &mut FenceableEpoch,
-        current_catalog_content_version: &semver::Version,
+        current_epoch: &mut FenceableToken<Epoch>,
+        current_deploy_generation: &mut FenceableToken<u64>,
         _metrics: &Arc<Metrics>,
-    ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, DurableCatalogError> {
+    ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, FenceError> {
         // TODO(jkosh44) It's a bit unfortunate that we have to clone all updates to attempt to
         // convert them into a `StateUpdateKind` and cache a very small subset of them. It would
         // be better if we could figure out a way not to clone everything.
@@ -707,6 +728,9 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         {
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
+                    if key.key == DEPLOY_GENERATION {
+                        current_deploy_generation.maybe_fence(value.value)?;
+                    }
                     let prev = self.configs.insert(key.key, value.value);
                     assert_eq!(
                         prev, None,
@@ -722,15 +746,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                     );
                 }
                 (StateUpdateKind::Setting(key, value), 1) => {
-                    if key.name == CATALOG_CONTENT_VERSION_KEY {
-                        let seen_catalog_content_version =
-                            value.value.parse().expect("invalid version persisted");
-                        validate_catalog_content_version(
-                            current_catalog_content_version,
-                            seen_catalog_content_version,
-                        )?;
-                    }
-
                     let prev = self.settings.insert(key.name, value.value);
                     assert_eq!(
                         prev, None,
@@ -777,6 +792,7 @@ impl UnopenedPersistCatalogState {
         persist_client: PersistClient,
         organization_id: Uuid,
         version: semver::Version,
+        deploy_generation: Option<u64>,
         metrics: Arc<Metrics>,
     ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
         let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
@@ -839,10 +855,7 @@ impl UnopenedPersistCatalogState {
                 .expect("invalid usage")
             {
                 Ok(()) => next_upper,
-                Err(mismatch) => mismatch
-                    .current
-                    .into_option()
-                    .expect("we use a totally ordered time and never finalize the shard"),
+                Err(mismatch) => antichain_to_timestamp(mismatch.current),
             }
         };
 
@@ -868,7 +881,8 @@ impl UnopenedPersistCatalogState {
             snapshot: Vec::new(),
             update_applier: UnopenedCatalogStateInner::new(organization_id),
             upper,
-            epoch: FenceableEpoch::Unfenced(None),
+            deploy_generation: FenceableToken::new(None, FenceError::deploy_generation),
+            epoch: FenceableToken::new(None, FenceError::epoch),
             catalog_content_version: version,
             metrics,
         };
@@ -883,6 +897,38 @@ impl UnopenedPersistCatalogState {
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         handle.apply_updates(updates)?;
 
+        let mut current_deploy_generation =
+            FenceableToken::new(deploy_generation, FenceError::deploy_generation);
+        match (
+            current_deploy_generation.token(),
+            handle.deploy_generation.token(),
+        ) {
+            (Some(_), Some(catalog_deploy_generation)) => {
+                current_deploy_generation.maybe_fence(catalog_deploy_generation)?;
+                handle.deploy_generation = current_deploy_generation;
+            }
+            (Some(_), None) => {
+                handle.deploy_generation = current_deploy_generation;
+            }
+            // If the provided `deploy_generation` is `None`, then we'll keep most recent
+            // deploy generation that we see in the catalog.
+            _ => {}
+        }
+
+        // Validate that the binary version of the current process is not less than any binary
+        // version that has written to the catalog.
+        // This condition is only checked once, right here. If a new process comes along with a
+        // higher version, it must fence this process out with one of the existing fencing
+        // mechanisms.
+        if let Some(found_version) = handle.get_catalog_content_version().await? {
+            if handle.catalog_content_version < found_version {
+                return Err(DurableCatalogError::IncompatiblePersistVersion {
+                    found_version,
+                    catalog_version: handle.catalog_content_version,
+                });
+            }
+        }
+
         Ok(handle)
     }
 
@@ -892,7 +938,6 @@ impl UnopenedPersistCatalogState {
         mode: Mode,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let read_only = matches!(mode, Mode::Readonly);
@@ -918,7 +963,7 @@ impl UnopenedPersistCatalogState {
         }
         let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
         fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
-        let current_epoch = FenceableEpoch::Unfenced(Some(current_epoch));
+        let current_epoch = FenceableToken::new(Some(current_epoch), FenceError::epoch);
         debug!(
             ?self.upper,
             ?prev_epoch,
@@ -957,6 +1002,7 @@ impl UnopenedPersistCatalogState {
             persist_client: self.persist_client,
             shard_id: self.shard_id,
             upper: self.upper,
+            deploy_generation: self.deploy_generation,
             epoch: self.epoch,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
@@ -972,6 +1018,7 @@ impl UnopenedPersistCatalogState {
         catalog.apply_updates(updates)?;
 
         let catalog_content_version = catalog.catalog_content_version.to_string();
+        let deploy_generation = catalog.deploy_generation.token();
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
             if deploy_generation.is_some() {
@@ -1087,14 +1134,12 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Savepoint,
             initial_ts,
             bootstrap_args,
-            Some(deploy_generation),
             epoch_lower_bound,
         )
         .boxed()
@@ -1106,7 +1151,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args, None, None)
+        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args, None)
             .boxed()
             .await
     }
@@ -1116,14 +1161,12 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Writable,
             initial_ts,
             bootstrap_args,
-            Some(deploy_generation),
             epoch_lower_bound,
         )
         .boxed()
@@ -1237,10 +1280,10 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKind>,
-        current_epoch: &mut FenceableEpoch,
-        current_catalog_content_version: &semver::Version,
+        current_epoch: &mut FenceableToken<Epoch>,
+        current_deploy_generation: &mut FenceableToken<u64>,
         metrics: &Arc<Metrics>,
-    ) -> Result<Option<StateUpdate<StateUpdateKind>>, DurableCatalogError> {
+    ) -> Result<Option<StateUpdate<StateUpdateKind>>, FenceError> {
         if let Some(collection_type) = update.kind.collection_type() {
             metrics
                 .collection_entries
@@ -1249,7 +1292,9 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
         }
 
         {
-            let update: Option<memory::objects::StateUpdate> = (&update).try_into()?;
+            let update: Option<memory::objects::StateUpdate> = (&update)
+                .try_into()
+                .expect("invalid persisted update: {update:#?}");
             if let Some(update) = update {
                 self.updates.push_back(update);
             }
@@ -1263,17 +1308,10 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 current_epoch.maybe_fence(epoch)?;
                 Ok(None)
             }
-            (StateUpdateKind::Setting(key, value), diff @ 1)
-                if key.name == CATALOG_CONTENT_VERSION_KEY =>
-            {
-                let seen_catalog_content_version =
-                    value.value.parse().expect("invalid version persisted");
-                validate_catalog_content_version(
-                    current_catalog_content_version,
-                    seen_catalog_content_version,
-                )?;
+            (StateUpdateKind::Config(key, value), diff @ 1) if key.key == DEPLOY_GENERATION => {
+                current_deploy_generation.maybe_fence(value.value)?;
                 Ok(Some(StateUpdate {
-                    kind: StateUpdateKind::Setting(key, value),
+                    kind: StateUpdateKind::Config(key, value),
                     ts: update.ts,
                     diff,
                 }))
@@ -1298,7 +1336,7 @@ type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn epoch(&self) -> Epoch {
         self.epoch
-            .epoch()
+            .token()
             .expect("opened catalog state must have an epoch")
     }
 
@@ -1570,20 +1608,14 @@ async fn snapshot_binary_inner(
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
 }
 
-/// Validate that the binary version of the current catalog is not less than any binary version
-/// that has written to the catalog.
-fn validate_catalog_content_version(
-    current_catalog_content_version: &semver::Version,
-    seen_catalog_content_version: semver::Version,
-) -> Result<(), DurableCatalogError> {
-    if current_catalog_content_version < &seen_catalog_content_version {
-        Err(DurableCatalogError::IncompatiblePersistVersion {
-            found_version: seen_catalog_content_version,
-            catalog_version: current_catalog_content_version.clone(),
-        })
-    } else {
-        Ok(())
-    }
+/// Convert an [`Antichain<Timestamp>`] to a [`Timestamp`].
+///
+/// The correctness of this function relies on [`Timestamp`] being totally ordered and never
+/// finalizing the catalog shard.
+pub(crate) fn antichain_to_timestamp(antichain: Antichain<Timestamp>) -> Timestamp {
+    antichain
+        .into_option()
+        .expect("we use a totally ordered time and never finalize the shard")
 }
 
 // Debug methods used by the catalog-debug tool.
@@ -1779,7 +1811,7 @@ impl UnopenedPersistCatalogState {
             .expect("cannot edit/delete from unopened catalog");
         let next_epoch =
             Epoch::new(current_epoch.get() + 1).expect("non-zero epoch plus 1 is always non-zero");
-        self.epoch = FenceableEpoch::Unfenced(Some(next_epoch));
+        self.epoch = FenceableToken::new(Some(next_epoch), FenceError::epoch);
         Ok([
             (StateUpdateKind::Epoch(current_epoch), -1),
             (StateUpdateKind::Epoch(next_epoch), 1),

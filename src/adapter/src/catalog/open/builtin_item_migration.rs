@@ -18,8 +18,8 @@ use mz_catalog::builtin::{BuiltinTable, Fingerprint, BUILTINS};
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
 use mz_catalog::durable::{
-    builtin_migration_shard_id, DurableCatalogError, SystemObjectDescription, SystemObjectMapping,
-    Transaction,
+    builtin_migration_shard_id, DurableCatalogError, FenceError, SystemObjectDescription,
+    SystemObjectMapping, Transaction,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::SYSTEM_CONN_ID;
@@ -462,19 +462,19 @@ async fn write_to_migration_shard(
     let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
     let next_upper_antichain = Antichain::from_elem(next_upper);
 
-    if let Err(_) = write_handle
+    if let Err(err) = write_handle
         .compare_and_append(updates, Antichain::from_elem(upper), next_upper_antichain)
         .await
         .expect("invalid usage")
     {
         return Err(Error::new(ErrorKind::Durable(DurableCatalogError::Fence(
-            "Catalog fenced during builtin table migrations".to_string(),
+            FenceError::migration(err),
         ))));
     }
 
     // The since handle gives us the ability to fence out other downgraders using an opaque token.
     // (See the method documentation for details.)
-    // That's not needed here, so we the since handle's opaque token to avoid any comparison
+    // That's not needed here, so we use the since handle's opaque token to avoid any comparison
     // failures.
     let opaque = *since_handle.opaque();
     let downgrade = since_handle

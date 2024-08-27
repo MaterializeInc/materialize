@@ -26,7 +26,7 @@ use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
-pub use crate::durable::error::{CatalogError, DurableCatalogError};
+pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
 pub use crate::durable::objects::state_update::StateUpdate;
 use crate::durable::objects::Snapshot;
@@ -102,7 +102,6 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -127,7 +126,6 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -149,7 +147,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// NB: We may remove this in later iterations of Pv2.
     async fn epoch(&mut self) -> Result<Epoch, CatalogError>;
 
-    /// Get the deployment generation of this instance.
+    /// Get the most recent deployment generation written to the catalog.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
     /// Get the `enable_0dt_deployment` config value of this instance.
@@ -329,42 +327,88 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     }
 }
 
+/// A builder to help create an [`OpenableDurableCatalogState`] for tests.
+#[derive(Debug, Clone)]
+pub struct TestCatalogStateBuilder {
+    persist_client: PersistClient,
+    organization_id: Uuid,
+    version: semver::Version,
+    deploy_generation: Option<u64>,
+    metrics: Arc<Metrics>,
+}
+
+impl TestCatalogStateBuilder {
+    pub fn new(persist_client: PersistClient) -> Self {
+        Self {
+            persist_client,
+            organization_id: Uuid::new_v4(),
+            version: semver::Version::new(0, 0, 0),
+            deploy_generation: None,
+            metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
+        }
+    }
+
+    pub fn with_organization_id(mut self, organization_id: Uuid) -> Self {
+        self.organization_id = organization_id;
+        self
+    }
+
+    pub fn with_version(mut self, version: semver::Version) -> Self {
+        self.version = version;
+        self
+    }
+
+    pub fn with_deploy_generation(mut self, deploy_generation: u64) -> Self {
+        self.deploy_generation = Some(deploy_generation);
+        self
+    }
+
+    pub fn with_default_deploy_generation(self) -> Self {
+        self.with_deploy_generation(0)
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    pub async fn build(self) -> Result<Box<dyn OpenableDurableCatalogState>, DurableCatalogError> {
+        persist_backed_catalog_state(
+            self.persist_client,
+            self.organization_id,
+            self.version,
+            self.deploy_generation,
+            self.metrics,
+        )
+        .await
+    }
+
+    pub async fn unwrap_build(self) -> Box<dyn OpenableDurableCatalogState> {
+        self.expect_build("failed to build").await
+    }
+
+    pub async fn expect_build(self, msg: &str) -> Box<dyn OpenableDurableCatalogState> {
+        self.build().await.expect(msg)
+    }
+}
+
 /// Creates an openable durable catalog state implemented using persist.
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
     version: semver::Version,
+    deploy_generation: Option<u64>,
     metrics: Arc<Metrics>,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, DurableCatalogError> {
-    let state =
-        UnopenedPersistCatalogState::new(persist_client, organization_id, version, metrics).await?;
-    Ok(Box::new(state))
-}
-
-/// Creates an openable durable catalog state implemented using persist that is meant to be used in
-/// tests.
-pub async fn test_persist_backed_catalog_state(
-    persist_client: PersistClient,
-    organization_id: Uuid,
-) -> Box<dyn OpenableDurableCatalogState> {
-    test_persist_backed_catalog_state_with_version(
+    let state = UnopenedPersistCatalogState::new(
         persist_client,
         organization_id,
-        semver::Version::new(0, 0, 0),
+        version,
+        deploy_generation,
+        metrics,
     )
-    .await
-    .expect("failed to open catalog state")
-}
-
-/// Creates an openable durable catalog state implemented using persist that is meant to be used in
-/// tests.
-pub async fn test_persist_backed_catalog_state_with_version(
-    persist_client: PersistClient,
-    organization_id: Uuid,
-    version: semver::Version,
-) -> Result<Box<dyn OpenableDurableCatalogState>, DurableCatalogError> {
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    persist_backed_catalog_state(persist_client, organization_id, version, metrics).await
+    .await?;
+    Ok(Box::new(state))
 }
 
 pub fn test_bootstrap_args() -> BootstrapArgs {
