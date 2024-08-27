@@ -28,7 +28,7 @@ cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).
 Field                         | Value                 | Description
 ------------------------------|-----------------------|-------------------------------------
 **TIMEOUT**                   | `duration`            | The maximum duration to wait for the new replicas to be ready.
-**ON TIMEOUT**                | [`COMMIT`,`ROLLBACK`] | The action to take on timeout. <br><ul><li>`COMMIT` will cutover to the new replicas regardless of their hydration status, which may lead to downtime.</li><li>`ROLLBACK` will remove any pending replicas and return a timeout error.</li><li>Defaults to `COMMIT`.</li></ul>
+**ON TIMEOUT**                | [`COMMIT`,`ROLLBACK`] | The action to take on timeout. <br><ul><li>`COMMIT` will cutover to the new replicas regardless of their hydration status, which may lead to downtime.</li><li>`ROLLBACK` will remove any pending replicas and return a timeout error.</li></ul>Default: `COMMIT`.
 
 ## Examples
 
