@@ -9,6 +9,7 @@
 
 //! Implementations of [Codec] for stdlib types.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
@@ -20,7 +21,7 @@ use bytes::{BufMut, Bytes};
 use timely::order::Product;
 
 use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
-use crate::stats::{ColumnarStats, NoneStats};
+use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
 /// An implementation of [Schema2] for [()].
@@ -88,8 +89,11 @@ impl ColumnDecoder<()> for UnitColumnar {
         }
     }
 
-    fn stats(&self) -> ColumnarStats {
-        ColumnarStats::NONE
+    fn stats(&self) -> StructStats {
+        StructStats {
+            len: self.len,
+            cols: BTreeMap::new(),
+        }
     }
 }
 
@@ -232,8 +236,8 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
         self.0.is_null(idx)
     }
 
-    fn stats(&self) -> ColumnarStats {
-        ColumnarStats::NONE
+    fn stats(&self) -> StructStats {
+        ColumnarStats::one_column_struct(self.0.len(), ColumnStatKinds::None)
     }
 }
 
@@ -502,7 +506,7 @@ impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
         panic!("TODO")
     }
 
-    fn stats(&self) -> ColumnarStats {
+    fn stats(&self) -> StructStats {
         panic!("TODO")
     }
 }

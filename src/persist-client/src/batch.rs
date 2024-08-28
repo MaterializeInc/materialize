@@ -961,7 +961,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         match result {
                             Ok((struct_ext, _stats)) => struct_ext,
                             Err(err) => {
-                                tracing::error!(?err, "failed to encode in columnar format!");
+                                soft_panic_or_log!(
+                                    "failed to encode in columnar format! {:?}",
+                                    err
+                                );
                                 None
                             }
                         }
@@ -1066,7 +1069,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                         // We can't collect stats if we failed to encode in a columnar format.
                         let Ok((extended_cols, stats)) = result else {
-                            tracing::error!(?result, "failed to encode in columnar format!");
+                            soft_panic_or_log!("failed to encode in columnar format! {:?}", result);
                             break 'collect_stats None;
                         };
 

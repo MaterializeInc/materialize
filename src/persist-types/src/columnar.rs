@@ -30,7 +30,7 @@ use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder};
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::stats::{ColumnarStats, DynStats};
+use crate::stats::{DynStats, StructStats};
 use crate::Codec;
 
 /// A __stable__ encoding for a type that gets durably persisted in an
@@ -70,9 +70,14 @@ pub trait ColumnDecoder<T> {
     fn is_null(&self, idx: usize) -> bool;
 
     /// Returns statistics for the column. This structure is defined by Persist,
-    /// but the contents are determined by the client; Persist will preserve them
-    /// in the part metadata and make them available to readers.
-    fn stats(&self) -> ColumnarStats;
+    /// but the contents are determined by the client; Persist will preserve
+    /// them in the part metadata and make them available to readers.
+    ///
+    /// TODO: For now, we require that the stats be structured as a non-nullable
+    /// struct. For a single column, map them to a struct with a single column
+    /// named the empty string. Fix this restriction if we end up with non-test
+    /// code that isn't naturally a struct.
+    fn stats(&self) -> StructStats;
 }
 
 /// An encoder for values of a fixed schema

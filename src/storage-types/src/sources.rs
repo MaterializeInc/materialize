@@ -26,7 +26,9 @@ use itertools::Itertools;
 use load_generator::LoadGeneratorSourceExportDetails;
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
-use mz_persist_types::stats::{ColumnarStats, DynStats, OptionStats, PrimitiveStats, StructStats};
+use mz_persist_types::stats::{
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats, StructStats,
+};
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -1717,38 +1719,49 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
         false
     }
 
-    fn stats(&self) -> ColumnarStats {
+    fn stats(&self) -> StructStats {
+        let len = self.err_decoder.len();
         let err_stats =
             OptionStats::<PrimitiveStats<Vec<u8>>>::from_column(&self.err_decoder).finish();
+        // The top level struct is non-nullable and every entry is either an
+        // `Ok(Row)` or an `Err(String)`. As a result, we can compute the number
+        // of `Ok` entries by subtracting the number of `Err` entries from the
+        // total count.
+        let row_null_count = len - self.err_decoder.null_count();
         let row_stats = match &self.row_decoder {
-            SourceDataRowColumnarDecoder::Row(encoder) => encoder.stats(),
-            SourceDataRowColumnarDecoder::EmptyRow => {
-                let stats = OptionStats {
-                    none: self.err_decoder.len() - self.err_decoder.null_count(),
-                    some: StructStats {
-                        len: self.err_decoder.len(),
-                        cols: BTreeMap::default(),
-                    },
-                };
-                stats.into_columnar_stats()
+            SourceDataRowColumnarDecoder::Row(encoder) => {
+                // Sanity check that the number of row nulls/nones we calculated
+                // using the error column matches what the row column thinks it
+                // has.
+                assert_eq!(encoder.null_count(), row_null_count);
+                encoder.stats()
             }
+            SourceDataRowColumnarDecoder::EmptyRow => StructStats {
+                len,
+                cols: BTreeMap::default(),
+            },
+        };
+        let row_stats = ColumnarStats {
+            nulls: Some(ColumnNullStats {
+                count: row_null_count,
+            }),
+            values: ColumnStatKinds::Struct(row_stats),
         };
 
         let stats = [
             (
                 SourceDataColumnarEncoder::OK_COLUMN_NAME.to_string(),
-                row_stats.into_columnar_stats(),
+                row_stats,
             ),
             (
                 SourceDataColumnarEncoder::ERR_COLUMN_NAME.to_string(),
                 err_stats,
             ),
         ];
-        let stats = StructStats {
-            len: self.err_decoder.len(),
+        StructStats {
+            len,
             cols: stats.into_iter().map(|(name, s)| (name, s)).collect(),
-        };
-        stats.into_columnar_stats()
+        }
     }
 }
 
