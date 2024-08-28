@@ -54,8 +54,12 @@ jobs:
             sql-parser:
               - 'src/sql-parser/**'
               - 'src/sql-lexer/**'
+              - '!**/Cargo.toml'
+              - '!**/BUILD.bazel'
             system-catalog:
               - 'src/catalog/src/builtin.rs'
+              - '!**/Cargo.toml'
+              - '!**/BUILD.bazel'
       - name: "Push to Slack"
         if: steps.filter.outputs.sql-parser == 'true' || steps.filter.outputs.system-catalog == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
