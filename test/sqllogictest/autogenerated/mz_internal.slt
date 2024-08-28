@@ -118,6 +118,16 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  disk_bytes  uint8
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics_history' ORDER BY position
+----
+1  replica_id  text
+2  process_id  uint8
+3  cpu_nano_cores  uint8
+4  memory_bytes  uint8
+5  disk_bytes  uint8
+6  occurred_at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
 ----
 1  replica_id  text
@@ -134,6 +144,16 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  cpu_percent  double␠precision
 4  memory_percent  double␠precision
 5  disk_percent  double␠precision
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization_history' ORDER BY position
+----
+1  replica_id  text
+2  process_id  uint8
+3  cpu_percent  double␠precision
+4  memory_percent  double␠precision
+5  disk_percent  double␠precision
+6  occurred_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
@@ -569,8 +589,10 @@ mz_aws_privatelink_connection_statuses
 mz_cluster_replica_frontiers
 mz_cluster_replica_history
 mz_cluster_replica_metrics
+mz_cluster_replica_metrics_history
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
+mz_cluster_replica_utilization_history
 mz_cluster_schedules
 mz_cluster_workload_classes
 mz_comments
