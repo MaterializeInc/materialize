@@ -19,12 +19,12 @@ use mz_repr::explain::PlanRenderingContext;
 use mz_repr::{Datum, GlobalId};
 use mz_sql_parser::ast::{
     Cte, CteBlock, Expr, Ident, JoinConstraint, JoinOperator, Query, Raw, RawItemName, Select,
-    SelectItem, SetExpr, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value,
-    Values,
+    SelectItem, SelectOption, SelectOptionName, SetExpr, TableAlias, TableFactor, TableWithJoins,
+    UnresolvedItemName, Value, Values, WithOptionValue,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
-use crate::{Id, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use crate::{AggregateExpr, Id, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 
 type SqlQuery = Query<Raw>;
 
@@ -84,6 +84,7 @@ enum SqlConversionError {
     UnexpectedWMR,
     UnexpectedNegation,
     UnexpectedThreshold,
+    UnexpectedMixedDistinctReduce,
     /// Recursion depth exceeded
     Recursion {
         /// The error that aborted recursion
@@ -399,7 +400,7 @@ impl MirToSql {
 
                 Ok(q)
             }
-            FlatMap { input, func, exprs } => todo!(),
+            FlatMap { input, func, exprs } => unimplemented!("MIR-to-SQL FlatMap"),
             Filter { input, predicates } => {
                 let mut q = sc.to_sql_query(input, bindings, ctx)?;
                 if predicates.is_empty() {
@@ -594,9 +595,100 @@ impl MirToSql {
                 input,
                 group_key,
                 aggregates,
-                monotonic,
+                monotonic: _monotonic,
                 expected_group_size,
-            } => todo!(),
+            } => {
+                let mut q = sc.to_sql_query(input, bindings, ctx)?;
+
+                let outer_columns = sc.column_info(expr, ctx);
+                assert!(outer_columns.len() == group_key.len() + aggregates.len());
+
+                // !!! selects group_key followed by each aggregate
+                let mut group_by = Vec::with_capacity(group_key.len());
+                let mut projection = Vec::with_capacity(outer_columns.len());
+
+                for (gk, ident) in group_key.iter().zip(outer_columns.iter()) {
+                    let expr = sc.to_sql_expr(gk, bindings, ctx)?;
+                    group_by.push(expr.clone());
+                    projection.push(SelectItem::Expr {
+                        expr,
+                        alias: Some(ident.clone()),
+                    });
+                }
+
+                let mut shared_distinct_value = None;
+                for (agg, ident) in aggregates
+                    .iter()
+                    .zip(outer_columns.iter().dropping(group_key.len()))
+                {
+                    if let Some(distinct) = shared_distinct_value {
+                        if agg.distinct != distinct {
+                            // TODO(mgree) if a reduce mixes distinct and non-distinct aggregates, we need to generate separate reduces and a join (i think???)
+                            return Err(SqlConversionError::UnexpectedMixedDistinctReduce);
+                        }
+                    } else {
+                        shared_distinct_value = Some(agg.distinct);
+                    }
+
+                    let expr = sc.agg_to_sql_expr(agg, bindings, ctx)?;
+                    projection.push(SelectItem::Expr {
+                        expr,
+                        alias: Some(ident.clone()),
+                    });
+                }
+
+                let body = &mut q.body;
+
+                // extract the body and add columns in a separate query
+                let ident = sc.fresh_ident("reduce");
+                let columns = sc.column_info(input, ctx);
+
+                let cte = Cte::<Raw> {
+                    alias: TableAlias {
+                        name: ident.clone(),
+                        columns: columns.clone(),
+                        strict: false,
+                    },
+                    id: (),
+                    query: SqlQuery {
+                        ctes: CteBlock::Simple(vec![]),
+                        body: body.take(),
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    },
+                };
+
+                sc.add_cte_to_query(&mut q, columns.clone(), cte);
+
+                let options = expected_group_size.map_or_else(
+                    || vec![],
+                    |egs| {
+                        vec![SelectOption {
+                            name: SelectOptionName::ExpectedGroupSize,
+                            value: Some(WithOptionValue::Value(Value::Number(egs.to_string()))),
+                        }]
+                    },
+                );
+
+                q.body = SetExpr::Select(Box::new(Select {
+                    distinct: None,
+                    projection,
+                    from: vec![TableWithJoins {
+                        relation: TableFactor::Table {
+                            name: RawItemName::Name(UnresolvedItemName(vec![ident])),
+                            alias: None,
+                        },
+                        joins: vec![],
+                    }],
+                    selection: None,
+                    group_by,
+                    having: None,
+                    options,
+                }));
+
+                Ok(q)
+            }
             TopK {
                 input,
                 group_key,
@@ -605,11 +697,12 @@ impl MirToSql {
                 offset,
                 monotonic,
                 expected_group_size,
-            } => todo!(),
-            Union { base, inputs } => todo!(),
+            } => unimplemented!("MIR-to-SQL TopK"),
+            Union { base, inputs } => unimplemented!("MIR-to-SQL Union"),
             ArrangeBy { input, keys: _keys } => sc.to_sql_query(input, bindings, ctx),
             // Negate forms are handled under `Union` but not elsewhere (SQL doesn't have negative cardinalities!)
             Negate { input: _input } => Err(SqlConversionError::UnexpectedNegation),
+            // Threshold forms are handled under `Union`'s LEFT JOIN detection but not elsewhere (SQL doesn't have negative cardinalities!)
             Threshold { input } => Err(SqlConversionError::UnexpectedThreshold),
             LetRec {
                 ids: _ids,
@@ -656,6 +749,15 @@ impl MirToSql {
         todo!()
     }
 
+    fn agg_to_sql_expr(
+        &mut self,
+        expr: &AggregateExpr,
+        bindings: &mut BTreeMap<LocalId, RawItemName>,
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+    ) -> Result<Expr<Raw>, SqlConversionError> {
+        todo!()
+    }
+
     fn to_sql_value(&self, datum: Datum) -> Expr<Raw> {
         match datum {
             Datum::False => Expr::Value(Value::Boolean(false)),
@@ -669,25 +771,25 @@ impl MirToSql {
             Datum::UInt64(n) => Expr::Value(Value::Number(n.to_string())),
             Datum::Float32(n) => Expr::Value(Value::Number(n.to_string())),
             Datum::Float64(n) => Expr::Value(Value::Number(n.to_string())),
-            Datum::Date(_) => todo!(),
-            Datum::Time(_) => todo!(),
-            Datum::Timestamp(_) => todo!(),
-            Datum::TimestampTz(_) => todo!(),
-            Datum::Interval(i) => todo!(),
-            Datum::Bytes(_) => todo!(),
             Datum::String(s) => Expr::Value(Value::String(s.to_string())),
-            Datum::Array(_) => todo!(),
-            Datum::List(_) => todo!(),
-            Datum::Map(_) => todo!(),
             Datum::Numeric(n) => Expr::Value(Value::Number(n.to_string())),
-            Datum::JsonNull => todo!(),
-            Datum::Uuid(_) => todo!(),
-            Datum::MzTimestamp(_) => todo!(),
-            Datum::Range(_) => todo!(),
-            Datum::MzAclItem(_) => todo!(),
-            Datum::AclItem(_) => todo!(),
             Datum::Dummy => Expr::Value(Value::String("!!!DUMMY!!!".to_string())),
             Datum::Null => Expr::null(),
+            Datum::Date(_)
+            | Datum::Time(_)
+            | Datum::Timestamp(_)
+            | Datum::TimestampTz(_)
+            | Datum::Interval(_)
+            | Datum::Bytes(_)
+            | Datum::Array(_)
+            | Datum::List(_)
+            | Datum::Map(_)
+            | Datum::JsonNull
+            | Datum::Uuid(_)
+            | Datum::MzTimestamp(_)
+            | Datum::Range(_)
+            | Datum::MzAclItem(_)
+            | Datum::AclItem(_) => unimplemented!("MIR-to-SQL esoteric Datum"),
         }
     }
 
