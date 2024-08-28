@@ -27,7 +27,7 @@ use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
-use tracing::{debug_span, warn};
+use tracing::debug_span;
 
 use crate::catalog::Catalog;
 use crate::coord::peek::{create_fast_path_plan, PeekDataflowPlan, PeekPlan};
@@ -298,13 +298,14 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         //
         // If `timestamp_ctx.antichain()` is empty, `timestamp_ctx.timestamp()`
         // will return `None` and we use the default (empty) `until`. Otherwise,
-        // we expect to be able to set `until = as_of + 1` without an overflow.
-        if let Some(as_of) = timestamp_ctx.timestamp() {
-            if let Some(until) = as_of.checked_add(1) {
-                df_desc.until = Antichain::from_elem(until);
-            } else {
-                warn!(as_of = %as_of, "as_of + 1 overflow");
-            }
+        // we expect to be able to set `until = as_of + 1` without an overflow, unless
+        // we query at the maximum timestamp. In this case, the default empty `until`
+        // is the correct choice.
+        if let Some(until) = timestamp_ctx
+            .timestamp()
+            .and_then(Timestamp::try_step_forward)
+        {
+            df_desc.until = Antichain::from_elem(until);
         }
 
         // Construct TransformCtx for global optimization.
