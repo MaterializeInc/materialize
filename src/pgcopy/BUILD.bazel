@@ -43,6 +43,7 @@ rust_test(
 	name = "mz_pgcopy_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_pgcopy",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

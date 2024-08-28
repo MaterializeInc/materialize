@@ -37,6 +37,7 @@ rust_test(
 	name = "workspace_hack_lib_tests",
 	version = "0.0.0",
 	crate = ":workspace_hack",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

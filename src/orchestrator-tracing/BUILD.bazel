@@ -50,6 +50,14 @@ rust_test(
 	name = "mz_orchestrator_tracing_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_orchestrator_tracing",
+	crate_features = [
+		"capture",
+		"default",
+		"humantime",
+		"mz-repr",
+		"tokio-console",
+		"tracing-capture",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

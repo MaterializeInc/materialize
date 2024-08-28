@@ -40,6 +40,7 @@ rust_test(
 	name = "mz_dyncfg_launchdarkly_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_dyncfg_launchdarkly",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

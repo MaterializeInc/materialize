@@ -41,6 +41,12 @@ rust_test(
 	name = "mz_avro_lib_tests",
 	version = "0.7.0",
 	crate = ":mz_avro",
+	crate_features = [
+		"byteorder",
+		"crc32fast",
+		"snap",
+		"snappy",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -75,7 +81,9 @@ rust_doc_test(
 rust_test(
 	name = "mz_avro_io_tests",
 	version = "0.7.0",
+	crate_name = "io",
 	srcs = ["tests/io.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -104,7 +112,9 @@ rust_test(
 rust_test(
 	name = "mz_avro_schema_tests",
 	version = "0.7.0",
+	crate_name = "schema",
 	srcs = ["tests/schema.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

@@ -95,7 +95,7 @@ data = ["String"]
 # Extra flags for rustc.
 rustc_flags = ["String"]
 # Environment variables to set for rustc.
-[[package.metadata.cargo-gazelle.lib.rustc_env]]
+[package.metadata.cargo-gazelle.lib.rustc_env]
 var1 = "my_value"
 
 # By default Bazel enables all features of a crate, if provided we will
@@ -118,7 +118,7 @@ data = ["String"]
 # Extra flags for rustc.
 rustc_flags = ["String"]
 # Environment variables to set for rustc.
-[[package.metadata.cargo-gazelle.build.rustc_env]]
+[package.metadata.cargo-gazelle.build.rustc_env]
 var1 = "my_value"
 
 # Environment variables to set for the build script.
@@ -142,7 +142,7 @@ data = ["String"]
 # Extra flags for rustc.
 rustc_flags = ["String"]
 # Environment variables to set for rustc.
-[[package.metadata.cargo-gazelle.test.<name>.rustc_env]]
+[package.metadata.cargo-gazelle.test.<name>.rustc_env]
 var1 = "my_value"
 
 # Bazel test size.
@@ -150,7 +150,7 @@ var1 = "my_value"
 # See <https://bazel.build/reference/be/common-definitions#common-attributes-tests>.
 size = "String"
 # Environment variables to set for test execution.
-[[package.metadata.cargo-gazelle.test.<name>.env]]
+[package.metadata.cargo-gazelle.test.<name>.env]
 var1 = "my_value"
 
 
@@ -169,7 +169,7 @@ rustc_flags = ["String"]
 var1 = "my_value"
 
 # Environment variables to set for test execution.
-[[package.metadata.cargo-gazelle.binary.<name>.env]]
+[package.metadata.cargo-gazelle.binary.<name>.env]
 var1 = "my_value"
 ```
 

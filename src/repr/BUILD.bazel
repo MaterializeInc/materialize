@@ -49,6 +49,11 @@ rust_test(
 	name = "mz_repr_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_repr",
+	crate_features = [
+		"default",
+		"tracing-subscriber",
+		"tracing_",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -73,8 +78,8 @@ rust_test(
 	),
 	size = "medium",
 	compile_data = [],
-	data = [],
-	env = {},
+	data = [] + glob(["src/adt/snapshots/*"]),
+	env = { "INSTA_WORKSPACE_ROOT": "." },
 	rustc_flags = [],
 	rustc_env = {},
 )
@@ -145,7 +150,9 @@ cargo_build_script(
 rust_test(
 	name = "mz_repr_strconv_tests",
 	version = "0.0.0",
+	crate_name = "strconv",
 	srcs = ["tests/strconv.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

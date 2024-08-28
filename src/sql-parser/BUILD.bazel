@@ -46,6 +46,12 @@ rust_test(
 	name = "mz_sql_parser_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_sql_parser",
+	crate_features = [
+		"datadriven",
+		"default",
+		"test",
+		"unicode-width",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -109,7 +115,9 @@ cargo_build_script(
 rust_test(
 	name = "mz_sql_parser_sqlparser_common_tests",
 	version = "0.0.0",
+	crate_name = "sqlparser_common",
 	srcs = ["tests/sqlparser_common.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

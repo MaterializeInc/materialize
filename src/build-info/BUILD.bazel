@@ -40,6 +40,10 @@ rust_test(
 	name = "mz_build_info_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_build_info",
+	crate_features = [
+		"default",
+		"semver",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

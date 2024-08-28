@@ -40,6 +40,7 @@ rust_test(
 	name = "mz_expr_parser_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_expr_parser",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -82,7 +83,9 @@ rust_doc_test(
 rust_test(
 	name = "mz_expr_parser_test_mir_parser_tests",
 	version = "0.0.0",
+	crate_name = "test_mir_parser",
 	srcs = ["tests/test_mir_parser.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

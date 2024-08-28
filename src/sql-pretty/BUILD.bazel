@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_sql_pretty_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_sql_pretty",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -76,7 +77,9 @@ rust_doc_test(
 rust_test(
 	name = "mz_sql_pretty_parser_tests",
 	version = "0.0.0",
+	crate_name = "parser",
 	srcs = ["tests/parser.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

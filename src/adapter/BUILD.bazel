@@ -76,6 +76,7 @@ rust_test(
 	name = "mz_adapter_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_adapter",
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -190,7 +191,9 @@ rust_doc_test(
 rust_test(
 	name = "mz_adapter_parameters_tests",
 	version = "0.0.0",
+	crate_name = "parameters",
 	srcs = ["tests/parameters.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -257,7 +260,9 @@ rust_test(
 rust_test(
 	name = "mz_adapter_sql_tests",
 	version = "0.0.0",
+	crate_name = "sql",
 	srcs = ["tests/sql.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -324,7 +329,9 @@ rust_test(
 rust_test(
 	name = "mz_adapter_timestamp_selection_tests",
 	version = "0.0.0",
+	crate_name = "timestamp_selection",
 	srcs = ["tests/timestamp_selection.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_segment_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_segment",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

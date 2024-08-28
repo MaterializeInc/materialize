@@ -40,6 +40,7 @@ rust_test(
 	name = "mz_sql_lexer_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_sql_lexer",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -92,7 +93,9 @@ cargo_build_script(
 rust_test(
 	name = "mz_sql_lexer_lexer_tests",
 	version = "0.0.0",
+	crate_name = "lexer",
 	srcs = ["tests/lexer.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

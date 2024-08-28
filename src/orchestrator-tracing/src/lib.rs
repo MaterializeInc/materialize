@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::sync::Arc;
-#[cfg(feature = "tokio-console")]
 use std::time::Duration;
 
 use async_trait::async_trait;

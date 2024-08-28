@@ -61,6 +61,7 @@ rust_test(
 	name = "mz_catalog_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_catalog",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -71,6 +72,7 @@ rust_test(
 		"//src/adapter-types:mz_adapter_types",
 		"//src/audit-log:mz_audit_log",
 		"//src/build-info:mz_build_info",
+		"//src/build-tools:mz_build_tools",
 		"//src/cloud-resources:mz_cloud_resources",
 		"//src/compute-client:mz_compute_client",
 		"//src/controller-types:mz_controller_types",
@@ -101,7 +103,10 @@ rust_test(
 	),
 	size = "medium",
 	compile_data = [],
-	data = [],
+	data = [] + glob([
+		"protos/**",
+		"src/durable/upgrade/snapshots/**",
+	]),
 	env = {},
 	rustc_flags = [],
 	rustc_env = {},
@@ -114,6 +119,7 @@ rust_doc_test(
 		"//src/adapter-types:mz_adapter_types",
 		"//src/audit-log:mz_audit_log",
 		"//src/build-info:mz_build_info",
+		"//src/build-tools:mz_build_tools",
 		"//src/cloud-resources:mz_cloud_resources",
 		"//src/compute-client:mz_compute_client",
 		"//src/controller-types:mz_controller_types",
@@ -161,7 +167,9 @@ cargo_build_script(
 rust_test(
 	name = "mz_catalog_debug_tests",
 	version = "0.0.0",
+	crate_name = "debug",
 	srcs = ["tests/debug.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -173,6 +181,7 @@ rust_test(
 		"//src/adapter-types:mz_adapter_types",
 		"//src/audit-log:mz_audit_log",
 		"//src/build-info:mz_build_info",
+		"//src/build-tools:mz_build_tools",
 		"//src/cloud-resources:mz_cloud_resources",
 		"//src/compute-client:mz_compute_client",
 		"//src/controller-types:mz_controller_types",
@@ -204,7 +213,7 @@ rust_test(
 	size = "large",
 	compile_data = [],
 	data = [] + glob(["tests/snapshots/debug*.snap"]),
-	env = {},
+	env = { "INSTA_WORKSPACE_ROOT": "." },
 	rustc_flags = [],
 	rustc_env = {},
 )
@@ -212,7 +221,9 @@ rust_test(
 rust_test(
 	name = "mz_catalog_open_tests",
 	version = "0.0.0",
+	crate_name = "open",
 	srcs = ["tests/open.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -224,6 +235,7 @@ rust_test(
 		"//src/adapter-types:mz_adapter_types",
 		"//src/audit-log:mz_audit_log",
 		"//src/build-info:mz_build_info",
+		"//src/build-tools:mz_build_tools",
 		"//src/cloud-resources:mz_cloud_resources",
 		"//src/compute-client:mz_compute_client",
 		"//src/controller-types:mz_controller_types",
@@ -255,7 +267,7 @@ rust_test(
 	size = "large",
 	compile_data = [],
 	data = [] + glob(["tests/snapshots/open*.snap"]),
-	env = {},
+	env = { "INSTA_WORKSPACE_ROOT": "." },
 	rustc_flags = [],
 	rustc_env = {},
 )
@@ -263,7 +275,9 @@ rust_test(
 rust_test(
 	name = "mz_catalog_read-write_tests",
 	version = "0.0.0",
+	crate_name = "read_write",
 	srcs = ["tests/read-write.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -275,6 +289,7 @@ rust_test(
 		"//src/adapter-types:mz_adapter_types",
 		"//src/audit-log:mz_audit_log",
 		"//src/build-info:mz_build_info",
+		"//src/build-tools:mz_build_tools",
 		"//src/cloud-resources:mz_cloud_resources",
 		"//src/compute-client:mz_compute_client",
 		"//src/controller-types:mz_controller_types",
@@ -306,7 +321,7 @@ rust_test(
 	size = "large",
 	compile_data = [],
 	data = [],
-	env = {},
+	env = { "INSTA_WORKSPACE_ROOT": "." },
 	rustc_flags = [],
 	rustc_env = {},
 )

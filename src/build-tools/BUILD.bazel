@@ -42,6 +42,10 @@ rust_test(
 	name = "mz_build_tools_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_build_tools",
+	crate_features = [
+		"default",
+		"bazel",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

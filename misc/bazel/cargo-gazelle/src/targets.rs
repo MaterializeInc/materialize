@@ -89,6 +89,16 @@ impl RustLibrary {
             return Ok(None);
         }
 
+        // Not all crates have a `lib.rs` or require a rust_library target.
+        let library_target = metadata
+            .build_targets()
+            .find(|target| matches!(target.id(), BuildTargetId::Library));
+        if library_target.is_none() {
+            let name = metadata.name();
+            tracing::debug!("no library target found for {name}, skipping rust_library",);
+            return Ok(None);
+        }
+
         let name = metadata.name().to_case(Case::Snake);
         let name = QuotedString::new(name);
 
@@ -138,7 +148,7 @@ impl RustLibrary {
         }
 
         // For every library we also generate the tests targets.
-        let unit_test = RustTest::library(config, metadata, crate_config)?;
+        let unit_test = RustTest::library(config, metadata, crate_config, features.clone())?;
         let doc_tests = RustDocTest::generate(config, metadata, crate_config)?;
 
         // Extend with any extra config specified in the Cargo.toml.
@@ -388,6 +398,7 @@ pub struct RustTest {
     name: Field<QuotedString>,
     version: Field<QuotedString>,
     kind: RustTestKind,
+    features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
@@ -410,6 +421,7 @@ impl RustTest {
         config: &GlobalConfig,
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
+        crate_features: List<QuotedString>,
         name: &str,
         kind: RustTestKind,
         size: RustTestSize,
@@ -445,7 +457,7 @@ impl RustTest {
             proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
-        if matches!(kind, RustTestKind::Integration(_)) {
+        if matches!(kind, RustTestKind::Integration { .. }) {
             let dep = format!(":{crate_name}");
             if metadata.is_proc_macro() {
                 if !proc_macro_deps.iter().any(|d| d.unquoted().ends_with(&dep)) {
@@ -484,6 +496,7 @@ impl RustTest {
             name: Field::new("name", name),
             version: Field::new("version", metadata.version().to_string().into()),
             kind,
+            features: Field::new("crate_features", crate_features),
             aliases: Field::new("aliases", aliases),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
@@ -500,12 +513,14 @@ impl RustTest {
         config: &GlobalConfig,
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
+        crate_features: List<QuotedString>,
     ) -> Result<Option<Self>, anyhow::Error> {
         let crate_name = metadata.name().to_case(Case::Snake);
         Self::common(
             config,
             metadata,
             crate_config,
+            crate_features,
             "lib",
             RustTestKind::library(crate_name),
             RustTestSize::Medium,
@@ -537,8 +552,9 @@ impl RustTest {
             config,
             metadata,
             crate_config,
+            List::new::<String, _>([]),
             target.name(),
-            RustTestKind::integration([test_target.to_string()]),
+            RustTestKind::integration(target.name(), [test_target.to_string()]),
             RustTestSize::Large,
         )
     }
@@ -555,6 +571,7 @@ impl ToBazelDefinition for RustTest {
             self.name.format(&mut w)?;
             self.version.format(&mut w)?;
             self.kind.format(&mut w)?;
+            self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
@@ -575,7 +592,18 @@ impl ToBazelDefinition for RustTest {
 #[derive(Debug)]
 pub enum RustTestKind {
     Library(Field<QuotedString>),
-    Integration(Field<List<QuotedString>>),
+    Integration {
+        /// Name we'll give the built Rust binary.
+        ///
+        /// Some test harnesses (e.g. [insta]) use the crate name to generate
+        /// files. We provide the crate name for integration tests for parity
+        /// with cargo test.
+        ///
+        /// [insta]: https://docs.rs/insta/latest/insta/
+        test_name: Field<QuotedString>,
+        /// Source files for the integration test.
+        srcs: Field<List<QuotedString>>,
+    },
 }
 
 impl RustTestKind {
@@ -584,9 +612,16 @@ impl RustTestKind {
         Self::Library(Field::new("crate", crate_name))
     }
 
-    pub fn integration(srcs: impl IntoIterator<Item = String>) -> Self {
+    pub fn integration(
+        test_name: impl Into<String>,
+        srcs: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let test_name = test_name.into().to_case(Case::Snake);
         let srcs = srcs.into_iter().map(QuotedString::new).collect();
-        Self::Integration(Field::new("srcs", srcs))
+        Self::Integration {
+            test_name: Field::new("crate_name", test_name.into()),
+            srcs: Field::new("srcs", srcs),
+        }
     }
 }
 
@@ -594,7 +629,10 @@ impl ToBazelDefinition for RustTestKind {
     fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
         match self {
             RustTestKind::Library(field) => field.format(writer)?,
-            RustTestKind::Integration(srcs) => srcs.format(writer)?,
+            RustTestKind::Integration { test_name, srcs } => {
+                test_name.format(writer)?;
+                srcs.format(writer)?;
+            }
         }
         Ok(())
     }

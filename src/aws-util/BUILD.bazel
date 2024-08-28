@@ -40,6 +40,11 @@ rust_test(
 	name = "mz_aws_util_lib_tests",
 	version = "0.0.0",
 	crate = ":mz_aws_util",
+	crate_features = [
+		"aws-sdk-s3",
+		"default",
+		"s3",
+	],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

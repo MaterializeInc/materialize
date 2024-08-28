@@ -36,6 +36,7 @@ rust_test(
 	name = "mz_ore_proc_lib_tests",
 	version = "0.1.0",
 	crate = ":mz_ore_proc",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
@@ -70,7 +71,9 @@ rust_doc_test(
 rust_test(
 	name = "mz_ore_proc_instrument_tests",
 	version = "0.1.0",
+	crate_name = "instrument",
 	srcs = ["tests/instrument.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,

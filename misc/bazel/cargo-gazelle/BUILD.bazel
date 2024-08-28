@@ -36,6 +36,7 @@ rust_test(
 	name = "cargo_gazelle_lib_tests",
 	version = "0.0.0",
 	crate = ":cargo_gazelle",
+	crate_features = ["default"],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
