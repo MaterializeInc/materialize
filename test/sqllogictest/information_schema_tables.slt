@@ -161,6 +161,10 @@ mz_kafka_sinks
 BASE TABLE
 materialize
 mz_catalog
+mz_kafka_sources
+BASE TABLE
+materialize
+mz_catalog
 mz_list_types
 BASE TABLE
 materialize
@@ -346,10 +350,6 @@ VIEW
 materialize
 mz_internal
 mz_internal_cluster_replicas
-BASE TABLE
-materialize
-mz_internal
-mz_kafka_sources
 BASE TABLE
 materialize
 mz_internal

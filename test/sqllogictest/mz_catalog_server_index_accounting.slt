@@ -61,7 +61,7 @@ mz_dataflow_operators_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_o
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_shutdown_durations_histogram_raw"␠("worker_id",␠"duration_ns")
 mz_frontiers_ind  CREATE␠INDEX␠"mz_frontiers_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_frontiers"␠("object_id")
 mz_indexes_ind  CREATE␠INDEX␠"mz_indexes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_indexes"␠("id")
-mz_kafka_sources_ind  CREATE␠INDEX␠"mz_kafka_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_kafka_sources"␠("id")
+mz_kafka_sources_ind  CREATE␠INDEX␠"mz_kafka_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_kafka_sources"␠("id")
 mz_materialized_views_ind  CREATE␠INDEX␠"mz_materialized_views_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_materialized_views"␠("id")
 mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_batch_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")

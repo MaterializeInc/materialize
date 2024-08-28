@@ -350,17 +350,6 @@ inputs.
 | `replica_id` | [`text`]    | The ID of a cluster replica. |
 | `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
-## `mz_kafka_sources`
-
-The `mz_kafka_sources` table contains a row for each Kafka source in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_kafka_sources -->
-| Field                  | Type           | Meaning                                                                                                   |
-|------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
-| `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
-| `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
-| `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
-
 ## `mz_materialization_dependencies`
 
 The `mz_materialization_dependencies` view describes the dependency structure between each materialization (materialized view, index, or sink) and the sources of its data.
