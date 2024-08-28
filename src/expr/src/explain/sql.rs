@@ -18,13 +18,16 @@ use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
 use mz_repr::{Datum, GlobalId};
 use mz_sql_parser::ast::{
-    Cte, CteBlock, Expr, Ident, JoinConstraint, JoinOperator, Query, Raw, RawItemName, Select,
-    SelectItem, SelectOption, SelectOptionName, SetExpr, TableAlias, TableFactor, TableWithJoins,
-    UnresolvedItemName, Value, Values, WithOptionValue,
+    Cte, CteBlock, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Query, Raw, RawItemName,
+    Select, SelectItem, SelectOption, SelectOptionName, SetExpr, TableAlias, TableFactor,
+    TableWithJoins, UnresolvedItemName, Value, Values, WithOptionValue,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
-use crate::{AggregateExpr, Id, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use crate::{
+    AggregateExpr, AggregateFunc, EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr,
+    RECURSION_LIMIT,
+};
 
 type SqlQuery = Query<Raw>;
 
@@ -74,12 +77,17 @@ impl DisplaySql<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr {
 
 /// Errors in converting MIR-to-SQL.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 enum SqlConversionError {
     UnboundId {
         id: Id,
     },
+    BadConstant {
+        err: EvalError,
+    },
     BadGlobalName {
         id: GlobalId,
+        err: IdentError,
     },
     UnexpectedWMR,
     UnexpectedNegation,
@@ -156,9 +164,9 @@ impl MirToSql {
         use MirRelationExpr::*;
 
         self.checked_recur_mut(|sc: &mut MirToSql| match expr {
-            Constant { rows, typ } => {
+            Constant { rows, .. } => {
                 let rows = match rows {
-                    Err(_) => vec![],
+                    Err(err) => return Err(SqlConversionError::BadConstant { err: err.clone() }),
                     Ok(raw_rows) => raw_rows
                         .into_iter()
                         .map(|(row, _id)| {
@@ -205,8 +213,8 @@ impl MirToSql {
                     }
                 })?;
 
-                let ident =
-                    Ident::new(name).map_err(|e| SqlConversionError::BadGlobalName { id: *id })?;
+                let ident = Ident::new(name)
+                    .map_err(|err| SqlConversionError::BadGlobalName { id: *id, err })?;
 
                 //
                 Ok(SqlQuery {
@@ -339,9 +347,10 @@ impl MirToSql {
                 let columns = sc.column_info(expr, ctx);
                 let mut new_select_items = Vec::with_capacity(scalars.len());
                 for (col, expr) in scalars.iter().enumerate() {
+                    let cols_so_far = num_inner_columns + col;
                     new_select_items.push(SelectItem::Expr {
-                        expr: sc.to_sql_expr(expr, bindings, ctx)?,
-                        alias: Some(columns[num_inner_columns + col].clone()),
+                        expr: sc.to_sql_expr(expr, &columns[0..cols_so_far])?,
+                        alias: Some(columns[cols_so_far].clone()),
                     });
                 }
 
@@ -400,17 +409,22 @@ impl MirToSql {
 
                 Ok(q)
             }
-            FlatMap { input, func, exprs } => unimplemented!("MIR-to-SQL FlatMap"),
+            FlatMap {
+                input: _,
+                func: _,
+                exprs: _,
+            } => unimplemented!("MIR-to-SQL FlatMap"),
             Filter { input, predicates } => {
                 let mut q = sc.to_sql_query(input, bindings, ctx)?;
                 if predicates.is_empty() {
                     return Ok(q);
                 }
 
+                let columns = sc.column_info(input, ctx);
                 let mut predicates = predicates.into_iter();
-                let mut selection = sc.to_sql_expr(predicates.next().unwrap(), bindings, ctx)?;
+                let mut selection = sc.to_sql_expr(predicates.next().unwrap(), &columns)?;
                 for expr in predicates {
-                    selection = selection.and(sc.to_sql_expr(&expr, bindings, ctx)?);
+                    selection = selection.and(sc.to_sql_expr(&expr, &columns)?);
                 }
 
                 match &mut q.body {
@@ -420,7 +434,6 @@ impl MirToSql {
                     body => {
                         // extract the body and add columns in a separate query
                         let ident = sc.fresh_ident("filter");
-                        let columns = sc.column_info(input, ctx);
 
                         let cte = Cte::<Raw> {
                             alias: TableAlias {
@@ -494,6 +507,9 @@ impl MirToSql {
                     q_inputs.push(q);
                     q_columns.push(sc.column_info(input, ctx));
                 }
+                let columns = q_columns.clone().concat();
+                assert!(columns == sc.column_info(expr, ctx));
+
                 let q_idents: Vec<Ident> =
                     (0..num_inputs).map(|_| sc.fresh_ident("join")).collect();
 
@@ -550,21 +566,10 @@ impl MirToSql {
                         .collect(),
                 );
 
-                let projection = q_columns
-                    .concat()
-                    .into_iter()
-                    .map(|i| SelectItem::Expr {
-                        expr: Expr::Identifier(vec![i.clone()]),
-                        alias: Some(i),
-                    })
-                    .collect();
-
                 // TODO(mgree): rather than giving ON(true) and giving a where clause, move these equivalences into the join itself
                 let mut selection: Option<Expr<Raw>> = None;
                 for equivalence in equivalences {
-                    if let Some(conjunct) =
-                        sc.equivalence_to_conjunct(equivalence, bindings, ctx)?
-                    {
+                    if let Some(conjunct) = sc.equivalence_to_conjunct(equivalence, &columns)? {
                         if let Some(sel) = selection {
                             selection = Some(sel.and(conjunct))
                         } else {
@@ -572,6 +577,14 @@ impl MirToSql {
                         }
                     }
                 }
+
+                let projection = columns
+                    .into_iter()
+                    .map(|i| SelectItem::Expr {
+                        expr: Expr::Identifier(vec![i.clone()]),
+                        alias: Some(i),
+                    })
+                    .collect();
 
                 let body = SetExpr::Select(Box::new(Select {
                     distinct: None,
@@ -602,13 +615,14 @@ impl MirToSql {
 
                 let outer_columns = sc.column_info(expr, ctx);
                 assert!(outer_columns.len() == group_key.len() + aggregates.len());
+                let columns = sc.column_info(input, ctx);
 
                 // !!! selects group_key followed by each aggregate
                 let mut group_by = Vec::with_capacity(group_key.len());
                 let mut projection = Vec::with_capacity(outer_columns.len());
 
                 for (gk, ident) in group_key.iter().zip(outer_columns.iter()) {
-                    let expr = sc.to_sql_expr(gk, bindings, ctx)?;
+                    let expr = sc.to_sql_expr(gk, &columns)?;
                     group_by.push(expr.clone());
                     projection.push(SelectItem::Expr {
                         expr,
@@ -630,7 +644,7 @@ impl MirToSql {
                         shared_distinct_value = Some(agg.distinct);
                     }
 
-                    let expr = sc.agg_to_sql_expr(agg, bindings, ctx)?;
+                    let expr = sc.agg_to_sql_expr(agg, &columns)?;
                     projection.push(SelectItem::Expr {
                         expr,
                         alias: Some(ident.clone()),
@@ -641,7 +655,6 @@ impl MirToSql {
 
                 // extract the body and add columns in a separate query
                 let ident = sc.fresh_ident("reduce");
-                let columns = sc.column_info(input, ctx);
 
                 let cte = Cte::<Raw> {
                     alias: TableAlias {
@@ -690,25 +703,25 @@ impl MirToSql {
                 Ok(q)
             }
             TopK {
-                input,
-                group_key,
-                order_key,
-                limit,
-                offset,
-                monotonic,
-                expected_group_size,
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+                monotonic: _,
+                expected_group_size: _,
             } => unimplemented!("MIR-to-SQL TopK"),
-            Union { base, inputs } => unimplemented!("MIR-to-SQL Union"),
+            Union { base: _, inputs: _ } => unimplemented!("MIR-to-SQL Union"),
             ArrangeBy { input, keys: _keys } => sc.to_sql_query(input, bindings, ctx),
             // Negate forms are handled under `Union` but not elsewhere (SQL doesn't have negative cardinalities!)
-            Negate { input: _input } => Err(SqlConversionError::UnexpectedNegation),
+            Negate { input: _ } => Err(SqlConversionError::UnexpectedNegation),
             // Threshold forms are handled under `Union`'s LEFT JOIN detection but not elsewhere (SQL doesn't have negative cardinalities!)
-            Threshold { input } => Err(SqlConversionError::UnexpectedThreshold),
+            Threshold { input: _ } => Err(SqlConversionError::UnexpectedThreshold),
             LetRec {
-                ids: _ids,
-                values: _values,
-                limits: _limits,
-                body: _body,
+                ids: _,
+                values: _,
+                limits: _,
+                body: _,
             } => Err(SqlConversionError::UnexpectedWMR),
         })
     }
@@ -716,8 +729,7 @@ impl MirToSql {
     fn equivalence_to_conjunct(
         &mut self,
         exprs: &Vec<MirScalarExpr>,
-        bindings: &mut BTreeMap<LocalId, RawItemName>,
-        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+        columns: &[Ident],
     ) -> Result<Option<Expr<Raw>>, SqlConversionError> {
         let mut iter = exprs.into_iter();
         let Some(lhs) = iter.next() else {
@@ -727,13 +739,13 @@ impl MirToSql {
             return Ok(None);
         };
 
-        let canonical = self.to_sql_expr(lhs, bindings, ctx)?;
+        let canonical = self.to_sql_expr(lhs, columns)?;
 
-        let right = self.to_sql_expr(rhs, bindings, ctx)?;
+        let right = self.to_sql_expr(rhs, columns)?;
         let mut equiv = Expr::equals(canonical.clone(), right);
 
         for rhs in iter {
-            let right = self.to_sql_expr(rhs, bindings, ctx)?;
+            let right = self.to_sql_expr(rhs, columns)?;
             equiv = equiv.and(canonical.clone().equals(right));
         }
 
@@ -743,19 +755,87 @@ impl MirToSql {
     fn to_sql_expr(
         &mut self,
         expr: &MirScalarExpr,
-        bindings: &mut BTreeMap<LocalId, RawItemName>,
-        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+        columns: &[Ident],
     ) -> Result<Expr<Raw>, SqlConversionError> {
-        todo!()
+        use MirScalarExpr::*;
+        fn call<S: ToString>(f: S, args: Vec<Expr<Raw>>) -> Expr<Raw> {
+            Expr::call(
+                RawItemName::Name(UnresolvedItemName(vec![Ident::new_unchecked(
+                    f.to_string(),
+                )])),
+                args,
+            )
+        }
+
+        match expr {
+            Column(col) => Ok(Expr::Identifier(vec![columns[*col].clone()])),
+            Literal(Ok(row), _) => Ok(Expr::Row {
+                exprs: row
+                    .unpack()
+                    .into_iter()
+                    .map(|datum| self.to_sql_value(datum))
+                    .collect(),
+            }),
+            Literal(Err(err), _) => Err(SqlConversionError::BadConstant { err: err.clone() }),
+            CallUnmaterializable(uf) => Ok(call(uf, vec![])),
+            CallUnary { func, expr } => {
+                let arg = self.to_sql_expr(expr, columns)?;
+                Ok(call(func, vec![arg]))
+            }
+            CallBinary { func, expr1, expr2 } => {
+                let arg1 = self.to_sql_expr(expr1, columns)?;
+                let arg2 = self.to_sql_expr(expr2, columns)?;
+                Ok(call(func, vec![arg1, arg2]))
+            }
+            CallVariadic { func, exprs } => {
+                let mut args = Vec::with_capacity(exprs.len());
+                for expr in exprs {
+                    args.push(self.to_sql_expr(expr, columns)?);
+                }
+                Ok(call(func, args))
+            }
+            If { cond, then, els } => Ok(Expr::Case {
+                operand: None,
+                conditions: vec![self.to_sql_expr(cond, columns)?],
+                results: vec![self.to_sql_expr(then, columns)?],
+                else_result: Some(Box::new(self.to_sql_expr(els, columns)?)),
+            }),
+        }
     }
 
     fn agg_to_sql_expr(
         &mut self,
         expr: &AggregateExpr,
-        bindings: &mut BTreeMap<LocalId, RawItemName>,
-        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+        columns: &[Ident],
     ) -> Result<Expr<Raw>, SqlConversionError> {
-        todo!()
+        let arg = self.to_sql_expr(&expr.expr, columns)?;
+
+        use AggregateFunc::*;
+        match expr.func {
+            Any
+            | All
+            | JsonbAgg { .. }
+            | JsonbObjectAgg { .. }
+            | MapAgg { .. }
+            | ArrayConcat { .. }
+            | ListConcat { .. }
+            | StringAgg { .. }
+            | RowNumber { .. }
+            | Rank { .. }
+            | DenseRank { .. }
+            | LagLead { .. }
+            | FirstValue { .. }
+            | LastValue { .. }
+            | WindowAggregate { .. }
+            | Dummy { .. } => unimplemented!("MIR-to-SQL AggregateFunc"),
+            _ => (),
+        };
+
+        let name = RawItemName::Name(UnresolvedItemName(vec![Ident::new_unchecked(
+            expr.func.name(),
+        )]));
+
+        Ok(Expr::call(name, vec![arg]))
     }
 
     fn to_sql_value(&self, datum: Datum) -> Expr<Raw> {
