@@ -35,6 +35,68 @@ pub const fn is_bazel_build() -> bool {
     }
 }
 
+/// Returns a path to the specified binary.
+///
+/// Looks for the binary in the following places:
+///
+/// * Checks the `MZ_IMAGE_<NAME>` environment variable.
+/// * Bazel runfiles, if we're building with Bazel.
+/// * The current execution directory.
+/// * The parent of the current execution directory.
+///
+pub fn local_image_path(name: &str) -> Result<PathBuf, anyhow::Error> {
+    static KNOWN_PROGRAMS: &[(&'static str, &'static str)] =
+        // (Program Name, Bazel Runfiles Location)
+        //
+        // Note: I discovered the runfiles path by manually inspecting the
+        // sandbox, which is a little unsatisfying, but it does map to the
+        // Bazel target:
+        //     "@//src/clusterd:clusterd"
+        //  "_main/src/clusterd/clusterd"
+        //
+        &[
+            ("clusterd", "_main/src/clusterd/clusterd"),
+            ("environmentd", "_main/src/environmentd/environmentd"),
+        ];
+
+    #[cfg_attr(not(bazel), allow(unused))]
+    let (_, bazel_target) = KNOWN_PROGRAMS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| anyhow::anyhow!("unknown program '{name}'"))?;
+
+    if let Ok(path) = std::env::var(format!("MZ_IMAGE_{}", name.to_uppercase())) {
+        return Ok(PathBuf::from(path));
+    }
+
+    cfg_if! {
+        if #[cfg(bazel)] {
+            let r = runfiles::Runfiles::create().unwrap();
+            return Ok(r.rlocation(bazel_target));
+        } else {
+            let exec_path = std::env::current_exe()?;
+            let exec_dir = exec_path.parent().expect("executing the system root?");
+
+            // Check the the binary as a sibling (e.g. running a binary).
+            let candidate_1 = exec_dir.join(name);
+            if candidate_1.exists() {
+                return Ok(candidate_1);
+            }
+
+            // Check for the binary in the parent (e.g. integration tests).
+            let candidate_2 = exec_dir
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("execution dir is the root"))?
+                .join(name);
+            if candidate_2.exists() {
+                return Ok(candidate_2);
+            }
+
+            Err(anyhow::anyhow!("binary '{name}' not found!"))
+        }
+    }
+}
+
 /// Returns the path to `protoc`.
 ///
 /// Looks for `protoc` in the following places:
