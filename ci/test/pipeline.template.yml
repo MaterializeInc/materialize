@@ -58,6 +58,7 @@ steps:
           - "WORKSPACE"
           - ".bazelrc"
           - "**/*.bzl"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -71,6 +72,7 @@ steps:
           - "WORKSPACE"
           - ".bazelrc"
           - "**/*.bzl"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
