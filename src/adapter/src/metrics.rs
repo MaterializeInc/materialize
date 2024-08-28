@@ -130,7 +130,7 @@ impl Metrics {
                 name: "mz_slow_message_handling",
                 help: "Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.",
                 var_labels: ["message_kind"],
-                buckets: histogram_seconds_buckets(0.128, 32.0),
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             optimization_notices: registry.register(metric!(
                 name: "mz_optimization_notices",
