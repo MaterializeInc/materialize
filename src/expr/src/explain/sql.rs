@@ -11,14 +11,16 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::str::Indent;
 use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
 use mz_repr::{Datum, GlobalId};
 use mz_sql_parser::ast::{
-    Cte, CteBlock, Expr, Ident, Query, Raw, RawItemName, Select, SelectItem, SetExpr, TableAlias,
-    TableFactor, TableWithJoins, UnresolvedItemName, Value, Values,
+    Cte, CteBlock, Expr, Ident, JoinConstraint, JoinOperator, Query, Raw, RawItemName, Select,
+    SelectItem, SetExpr, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value,
+    Values,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
@@ -467,7 +469,127 @@ impl MirToSql {
                 inputs,
                 equivalences,
                 implementation,
-            } => todo!(),
+            } => {
+                let num_inputs = inputs.len();
+
+                if num_inputs == 0 {
+                    return Ok(SqlQuery {
+                        ctes: CteBlock::Simple(vec![]),
+                        body: SetExpr::Values(Values(vec![])),
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    });
+                }
+
+                if num_inputs == 1 {
+                    return sc.to_sql_query(&inputs[0], bindings, ctx);
+                }
+
+                let mut q_inputs = Vec::with_capacity(num_inputs);
+                let mut q_columns = Vec::with_capacity(num_inputs);
+                for input in inputs.into_iter() {
+                    let q = sc.to_sql_query(input, bindings, ctx)?;
+                    q_inputs.push(q);
+                    q_columns.push(sc.column_info(input, ctx));
+                }
+                let q_idents: Vec<Ident> =
+                    (0..num_inputs).map(|_| sc.fresh_ident("join")).collect();
+
+                let (first, rest): (_, Vec<_>) = match implementation {
+                    crate::JoinImplementation::Differential((start, _, _), order) => {
+                        (*start, order.into_iter().map(|(idx, _, _)| *idx).collect())
+                    }
+                    crate::JoinImplementation::DeltaQuery(orders) => (
+                        orders[0][0].0,
+                        orders[0][1..].into_iter().map(|(idx, _, _)| *idx).collect(),
+                    ),
+                    crate::JoinImplementation::IndexedFilter(_, _, _, _)
+                    | crate::JoinImplementation::Unimplemented => {
+                        (0, (1..q_inputs.len()).collect())
+                    }
+                };
+
+                let from = vec![TableWithJoins {
+                    relation: TableFactor::Table {
+                        name: RawItemName::Name(UnresolvedItemName(vec![q_idents[first].clone()])),
+                        alias: None,
+                    },
+                    joins: rest
+                        .into_iter()
+                        .map(|idx| mz_sql_parser::ast::Join {
+                            relation: TableFactor::Table {
+                                name: RawItemName::Name(UnresolvedItemName(vec![
+                                    q_idents[idx].clone()
+                                ])),
+                                alias: None,
+                            },
+                            join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::Value(
+                                Value::Boolean(true),
+                            ))),
+                        })
+                        .collect(),
+                }];
+
+                // TODO(mgree): would be nice to denest these
+                // TODO(mgree): generate CTEs in same order as from
+                let ctes = CteBlock::Simple(
+                    q_inputs
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, query)| Cte {
+                            alias: TableAlias {
+                                name: q_idents[i].clone(),
+                                columns: q_columns[i].clone(),
+                                strict: false,
+                            },
+                            id: (),
+                            query,
+                        })
+                        .collect(),
+                );
+
+                let projection = q_columns
+                    .concat()
+                    .into_iter()
+                    .map(|i| SelectItem::Expr {
+                        expr: Expr::Identifier(vec![i.clone()]),
+                        alias: Some(i),
+                    })
+                    .collect();
+
+                // TODO(mgree): rather than giving ON(true) and giving a where clause, move these equivalences into the join itself
+                let mut selection: Option<Expr<Raw>> = None;
+                for equivalence in equivalences {
+                    if let Some(conjunct) =
+                        sc.equivalence_to_conjunct(equivalence, bindings, ctx)?
+                    {
+                        if let Some(sel) = selection {
+                            selection = Some(sel.and(conjunct))
+                        } else {
+                            selection = Some(conjunct);
+                        }
+                    }
+                }
+
+                let body = SetExpr::Select(Box::new(Select {
+                    distinct: None,
+                    projection,
+                    from,
+                    selection,
+                    group_by: vec![],
+                    having: None,
+                    options: vec![],
+                }));
+
+                Ok(Query {
+                    ctes,
+                    body,
+                    order_by: vec![],
+                    limit: None,
+                    offset: None,
+                })
+            }
             Reduce {
                 input,
                 group_key,
@@ -496,6 +618,33 @@ impl MirToSql {
                 body: _body,
             } => Err(SqlConversionError::UnexpectedWMR),
         })
+    }
+
+    fn equivalence_to_conjunct(
+        &mut self,
+        exprs: &Vec<MirScalarExpr>,
+        bindings: &mut BTreeMap<LocalId, RawItemName>,
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+    ) -> Result<Option<Expr<Raw>>, SqlConversionError> {
+        let mut iter = exprs.into_iter();
+        let Some(lhs) = iter.next() else {
+            return Ok(None);
+        };
+        let Some(rhs) = iter.next() else {
+            return Ok(None);
+        };
+
+        let canonical = self.to_sql_expr(lhs, bindings, ctx)?;
+
+        let right = self.to_sql_expr(rhs, bindings, ctx)?;
+        let mut equiv = Expr::equals(canonical.clone(), right);
+
+        for rhs in iter {
+            let right = self.to_sql_expr(rhs, bindings, ctx)?;
+            equiv = equiv.and(canonical.clone().equals(right));
+        }
+
+        Ok(Some(equiv))
     }
 
     fn to_sql_expr(
