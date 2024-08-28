@@ -55,6 +55,7 @@ def flatten(xss):
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-full", action="store_true")
     parser.add_argument("--miri-fast", action="store_true")
+    parser.add_argument("--bazel", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach", "minio")
@@ -82,7 +83,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     extra_env = {}
 
+    if sanitizer != Sanitizer.none:
+        assert not args.bazel, f"Bazel doesn't support Sanitizers, {sanitizer}"
+
     if coverage:
+        assert not args.bazel, "Bazel doesn't support getting coverage"
+
         # TODO(def-): For coverage inside of clusterd called from unit tests need
         # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
         # aggregate the data.
@@ -126,6 +132,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             buildkite.upload_artifact("coverage/cargotest.lcov.zst")
     else:
         if args.miri_full:
+            assert not args.bazel, "Bazel doesn't support Miri"
+
             spawn.runv(
                 [
                     "bin/ci-builder",
@@ -136,6 +144,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env=env,
             )
         elif args.miri_fast:
+            assert not args.bazel, "Bazel doesn't support Miri"
+
             spawn.runv(
                 [
                     "bin/ci-builder",
@@ -199,17 +209,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                 )
             else:
-                spawn.runv(
-                    [
-                        "cargo",
-                        "build",
-                        "--workspace",
-                        "--bin",
-                        "clusterd",
-                        "--profile=ci",
-                    ],
-                    env=env,
-                )
+                # The necessary tests that require clusterd build it on their own.
+                if not args.bazel:
+                    spawn.runv(
+                        [
+                            "cargo",
+                            "build",
+                            "--workspace",
+                            "--bin",
+                            "clusterd",
+                            "--profile=ci",
+                        ],
+                        env=env,
+                    )
 
             cpu_count = os.cpu_count()
             assert cpu_count
@@ -260,17 +272,40 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         print(f"Test against package {pkg['name']} failed, continuing")
 
             else:
-                spawn.runv(
-                    [
-                        "cargo",
-                        "nextest",
-                        "run",
-                        "--workspace",
-                        "--all-features",
-                        "--profile=ci",
-                        "--cargo-profile=ci",
-                        f"--partition=count:{partition}/{total}",
-                        *args.args,
-                    ],
-                    env=env,
-                )
+                if args.bazel:
+                    passthrough_args = [
+                        "ZOOKEEPER_ADDR",
+                        "KAFKA_ADDRS",
+                        "SCHEMA_REGISTRY_URL",
+                        "POSTGRES_URL",
+                        "COCKROACH_URL",
+                        "MZ_SOFT_ASSERTIONS",
+                        "MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET",
+                        "MZ_S3_UPLOADER_TEST_S3_BUCKET",
+                        "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL",
+                    ]
+                    test_args = [f"--test_env={arg}" for arg in passthrough_args]
+                    spawn.runv(
+                        [
+                            "bazel",
+                            "test",
+                            *test_args,
+                            *args.args,
+                        ],
+                        env=env,
+                    )
+                else:
+                    spawn.runv(
+                        [
+                            "cargo",
+                            "nextest",
+                            "run",
+                            "--workspace",
+                            "--all-features",
+                            "--profile=ci",
+                            "--cargo-profile=ci",
+                            f"--partition=count:{partition}/{total}",
+                            *args.args,
+                        ],
+                        env=env,
+                    )

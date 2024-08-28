@@ -273,6 +273,37 @@ steps:
       # Because of scratch-aws-access
       queue: builder-linux-aarch64
 
+  - id: cargo-test-bazel
+    label: ":bazel: Cargo Test"
+    timeout_in_minutes: 60
+    inputs:
+      - Cargo.lock
+      - Cargo.toml
+      - ".config/nextest.toml"
+      - "**/Cargo.toml"
+      - "**/*.rs"
+      - "**/BUILD.bazel"
+      - "**/*.proto"
+      - "**/testdata/**"
+    depends_on: []
+    env:
+      AWS_DEFAULT_REGION: "us-east-1"
+      # cargo-test's coverage is handled separately by cargo-llvm-cov
+      BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+          args: [
+            "--bazel",
+            "bin/bazel query 'kind(rust_test|rust_doc_test)'",
+            "--",
+            "--remote_cache=https://bazel-remote.dev.materialize.com",
+          ]
+    agents:
+      # Because of scratch-aws-access
+      queue: builder-linux-aarch64
+
   - id: testdrive
     label: Testdrive %N
     depends_on: build-aarch64
