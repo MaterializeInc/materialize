@@ -38,6 +38,7 @@ mz_arrangement_heap_size_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_he
 mz_arrangement_records_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_records_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_arrangement_records_raw"␠("operator_id",␠"worker_id")
 mz_arrangement_sharing_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_sharing_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_arrangement_sharing_raw"␠("operator_id",␠"worker_id")
 mz_cluster_replica_history_ind  CREATE␠INDEX␠"mz_cluster_replica_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_history"␠("dropped_at")
+mz_cluster_replica_metrics_history_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_metrics_history"␠("replica_id")
 mz_cluster_replica_metrics_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_metrics"␠("replica_id")
 mz_cluster_replica_sizes_ind  CREATE␠INDEX␠"mz_cluster_replica_sizes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_cluster_replica_sizes"␠("size")
 mz_cluster_replica_statuses_ind  CREATE␠INDEX␠"mz_cluster_replica_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_statuses"␠("replica_id")
@@ -208,6 +209,12 @@ mz_cluster_replica_metrics  disk_bytes
 mz_cluster_replica_metrics  memory_bytes
 mz_cluster_replica_metrics  process_id
 mz_cluster_replica_metrics  replica_id
+mz_cluster_replica_metrics_history  cpu_nano_cores
+mz_cluster_replica_metrics_history  disk_bytes
+mz_cluster_replica_metrics_history  memory_bytes
+mz_cluster_replica_metrics_history  occurred_at
+mz_cluster_replica_metrics_history  process_id
+mz_cluster_replica_metrics_history  replica_id
 mz_cluster_replica_sizes  cpu_nano_cores
 mz_cluster_replica_sizes  credits_per_hour
 mz_cluster_replica_sizes  disk_bytes

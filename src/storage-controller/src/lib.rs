@@ -2975,7 +2975,8 @@ where
             // it resilient to the upper moving concurrently.
             IntrospectionType::SourceStatusHistory
             | IntrospectionType::SinkStatusHistory
-            | IntrospectionType::PrivatelinkConnectionStatusHistory => {
+            | IntrospectionType::PrivatelinkConnectionStatusHistory
+            | IntrospectionType::ReplicaMetricsHistory => {
                 if !self.read_only {
                     self.prepare_introspection_collection(
                         id,
@@ -3067,6 +3068,9 @@ where
             IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
+            }
+            IntrospectionType::ReplicaMetricsHistory => {
+                // TODO: partially truncate
             }
             IntrospectionType::StorageSourceStatistics => {
                 let prev = self.snapshot_statistics(id, recent_upper).await;

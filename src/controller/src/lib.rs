@@ -48,12 +48,14 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
+use mz_storage_client::controller::{
+    IntrospectionType, StorageController, StorageMetadata, StorageTxn,
+};
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -175,6 +177,8 @@ pub struct Controller<T: Timestamp = mz_repr::Timestamp> {
     metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
     /// Periodic notification to record frontiers.
     frontiers_ticker: Interval,
+    /// A function providing the current wallclock time.
+    now: NowFn,
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
@@ -246,6 +250,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             metrics_tx: _,
             metrics_rx: _,
             frontiers_ticker: _,
+            now: _,
             persist_pubsub_url: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
@@ -534,11 +539,7 @@ where
             Readiness::NotReady => Ok(None),
             Readiness::Storage => self.process_storage_response(storage_metadata).await,
             Readiness::Compute => self.process_compute_response().await,
-            Readiness::Metrics => Ok(self
-                .metrics_rx
-                .next()
-                .await
-                .map(|(id, metrics)| ControllerResponse::ComputeReplicaMetrics(id, metrics))),
+            Readiness::Metrics => self.process_replica_metrics().await,
             Readiness::Frontiers => {
                 self.record_frontiers().await;
                 Ok(None)
@@ -586,6 +587,52 @@ where
             }
         }
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
+    }
+
+    async fn process_replica_metrics(
+        &mut self,
+    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let Some((id, metrics)) = self.metrics_rx.next().await else {
+            return Ok(None);
+        };
+
+        self.record_replica_metrics(id, &metrics).await;
+        Ok(Some(ControllerResponse::ComputeReplicaMetrics(id, metrics)))
+    }
+
+    async fn record_replica_metrics(
+        &mut self,
+        replica_id: ReplicaId,
+        metrics: &[ServiceProcessMetrics],
+    ) {
+        if self.read_only() {
+            return;
+        }
+
+        let now = mz_ore::now::to_datetime((self.now)());
+        let now_tz = now.try_into().expect("must fit");
+
+        let replica_id = replica_id.to_string();
+        let mut row = Row::default();
+        let updates = metrics
+            .iter()
+            .zip(0..)
+            .map(|(m, process_id)| {
+                row.packer().extend(&[
+                    Datum::String(&replica_id),
+                    Datum::UInt64(process_id),
+                    m.cpu_nano_cores.into(),
+                    m.memory_bytes.into(),
+                    m.disk_usage_bytes.into(),
+                    Datum::TimestampTz(now_tz),
+                ]);
+                (row.clone(), 1)
+            })
+            .collect();
+
+        self.storage
+            .append_introspection_updates(IntrospectionType::ReplicaMetricsHistory, updates)
+            .await;
     }
 
     async fn record_frontiers(&mut self) {
@@ -679,7 +726,7 @@ where
             config.build_info,
             config.persist_location,
             config.persist_clients,
-            config.now,
+            config.now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
@@ -721,6 +768,7 @@ where
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             frontiers_ticker,
+            now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),

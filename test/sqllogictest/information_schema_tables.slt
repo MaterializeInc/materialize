@@ -289,11 +289,19 @@ mz_cluster_replica_metrics
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_replica_metrics_history
+SOURCE
+materialize
+mz_internal
 mz_cluster_replica_statuses
 BASE TABLE
 materialize
 mz_internal
 mz_cluster_replica_utilization
+VIEW
+materialize
+mz_internal
+mz_cluster_replica_utilization_history
 VIEW
 materialize
 mz_internal
