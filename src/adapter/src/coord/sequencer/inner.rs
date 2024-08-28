@@ -554,13 +554,15 @@ impl Coordinator {
                         }
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
-                            external_reference,
+                            external_reference: _,
                             details,
+                            data_config,
                         } => (
                             DataSource::IngestionExport {
                                 ingestion_id,
-                                external_reference,
                                 details,
+                                data_config: data_config
+                                    .into_inline_connection(coord.catalog().state()),
                             },
                             source_status_collection_id,
                         ),
@@ -896,10 +898,12 @@ impl Coordinator {
                     ingestion_id,
                     external_reference,
                     details,
+                    data_config,
                 } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
                     details,
+                    data_config,
                 }),
                 o => {
                     unreachable!("CREATE TABLE data source got {:?}", o)
@@ -978,8 +982,9 @@ impl Coordinator {
                         match data_source {
                             DataSourceDesc::IngestionExport {
                                 ingestion_id,
-                                external_reference,
+                                external_reference: _,
                                 details,
+                                data_config,
                             } => {
                                 // TODO: It's a little weird that a table will be present in this
                                 // source status collection, we might want to split out into a separate
@@ -992,8 +997,9 @@ impl Coordinator {
                                     desc: table.desc.clone(),
                                     data_source: DataSource::IngestionExport {
                                         ingestion_id,
-                                        external_reference,
                                         details,
+                                        data_config: data_config
+                                            .into_inline_connection(coord.catalog.state()),
                                     },
                                     since: None,
                                     status_collection_id,
@@ -3858,13 +3864,15 @@ impl Coordinator {
                         // Subsources use source statuses.
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
-                            external_reference,
+                            external_reference: _,
                             details,
+                            data_config,
                         } => (
                             DataSource::IngestionExport {
                                 ingestion_id,
-                                external_reference,
                                 details,
+                                data_config: data_config
+                                    .into_inline_connection(self.catalog().state()),
                             },
                             source_status_collection_id,
                         ),

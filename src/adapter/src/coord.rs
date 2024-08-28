@@ -2405,13 +2405,14 @@ impl Coordinator {
                 }
                 DataSourceDesc::IngestionExport {
                     ingestion_id,
-                    external_reference,
+                    external_reference: _,
                     details,
+                    data_config,
                 } => (
                     DataSource::IngestionExport {
                         ingestion_id,
-                        external_reference,
                         details,
+                        data_config: data_config.into_inline_connection(catalog.state()),
                     },
                     Some(source_status_collection_id),
                 ),

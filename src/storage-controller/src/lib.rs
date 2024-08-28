@@ -72,8 +72,7 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    ExportReference, GenericSourceConnection, IngestionDescription, SourceData, SourceDesc,
-    SourceExport, SourceExportDetails,
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
 };
 use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -664,14 +663,9 @@ where
             // Ensure that the ingestion has an export for its primary source.
             // This is done in an awkward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
-                ingestion.source_exports.insert(
-                    id,
-                    SourceExport {
-                        ingestion_output: None,
-                        storage_metadata: (),
-                        details: SourceExportDetails::None,
-                    },
-                );
+                ingestion
+                    .source_exports
+                    .insert(id, ingestion.desc.primary_source_export());
             }
 
             let write_frontier = write.upper();
@@ -759,8 +753,8 @@ where
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
-                    external_reference,
                     details,
+                    data_config,
                 } => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "not registering {} with a controller persist worker", id);
                     // Adjust the source to contain this export.
@@ -774,11 +768,9 @@ where
                             ingestion_desc.source_exports.insert(
                                 id,
                                 SourceExport {
-                                    ingestion_output: Some(ExportReference::from(
-                                        external_reference.clone(),
-                                    )),
                                     storage_metadata: (),
                                     details: details.clone(),
+                                    data_config: data_config.clone(),
                                 },
                             );
 
@@ -3742,9 +3734,9 @@ where
         for (
             export_id,
             SourceExport {
-                ingestion_output,
                 storage_metadata: (),
                 details,
+                data_config,
             },
         ) in ingestion_description.source_exports
         {
@@ -3752,9 +3744,9 @@ where
             source_exports.insert(
                 export_id,
                 SourceExport {
-                    ingestion_output,
                     storage_metadata: export_storage_metadata,
                     details,
+                    data_config,
                 },
             );
         }

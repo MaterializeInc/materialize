@@ -637,7 +637,7 @@ where
             }
             StorageCommand::RunIngestions(ingestions) => ingestions
                 .iter()
-                .for_each(|i| self.insert_new_uppers(i.description.subsource_ids())),
+                .for_each(|i| self.insert_new_uppers(i.description.collection_ids())),
             StorageCommand::RunSinks(exports) => {
                 exports.iter().for_each(|e| self.insert_new_uppers([e.id]))
             }

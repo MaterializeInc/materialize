@@ -87,7 +87,7 @@ use mz_storage_types::sources::encoding::{
     RegexEncoding, SourceDataEncoding,
 };
 use mz_storage_types::sources::envelope::{
-    KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
+    KeyEnvelope, NoneEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
@@ -103,8 +103,8 @@ use mz_storage_types::sources::postgres::{
 };
 use mz_storage_types::sources::{
     GenericSourceConnection, MySqlSourceExportDetails, PostgresSourceExportDetails,
-    ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDetails,
-    SourceExportStatementDetails, Timeline,
+    ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDataConfig,
+    SourceExportDetails, SourceExportStatementDetails, Timeline,
 };
 use prost::Message;
 
@@ -1137,10 +1137,16 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
+    // TODO: Refactor the above encoding and envelope checks to be re-used
+    // for `CREATE TABLE .. FROM SOURCE` statements as well.
+
     let source_desc = SourceDesc::<ReferencedConnection> {
         connection: external_connection,
-        encoding,
-        envelope: envelope.clone(),
+        // TODO: Remove this once sources no longer output to a primary collection.
+        primary_export: SourceExportDataConfig {
+            encoding,
+            envelope: envelope.clone(),
+        },
         timestamp_interval,
     };
 
@@ -1417,6 +1423,14 @@ pub fn plan_create_subsource(
             ingestion_id,
             external_reference,
             details,
+            // Subsources don't currently support non-default envelopes / encoding
+            data_config: SourceExportDataConfig {
+                envelope: SourceEnvelope::None(NoneEnvelope {
+                    key_envelope: KeyEnvelope::None,
+                    key_arity: 0,
+                }),
+                encoding: None,
+            },
         }
     } else if progress {
         DataSourceDesc::Progress
@@ -1521,6 +1535,16 @@ pub fn plan_create_table_from_source(
         ingestion_id,
         external_reference: external_reference.clone(),
         details,
+        // Tables don't currently support non-default envelopes / encoding
+        // TODO(roshan): Once we add support for kafka source tables, refactor
+        // this.
+        data_config: SourceExportDataConfig {
+            envelope: SourceEnvelope::None(NoneEnvelope {
+                key_envelope: KeyEnvelope::None,
+                key_arity: 0,
+            }),
+            encoding: None,
+        },
     };
 
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
