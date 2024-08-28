@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
 use std::str::FromStr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
+use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
@@ -32,6 +34,7 @@ use mz_ore::{
 };
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -41,6 +44,7 @@ use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::Container;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -314,8 +318,37 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindJson>(
         &mut self,
         updates: Vec<(S, Diff)>,
-    ) -> Result<Timestamp, CatalogError> {
+    ) -> Result<Timestamp, DurableCatalogError> {
         assert_eq!(self.mode, Mode::Writable);
+
+        // This awkward code allows us to perform an expensive soft assert that requires cloning
+        // `updates` twice, after `updates` has been consumed.
+        let contains_fence = if SOFT_ASSERTIONS.load(Ordering::Relaxed) {
+            let updates: Vec<_> = updates.clone();
+            let parsed_updates: Vec<_> = updates
+                .clone()
+                .into_iter()
+                .map(|(update, diff)| {
+                    let update: StateUpdateKindJson = update.into();
+                    (update, diff)
+                })
+                .filter_map(|(update, diff)| {
+                    <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(update)
+                        .ok()
+                        .map(|update| (update, diff))
+                })
+                .collect();
+            let contains_retraction = parsed_updates
+                .iter()
+                .any(|(update, diff)| matches!(update, StateUpdateKind::Epoch(..)) && *diff == -1);
+            let contains_addition = parsed_updates
+                .iter()
+                .any(|(update, diff)| matches!(update, StateUpdateKind::Epoch(..)) && *diff == 1);
+            let contains_fence = contains_retraction && contains_addition;
+            Some((contains_fence, updates))
+        } else {
+            None
+        };
 
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
@@ -330,14 +363,20 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 Antichain::from_elem(next_upper),
             )
             .await
-            .expect("invalid usage")
-            .map_err(|upper_mismatch| FenceError::Upper {
-                expected_upper: antichain_to_timestamp(upper_mismatch.expected),
-                actual_upper: antichain_to_timestamp(upper_mismatch.current),
-            });
-        // Try and get a more detailed fence error, if one exists, by syncing with the shard.
-        if let Err(e) = res {
+            .expect("invalid usage");
+
+        // There was an upper mismatch which means something else must have written to the catalog.
+        // Syncing to the current upper should result in a fence error since writing to the catalog
+        // without fencing other catalogs should be impossible. The one exception is if we are
+        // trying to fence other catalogs with this write, in which case we won't see a fence error.
+        if let Err(e @ UpperMismatch { .. }) = res {
             self.sync_to_current_upper().await?;
+            if let Some((contains_fence, updates)) = contains_fence {
+                assert!(
+                    contains_fence,
+                    "updates were neither fenced nor fencing and encountered an upper mismatch: {updates:#?}"
+                )
+            }
             return Err(e.into());
         }
 

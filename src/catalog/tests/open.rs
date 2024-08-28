@@ -687,7 +687,7 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap();
 
-    // Unopened catalog should be fenced now with an epoch fence.
+    // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
     assert!(
         matches!(
@@ -738,7 +738,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .await
         .unwrap();
 
-    // Unopened catalog should be fenced now with an epoch fence.
+    // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
     assert!(
         matches!(
@@ -751,6 +751,80 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
     );
 
     let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
+        "unexpected err: {err:?}"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_fencing_during_write() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_fencing_during_write(state_builder).await;
+}
+
+async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
+    let deploy_generation = 0;
+    let mut state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation)
+        .unwrap_build()
+        .await
+        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    // Drain updates.
+    let _ = state.sync_to_current_updates().await;
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("cmu".to_string(), Some(1900)).unwrap();
+
+    // Open catalog, which will bump the epoch.
+    let mut state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation)
+        .unwrap_build()
+        .await
+        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    // Drain updates.
+    let _ = state.sync_to_current_updates().await;
+
+    // Committing results in an epoch fence error.
+    let err = txn.commit().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("wes".to_string(), Some(1831)).unwrap();
+
+    // Open catalog, which will bump the epoch AND deploy generation.
+    let _state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation + 1)
+        .unwrap_build()
+        .await
+        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+
+    // Committing results in a deploy generation fence error.
+    let err = txn.commit().await.unwrap_err();
     assert!(
         matches!(
             err,
