@@ -28,7 +28,8 @@ build --incompatible_strict_action_env
 common --copt=-mmacosx-version-min=14.0
 common --linkopt=-mmacosx-version-min=14.0
 common --macos_sdk_version=14.0
-
+# Note(parkmycar): Ideally we would error on unused command line arguments, but
+# trying to constrain the above arguments to just macos doesn't seem to work.
 common --copt=-Wno-unused-command-line-argument
 common --linkopt=-Wno-unused-command-line-argument
 
@@ -60,7 +61,7 @@ build:macos --experimental_inmemory_sandbox_stashes
 
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
 #
-# TODO(parkmycar): Enable this under a "debug" or "verbose" 
+# TODO(parkmycar): Enable this under a "debug" or "verbose"
 # common --explain=bazel-explain.log
 # common --verbose_explanations
 
