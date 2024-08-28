@@ -152,10 +152,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut reader_snapshot_table_info = BTreeMap::new();
 
     for output in source_outputs.into_iter() {
-        mz_ore::soft_assert_or_log!(
-            output.output_index != 0,
-            "primary collection should not be represented in output info"
-        );
         // Determine which outputs need to be snapshot and which already have been.
         if *output.resume_upper != [GtidPartition::minimum()] {
             // Already has been snapshotted.

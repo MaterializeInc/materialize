@@ -18,8 +18,7 @@ use futures::StreamExt;
 use mz_repr::Row;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
-    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput,
-    LoadGeneratorSourceConnection,
+    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -210,10 +209,14 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     // figure out which output types from the generator belong to which output indexes
     let mut output_map = BTreeMap::new();
     for (_, export) in config.source_exports.iter() {
-        let output_type = match &export.details {
+        let output_type = match &export.export.details {
             SourceExportDetails::LoadGenerator(details) => details.output,
-            SourceExportDetails::None => LoadGeneratorOutput::Default,
-            _ => panic!("unexpected source export details: {:?}", export.details),
+            // This is an export that doesn't need any data output to it.
+            SourceExportDetails::None => continue,
+            _ => panic!(
+                "unexpected source export details: {:?}",
+                export.export.details
+            ),
         };
         output_map
             .entry(output_type)

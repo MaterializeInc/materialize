@@ -33,7 +33,9 @@ use mz_storage_types::errors::{
 use mz_storage_types::sources::kafka::{
     KafkaMetadataKind, KafkaSourceConnection, KafkaTimestamp, RangeBound,
 };
-use mz_storage_types::sources::{MzOffset, SourceExport, SourceExportDetails, SourceTimestamp};
+use mz_storage_types::sources::{
+    IndexedSourceExport, MzOffset, SourceExport, SourceExportDetails, SourceTimestamp,
+};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
@@ -191,10 +193,14 @@ impl SourceRender for KafkaSourceConnection {
 
         let mut outputs = vec![];
         for (id, export) in &config.source_exports {
-            let SourceExport {
+            let IndexedSourceExport {
                 ingestion_output,
-                details,
-                storage_metadata: _,
+                export:
+                    SourceExport {
+                        details,
+                        storage_metadata: _,
+                        data_config: _,
+                    },
             } = export;
             let resume_upper = Antichain::from_iter(
                 config
@@ -205,31 +211,17 @@ impl SourceRender for KafkaSourceConnection {
                     .map(Partitioned::<RangeBound<PartitionId>, MzOffset>::decode_row),
             );
 
-            // Output index 0 is the primary source which is a valid output
-            // for legacy Kafka sources.
-            // TODO: When we refactor the SQL layer to include full details on the primary
-            // collection's `SourceExport` struct we should remove this block.
-            let metadata_columns = if *ingestion_output == 0 {
-                // The primary source output won't have source-export specific
-                // details, since its details are stored on the primary source object
-                // itself.
-                match details {
-                    SourceExportDetails::None => self
-                        .metadata_columns
-                        .iter()
-                        .map(|(_name, kind)| kind.clone())
-                        .collect::<Vec<_>>(),
-                    _ => panic!("unexpected source export details: {:?}", details),
+            let metadata_columns = match details {
+                SourceExportDetails::Kafka(details) => details
+                    .metadata_columns
+                    .iter()
+                    .map(|(_name, kind)| kind.clone())
+                    .collect::<Vec<_>>(),
+                SourceExportDetails::None => {
+                    // This is an export that doesn't need any data output to it.
+                    continue;
                 }
-            } else {
-                match details {
-                    SourceExportDetails::Kafka(details) => details
-                        .metadata_columns
-                        .iter()
-                        .map(|(_name, kind)| kind.clone())
-                        .collect::<Vec<_>>(),
-                    _ => panic!("unexpected source export details: {:?}", details),
-                }
+                _ => panic!("unexpected source export details: {:?}", details),
             };
 
             let output = SourceOutputInfo {

@@ -50,7 +50,9 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
+use mz_storage_types::sources::{
+    IndexedSourceExport, SourceConnection, SourceExportDataConfig, SourceTimestamp,
+};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -92,7 +94,7 @@ pub struct RawSourceCreationConfig {
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
     /// The details of the outputs from this ingestion.
-    pub source_exports: BTreeMap<GlobalId, SourceExport<usize, CollectionMetadata>>,
+    pub source_exports: BTreeMap<GlobalId, IndexedSourceExport<CollectionMetadata>>,
     /// The ID of the worker on which this operator is executing
     pub worker_id: usize,
     /// The total count of workers
@@ -170,6 +172,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
+        SourceExportDataConfig,
     )>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -215,7 +218,7 @@ where
     let (streams, health, source_tokens) = if use_reclock_v2 {
         let (reclock_pusher, reclocked) = reclock(&remap_collection, config.as_of.clone());
 
-        let streams = demux_subsources(config.clone(), reclocked);
+        let streams = demux_source_exports(config.clone(), reclocked);
 
         let config = config.clone();
         scope.parent.scoped("SourceTimeDomain", move |scope| {
@@ -626,6 +629,7 @@ fn reclock_operator<G, FromTime, M>(
 ) -> Vec<(
     Collection<G, SourceOutput<FromTime>, Diff>,
     Collection<G, DataflowError, Diff>,
+    SourceExportDataConfig,
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -870,14 +874,18 @@ where
             },
         );
 
+    let data_config_per_index = source_exports
+        .values()
+        .map(|export| (export.ingestion_output, &export.export.data_config))
+        .collect::<BTreeMap<_, _>>();
+
     // We use the output index from the source export to route values to its ok
     // and err streams. There is one partition per source export; however,
     // source export indices can be non-contiguous, so we need to ensure we have
-    // at least as many as we reference.
+    // at least as many partitions as we reference.
     let partition_count = u64::cast_from(
-        source_exports
-            .values()
-            .map(|export| export.ingestion_output)
+        data_config_per_index
+            .keys()
             .max()
             .expect("source exports must have elements")
             + 1,
@@ -899,16 +907,29 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    ok_streams.into_iter().zip_eq(err_streams).collect()
+    ok_streams
+        .into_iter()
+        .zip_eq(err_streams)
+        .enumerate()
+        .filter_map(|(idx, (ok_stream, err_stream))| {
+            // We only want to return streams for partitions with a data config, which
+            // indicates that they actually have data. The filtered streams were just
+            // empty partitions for any non-continuous values in the output indexes.
+            data_config_per_index
+                .get(&idx)
+                .map(|data_config| (ok_stream, err_stream, (*data_config).clone()))
+        })
+        .collect()
 }
 
-/// Demultiplexes a combined stream of all subsources into individual collections per subsource
-fn demux_subsources<G, FromTime>(
+/// Demultiplexes a combined stream of all source exports into individual collections per source export
+fn demux_source_exports<G, FromTime>(
     config: RawSourceCreationConfig,
     input: Collection<G, (usize, Result<SourceOutput<FromTime>, DataflowError>), Diff>,
 ) -> Vec<(
     Collection<G, SourceOutput<FromTime>, Diff>,
     Collection<G, DataflowError, Diff>,
+    SourceExportDataConfig,
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -974,14 +995,18 @@ where
         },
     );
 
+    let data_config_per_index = source_exports
+        .values()
+        .map(|export| (export.ingestion_output, &export.export.data_config))
+        .collect::<BTreeMap<_, _>>();
+
     // We use the output index from the source export to route values to its ok
     // and err streams. There is one partition per source export; however,
     // source export indices can be non-contiguous, so we need to ensure we have
-    // at least as many as we reference.
+    // at least as many partitions as we reference.
     let partition_count = u64::cast_from(
-        source_exports
-            .values()
-            .map(|export| export.ingestion_output)
+        data_config_per_index
+            .keys()
             .max()
             .expect("source exports must have elements")
             + 1,
@@ -1003,7 +1028,19 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    ok_streams.into_iter().zip_eq(err_streams).collect()
+    ok_streams
+        .into_iter()
+        .zip_eq(err_streams)
+        .enumerate()
+        .filter_map(|(idx, (ok_stream, err_stream))| {
+            // We only want to return streams for partitions with a data config, which
+            // indicates that they actually have data. The filtered streams were just
+            // empty partitions for any non-continuous values in the output indexes.
+            data_config_per_index
+                .get(&idx)
+                .map(|data_config| (ok_stream, err_stream, (*data_config).clone()))
+        })
+        .collect()
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the

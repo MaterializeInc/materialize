@@ -112,7 +112,7 @@ where
     needed_tokens.extend(source_tokens);
 
     let mut outputs = vec![];
-    for (ok_source, err_source) in streams {
+    for (ok_source, err_source, data_config) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
@@ -123,6 +123,7 @@ where
             dataflow_debug_name,
             id,
             ok_source,
+            data_config,
             description.clone(),
             error_collections,
             storage_state,
@@ -144,6 +145,7 @@ fn render_source_stream<G, FromTime>(
     dataflow_debug_name: &String,
     id: GlobalId,
     ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
+    data_config: SourceExportDataConfig,
     description: IngestionDescription<CollectionMetadata>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &crate::storage_state::StorageState,
@@ -161,11 +163,13 @@ where
 {
     let mut needed_tokens = vec![];
 
+    // Use the envelope and encoding configs for this particular source export
+    let SourceExportDataConfig { encoding, envelope } = data_config;
+
     let SourceDesc {
-        encoding,
-        envelope,
         connection: _,
         timestamp_interval: _,
+        primary_export: _,
     } = description.desc;
 
     let (decoded_stream, decode_health) = match encoding {
