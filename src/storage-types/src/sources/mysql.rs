@@ -35,6 +35,8 @@ use crate::controller::AlterError;
 use crate::sources::{SourceConnection, SourceTimestamp};
 use crate::AlterCompatible;
 
+use super::SourceExportDetails;
+
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.mysql.rs"
@@ -132,6 +134,10 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
 
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
+    }
+
+    fn primary_export_details(&self) -> SourceExportDetails {
+        SourceExportDetails::None
     }
 }
 

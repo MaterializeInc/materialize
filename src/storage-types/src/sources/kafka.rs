@@ -37,6 +37,8 @@ use crate::connections::{ConnectionContext, KafkaConnection};
 use crate::controller::AlterError;
 use crate::sources::{MzOffset, SourceConnection, SourceTimestamp};
 
+use super::SourceExportDetails;
+
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.kafka.rs"
@@ -217,6 +219,9 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
         Some(self.connection_id)
     }
 
+    // TODO(roshan): Refactor this when we refactor kafka source SQL planning to allow
+    // for multiple exports. This should accept the metadata_columns for
+    // each export rather than assuming the primary export.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         self.metadata_columns
             .iter()
@@ -260,6 +265,12 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
                 (&**name, typ)
             })
             .collect()
+    }
+
+    fn primary_export_details(&self) -> SourceExportDetails {
+        SourceExportDetails::Kafka(KafkaSourceExportDetails {
+            metadata_columns: self.metadata_columns.clone(),
+        })
     }
 }
 
