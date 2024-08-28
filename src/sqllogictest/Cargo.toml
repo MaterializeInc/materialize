@@ -21,6 +21,7 @@ itertools = "0.10.5"
 junit-report = "0.8.3"
 md-5 = "0.10.5"
 mz-build-info = { path = "../build-info" }
+mz-build-tools = { path = "../build-tools" }
 mz-catalog = { path = "../catalog" }
 mz-controller = { path = "../controller" }
 mz-dyncfgs = { path = "../dyncfgs" }
@@ -62,3 +63,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.bin.sqllogictest]
+# The ProcessOrchestrator spawns an instance of `clusterd`.
+data = ["//src/clusterd:clusterd"]

@@ -12,6 +12,7 @@
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
 
+use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
-use std::{cmp, env, iter, thread};
+use std::{cmp, iter, thread};
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -773,15 +774,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                       not usable with the process orchestrator"
                 );
             }
+            let clusterd_name = "clusterd".to_string();
+            let clusterd_path = mz_build_tools::local_image_path(&clusterd_name)?;
             let orchestrator = Arc::new(
                 runtime
                     .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
-                        // Look for binaries in the same directory as the
-                        // running binary. When running via `cargo run`, this
-                        // means that debug binaries look for other debug
-                        // binaries and release binaries look for other release
-                        // binaries.
-                        image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                        images: BTreeMap::from([(clusterd_name, clusterd_path)]),
                         suppress_output: false,
                         environment_id: args.environment_id.to_string(),
                         secrets_dir: args

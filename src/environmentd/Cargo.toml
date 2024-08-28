@@ -41,6 +41,7 @@ mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
 mz-build-info = { path = "../build-info" }
+mz-build-tools = { path = "../build-tools" }
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-catalog = { path = "../catalog" }
@@ -191,5 +192,30 @@ compile_data = ["src/http/static/**/*", "templates/*"]
 [package.metadata.cargo-gazelle.build]
 data = ["src/bin/environmentd/sys.c"]
 
+[package.metadata.cargo-gazelle.test.auth]
+# The ProcessOrchestrator spawns an instance of `clusterd`.
+data = ["//src/clusterd:clusterd"]
+
+[package.metadata.cargo-gazelle.test.cli]
+data = ["//src/environmentd:environmentd"]
+
+[package.metadata.cargo-gazelle.test.pgwire]
+# The ProcessOrchestrator spawns an instance of `clusterd`.
+data = ["//src/clusterd:clusterd"]
+
 [package.metadata.cargo-gazelle.test.server]
 env = { INSTA_WORKSPACE_ROOT = "." }
+# The ProcessOrchestrator spawns an instance of `clusterd`.
+data = ["//src/clusterd:clusterd"]
+
+[package.metadata.cargo-gazelle.test.sql]
+# The ProcessOrchestrator spawns an instance of `clusterd`.
+data = ["//src/clusterd:clusterd"]
+
+[package.metadata.cargo-gazelle.test.timezones]
+# The ProcessOrchestrator spawns an instance of `clusterd`.
+data = ["//src/clusterd:clusterd", "tests/testdata/timezones/**"]
+
+[package.metadata.cargo-gazelle.test.tracing]
+# The ProcessOrchestrator spawns an instance of `clusterd`.
+data = ["//src/clusterd:clusterd"]

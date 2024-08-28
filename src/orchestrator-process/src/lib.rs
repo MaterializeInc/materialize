@@ -58,9 +58,8 @@ pub mod secrets;
 /// Configures a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
 pub struct ProcessOrchestratorConfig {
-    /// The directory in which the orchestrator should look for executable
-    /// images.
-    pub image_dir: PathBuf,
+    /// Location where images can be found.
+    pub images: BTreeMap<String, PathBuf>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
     /// The ID of the environment under orchestration.
@@ -112,7 +111,7 @@ pub struct ProcessOrchestratorTcpProxyConfig {
 /// of `Orchestrator`.
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
-    image_dir: PathBuf,
+    images: BTreeMap<String, PathBuf>,
     suppress_output: bool,
     namespaces: Mutex<BTreeMap<String, Arc<dyn NamespacedOrchestrator>>>,
     metadata_dir: PathBuf,
@@ -205,7 +204,7 @@ impl ProcessOrchestrator {
     /// Creates a new process orchestrator from the provided configuration.
     pub async fn new(
         ProcessOrchestratorConfig {
-            image_dir,
+            images,
             suppress_output,
             environment_id,
             secrets_dir,
@@ -234,11 +233,19 @@ impl ProcessOrchestrator {
                 .context("creating prometheus directory")?;
         }
 
+        let mut canonicalized_images = BTreeMap::default();
+        for (name, path) in images {
+            let path = fs::canonicalize(path)
+                .await
+                .context("canonicalizing image path")?;
+            canonicalized_images.insert(name, path);
+        }
+
         let launch_spec = LaunchSpec::determine_implementation()?;
         info!(driver = ?launch_spec, "Process orchestrator launch spec");
 
         Ok(ProcessOrchestrator {
-            image_dir: fs::canonicalize(image_dir).await?,
+            images: canonicalized_images,
             suppress_output,
             namespaces: Mutex::new(BTreeMap::new()),
             metadata_dir: fs::canonicalize(metadata_dir).await?,
@@ -258,7 +265,7 @@ impl Orchestrator for ProcessOrchestrator {
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
             let config = Arc::new(NamespacedProcessOrchestratorConfig {
                 namespace: namespace.into(),
-                image_dir: self.image_dir.clone(),
+                images: self.images.clone(),
                 suppress_output: self.suppress_output,
                 metadata_dir: self.metadata_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
@@ -296,7 +303,7 @@ impl Orchestrator for ProcessOrchestrator {
 #[derive(Debug)]
 struct NamespacedProcessOrchestratorConfig {
     namespace: String,
-    image_dir: PathBuf,
+    images: BTreeMap<String, PathBuf>,
     suppress_output: bool,
     metadata_dir: PathBuf,
     command_wrapper: Vec<String>,
@@ -729,9 +736,11 @@ impl OrchestratorWorker {
         let suppress_output = self.config.suppress_output;
         let propagate_crashes = self.config.propagate_crashes;
         let command_wrapper = self.config.command_wrapper.clone();
-        let image = self.config.image_dir.join(image);
         let pid_file = run_dir.join(format!("{i}.pid"));
         let full_id = self.config.full_id(&id);
+        let Some(image) = self.config.images.get(&image).cloned() else {
+            panic!("unknown image '{image}', known {:?}", self.config.images);
+        };
 
         let state_updater = ProcessStateUpdater {
             namespace: self.config.namespace.clone(),

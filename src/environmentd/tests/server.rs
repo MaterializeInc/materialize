@@ -3937,6 +3937,7 @@ async fn test_github_25388() {
 
     // May be flakey/racey due to various sleeps.
     Retry::default()
+        .max_duration(Duration::from_secs(20))
         .retry_async(|_| async {
             client1
                 .batch_execute("DROP INDEX IF EXISTS idx")
@@ -3966,6 +3967,7 @@ async fn test_github_25388() {
         .unwrap();
 
     Retry::default()
+        .max_duration(Duration::from_secs(20))
         .retry_async(|_| async {
             client1
                 .batch_execute("DROP INDEX IF EXISTS idx")

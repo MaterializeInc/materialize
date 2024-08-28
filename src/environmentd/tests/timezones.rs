@@ -28,11 +28,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
 
 use mz_environmentd::test_util;
 use mz_ore::assert_none;
 use mz_pgrepr::Interval;
+
+static TIMEZONE_DIRECTORY: &'static str = {
+    if mz_build_tools::is_bazel_build() {
+        "src/environmentd/tests/testdata/timezones"
+    } else {
+        "tests/testdata/timezones"
+    }
+};
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_pg_timezone_abbrevs() {
@@ -75,7 +82,7 @@ async fn test_pg_timezone_abbrevs() {
         "names-2023-12-15-Pacific/Kanton",
     ]);
 
-    let entries = fs::read_dir(Path::new("tests").join("testdata").join("timezones")).unwrap();
+    let entries = fs::read_dir(TIMEZONE_DIRECTORY).unwrap();
     for entry in entries {
         let entry = entry.unwrap();
         let path = entry.path();
