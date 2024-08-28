@@ -225,6 +225,27 @@ async fn test_token_refresh() {
     assert!(refresh_body.get("accessToken").is_some());
 }
 
+#[mz_ore::test(tokio::test)]
+async fn test_invalid_api_token_authentication() {
+    let ctx = setup_test_context().await;
+
+    let response = ctx
+        .client
+        .post(format!(
+            "{}/identity/resources/auth/v1/api-token",
+            ctx.base_url
+        ))
+        .json(&json!({
+            "clientId": Uuid::new_v4().to_string(),
+            "secret": Uuid::new_v4().to_string()
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 404);
+}
+
 // User Profile Tests
 
 #[mz_ore::test(tokio::test)]
