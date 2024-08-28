@@ -126,4 +126,17 @@ describe("query stream api", () => {
       { v: 6 },
     ]);
   });
+
+  it("should throw errors on invalid queries", async () => {
+    const queryStream = new QueryStream("ELECT 1");
+
+    const fetchData = async () => {
+      const rows = [];
+      for await (const row of client.query(queryStream)) {
+        rows.push(row);
+      }
+    };
+
+    await expect(fetchData).rejects.toThrow("Expected a keyword at the beginning of a statement");
+  });
 });

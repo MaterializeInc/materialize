@@ -2220,6 +2220,15 @@ where
         );
         let is_fatal = err.severity.is_fatal();
         self.send(BackendMessage::ErrorResponse(err)).await?;
+
+        // Flush immediately after sending an error response, as some clients
+        // expect to be able to read the error response before sending a Sync
+        // message. This is arguably in violation of the protocol specification,
+        // but the specification is somewhat ambiguous, and easier to match
+        // PostgreSQL here than to fix all the clients that have this
+        // expectation.
+        self.conn.flush().await?;
+
         let txn = self.adapter_client.session().transaction();
         match txn {
             // Error can be called from describe and parse and so might not be in an active
