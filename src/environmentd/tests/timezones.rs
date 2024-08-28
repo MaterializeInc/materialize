@@ -33,7 +33,7 @@ use mz_environmentd::test_util;
 use mz_ore::assert_none;
 use mz_pgrepr::Interval;
 
-static TIMEZONE_DIRECTORY: &'static str = {
+static TIMEZONE_DIRECTORY: &str = {
     if mz_build_tools::is_bazel_build() {
         "src/environmentd/tests/testdata/timezones"
     } else {

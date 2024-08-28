@@ -34,7 +34,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
-use std::{env, fmt, ops, str, thread};
+use std::{fmt, ops, str, thread};
 
 use anyhow::{anyhow, bail};
 use bytes::BytesMut;

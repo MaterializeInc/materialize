@@ -45,7 +45,7 @@ pub const fn is_bazel_build() -> bool {
 /// * The parent of the current execution directory.
 ///
 pub fn local_image_path(name: &str) -> Result<PathBuf, anyhow::Error> {
-    static KNOWN_PROGRAMS: &[(&'static str, &'static str)] =
+    static KNOWN_PROGRAMS: &[(&str, &str)] =
         // (Program Name, Bazel Runfiles Location)
         //
         // Note: I discovered the runfiles path by manually inspecting the

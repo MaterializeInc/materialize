@@ -296,7 +296,7 @@ steps:
           composition: cargo-test
           args: [
             "--bazel",
-            "bin/bazel query 'kind(rust_test|rust_doc_test)'",
+            "//...",
             "--",
             "--remote_cache=https://bazel-remote.dev.materialize.com",
           ]
