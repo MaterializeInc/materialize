@@ -10,7 +10,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
-use std::sync::LazyLock;
 
 use mz_persist_types::Codec;
 use mz_repr::{RelationDesc, ScalarType};
@@ -19,7 +18,7 @@ use mz_storage_types::sources::SourceData;
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
-const PROTO_DIRECTORY: &'static str = {
+const PROTO_DIRECTORY: &str = {
     if mz_build_tools::is_bazel_build() {
         "src/catalog/protos"
     } else {
@@ -28,7 +27,7 @@ const PROTO_DIRECTORY: &'static str = {
 };
 const PROTO_EXT: &str = "proto";
 
-static SNAPSHOT_DIRECTORY: &'static str = {
+static SNAPSHOT_DIRECTORY: &str = {
     if mz_build_tools::is_bazel_build() {
         "src/catalog/src/durable/upgrade/snapshots"
     } else {
