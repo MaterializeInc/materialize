@@ -76,6 +76,21 @@ steps:
         agents:
           queue: builder-linux-aarch64
 
+      - id: build-macos-bazel
+        label: ":bazel: Build macos"
+        command: bin/ci-builder run stable bin/bazel-temp
+        inputs:
+          - "*"
+          - "WORKSPACE"
+          - ".bazelrc"
+          - "**/*.bzl"
+        depends_on: []
+        timeout_in_minutes: 30
+        agents:
+          queue: mac
+        coverage: skip
+        sanitizer: skip
+
       - id: build-wasm
         label: Build WASM
         command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
