@@ -243,7 +243,7 @@ async fn test_invalid_api_token_authentication() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), 404);
+    assert_eq!(response.status(), 401);
 }
 
 // User Profile Tests
@@ -264,6 +264,20 @@ async fn test_get_user_profile() {
     assert_eq!(profile_response.status(), 200);
     let profile_body: serde_json::Value = profile_response.json().await.unwrap();
     assert!(profile_body.get("tenantId").is_some());
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_get_user_profile_without_token() {
+    let ctx = setup_test_context().await;
+
+    let profile_response = ctx
+        .client
+        .get(format!("{}/identity/resources/users/v2/me", ctx.base_url))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(profile_response.status(), 400);
 }
 
 // User API Token Tests
@@ -594,6 +608,98 @@ async fn test_update_user_roles() {
     assert!(body["roles"].as_array().unwrap().len() == 2);
 }
 
+#[mz_ore::test(tokio::test)]
+async fn test_create_user_with_invalid_role() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    let response = ctx
+        .client
+        .post(format!("{}/identity/resources/users/v2", ctx.base_url))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "email": "newuser@example.com",
+            "roleIds": ["invalid_role_id"]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 400);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_create_duplicate_user() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    let email = "duplicate@example.com";
+
+    // Create the first user
+    ctx.client
+        .post(format!("{}/identity/resources/users/v2", ctx.base_url))
+        .bearer_auth(&access_token)
+        .json(&json!({ "email": email }))
+        .send()
+        .await
+        .unwrap();
+
+    // Try to create a duplicate user
+    let response = ctx
+        .client
+        .post(format!("{}/identity/resources/users/v2", ctx.base_url))
+        .bearer_auth(access_token)
+        .json(&json!({ "email": email }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 409);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_update_nonexistent_user_roles() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    let response = ctx
+        .client
+        .put(format!(
+            "{}/frontegg/team/resources/members/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "email": "nonexistent@example.com",
+            "roleIds": ["user"]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 404);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_delete_nonexistent_user() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    let response = ctx
+        .client
+        .delete(format!(
+            "{}/identity/resources/users/v1/{}",
+            ctx.base_url,
+            Uuid::new_v4()
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 404);
+}
+
 // SSO Configuration Tests
 
 #[mz_ore::test(tokio::test)]
@@ -834,607 +940,134 @@ async fn test_delete_sso_config() {
     assert_eq!(get_response.status(), 404);
 }
 
-// Group Tests
-
 #[mz_ore::test(tokio::test)]
-async fn test_add_users_to_group() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // Create a group
-    let create_group_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1",
-            ctx.base_url
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "name": "Test Group",
-            "description": "A test group"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let create_group_body: serde_json::Value = create_group_response.json().await.unwrap();
-    let group_id = create_group_body["id"].as_str().unwrap();
-
-    // Create users
-    let mut user_ids = Vec::new();
-    for email in &["user1@example.com", "user2@example.com"] {
-        let create_user_response = ctx
-            .client
-            .post(format!("{}/identity/resources/users/v2", ctx.base_url))
-            .bearer_auth(&access_token)
-            .json(&json!({
-                "email": email
-            }))
-            .send()
-            .await
-            .unwrap();
-
-        let create_user_body: serde_json::Value = create_user_response.json().await.unwrap();
-        user_ids.push(create_user_body["id"].as_str().unwrap().to_string());
-    }
-
-    // Add users to the group
-    let add_users_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}/users",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({ "userIds": user_ids }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(add_users_response.status(), 201);
-
-    // Verify that the users were added to the group
-    let get_group_response = ctx
-        .client
-        .get(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .unwrap();
-
-    let get_group_body: serde_json::Value = get_group_response.json().await.unwrap();
-    let group_users = get_group_body["users"].as_array().unwrap();
-    assert_eq!(group_users.len(), 2);
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_list_groups() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // Create a couple of groups
-    for i in 1..=2 {
-        ctx.client
-            .post(format!(
-                "{}/frontegg/identity/resources/groups/v1",
-                ctx.base_url
-            ))
-            .bearer_auth(&access_token)
-            .json(&json!({
-                "name": format!("Test Group {}", i),
-                "description": format!("A test group {}", i)
-            }))
-            .send()
-            .await
-            .unwrap();
-    }
-
-    // List all groups
-    let response = ctx
-        .client
-        .get(format!(
-            "{}/frontegg/identity/resources/groups/v1",
-            ctx.base_url
-        ))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await.unwrap();
-    let groups = body["groups"].as_array().unwrap();
-    assert!(groups.len() >= 2);
-
-    // Check that each group has the expected fields
-    for group in groups {
-        assert!(group.get("id").is_some());
-        assert!(group.get("name").is_some());
-        assert!(group.get("description").is_some());
-    }
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_create_group() {
+async fn test_get_nonexistent_sso_config() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
 
     let response = ctx
         .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1",
-            ctx.base_url
-        ))
-        .bearer_auth(access_token)
-        .json(&json!({
-            "name": "Test Group",
-            "description": "A test group"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), 201);
-    let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(body["name"], "Test Group");
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_get_group() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // First, create a group
-    let create_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1",
-            ctx.base_url
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "name": "Test Group",
-            "description": "A test group"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let create_body: serde_json::Value = create_response.json().await.unwrap();
-    let group_id = create_body["id"].as_str().unwrap();
-
-    // Now, get the group
-    let get_response = ctx
-        .client
         .get(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}",
-            ctx.base_url, group_id
+            "{}/frontegg/team/resources/sso/v1/configurations/{}",
+            ctx.base_url,
+            Uuid::new_v4()
         ))
         .bearer_auth(access_token)
         .send()
         .await
         .unwrap();
 
-    assert_eq!(get_response.status(), 200);
-    let body: serde_json::Value = get_response.json().await.unwrap();
-    assert_eq!(body["name"], "Test Group");
+    assert_eq!(response.status(), 404);
 }
 
 #[mz_ore::test(tokio::test)]
-async fn test_update_group() {
+async fn test_sso_group_mapping_crud() {
     let ctx = setup_test_context().await;
     let access_token = authenticate(&ctx).await.unwrap();
 
-    // First, create a group
-    let create_response = ctx
+    // Create SSO configuration
+    let create_sso_response = ctx
         .client
         .post(format!(
-            "{}/frontegg/identity/resources/groups/v1",
+            "{}/frontegg/team/resources/sso/v1/configurations",
             ctx.base_url
         ))
         .bearer_auth(&access_token)
         .json(&json!({
-            "name": "Test Group",
-            "description": "A test group"
+            "enabled": true,
+            "ssoEndpoint": "https://example.com/sso",
+            "publicCertificate": "-----BEGIN CERTIFICATE-----\nMIIC...",
+            "signRequest": true,
+            "acsUrl": "https://example.com/acs",
+            "spEntityId": "example-sp",
+            "type": "saml"
         }))
         .send()
         .await
         .unwrap();
 
-    let create_body: serde_json::Value = create_response.json().await.unwrap();
-    let group_id = create_body["id"].as_str().unwrap();
+    let create_sso_body: serde_json::Value = create_sso_response.json().await.unwrap();
+    let config_id = create_sso_body["id"].as_str().unwrap();
 
-    // Now, update the group
-    let update_response = ctx
-        .client
-        .patch(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token)
-        .json(&json!({
-            "name": "Updated Test Group",
-            "description": "An updated test group"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(update_response.status(), 200);
-    let body: serde_json::Value = update_response.json().await.unwrap();
-    assert_eq!(body["name"], "Updated Test Group");
-    assert_eq!(body["description"], "An updated test group");
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_delete_group() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // First, create a group
-    let create_response = ctx
+    // Create group mapping
+    let create_mapping_response = ctx
         .client
         .post(format!(
-            "{}/frontegg/identity/resources/groups/v1",
-            ctx.base_url
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "name": "Test Group",
-            "description": "A test group"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let create_body: serde_json::Value = create_response.json().await.unwrap();
-    let group_id = create_body["id"].as_str().unwrap();
-
-    // Now, delete the group
-    let delete_response = ctx
-        .client
-        .delete(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token.clone())
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(delete_response.status(), 200);
-
-    // Verify that the group is deleted
-    let get_response = ctx
-        .client
-        .get(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(get_response.status(), 404);
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_add_roles_to_group() {
-    let ctx = setup_test_context().await;
-    let default_roles = ctx.roles.clone();
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // First, create a group
-    let create_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1",
-            ctx.base_url
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "name": "Test Group",
-            "description": "A test group"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let create_body: serde_json::Value = create_response.json().await.unwrap();
-    let group_id = create_body["id"].as_str().unwrap();
-
-    assert_eq!(group_id.len(), 36);
-    assert_eq!(group_id.chars().filter(|&c| c == '-').count(), 4);
-
-    // Now, add roles to the group
-    let add_roles_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}/roles",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token.clone())
-        .json(&json!({
-            "roleIds": [default_roles[0].id.clone(), default_roles[1].id.clone()]
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(add_roles_response.status(), 201);
-
-    // Verify that the roles were added
-    let get_response = ctx
-        .client
-        .get(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .unwrap();
-
-    let body: serde_json::Value = get_response.json().await.unwrap();
-    assert!(body["roles"].as_array().unwrap().len() >= 2);
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_remove_roles_from_group() {
-    let ctx = setup_test_context().await;
-    let default_roles = ctx.roles.clone();
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // First, create a group and add roles
-    let create_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1",
-            ctx.base_url
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "name": "Test Group",
-            "description": "A test group"
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let create_body: serde_json::Value = create_response.json().await.unwrap();
-    let group_id = create_body["id"].as_str().unwrap();
-
-    // Add roles to the group
-    let add_roles_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}/roles",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "roleIds": [default_roles[0].id.clone(), default_roles[1].id.clone()]
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(
-        add_roles_response.status(),
-        201,
-        "Failed to add roles to group"
-    );
-
-    // Now, remove roles from the group
-    let remove_roles_response = ctx
-        .client
-        .delete(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}/roles",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token.clone())
-        .json(&json!({
-            "roleIds": [default_roles[1].id.clone()]
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(
-        remove_roles_response.status(),
-        200,
-        "Failed to remove roles from group"
-    );
-
-    // Verify that the role was removed
-    let get_response = ctx
-        .client
-        .get(format!(
-            "{}/frontegg/identity/resources/groups/v1/{}",
-            ctx.base_url, group_id
-        ))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .unwrap();
-
-    let body: serde_json::Value = get_response.json().await.unwrap();
-    let roles = body["roles"].as_array().unwrap();
-    assert_eq!(roles.len(), 1, "Unexpected number of roles after removal");
-    assert_eq!(roles[0]["id"], default_roles[0].id);
-}
-
-// SCIM Configuration Tests
-
-#[mz_ore::test(tokio::test)]
-async fn test_create_scim_configuration() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    let response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/directory/resources/v1/configurations/scim2",
-            ctx.base_url
-        ))
-        .bearer_auth(access_token)
-        .json(&json!({
-            "source": "azure",
-            "connectionName": "Test SCIM Connection",
-            "syncToUserManagement": true
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await.unwrap();
-    assert!(body.get("id").is_some());
-    assert_eq!(body["connectionName"], "Test SCIM Connection");
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_list_scim_configurations() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // First, create a SCIM configuration
-    ctx.client
-        .post(format!(
-            "{}/frontegg/directory/resources/v1/configurations/scim2",
-            ctx.base_url
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "source": "azure",
-            "connectionName": "Test SCIM Connection",
-            "syncToUserManagement": true
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    // Now, list SCIM configurations
-    let list_response = ctx
-        .client
-        .get(format!(
-            "{}/frontegg/directory/resources/v1/configurations/scim2",
-            ctx.base_url
-        ))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(list_response.status(), 200);
-    let body: serde_json::Value = list_response.json().await.unwrap();
-    assert!(body.as_array().unwrap().len() > 0);
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_delete_scim_configuration() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    // First, create a SCIM configuration
-    let create_response = ctx
-        .client
-        .post(format!(
-            "{}/frontegg/directory/resources/v1/configurations/scim2",
-            ctx.base_url
-        ))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "source": "azure",
-            "connectionName": "Test SCIM Connection",
-            "syncToUserManagement": true
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    let create_body: serde_json::Value = create_response.json().await.unwrap();
-    let config_id = create_body["id"].as_str().unwrap();
-
-    // Now, delete the SCIM configuration
-    let delete_response = ctx
-        .client
-        .delete(format!(
-            "{}/frontegg/directory/resources/v1/configurations/scim2/{}",
+            "{}/frontegg/team/resources/sso/v1/configurations/{}/groups",
             ctx.base_url, config_id
         ))
-        .bearer_auth(access_token.clone())
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "group": "TestGroup",
+            "roleIds": ["user"]
+        }))
         .send()
         .await
         .unwrap();
 
-    assert_eq!(delete_response.status(), 204);
+    assert_eq!(create_mapping_response.status(), 200);
+    let create_mapping_body: serde_json::Value = create_mapping_response.json().await.unwrap();
+    let mapping_id = create_mapping_body["id"].as_str().unwrap();
 
-    // Verify that the configuration is deleted
-    let list_response = ctx
+    // Read group mapping
+    let get_mapping_response = ctx
         .client
         .get(format!(
-            "{}/frontegg/directory/resources/v1/configurations/scim2",
-            ctx.base_url
+            "{}/frontegg/team/resources/sso/v1/configurations/{}/groups/{}",
+            ctx.base_url, config_id, mapping_id
         ))
-        .bearer_auth(access_token)
+        .bearer_auth(&access_token)
         .send()
         .await
         .unwrap();
 
-    let body: serde_json::Value = list_response.json().await.unwrap();
-    assert!(!body
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|config| config["id"] == config_id));
-}
+    assert_eq!(get_mapping_response.status(), 200);
 
-// Roles Tests
-
-#[mz_ore::test(tokio::test)]
-async fn test_get_roles() {
-    let ctx = setup_test_context().await;
-    let access_token = authenticate(&ctx).await.unwrap();
-
-    let response = ctx
+    // Update group mapping
+    let update_mapping_response = ctx
         .client
-        .get(format!("{}/identity/resources/roles/v2", ctx.base_url))
-        .bearer_auth(access_token)
+        .patch(format!(
+            "{}/frontegg/team/resources/sso/v1/configurations/{}/groups/{}",
+            ctx.base_url, config_id, mapping_id
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "group": "UpdatedTestGroup",
+            "roleIds": ["user", "admin"]
+        }))
         .send()
         .await
         .unwrap();
 
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await.unwrap();
-    assert!(body.get("items").is_some() && body["items"].is_array());
-    assert!(body.get("_metadata").is_some() && body["_metadata"].get("total_items").is_some());
-    if let Some(items) = body["items"].as_array() {
-        if !items.is_empty() {
-            assert!(items[0].get("id").is_some());
-            assert!(items[0].get("name").is_some());
-        }
-    }
-}
+    assert_eq!(update_mapping_response.status(), 200);
 
-// Latency Test
+    // Delete group mapping
+    let delete_mapping_response = ctx
+        .client
+        .delete(format!(
+            "{}/frontegg/team/resources/sso/v1/configurations/{}/groups/{}",
+            ctx.base_url, config_id, mapping_id
+        ))
+        .bearer_auth(&access_token)
+        .send()
+        .await
+        .unwrap();
 
-#[mz_ore::test(tokio::test)]
-async fn test_latency() {
-    let ctx = setup_test_context().await;
+    assert_eq!(delete_mapping_response.status(), 200);
 
-    let start = std::time::Instant::now();
-    let _ = authenticate(&ctx).await.unwrap();
-    let duration = start.elapsed();
+    // Verify deletion
+    let get_deleted_mapping_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/team/resources/sso/v1/configurations/{}/groups/{}",
+            ctx.base_url, config_id, mapping_id
+        ))
+        .bearer_auth(&access_token)
+        .send()
+        .await
+        .unwrap();
 
-    assert!(
-        duration >= Duration::from_millis(100),
-        "Request completed faster than the configured latency"
-    );
+    assert_eq!(get_deleted_mapping_response.status(), 404);
 }
 
 #[mz_ore::test(tokio::test)]
@@ -2067,6 +1700,593 @@ async fn test_set_sso_default_roles() {
     assert_eq!(get_body["roleIds"].as_array().unwrap().len(), 2);
 }
 
+// Group Tests
+
+#[mz_ore::test(tokio::test)]
+async fn test_add_users_to_group() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // Create a group
+    let create_group_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "name": "Test Group",
+            "description": "A test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let create_group_body: serde_json::Value = create_group_response.json().await.unwrap();
+    let group_id = create_group_body["id"].as_str().unwrap();
+
+    // Create users
+    let mut user_ids = Vec::new();
+    for email in &["user1@example.com", "user2@example.com"] {
+        let create_user_response = ctx
+            .client
+            .post(format!("{}/identity/resources/users/v2", ctx.base_url))
+            .bearer_auth(&access_token)
+            .json(&json!({
+                "email": email
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        let create_user_body: serde_json::Value = create_user_response.json().await.unwrap();
+        user_ids.push(create_user_body["id"].as_str().unwrap().to_string());
+    }
+
+    // Add users to the group
+    let add_users_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}/users",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({ "userIds": user_ids }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(add_users_response.status(), 201);
+
+    // Verify that the users were added to the group
+    let get_group_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    let get_group_body: serde_json::Value = get_group_response.json().await.unwrap();
+    let group_users = get_group_body["users"].as_array().unwrap();
+    assert_eq!(group_users.len(), 2);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_list_groups() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // Create a couple of groups
+    for i in 1..=2 {
+        ctx.client
+            .post(format!(
+                "{}/frontegg/identity/resources/groups/v1",
+                ctx.base_url
+            ))
+            .bearer_auth(&access_token)
+            .json(&json!({
+                "name": format!("Test Group {}", i),
+                "description": format!("A test group {}", i)
+            }))
+            .send()
+            .await
+            .unwrap();
+    }
+
+    // List all groups
+    let response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    let groups = body["groups"].as_array().unwrap();
+    assert!(groups.len() >= 2);
+
+    // Check that each group has the expected fields
+    for group in groups {
+        assert!(group.get("id").is_some());
+        assert!(group.get("name").is_some());
+        assert!(group.get("description").is_some());
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_create_group() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    let response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "name": "Test Group",
+            "description": "A test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 201);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["name"], "Test Group");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_get_group() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // First, create a group
+    let create_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "name": "Test Group",
+            "description": "A test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let create_body: serde_json::Value = create_response.json().await.unwrap();
+    let group_id = create_body["id"].as_str().unwrap();
+
+    // Now, get the group
+    let get_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), 200);
+    let body: serde_json::Value = get_response.json().await.unwrap();
+    assert_eq!(body["name"], "Test Group");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_update_group() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // First, create a group
+    let create_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "name": "Test Group",
+            "description": "A test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let create_body: serde_json::Value = create_response.json().await.unwrap();
+    let group_id = create_body["id"].as_str().unwrap();
+
+    // Now, update the group
+    let update_response = ctx
+        .client
+        .patch(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "name": "Updated Test Group",
+            "description": "An updated test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(update_response.status(), 200);
+    let body: serde_json::Value = update_response.json().await.unwrap();
+    assert_eq!(body["name"], "Updated Test Group");
+    assert_eq!(body["description"], "An updated test group");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_delete_group() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // First, create a group
+    let create_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "name": "Test Group",
+            "description": "A test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let create_body: serde_json::Value = create_response.json().await.unwrap();
+    let group_id = create_body["id"].as_str().unwrap();
+
+    // Now, delete the group
+    let delete_response = ctx
+        .client
+        .delete(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token.clone())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(delete_response.status(), 200);
+
+    // Verify that the group is deleted
+    let get_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), 404);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_add_roles_to_group() {
+    let ctx = setup_test_context().await;
+    let default_roles = ctx.roles.clone();
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // First, create a group
+    let create_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "name": "Test Group",
+            "description": "A test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let create_body: serde_json::Value = create_response.json().await.unwrap();
+    let group_id = create_body["id"].as_str().unwrap();
+
+    assert_eq!(group_id.len(), 36);
+    assert_eq!(group_id.chars().filter(|&c| c == '-').count(), 4);
+
+    // Now, add roles to the group
+    let add_roles_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}/roles",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token.clone())
+        .json(&json!({
+            "roleIds": [default_roles[0].id.clone(), default_roles[1].id.clone()]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(add_roles_response.status(), 201);
+
+    // Verify that the roles were added
+    let get_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    let body: serde_json::Value = get_response.json().await.unwrap();
+    assert!(body["roles"].as_array().unwrap().len() >= 2);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_remove_roles_from_group() {
+    let ctx = setup_test_context().await;
+    let default_roles = ctx.roles.clone();
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // First, create a group and add roles
+    let create_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "name": "Test Group",
+            "description": "A test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let create_body: serde_json::Value = create_response.json().await.unwrap();
+    let group_id = create_body["id"].as_str().unwrap();
+
+    // Add roles to the group
+    let add_roles_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}/roles",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "roleIds": [default_roles[0].id.clone(), default_roles[1].id.clone()]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        add_roles_response.status(),
+        201,
+        "Failed to add roles to group"
+    );
+
+    // Now, remove roles from the group
+    let remove_roles_response = ctx
+        .client
+        .delete(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}/roles",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token.clone())
+        .json(&json!({
+            "roleIds": [default_roles[1].id.clone()]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        remove_roles_response.status(),
+        200,
+        "Failed to remove roles from group"
+    );
+
+    // Verify that the role was removed
+    let get_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/identity/resources/groups/v1/{}",
+            ctx.base_url, group_id
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    let body: serde_json::Value = get_response.json().await.unwrap();
+    let roles = body["roles"].as_array().unwrap();
+    assert_eq!(roles.len(), 1, "Unexpected number of roles after removal");
+    assert_eq!(roles[0]["id"], default_roles[0].id);
+}
+
+// SCIM Configuration Tests
+
+#[mz_ore::test(tokio::test)]
+async fn test_create_scim_configuration() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    let response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/directory/resources/v1/configurations/scim2",
+            ctx.base_url
+        ))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "source": "azure",
+            "connectionName": "Test SCIM Connection",
+            "syncToUserManagement": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body.get("id").is_some());
+    assert_eq!(body["connectionName"], "Test SCIM Connection");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_list_scim_configurations() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // First, create a SCIM configuration
+    ctx.client
+        .post(format!(
+            "{}/frontegg/directory/resources/v1/configurations/scim2",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "source": "azure",
+            "connectionName": "Test SCIM Connection",
+            "syncToUserManagement": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // Now, list SCIM configurations
+    let list_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/directory/resources/v1/configurations/scim2",
+            ctx.base_url
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(list_response.status(), 200);
+    let body: serde_json::Value = list_response.json().await.unwrap();
+    assert!(body.as_array().unwrap().len() > 0);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_delete_scim_configuration() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // First, create a SCIM configuration
+    let create_response = ctx
+        .client
+        .post(format!(
+            "{}/frontegg/directory/resources/v1/configurations/scim2",
+            ctx.base_url
+        ))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "source": "azure",
+            "connectionName": "Test SCIM Connection",
+            "syncToUserManagement": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let create_body: serde_json::Value = create_response.json().await.unwrap();
+    let config_id = create_body["id"].as_str().unwrap();
+
+    // Now, delete the SCIM configuration
+    let delete_response = ctx
+        .client
+        .delete(format!(
+            "{}/frontegg/directory/resources/v1/configurations/scim2/{}",
+            ctx.base_url, config_id
+        ))
+        .bearer_auth(access_token.clone())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(delete_response.status(), 204);
+
+    // Verify that the configuration is deleted
+    let list_response = ctx
+        .client
+        .get(format!(
+            "{}/frontegg/directory/resources/v1/configurations/scim2",
+            ctx.base_url
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    let body: serde_json::Value = list_response.json().await.unwrap();
+    assert!(!body
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|config| config["id"] == config_id));
+}
+
+// Roles Tests
+
+#[mz_ore::test(tokio::test)]
+async fn test_get_roles() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    let response = ctx
+        .client
+        .get(format!("{}/identity/resources/roles/v2", ctx.base_url))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body.get("items").is_some() && body["items"].is_array());
+    assert!(body.get("_metadata").is_some() && body["_metadata"].get("total_items").is_some());
+    if let Some(items) = body["items"].as_array() {
+        if !items.is_empty() {
+            assert!(items[0].get("id").is_some());
+            assert!(items[0].get("name").is_some());
+        }
+    }
+}
+
 #[mz_ore::test(tokio::test)]
 async fn test_remove_users_from_group() {
     let ctx = setup_test_context().await;
@@ -2270,4 +2490,20 @@ async fn test_get_users_v3() {
 
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["items"].as_array().unwrap().len(), 2);
+}
+
+// Latency Test
+
+#[mz_ore::test(tokio::test)]
+async fn test_latency() {
+    let ctx = setup_test_context().await;
+
+    let start = std::time::Instant::now();
+    let _ = authenticate(&ctx).await.unwrap();
+    let duration = start.elapsed();
+
+    assert!(
+        duration >= Duration::from_millis(100),
+        "Request completed faster than the configured latency"
+    );
 }
