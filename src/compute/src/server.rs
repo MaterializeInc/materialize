@@ -353,9 +353,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             move |scope| {
                 let mut container = Default::default();
                 source(scope, "CmdSource", |capability, info| {
-                    // Send activator for this operator back
+                    // Send activator for this operator back.
                     let activator = scope.sync_activator_for(&info.address[..]);
-                    activator_tx.send(activator).expect("activator_tx working");
+                    // This might fail if the client has already shut down, which is fine. The rest
+                    // of the operator implementation knows how to handle a disconnected client.
+                    let _ = activator_tx.send(activator);
 
                     //Hold onto capbility until we receive a disconnected error
                     let mut cap_opt = Some(capability);
