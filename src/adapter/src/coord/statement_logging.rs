@@ -676,6 +676,14 @@ impl Coordinator {
         } else {
             distribution.sample(&mut thread_rng())
         };
+
+        // Track how many statements we're recording.
+        let sampled_label = sample.then_some("true").unwrap_or("false");
+        self.metrics
+            .statement_logging_records
+            .with_label_values(&[sampled_label])
+            .inc_by(1);
+
         if let Some((sql, accounted)) = match session.qcell_rw(logging) {
             PreparedStatementLoggingInfo::AlreadyLogged { .. } => None,
             PreparedStatementLoggingInfo::StillToLog { sql, accounted, .. } => {

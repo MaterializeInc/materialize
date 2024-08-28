@@ -30,6 +30,7 @@ pub struct Metrics {
     pub canceled_peeks: IntCounterVec,
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
+    pub statement_logging_records: IntCounterVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
     pub statement_logging_actual_bytes: IntCounterVec,
     pub message_batch: HistogramVec,
@@ -112,6 +113,11 @@ impl Metrics {
                 help: "Latency of an execute for a successful query from pgwire's perspective",
                 var_labels: ["instance_id", "isolation_level", "strategy"],
                 buckets: histogram_seconds_buckets(0.000_128, 32.0)
+            }),
+            statement_logging_records: registry.register(metric! {
+                name: "mz_statement_logging_record_count",
+                help: "The total number of SQL statements tagged with whether or not they were recorded.",
+                var_labels: ["sample"],
             }),
             statement_logging_unsampled_bytes: registry.register(metric!(
                 name: "mz_statement_logging_unsampled_bytes",
