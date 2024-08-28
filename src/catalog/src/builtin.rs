@@ -50,6 +50,7 @@ use mz_sql::session::user::{
     MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::healthcheck::REPLICA_METRICS_HISTORY_DESC;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
@@ -3241,17 +3242,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
         data_source: IntrospectionType::ReplicaMetricsHistory,
-        desc: RelationDesc::builder()
-            .with_column("replica_id", ScalarType::String.nullable(false))
-            .with_column("process_id", ScalarType::UInt64.nullable(false))
-            .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-            .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
-            .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
-            .with_column(
-                "occurred_at",
-                ScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .finish(),
+        desc: REPLICA_METRICS_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });

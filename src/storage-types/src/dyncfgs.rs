@@ -57,6 +57,13 @@ pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::ne
     during shard finalization",
 );
 
+/// The interval of time to keep when truncating the replica metrics history.
+pub const REPLICA_METRICS_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "replica_metrics_history_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the replica metrics history.",
+);
+
 // Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
@@ -205,6 +212,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&SUSPENDABLE_SOURCES)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)

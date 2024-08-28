@@ -528,6 +528,98 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     )
 
 
+def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> None:
+    """
+    Test the truncation mechanism for `mz_cluster_replica_metrics_history`.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("testdrive_no_reset", persistent=True)
+
+    # The replica metrics are updated once per minute and on envd startup. We
+    # can thus restart envd to generate metrics rows without having to block
+    # for a minute.
+
+    # Create a replica and wait for metrics data to arrive.
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > CREATE CLUSTER test SIZE '1'
+
+            > SELECT count(*) >= 1
+              FROM mz_internal.mz_cluster_replica_metrics_history m
+              JOIN mz_cluster_replicas r ON r.id = m.replica_id
+              JOIN mz_clusters c ON c.id = r.cluster_id
+              WHERE c.name = 'test'
+            true
+            """
+        ),
+    )
+
+    # The default retention interval is 30 days, so we don't expect truncation
+    # after a restart.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT count(*) >= 2
+              FROM mz_internal.mz_cluster_replica_metrics_history m
+              JOIN mz_cluster_replicas r ON r.id = m.replica_id
+              JOIN mz_clusters c ON c.id = r.cluster_id
+              WHERE c.name = 'test'
+            true
+            """
+        ),
+    )
+
+    # Reduce the retention interval to force a truncation.
+    c.sql(
+        "ALTER SYSTEM SET replica_metrics_history_retention_interval = '1s'",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT count(*) < 2
+              FROM mz_internal.mz_cluster_replica_metrics_history m
+              JOIN mz_cluster_replicas r ON r.id = m.replica_id
+              JOIN mz_clusters c ON c.id = r.cluster_id
+              WHERE c.name = 'test'
+            true
+            """
+        ),
+    )
+
+    # Verify that this also works a second time.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT count(*) < 2
+              FROM mz_internal.mz_cluster_replica_metrics_history m
+              JOIN mz_cluster_replicas r ON r.id = m.replica_id
+              JOIN mz_clusters c ON c.id = r.cluster_id
+              WHERE c.name = 'test'
+            true
+            """
+        ),
+    )
+
+
 def workflow_index_compute_dependencies(c: Composition) -> None:
     """
     Assert that materialized views and index catalog items see and use only
