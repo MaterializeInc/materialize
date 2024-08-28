@@ -29,6 +29,9 @@ common --copt=-mmacosx-version-min=14.0
 common --linkopt=-mmacosx-version-min=14.0
 common --macos_sdk_version=14.0
 
+common --copt=-Wno-unused-command-line-argument
+common --linkopt=-Wno-unused-command-line-argument
+
 # Config for building protobuf.
 build --copt=-Wno-error=deprecated-declarations
 
