@@ -37,12 +37,6 @@ Emulator](/get-started/install-materialize-emulator/) to test locally. However,
 the Materialize Emulator does not provide the full experience of using
 Materialize.
 
-## Step 0. Sign in to Materialize
-
-Navigate to the [Materialize console](https://console.materialize.com/) and sign
-in. By default, you should land in the SQL Shell. If you're already signed in,
-you can access the SQL Shell in the left-hand menu.
-
 ## Step 1. Ingest streaming data
 
 You'll use a sample auction house data set to build an operational use
