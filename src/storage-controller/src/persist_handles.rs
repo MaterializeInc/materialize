@@ -77,6 +77,11 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     },
+    AppendSoon {
+        id: GlobalId,
+        updates: Vec<TimestamplessUpdate>,
+        tx: tokio::sync::oneshot::Sender<()>,
+    },
     Shutdown,
 }
 
@@ -87,6 +92,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
             PersistTableWriteCmd::Update { .. } => "PersistTableWriteCmd::Update",
             PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
+            PersistTableWriteCmd::AppendSoon { .. } => "PersistTableWriteCmd::AppendSoon",
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
         }
     }
@@ -172,6 +178,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
+                soon: BTreeMap::new(),
             };
             worker.run(rx).await
         });
@@ -241,6 +248,22 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn append_soon(
+        &self,
+        id: GlobalId,
+        updates: Vec<TimestamplessUpdate>,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if updates.is_empty() {
+            tx.send(()).expect("rx has not been dropped at this point");
+            rx
+        } else {
+            self.send(PersistTableWriteCmd::AppendSoon { id, updates, tx });
+            rx
+        }
+    }
+
     /// Drops the handles associated with `ids` from this worker.
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
@@ -256,10 +279,27 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     }
 }
 
+struct AppendSoon<T> {
+    min_commit_ts: Option<T>,
+    updates: Vec<TimestamplessUpdate>,
+    txs: Vec<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl<T> Default for AppendSoon<T> {
+    fn default() -> Self {
+        Self {
+            min_commit_ts: Default::default(),
+            updates: Default::default(),
+            txs: Default::default(),
+        }
+    }
+}
+
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
+    soon: BTreeMap<GlobalId, AppendSoon<T>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T> {
@@ -307,6 +347,21 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                         .instrument(span)
                         .await
                 }
+                PersistTableWriteCmd::AppendSoon {
+                    id,
+                    mut updates,
+                    tx,
+                } => {
+                    let soon = self.soon.entry(id).or_default();
+                    if soon.updates.is_empty() {
+                        // Special case empty to reuse the input Vec because we
+                        // clear after draining.
+                        soon.updates = updates;
+                    } else {
+                        soon.updates.append(&mut updates);
+                    }
+                    soon.txs.push(tx);
+                }
                 PersistTableWriteCmd::Shutdown => {
                     tracing::info!("PersistTableWriteWorker shutting down via command");
                     return;
@@ -353,6 +408,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
 
     async fn drop_handles(&mut self, ids: Vec<GlobalId>, forget_ts: T) {
         tracing::info!(?ids, "drop tables");
+        for id in &ids {
+            // If there are any unresolved soon entries for this id, the caller
+            // can distinguish that this was not successful because the rx side
+            // of the channel will close.
+            self.soon.remove(id);
+        }
         let data_ids = ids
             .iter()
             // n.b. this should only remove the handle from the persist
@@ -380,9 +441,28 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         &mut self,
         write_ts: T,
         advance_to: T,
-        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        mut updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ) {
+        // Sneak in any AppendSoon entries as necessary.
+        let mut soon_txs = Vec::new();
+        for (id, soon) in &mut self.soon {
+            // Debounce these so we have to advance the physical upper less
+            // often.
+            match &soon.min_commit_ts {
+                // Fall through
+                Some(min_commit_ts) if write_ts >= *min_commit_ts => {}
+                Some(_) => continue,
+                None => {
+                    debug_assert!(soon.updates.is_empty());
+                    debug_assert!(soon.txs.is_empty());
+                }
+            }
+            soon.min_commit_ts = None;
+            updates.push((*id, std::mem::take(&mut soon.updates)));
+            soon_txs.append(&mut soon.txs);
+        }
+
         debug!(
             "tables append timestamp={:?} advance_to={:?} len={} ids={:?}{}",
             write_ts,
@@ -462,6 +542,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             }
         };
         // It is not an error for the other end to hang up.
+        for tx in soon_txs {
+            let _ = tx.send(());
+        }
         let _ = tx.send(response);
     }
 }
