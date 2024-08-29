@@ -535,6 +535,55 @@ fn lag_lead_inner<'a>(
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
 ) -> Vec<Datum<'a>> {
+    if *ignore_nulls {
+        lag_lead_inner_ignore_nulls(args, lag_lead_type)
+    } else {
+        lag_lead_inner_respect_nulls(args, lag_lead_type)
+    }
+}
+
+fn lag_lead_inner_respect_nulls<'a>(
+    args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
+    lag_lead_type: &LagLeadType,
+) -> Vec<Datum<'a>> {
+    let mut result: Vec<Datum> = Vec::with_capacity(args.len());
+    for (idx, (_, offset, default_value)) in args.iter().enumerate() {
+        // Null offsets are acceptable, and always return null
+        if offset.is_null() {
+            result.push(*offset);
+            continue;
+        }
+
+        let idx = i64::try_from(idx).expect("Array index does not fit in i64");
+        let offset = i64::from(offset.unwrap_int32());
+        let offset = match lag_lead_type {
+            LagLeadType::Lag => -offset,
+            LagLeadType::Lead => offset,
+        };
+
+        // Get a Datum from `datums`. Return None if index is out of range.
+        let datums_get = |i: i64| -> Option<Datum> {
+            match u64::try_from(i) {
+                Ok(i) => args
+                    .get(usize::cast_from(i))
+                    .map(|d| Some(d.0)) // succeeded in getting a Datum from the vec
+                    .unwrap_or(None), // overindexing
+                Err(_) => None, // underindexing (negative index)
+            }
+        };
+
+        let lagged_value = datums_get(idx + offset).unwrap_or(*default_value);
+
+        result.push(lagged_value);
+    }
+
+    result
+}
+
+fn lag_lead_inner_ignore_nulls<'a>(
+    args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
+    lag_lead_type: &LagLeadType,
+) -> Vec<Datum<'a>> {
     let mut result: Vec<Datum> = Vec::with_capacity(args.len());
     for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
@@ -562,9 +611,7 @@ fn lag_lead_inner<'a>(
             }
         };
 
-        let lagged_value = if !ignore_nulls {
-            datums_get(idx + offset).unwrap_or(*default_value)
-        } else {
+        let lagged_value = {
             // We start j from idx, and step j until we have seen an abs(offset) number of non-null
             // values.
             //
