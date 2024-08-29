@@ -126,7 +126,7 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
 
     // Use `NOW_ZERO` for consistent timestamps in the snapshots.
     let _ = openable_state1
-        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .open(NOW_ZERO(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -270,7 +270,7 @@ async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -332,7 +332,7 @@ async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain state updates.

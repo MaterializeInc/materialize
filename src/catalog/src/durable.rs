@@ -90,9 +90,6 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// storage, it will never read another update from durable storage. As a
     /// consequence, savepoint catalogs can never be fenced.
     ///
-    /// `epoch_lower_bound` is used as a lower bound for the epoch that is
-    /// used by the returned catalog.
-    ///
     /// Will return an error in the following scenarios:
     ///   - Catalog initialization fails.
     ///   - Catalog migrations fail.
@@ -102,7 +99,6 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog in read only mode. All mutating methods
@@ -120,13 +116,10 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// needed.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
-    /// `epoch_lower_bound` is used as a lower bound for the epoch that is used by the returned
-    /// catalog.
     async fn open(
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for

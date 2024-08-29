@@ -40,7 +40,7 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     assert_ok!(state1.confirm_leadership().await);
@@ -48,7 +48,7 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
     let mut state2 = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     assert_ok!(state2.confirm_leadership().await);
@@ -87,7 +87,7 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -164,7 +164,7 @@ async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain initial updates.
@@ -221,7 +221,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain initial updates.
@@ -275,7 +275,7 @@ async fn test_schemas(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain initial updates.
@@ -339,14 +339,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     let mut savepoint_state = state_builder
         .clone()
         .unwrap_build()
         .await
-        .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     let mut reader_state = state_builder

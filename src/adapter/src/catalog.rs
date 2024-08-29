@@ -474,16 +474,13 @@ impl Catalog {
         organization_id: Uuid,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
-        let epoch_lower_bound = None;
         let environment_id = None;
         let openable_storage = TestCatalogStateBuilder::new(persist_client)
             .with_organization_id(organization_id)
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage
-            .open(now(), &test_bootstrap_args(), epoch_lower_bound)
-            .await?;
+        let storage = openable_storage.open(now(), &test_bootstrap_args()).await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
             .await
