@@ -997,7 +997,8 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::LagLead { .. }
         | AggregateFunc::FirstValue { .. }
         | AggregateFunc::LastValue { .. }
-        | AggregateFunc::WindowAggregate { .. } => ReductionType::Basic,
+        | AggregateFunc::WindowAggregate { .. }
+        | AggregateFunc::FusedValueWindowFunc { .. } => ReductionType::Basic,
     }
 }
 

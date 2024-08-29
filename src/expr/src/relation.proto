@@ -84,6 +84,11 @@ message ProtoAggregateFunc {
         mz_expr.relation.ProtoWindowFrame window_frame = 3;
     }
 
+    message ProtoFusedValueWindowFunc {
+        repeated ProtoAggregateFunc funcs = 1;
+        ProtoColumnOrders order_by = 2;
+    }
+
     message ProtoMapAgg {
         ProtoColumnOrders order_by = 1;
         mz_repr.relation_and_scalar.ProtoScalarType value_type = 2;
@@ -136,6 +141,7 @@ message ProtoAggregateFunc {
         ProtoFramedWindowFunc first_value = 41;
         ProtoFramedWindowFunc last_value = 42;
         ProtoWindowAggregate window_aggregate = 55;
+        ProtoFusedValueWindowFunc fused_value_window_func = 57;
         google.protobuf.Empty max_uint16 = 43;
         google.protobuf.Empty max_uint32 = 44;
         google.protobuf.Empty max_uint64 = 45;

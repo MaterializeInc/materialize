@@ -178,6 +178,7 @@ From
 Full
 Fullname
 Function
+Fusion
 Generator
 Grant
 Greatest

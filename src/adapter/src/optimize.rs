@@ -247,6 +247,9 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_new_outer_join_lowering: config.features.enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering: config.features.enable_variadic_left_join_lowering,
             enable_outer_join_null_filter: config.features.enable_outer_join_null_filter,
+            enable_value_window_function_fusion: config
+                .features
+                .enable_value_window_function_fusion,
         }
     }
 }

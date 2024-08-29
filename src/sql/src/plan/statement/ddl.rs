@@ -3510,7 +3510,8 @@ generate_extracted_config!(
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
-    (EnableOuterJoinNullFilter, Option<bool>, Default(None))
+    (EnableOuterJoinNullFilter, Option<bool>, Default(None)),
+    (EnableValueWindowFunctionFusion, Option<bool>, Default(None))
 );
 
 /// Convert a [`CreateClusterStatement`] into a [`Plan`].
@@ -3648,6 +3649,7 @@ pub fn plan_create_cluster_inner(
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
             enable_outer_join_null_filter,
+            enable_value_window_function_fusion,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -3657,6 +3659,7 @@ pub fn plan_create_cluster_inner(
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
             enable_outer_join_null_filter,
+            enable_value_window_function_fusion,
             ..Default::default()
         };
 
@@ -3752,6 +3755,7 @@ pub fn unplan_create_cluster(
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
                 enable_outer_join_null_filter,
+                enable_value_window_function_fusion,
             } = optimizer_feature_overrides;
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.
@@ -3762,6 +3766,7 @@ pub fn unplan_create_cluster(
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
                 enable_outer_join_null_filter,
+                enable_value_window_function_fusion,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {

@@ -162,7 +162,10 @@ impl LazyUnaryFunc for RecordGet {
                 ty.nullable = ty.nullable || input_type.nullable;
                 ty
             }
-            _ => unreachable!("RecordGet specified nonexistent field"),
+            _ => unreachable!(
+                "RecordGet on non-record input: {:?}",
+                input_type.scalar_type
+            ),
         }
     }
 

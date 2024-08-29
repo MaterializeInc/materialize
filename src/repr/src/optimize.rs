@@ -117,6 +117,8 @@ optimizer_feature_flags!({
     // Reoptimize imported views when building and optimizing a
     // `DataflowDescription` in the global MIR optimization phase.
     reoptimize_imported_views: bool,
+    // Enables the value window function fusion optimization.
+    enable_value_window_function_fusion: bool,
 });
 
 /// A trait used to implement layered config construction.

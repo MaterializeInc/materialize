@@ -138,6 +138,7 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     /// Enable the extra null filter implemented in #28018.
     pub enable_outer_join_null_filter: bool,
+    pub enable_value_window_function_fusion: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -146,17 +147,18 @@ impl From<&SystemVars> for Config {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
+            enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
         }
     }
 }
 
 /// Context passed to the lowering. This is wired to most parts of the lowering.
-struct Context<'a> {
+pub(crate) struct Context<'a> {
     /// Feature flags affecting the behavior of lowering.
-    config: &'a Config,
+    pub config: &'a Config,
     /// Optional, because some callers don't have an `OptimizerMetrics` handy. When it's None, we
     /// simply don't write metrics.
-    metrics: Option<&'a OptimizerMetrics>,
+    pub metrics: Option<&'a OptimizerMetrics>,
 }
 
 impl HirRelationExpr {
@@ -190,6 +192,7 @@ impl HirRelationExpr {
                     let mut id_gen = mz_ore::id_gen::IdGen::default();
                     transform_expr::split_subquery_predicates(&mut other);
                     transform_expr::try_simplify_quantified_comparisons(&mut other);
+                    transform_expr::fuse_window_functions(&mut other, &context)?;
                     MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
                         .let_in_fallible(&mut id_gen, |id_gen, get_outer| {
                             other.applied_to(
@@ -455,6 +458,7 @@ impl HirRelationExpr {
                                 requires_nonexistent_column
                             })
                             .unwrap_or(scalars.len());
+                        assert!(end_idx > 0, "a Map expression references itself or a later column; lowered_arity: {}, expressions: {:?}", lowered_arity, scalars);
 
                         lowered_arity = lowered_arity + end_idx;
                         let scalars = scalars.drain(0..end_idx).collect_vec();
@@ -1201,7 +1205,10 @@ impl HirScalarExpr {
                                 .typ(&get_inner.typ().column_types)
                                 .scalar_type;
 
-                            // Build a new record with the original row in a record in a list + the encoded args in a record
+                            // Build a new record that has two fields:
+                            // 1. the original row in a record
+                            // 2. the encoded args (which can be either a single value, or a record
+                            //    if the window function has multiple arguments, such as `lag`)
                             let fn_input_record_fields =
                                 [original_row_record_type, mir_encoded_args_type]
                                     .iter()

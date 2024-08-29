@@ -2652,6 +2652,21 @@ impl ScalarType {
         }
     }
 
+    /// Returns vector of [`ColumnType`] elements in a [`ScalarType::Record`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Record`].
+    pub fn unwrap_record_element_column_type(&self) -> Vec<&ColumnType> {
+        match self {
+            ScalarType::Record { fields, .. } => fields.iter().map(|(_, t)| t).collect_vec(),
+            _ => panic!(
+                "ScalarType::unwrap_record_element_column_type called on {:?}",
+                self
+            ),
+        }
+    }
+
     /// Returns number of dimensions/axes (also known as "rank") on a
     /// [`ScalarType::List`].
     ///

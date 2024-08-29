@@ -2088,6 +2088,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_value_window_function_fusion,
+        desc: "Enables the value window function fusion optimization",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2101,6 +2107,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
             enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
+            enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }
