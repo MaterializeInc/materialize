@@ -887,6 +887,7 @@ class Composition:
             "up",
             *(["--detach"] if detach else []),
             *(["--wait"] if wait else []),
+            *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
             *services,
             max_tries=max_tries,
         )
