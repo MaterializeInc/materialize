@@ -30,6 +30,7 @@ use mz_ore::task::JoinHandle;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64, Opaque};
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug, info, trace_span, warn, Instrument};
@@ -54,7 +55,6 @@ use crate::internal::state::{
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
-use crate::iter::MINIMUM_CONSOLIDATED_VERSION;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
 use crate::schema::{CaESchema, SchemaId};
@@ -96,6 +96,12 @@ pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
     "Claim a compaction with the given percent chance, if claiming compactions is enabled. \
     (If over 100, we'll always claim at least one; for example, if set to 365, we'll claim at least \
     three and have a 65% chance of claiming a fourth.)",
+);
+
+pub(crate) const CLAIM_COMPACTION_MIN_VERSION: Config<String> = Config::new(
+    "persist_claim_compaction_min_version",
+    String::new(),
+    "If set to a valid version string, compact away any earlier versions if possible.",
 );
 
 impl<K, V, T, D> Machine<K, V, T, D>
@@ -438,6 +444,9 @@ where
                         } else {
                             0
                         },
+                        Version::parse(&CLAIM_COMPACTION_MIN_VERSION.get(cfg))
+                            .ok()
+                            .as_ref(),
                     )
                 })
                 .await;

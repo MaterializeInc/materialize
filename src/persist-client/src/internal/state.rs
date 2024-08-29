@@ -1095,6 +1095,7 @@ where
         inline_writes_total_max_bytes: usize,
         record_compactions: bool,
         claim_compaction_percent: usize,
+        claim_compaction_min_version: Option<&Version>,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1203,10 +1204,10 @@ where
                 reqs_to_take += 1;
             }
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
-            let min_writer = WriterKey::for_version(&crate::iter::MINIMUM_CONSOLIDATED_VERSION);
+            let min_writer = claim_compaction_min_version.map(WriterKey::for_version);
             merge_reqs.extend(
                 self.trace
-                    .fueled_merge_reqs_before_ms(threshold_ms, Some(min_writer))
+                    .fueled_merge_reqs_before_ms(threshold_ms, min_writer)
                     .take(reqs_to_take),
             )
         }
@@ -2616,6 +2617,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2635,6 +2637,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
 
@@ -2650,6 +2653,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2669,6 +2673,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2691,6 +2696,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
     }
@@ -2738,6 +2744,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
 
@@ -2812,6 +2819,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
 
@@ -2843,6 +2851,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
 
@@ -2906,6 +2915,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
         assert!(state
@@ -2920,6 +2930,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
 
@@ -2977,6 +2988,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
 
@@ -2998,6 +3010,7 @@ pub(crate) mod tests {
                 0,
                 true,
                 100,
+                None
             )
             .is_continue());
     }
@@ -3033,6 +3046,7 @@ pub(crate) mod tests {
             0,
             true,
             100,
+            None,
         );
         assert_eq!(state.maybe_gc(false), None);
 
