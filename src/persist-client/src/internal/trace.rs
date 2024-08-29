@@ -54,6 +54,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
+use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -540,10 +541,22 @@ impl<T: Timestamp + Lattice> Trace<T> {
     pub(crate) fn fueled_merge_reqs_before_ms(
         &self,
         threshold_ms: u64,
+        threshold_writer: Option<WriterKey>,
     ) -> impl Iterator<Item = FueledMergeReq<T>> + '_ {
         self.spine
             .spine_batches()
-            .filter(|b| !b.is_compact())
+            .filter(move |b| {
+                let noncompact = !b.is_compact();
+                let old_writer = threshold_writer.as_ref().map_or(false, |min_writer| {
+                    b.parts.iter().any(|b| {
+                        b.batch
+                            .parts
+                            .iter()
+                            .any(|p| p.writer_key().map_or(false, |writer| writer < *min_writer))
+                    })
+                });
+                noncompact || old_writer
+            })
             .filter(move |b| {
                 // Either there's no active compaction, or the last active compaction
                 // is not after the timeout timestamp.
@@ -1756,7 +1769,9 @@ pub(crate) mod tests {
                     lower.clone_from(batch.desc.upper());
                     let _merge_req = trace.push_batch(batch);
                 }
-                let reqs: Vec<_> = trace.fueled_merge_reqs_before_ms(timeout_ms).collect();
+                let reqs: Vec<_> = trace
+                    .fueled_merge_reqs_before_ms(timeout_ms, None)
+                    .collect();
                 for req in reqs {
                     trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }

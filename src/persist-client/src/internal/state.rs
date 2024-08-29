@@ -221,7 +221,7 @@ impl<T> BatchPart<T> {
 
     pub fn writer_key(&self) -> Option<WriterKey> {
         match self {
-            BatchPart::Hollow(x) => Some(x.key.split().0),
+            BatchPart::Hollow(x) => x.key.split().map(|(writer, _part)| writer),
             BatchPart::Inline { .. } => None,
         }
     }
@@ -1196,7 +1196,12 @@ where
             .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
         if record_compactions && claim_unclaimed_compactions && all_empty_reqs {
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
-            merge_reqs.extend(self.trace.fueled_merge_reqs_before_ms(threshold_ms).take(1))
+            let min_writer = WriterKey::for_version(&crate::iter::MINIMUM_CONSOLIDATED_VERSION);
+            merge_reqs.extend(
+                self.trace
+                    .fueled_merge_reqs_before_ms(threshold_ms, Some(min_writer))
+                    .take(1),
+            )
         }
 
         if record_compactions {
