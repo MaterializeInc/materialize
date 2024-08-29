@@ -58,6 +58,7 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
           rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
           bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
           buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
+          rm -rf coverage
         fi
     fi
 fi
