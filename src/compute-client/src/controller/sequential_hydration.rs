@@ -331,7 +331,6 @@ async fn forward_messages<C, T>(
                     break; // `SequentialHydration` dropped
                 };
                 if let Err(error) = client.send(command).await {
-                    tracing::error!("error on send");
                     // Client produced an unrecoverable error.
                     let _ = tx.send(Err(error));
                     break;
@@ -341,11 +340,9 @@ async fn forward_messages<C, T>(
                 let response = match response {
                     Ok(Some(response)) => response,
                     Ok(None) => {
-                        tracing::error!("client disconnect");
                         break; // client disconnected
                     }
                     Err(error) => {
-                        tracing::error!("error on receive");
                         // Client produced an unrecoverable error.
                         let _ = tx.send(Err(error));
                         break;
