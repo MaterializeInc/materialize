@@ -536,14 +536,15 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         );
     }
 
-    /// Returns `true` iff each (non-transient) collection is hydrated on at
+    /// Returns `true` if each non-transient, non-excluded collection is hydrated on at
     /// least one replica.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
-    pub fn all_collections_hydrated_on_replicas(
+    pub fn collections_hydrated_on_replicas(
         &self,
         target_replica_ids: Option<Vec<ReplicaId>>,
+        exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, HydrationCheckBadTarget> {
         if self.replicas.is_empty() {
             return Ok(true);
@@ -565,9 +566,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         for (id, _collection) in self.collections_iter() {
-            if id.is_transient() {
-                // These have no relation to dataflows running on previous
-                // deployments.
+            if id.is_transient() || exclude_collections.contains(id) {
                 continue;
             }
 
@@ -598,7 +597,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         Ok(all_hydrated)
     }
 
-    /// Returns `true` iff all (non-transient) collections have their write
+    /// Returns `true` if all non-transient, non-excluded collections have their write
     /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
     /// reported in `live_frontiers`. The "live" frontiers are frontiers as
     /// reported by a currently running `environmentd` deployment, during a 0dt
@@ -606,10 +605,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
-    pub fn all_collections_caught_up(
+    pub fn collections_caught_up(
         &self,
         allowed_lag: T,
         live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
+        exclude_collections: &BTreeSet<GlobalId>,
     ) -> bool {
         if self.replicas.is_empty() {
             return true;
@@ -618,7 +618,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let mut all_caught_up = true;
 
         for (id, collection) in self.collections_iter() {
-            if id.is_transient() {
+            if id.is_transient() || exclude_collections.contains(id) {
                 // These have no relation to dataflows running on previous
                 // deployments.
                 continue;
@@ -671,12 +671,13 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         all_caught_up
     }
 
-    /// Returns `true` iff all collections are hydrated on at least one replica.
+    /// Returns `true` if all non-transient, non-excluded collections are hydrated on at least one
+    /// replica.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
-    pub fn all_collections_hydrated(&self) -> bool {
-        self.all_collections_hydrated_on_replicas(None)
+    pub fn collections_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
+        self.collections_hydrated_on_replicas(None, exclude_collections)
             .expect("Cannot error if target_replica_ids is None")
     }
 

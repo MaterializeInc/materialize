@@ -28,7 +28,7 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -343,15 +343,16 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         self.arrangement_exert_proportionality = value;
     }
 
-    /// Returns `true` iff all collections on all clusters have been hydrated.
+    /// Returns `true` if all non-transient, non-excluded collections on all clusters have been
+    /// hydrated.
     ///
     /// For this check, zero-replica clusters are always considered hydrated.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub fn clusters_hydrated(&self) -> bool {
+    pub fn clusters_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
         let mut result = true;
         for (instance_id, i) in &self.instances {
-            let instance_hydrated = i.all_collections_hydrated();
+            let instance_hydrated = i.collections_hydrated(exclude_collections);
 
             if !instance_hydrated {
                 result = false;
@@ -365,7 +366,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         result
     }
 
-    /// Returns `true` iff all (non-transient) collections have their write
+    /// Returns `true` if all non-transient, non-excluded collections have their write
     /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
     /// reported in `live_frontiers`. The "live" frontiers are frontiers as
     /// reported by a currently running `environmentd` deployment, during a 0dt
@@ -378,11 +379,12 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         &self,
         allowed_lag: T,
         live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
+        exclude_collections: &BTreeSet<GlobalId>,
     ) -> bool {
         let mut result = true;
         for (instance_id, i) in &self.instances {
             let instance_hydrated =
-                i.all_collections_caught_up(allowed_lag.clone(), live_frontiers);
+                i.collections_caught_up(allowed_lag.clone(), live_frontiers, exclude_collections);
 
             if !instance_hydrated {
                 result = false;
@@ -396,18 +398,20 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         result
     }
 
-    /// Returns `true` iff all collections are hydrated on any of the provided replicas.
+    /// Returns `true` if all non-transient, non-excluded collections are hydrated on any of the
+    /// provided replicas.
     ///
     /// For this check, zero-replica clusters are always considered hydrated.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub fn all_collections_hydrated_for_replicas(
+    pub fn collections_hydrated_for_replicas(
         &self,
         cluster: StorageInstanceId,
         replicas: Vec<ReplicaId>,
+        exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, anyhow::Error> {
         let i = self.instance(cluster)?;
-        i.all_collections_hydrated_on_replicas(Some(replicas))
+        i.collections_hydrated_on_replicas(Some(replicas), exclude_collections)
             .map_err(|e| e.into())
     }
 

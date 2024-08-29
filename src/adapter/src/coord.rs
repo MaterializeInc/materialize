@@ -1548,6 +1548,18 @@ impl ClusterReplicaStatuses {
     }
 }
 
+/// Context needed to check the hydration status of clusters.
+#[derive(Debug)]
+struct HydrationCheckContext {
+    /// A trigger that signals that all clusters have been hydrated.
+    trigger: trigger::Trigger,
+    /// Collections to exclude from the hydration check.
+    ///
+    /// When a hydration check is performed as part of a 0dt upgrade, it makes sense to exclude
+    /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
+    exclude_collections: BTreeSet<GlobalId>,
+}
+
 /// Glues the external world to the Timely workers.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -1689,9 +1701,9 @@ pub struct Coordinator {
     /// clusters whether they are hydrated.
     check_clusters_hydrated_interval: tokio::time::Interval,
 
-    /// A trigger that signals that all clusters have been hydrated. Only used
+    /// Context needed to check whether all clusters have been hydrated. Only used
     /// during 0dt deployment, while in read-only mode.
-    clusters_hydrated_trigger: Option<trigger::Trigger>,
+    hydration_check: Option<HydrationCheckContext>,
 
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
@@ -3439,11 +3451,11 @@ impl Coordinator {
     }
 
     /// Checks that all clusters/collections are hydrated. If so, this will
-    /// trigger `self.clusters_hydrated_trigger`.
+    /// trigger `self.hydration_check.trigger`.
     ///
     /// This method is a no-op when the trigger has already been fired.
     async fn maybe_check_hydration_status(&mut self) {
-        if self.clusters_hydrated_trigger.is_some() {
+        if let Some(ctx) = &self.hydration_check {
             let enable_caught_up_check =
                 ENABLE_0DT_CAUGHT_UP_CHECK.get(self.catalog().system_config().dyncfgs());
 
@@ -3517,35 +3529,36 @@ impl Coordinator {
                     .try_into()
                     .expect("must fit into u64");
 
-                let compute_caught_up = self
-                    .controller
-                    .compute
-                    .clusters_caught_up(allowed_lag.into(), &live_collection_frontiers);
+                let compute_caught_up = self.controller.compute.clusters_caught_up(
+                    allowed_lag.into(),
+                    &live_collection_frontiers,
+                    &ctx.exclude_collections,
+                );
 
                 // We also check that we're "hydrated", meaning all collections
                 // have reported an upper at _some_ frontier. This acts as a
                 // back-stop to the case where `mz_cluster_replica_frontiers` is
                 // migrated and we report `0` for a collection frontier.
-                let compute_hydrated = self.controller.compute.clusters_hydrated();
+                let compute_hydrated = self
+                    .controller
+                    .compute
+                    .clusters_hydrated(&ctx.exclude_collections);
                 tracing::info!(%compute_caught_up, %compute_hydrated, "checked caught-up status of collections");
 
                 if compute_caught_up && compute_hydrated {
-                    let trigger = self
-                        .clusters_hydrated_trigger
-                        .take()
-                        .expect("known to exist");
-                    trigger.fire();
+                    let ctx = self.hydration_check.take().expect("known to exist");
+                    ctx.trigger.fire();
                 }
             } else {
-                let compute_hydrated = self.controller.compute.clusters_hydrated();
+                let compute_hydrated = self
+                    .controller
+                    .compute
+                    .clusters_hydrated(&ctx.exclude_collections);
                 tracing::info!(%compute_hydrated, "checked hydration status of clusters");
 
                 if compute_hydrated {
-                    let trigger = self
-                        .clusters_hydrated_trigger
-                        .take()
-                        .expect("known to exist");
-                    trigger.fire();
+                    let ctx = self.hydration_check.take().expect("known to exist");
+                    ctx.trigger.fire();
                 }
             }
         }
@@ -3816,6 +3829,7 @@ pub fn serve(
             mut catalog,
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
+            new_builtins,
             builtin_table_updates,
         } = Catalog::open(mz_catalog::config::Config {
             storage,
@@ -3902,6 +3916,11 @@ pub fn serve(
             interval
         };
 
+        let hydration_check = clusters_hydrated_trigger.map(|trigger| HydrationCheckContext {
+            trigger,
+            exclude_collections: new_builtins,
+        });
+
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
             // of them are locked in right when an oracle is first opened!
@@ -3975,7 +3994,7 @@ pub fn serve(
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
-                    clusters_hydrated_trigger,
+                    hydration_check,
                     buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {

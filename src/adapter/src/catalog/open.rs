@@ -169,6 +169,8 @@ pub struct InitializeStateResult {
     pub storage_collections_to_drop: BTreeSet<GlobalId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    /// A set of new builtin items.
+    pub new_builtins: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     /// The version of the catalog that existed before initializing the catalog.
@@ -182,6 +184,8 @@ pub struct OpenCatalogResult {
     pub storage_collections_to_drop: BTreeSet<GlobalId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    /// A set of new builtin items.
+    pub new_builtins: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
 }
@@ -285,7 +289,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
-        let migrated_builtins = {
+        let (migrated_builtins, new_builtins) = {
             migrate::durable_migrate(&mut txn, config.boot_ts)?;
             // Overwrite and persist selected parameter values in `remote_system_parameters` that
             // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
@@ -296,7 +300,8 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
+            let (migrated_builtins, new_builtins) =
+                add_new_remove_old_builtin_items_migration(&mut txn)?;
             let cluster_sizes = BuiltinBootstrapClusterSizes {
                 system_cluster: config.builtin_system_cluster_replica_size,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
@@ -312,7 +317,7 @@ impl Catalog {
             add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
             add_new_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            migrated_builtins
+            (migrated_builtins, new_builtins)
         };
         remove_pending_cluster_replicas_migration(&mut txn)?;
 
@@ -455,6 +460,7 @@ impl Catalog {
             state,
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
+            new_builtins: new_builtins.into_iter().collect(),
             builtin_table_updates,
             last_seen_version,
         })
@@ -478,6 +484,7 @@ impl Catalog {
                 state,
                 storage_collections_to_drop,
                 migrated_storage_collections_0dt,
+                new_builtins,
                 mut builtin_table_updates,
                 last_seen_version: _,
             } =
@@ -546,6 +553,7 @@ impl Catalog {
                 catalog,
                 storage_collections_to_drop,
                 migrated_storage_collections_0dt,
+                new_builtins,
                 builtin_table_updates,
             })
         }
@@ -902,12 +910,16 @@ impl CatalogState {
     }
 }
 
-/// Returns the list of builtin [`GlobalId`]s that need to be migrated.
+/// Updates the catalog with new and removed builtin items.
+///
+/// Returns the list of builtin [`GlobalId`]s that need to be migrated, and the list of new builtin
+/// [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
+) -> Result<(Vec<GlobalId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
     let mut new_builtins = Vec::new();
-    let mut migrated_builtins = Vec::new();
+    let mut new_builtin_ids = Vec::new();
+    let mut migrated_builtin_ids = Vec::new();
 
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new, deleted, and migrated builtin items.
@@ -968,7 +980,7 @@ fn add_new_remove_old_builtin_items_migration(
                         !builtin.runtime_alterable(),
                         "setting the runtime alterable flag on an existing object is not permitted"
                     );
-                    migrated_builtins.push(system_object_mapping.unique_identifier.id);
+                    migrated_builtin_ids.push(system_object_mapping.unique_identifier.id);
                 }
             }
             None => {
@@ -981,6 +993,7 @@ fn add_new_remove_old_builtin_items_migration(
                     },
                     unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
                 });
+                new_builtin_ids.push(id);
 
                 // Runtime-alterable system objects are durably recorded to the
                 // usual items collection, so that they can be later altered at
@@ -1053,7 +1066,7 @@ fn add_new_remove_old_builtin_items_migration(
     txn.remove_items(&deleted_runtime_alterable_system_ids)?;
     txn.remove_system_object_mappings(deleted_system_objects)?;
 
-    Ok(migrated_builtins)
+    Ok((migrated_builtin_ids, new_builtin_ids))
 }
 
 fn add_new_builtin_clusters_migration(
