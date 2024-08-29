@@ -61,25 +61,20 @@
 //! For steps that behave as described in (a), we can prove that (b) will always succeed in
 //! applying the bounds propagation constraints:
 //!
-//!     Let `A` and `B` be any pair of collections where `A` is an input of `B`.
-//!     Before (a), both invariants are upheld, i.e. `A.lower <= B.lower` and `A.upper <= B.upper`.
-//!
-//!     Case 1: (a) increases `A.lower` and/or `B.lower` to `A.lower'` and `B.lower'`
-//!         Invariant (1) might be broken, need to prove that it can be restored.
-//!         Case 1.a: `A.lower' <= B.lower'`
-//!             Invariant (1) is still upheld without propagation.
-//!         Case 1.b: `A.lower' > B.lower'`
-//!             A collection's lower bound can only be increased up to its upper bound.
-//!             Therefore, and from invariant (2): `A.lower' <= A.upper <= B.upper`
-//!             Therefore, propagation can set `B.lower' = A.lower'`, restoring invariant (1).
-//!     Case 2: (a) decreases `A.upper` and/or `B.upper`
-//!         Invariant (2) might be broken, need to prove that it can be restored.
-//!         The proof is equivalent to Case 1.
-//!
-//! Because the bounds propagation is guaranteed to succeed, provided each step of the as-of
-//! selection process only modifies either lower or upper bounds, the `propagate_bounds_*` methods
-//! always apply hard constraints, even when they are invoked during a soft-constraint step.
-//! Failing to apply a constraint while propagating bounds is a bug.
+//! | Let `A` and `B` be any pair of collections where `A` is an input of `B`.
+//! | Before (a), both invariants are upheld, i.e. `A.lower <= B.lower` and `A.upper <= B.upper`.
+//! |
+//! | Case 1: (a) increases `A.lower` and/or `B.lower` to `A.lower'` and `B.lower'`
+//! |     Invariant (1) might be broken, need to prove that it can be restored.
+//! |     Case 1.a: `A.lower' <= B.lower'`
+//! |         Invariant (1) is still upheld without propagation.
+//! |     Case 1.b: `A.lower' > B.lower'`
+//! |         A collection's lower bound can only be increased up to its upper bound.
+//! |         Therefore, and from invariant (2): `A.lower' <= A.upper <= B.upper`
+//! |         Therefore, propagation can set `B.lower' = A.lower'`, restoring invariant (1).
+//! | Case 2: (a) decreases `A.upper` and/or `B.upper`
+//! |     Invariant (2) might be broken, need to prove that it can be restored.
+//! |     The proof is equivalent to Case 1.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -598,26 +593,42 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
 
     /// Propagate as-of bounds through the dependency graph, in downstream direction.
     fn propagate_bounds_downstream(&self, bound_type: BoundType) {
+        // Propagating `lower` bounds downstream restores `AsOfBounds` invariant (1) and must
+        // therefore always succeed.
+        let constraint_type = match bound_type {
+            BoundType::Lower => ConstraintType::Hard,
+            BoundType::Upper => ConstraintType::Soft,
+        };
+
         // We don't want to rely on a correspondence between `GlobalId` order and dependency order,
         // so we use a fixpoint loop here.
         fixpoint(|changed| {
-            self.propagate_bounds_downstream_inner(bound_type, changed);
+            self.propagate_bounds_downstream_inner(bound_type, constraint_type, changed);
 
             // Propagating `upper` bounds downstream might break `AsOfBounds` invariant (2), so we
             // need to restore it.
             if bound_type == BoundType::Upper {
-                self.propagate_bounds_upstream_inner(BoundType::Upper, changed);
+                self.propagate_bounds_upstream_inner(
+                    BoundType::Upper,
+                    ConstraintType::Hard,
+                    changed,
+                );
             }
         });
     }
 
-    fn propagate_bounds_downstream_inner(&self, bound_type: BoundType, changed: &mut bool) {
+    fn propagate_bounds_downstream_inner(
+        &self,
+        bound_type: BoundType,
+        constraint_type: ConstraintType,
+        changed: &mut bool,
+    ) {
         for (id, collection) in &self.collections {
             for input_id in &collection.compute_inputs {
                 let input_collection = self.expect_collection(*input_id);
                 let bounds = input_collection.bounds.borrow();
                 let constraint = Constraint {
-                    type_: ConstraintType::Hard,
+                    type_: constraint_type,
                     bound_type,
                     frontier: bounds.get(bound_type),
                     reason: &format!("upstream {input_id} {bound_type} as-of bound"),
@@ -629,25 +640,41 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
 
     /// Propagate as-of bounds through the dependency graph, in upstream direction.
     fn propagate_bounds_upstream(&self, bound_type: BoundType) {
+        // Propagating `upper` bounds upstream restores `AsOfBounds` invariant (2) and must
+        // therefore always succeed.
+        let constraint_type = match bound_type {
+            BoundType::Lower => ConstraintType::Soft,
+            BoundType::Upper => ConstraintType::Hard,
+        };
+
         // We don't want to rely on a correspondence between `GlobalId` order and dependency order,
         // so we use a fixpoint loop here.
         fixpoint(|changed| {
-            self.propagate_bounds_upstream_inner(bound_type, changed);
+            self.propagate_bounds_upstream_inner(bound_type, constraint_type, changed);
 
             // Propagating `lower` bounds upstream might break `AsOfBounds` invariant (1), so we
             // need to restore it.
             if bound_type == BoundType::Lower {
-                self.propagate_bounds_downstream_inner(BoundType::Lower, changed);
+                self.propagate_bounds_downstream_inner(
+                    BoundType::Lower,
+                    ConstraintType::Hard,
+                    changed,
+                );
             }
         });
     }
 
-    fn propagate_bounds_upstream_inner(&self, bound_type: BoundType, changed: &mut bool) {
+    fn propagate_bounds_upstream_inner(
+        &self,
+        bound_type: BoundType,
+        constraint_type: ConstraintType,
+        changed: &mut bool,
+    ) {
         for (id, collection) in self.collections.iter().rev() {
             let bounds = collection.bounds.borrow();
             for input_id in &collection.compute_inputs {
                 let constraint = Constraint {
-                    type_: ConstraintType::Hard,
+                    type_: constraint_type,
                     bound_type,
                     frontier: bounds.get(bound_type),
                     reason: &format!("downstream {id} {bound_type} as-of bound"),
