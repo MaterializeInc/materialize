@@ -209,6 +209,7 @@ where
                 all_responses.push((ids, tx));
             }
             PersistTableWriteCmd::AppendSoon { .. } => todo!("WIP"),
+            PersistTableWriteCmd::AppendConditional { .. } => todo!("WIP"),
             PersistTableWriteCmd::Shutdown => shutdown = true,
         }
     }

@@ -21,6 +21,7 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::vec::VecExt;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
@@ -81,6 +82,12 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         updates: Vec<TimestamplessUpdate>,
         tx: tokio::sync::oneshot::Sender<()>,
     },
+    AppendConditional {
+        id: GlobalId,
+        ts: T,
+        updates: Vec<TimestamplessUpdate>,
+        tx: tokio::sync::oneshot::Sender<Result<(), T>>,
+    },
     Shutdown,
 }
 
@@ -92,6 +99,9 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
             PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
             PersistTableWriteCmd::AppendSoon { .. } => "PersistTableWriteCmd::AppendSoon",
+            PersistTableWriteCmd::AppendConditional { .. } => {
+                "PersistTableWriteCmd::AppendConditional"
+            }
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
         }
     }
@@ -180,6 +190,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                 tidy: Tidy::default(),
                 soon_debounce,
                 soon: BTreeMap::new(),
+                conditional: BTreeMap::new(),
             };
             worker.run(rx).await
         });
@@ -264,6 +275,28 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         }
     }
 
+    pub(crate) fn append_conditional(
+        &self,
+        id: GlobalId,
+        ts: T,
+        updates: Vec<TimestamplessUpdate>,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), T>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if updates.is_empty() {
+            tx.send(Ok(()))
+                .expect("rx has not been dropped at this point");
+            rx
+        } else {
+            self.send(PersistTableWriteCmd::AppendConditional {
+                id,
+                ts,
+                updates,
+                tx,
+            });
+            rx
+        }
+    }
+
     /// Drops the handles associated with `ids` from this worker.
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
@@ -295,12 +328,19 @@ impl<T: Timestamp> Default for AppendSoon<T> {
     }
 }
 
+struct AppendConditional<T> {
+    ts: T,
+    updates: Vec<TimestamplessUpdate>,
+    tx: tokio::sync::oneshot::Sender<Result<(), T>>,
+}
+
 struct TxnsTableWorker<T> {
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
     soon_debounce: Box<dyn Fn() -> T + Send + Sync>,
     soon: BTreeMap<GlobalId, AppendSoon<T>>,
+    conditional: BTreeMap<GlobalId, Vec<AppendConditional<T>>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T> {
@@ -363,6 +403,15 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     }
                     soon.txs.push(tx);
                 }
+                PersistTableWriteCmd::AppendConditional {
+                    id,
+                    ts,
+                    updates,
+                    tx,
+                } => {
+                    let conditional = self.conditional.entry(id).or_default();
+                    conditional.push(AppendConditional { ts, updates, tx })
+                }
                 PersistTableWriteCmd::Shutdown => {
                     tracing::info!("PersistTableWriteWorker shutting down via command");
                     return;
@@ -410,10 +459,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
     async fn drop_handles(&mut self, ids: Vec<GlobalId>, forget_ts: T) {
         tracing::info!(?ids, "drop tables");
         for id in &ids {
-            // If there are any unresolved soon entries for this id, the caller
-            // can distinguish that this was not successful because the rx side
-            // of the channel will close.
+            // If there are any unresolved entries for this id, the caller can
+            // distinguish that this was not successful because the rx side of
+            // the channel will close.
             self.soon.remove(id);
+            self.conditional.remove(id);
         }
         let data_ids = ids
             .iter()
@@ -468,6 +518,29 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             soon.last_commit_ts = write_ts.clone();
             updates.push((*id, std::mem::take(&mut soon.updates)));
             soon_txs.append(&mut soon.txs);
+        }
+        // Ditto AppendConditional.
+        let mut conditional_txs = Vec::new();
+        for (id, conditional) in &mut self.conditional {
+            if conditional.is_empty() {
+                continue;
+            }
+            let ready = conditional.drain_filter_swapping(|c| {
+                tracing::info!(
+                    "WIP append conditional {} {} 1 {:?} vs {:?}",
+                    id,
+                    c.updates.len(),
+                    c.ts,
+                    write_ts
+                );
+                c.ts <= write_ts
+            });
+            for c in ready {
+                // WIP whoops big incorrect. need to run lesser ts in a separate
+                // txn first. welp that pretty much kills the whole idea?
+                updates.push((*id, c.updates));
+                conditional_txs.push(c.tx);
+            }
         }
 
         debug!(
@@ -551,6 +624,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         // It is not an error for the other end to hang up.
         for tx in soon_txs {
             let _ = tx.send(());
+        }
+        for tx in conditional_txs {
+            let _ = tx.send(Ok(()));
         }
         let _ = tx.send(response);
     }

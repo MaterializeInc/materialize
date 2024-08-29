@@ -564,18 +564,7 @@ where
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         Some(*self.txns_read.txns_id())
                     }
-                    DataSource::Introspection(typ) => match typ {
-                        // WIP
-                        IntrospectionType::SourceStatusHistory
-                        | IntrospectionType::SinkStatusHistory
-                        | IntrospectionType::PrivatelinkConnectionStatusHistory
-                        | IntrospectionType::PreparedStatementHistory
-                        | IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory
-                        | IntrospectionType::StatementLifecycleHistory
-                        | IntrospectionType::SqlText => Some(*self.txns_read.txns_id()),
-                        _ => None,
-                    },
+                    DataSource::Introspection(_) => Some(*self.txns_read.txns_id()),
                     DataSource::Ingestion(_)
                     | DataSource::IngestionExport { .. }
                     | DataSource::Progress
@@ -751,9 +740,7 @@ where
                     let table_reg = self
                         .register_introspection_collection(id, *typ, write)
                         .await?;
-                    if let Some(table_reg) = table_reg {
-                        table_registers.push(table_reg);
-                    }
+                    table_registers.push(table_reg);
                     self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
@@ -2872,7 +2859,7 @@ where
         id: GlobalId,
         introspection_type: IntrospectionType,
         mut write_handle: WriteHandle<SourceData, (), T, Diff>,
-    ) -> Result<Option<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>, StorageError<T>> {
+    ) -> Result<(GlobalId, WriteHandle<SourceData, (), T, Diff>), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
         // In read-only mode we create a new shard for all migrated storage collections. So we
@@ -2954,7 +2941,7 @@ where
             | IntrospectionType::StorageSinkStatistics => {
                 self.collection_manager.register_differential_collection(
                     id,
-                    write_handle,
+                    self.persist_table_worker.clone(),
                     read_handle_fn,
                     force_writable,
                 );
@@ -2968,7 +2955,7 @@ where
                     )
                     .await?;
                 }
-                Ok(None)
+                Ok((id, write_handle))
             }
 
             // For these, we first have to prepare and then register with
@@ -2990,7 +2977,7 @@ where
                     )
                     .await?;
                 }
-                Ok(Some((id, write_handle)))
+                Ok((id, write_handle))
             }
 
             // Same as our other differential collections, but for these the
@@ -3002,7 +2989,7 @@ where
             | IntrospectionType::ComputeHydrationTimes => {
                 self.collection_manager.register_differential_collection(
                     id,
-                    write_handle,
+                    self.persist_table_worker.clone(),
                     read_handle_fn,
                     force_writable,
                 );
@@ -3016,7 +3003,7 @@ where
                     )
                     .await?;
                 }
-                Ok(None)
+                Ok((id, write_handle))
             }
 
             // Note [btv] - we don't truncate these, because that uses
@@ -3035,7 +3022,7 @@ where
                     )
                     .await?;
                 }
-                Ok(Some((id, write_handle)))
+                Ok((id, write_handle))
             }
         }
     }
