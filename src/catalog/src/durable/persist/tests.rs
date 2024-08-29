@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::now::NOW_ZERO;
+use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use uuid::Uuid;
@@ -49,7 +49,7 @@ async fn test_upgrade_shard() {
         .expect_build("failed to create persist catalog")
         .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .expect("failed to open persist catalog");
 
@@ -109,7 +109,7 @@ async fn test_upgrade_shard() {
         .expect_build("failed to create persist catalog")
         .await;
     let _persist_state = persist_openable_state
-        .open_savepoint(NOW_ZERO(), &test_bootstrap_args())
+        .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .expect("failed to open savepoint persist catalog");
 
@@ -138,7 +138,7 @@ async fn test_upgrade_shard() {
         .expect_build("failed to create persist catalog")
         .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .expect("failed to open readonly persist catalog");
 
@@ -178,7 +178,7 @@ async fn test_version_regression() {
         .expect_build("failed to create persist catalog")
         .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .expect("failed to open persist catalog");
 
@@ -199,7 +199,7 @@ async fn test_version_regression() {
         .expect_build("failed to create persist catalog")
         .await;
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .expect("failed to open readonly persist catalog");
 
