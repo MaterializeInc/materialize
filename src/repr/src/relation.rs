@@ -931,6 +931,10 @@ impl VersionedRelationDesc {
 
     /// Adds a new column to this [`RelationDesc`], creating a new version of the [`RelationDesc`].
     ///
+    /// # Panics
+    ///
+    /// * Panics if a column with `name` already exists that hasn't been dropped.
+    ///
     /// Note: For building a [`RelationDesc`] see [`RelationDescBuilder::with_column`].
     #[must_use]
     pub fn add_column<N, T>(&mut self, name: N, typ: T) -> RelationVersion
@@ -941,9 +945,19 @@ impl VersionedRelationDesc {
         let latest_version = self.latest_version();
         let new_version = latest_version.bump();
 
+        let name = name.into();
+        let existing = self
+            .inner
+            .metadata
+            .iter()
+            .find(|(_, meta)| meta.name == name && meta.dropped.is_none());
+        if let Some(existing) = existing {
+            panic!("column named '{name}' already exists! {existing:?}");
+        }
+
         let next_idx = self.inner.metadata.len();
         let col_meta = ColumnMetadata {
-            name: name.into(),
+            name,
             typ_idx: next_idx,
             added: new_version,
             dropped: None,
@@ -959,9 +973,8 @@ impl VersionedRelationDesc {
     }
 
     /// Drops the column `name` from this [`RelationDesc`]. If there are multiple columns with
-    /// `name` drops the left-most one.
+    /// `name` drops the left-most one that hasn't already been dropped.
     ///
-    /// TODO(parkmycar): Add better handling for multiple columns with the same `name`.
     /// TODO(parkmycar): Add handling for dropping a column that is currently used as a key.
     ///
     /// # Panics
@@ -981,7 +994,7 @@ impl VersionedRelationDesc {
             .inner
             .metadata
             .values_mut()
-            .find(|meta| meta.name == name)
+            .find(|meta| meta.name == name && meta.dropped.is_none())
             .expect("column to exist");
 
         // Make sure the column hadn't been previously dropped.
@@ -1541,6 +1554,61 @@ mod tests {
               "name": "b",
               "typ_idx": 1,
               "added": 0,
+              "dropped": null
+            }
+          }
+        }
+        "###);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "column named 'a' already exists!")]
+    fn test_add_column_with_same_name_panics() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::Bool.nullable(true))
+            .finish();
+        let mut versioned = VersionedRelationDesc::new(desc);
+
+        let _ = versioned.add_column("a", ScalarType::String.nullable(false));
+    }
+
+    #[mz_ore::test]
+    fn test_add_column_with_same_name_prev_dropped() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::Bool.nullable(true))
+            .finish();
+        let mut versioned = VersionedRelationDesc::new(desc);
+
+        let v1 = versioned.drop_column("a");
+        let v1 = versioned.at_version(RelationVersionSelector::Specific(v1));
+        insta::assert_json_snapshot!(v1, @r###"
+        {
+          "typ": {
+            "column_types": [],
+            "keys": []
+          },
+          "metadata": {}
+        }
+        "###);
+
+        let v2 = versioned.add_column("a", ScalarType::String.nullable(false));
+        let v2 = versioned.at_version(RelationVersionSelector::Specific(v2));
+        insta::assert_json_snapshot!(v2, @r###"
+        {
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "String",
+                "nullable": false
+              }
+            ],
+            "keys": []
+          },
+          "metadata": {
+            "1": {
+              "name": "a",
+              "typ_idx": 0,
+              "added": 2,
               "dropped": null
             }
           }
