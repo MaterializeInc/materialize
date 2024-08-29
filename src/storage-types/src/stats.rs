@@ -244,10 +244,7 @@ mod tests {
         let key_col = part.key.as_struct();
         let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&schema, key_col.clone())
             .expect("success");
-        let key_stats = decoder
-            .stats()
-            .into_struct_stats()
-            .expect("key col is StructStats");
+        let key_stats = decoder.stats();
 
         let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
         let stats = RelationPartStats {
@@ -371,10 +368,7 @@ mod tests {
             let key_col = part.key.as_struct();
             let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&desc, key_col.clone())
                 .expect("success");
-            let key_stats = decoder
-                .stats()
-                .into_struct_stats()
-                .expect("key col is StructStats");
+            let key_stats = decoder.stats();
 
             all_stats.push(key_stats);
         }

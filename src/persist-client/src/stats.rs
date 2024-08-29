@@ -16,7 +16,7 @@ use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecordsStructuredExt;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist_types::columnar::{codec_to_schema2, ColumnDecoder, Schema2};
-use mz_persist_types::stats::{ColumnStatKinds, PartStats};
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
 
 use crate::batch::UntrimmableColumns;
@@ -148,12 +148,6 @@ where
         .decoder_any(ext.key.as_ref())
         .map_err(|e| e.to_string())?
         .stats();
-    let key_stats = match key_stats.into_non_null_values() {
-        Some(ColumnStatKinds::Struct(stats)) => stats,
-        key_stats => Err(format!(
-            "found non-StructStats when encoding updates, {key_stats:?}"
-        ))?,
-    };
 
     Ok((Some(ext), PartStats { key: key_stats }))
 }

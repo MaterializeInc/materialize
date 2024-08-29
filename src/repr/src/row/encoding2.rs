@@ -28,8 +28,7 @@ use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, OptionStats, PrimitiveStats,
-    StructStats,
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats, StructStats,
 };
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use prost::Message;
@@ -1167,6 +1166,13 @@ impl RowColumnarDecoder {
             nullability: col.logical_nulls(),
         })
     }
+
+    // Returns the number of null entries in this array of Row structs. This
+    // will be 0 when `Row` is encoded directly, but could be non-zero when it's
+    // used inside `SourceDataEncoder`.
+    pub fn null_count(&self) -> usize {
+        self.nullability.as_ref().map_or(0, |n| n.null_count())
+    }
 }
 
 impl ColumnDecoder<Row> for RowColumnarDecoder {
@@ -1185,26 +1191,22 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
         nullability.is_null(idx)
     }
 
-    fn stats(&self) -> ColumnarStats {
-        let stats = OptionStats {
-            some: StructStats {
-                len: self.len,
-                cols: self
-                    .decoders
-                    .iter()
-                    .map(|(name, null_count, decoder)| {
-                        let name = name.to_string();
-                        let stats = ColumnarStats {
-                            nulls: null_count.map(|count| ColumnNullStats { count }),
-                            values: decoder.stats(),
-                        };
-                        (name, stats)
-                    })
-                    .collect(),
-            },
-            none: self.nullability.as_ref().map_or(0, |n| n.null_count()),
-        };
-        stats.into_columnar_stats()
+    fn stats(&self) -> StructStats {
+        StructStats {
+            len: self.len,
+            cols: self
+                .decoders
+                .iter()
+                .map(|(name, null_count, decoder)| {
+                    let name = name.to_string();
+                    let stats = ColumnarStats {
+                        nulls: null_count.map(|count| ColumnNullStats { count }),
+                        values: decoder.stats(),
+                    };
+                    (name, stats)
+                })
+                .collect(),
+        }
     }
 }
 
@@ -1706,10 +1708,6 @@ mod tests {
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col.clone()).unwrap();
         let stats = decoder.stats();
-        let stats = match stats.values {
-            ColumnStatKinds::Struct(stats) => stats,
-            e => panic!("expected struct stats; got {e:?}"),
-        };
 
         // Collect all of our lower and upper bounds.
         let arena = RowArena::new();

@@ -52,10 +52,17 @@ pub struct ColumnarStats {
 }
 
 impl ColumnarStats {
-    pub const NONE: Self = ColumnarStats {
-        nulls: None,
-        values: ColumnStatKinds::None,
-    };
+    /// Returns a `[StructStats]` with a single non-nullable column.
+    pub fn one_column_struct(len: usize, col: ColumnStatKinds) -> StructStats {
+        let col = ColumnarStats {
+            nulls: None,
+            values: col,
+        };
+        StructStats {
+            len,
+            cols: [("".to_owned(), col)].into_iter().collect(),
+        }
+    }
 
     /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
     pub fn as_non_null_values(&self) -> Option<&ColumnStatKinds> {
@@ -355,10 +362,7 @@ impl PartStats {
         K: Schema2<T, Statistics = StructStats>,
     {
         let decoder = K::decoder_any(desc, &part.key).context("decoder_any")?;
-        let stats = decoder
-            .stats()
-            .into_struct_stats()
-            .expect("schema should generate StructStats");
+        let stats = decoder.stats();
         Ok(PartStats { key: stats })
     }
 }

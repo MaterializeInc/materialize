@@ -32,13 +32,7 @@ mod tests {
         let key_col = part.key.as_struct();
         let decoder =
             <RelationDesc as Schema2<Row>>::decoder(schema, key_col.clone()).expect("success");
-        let stats = decoder.stats();
-
-        let expected = stats
-            .try_as_optional_struct()
-            .expect("key col is StructStats")
-            .some;
-        let mut actual: ProtoStructStats = RustType::into_proto(expected);
+        let mut actual: ProtoStructStats = RustType::into_proto(&decoder.stats());
 
         // It's not particularly easy to give StructStats a PartialEq impl, but
         // verifying that there weren't any panics gets us pretty far.
