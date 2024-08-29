@@ -612,31 +612,31 @@ fn lag_lead_inner_ignore_nulls<'a>(
         };
 
         let lagged_value = {
-            // We start j from idx, and step j until we have seen an abs(offset) number of non-null
-            // values.
-            //
-            // (This is a very naive implementation: We could avoid an inner loop, and instead step
-            // two indexes in one loop, with one index lagging behind. But a common use case is an
-            // offset of 1 and not too many nulls, for which this doesn't matter. And anyhow, the
-            // whole thing hopefully will be replaced by prefix sum soon.)
             if increment != 0 {
-                let mut to_go = num::abs(offset);
+                // We start j from idx, and step j until we have seen an abs(offset) number of non-null
+                // values or reach the beginning or end of the partition.
+                //
+                // If offset is big, then this is slow: `O(partition_size * offset)`. We could avoid an
+                // inner loop, and instead step two indexes in one loop, with one index lagging behind.
+                // But a common use case is an offset of 1, for which this doesn't matter.
                 let mut j = idx;
-                loop {
+                for _ in 0..num::abs(offset) {
                     j += increment;
-                    match datums_get(j) {
-                        Some(datum) => {
-                            if !datum.is_null() {
-                                to_go -= 1;
-                                if to_go == 0 {
-                                    break datum;
-                                }
-                            }
-                        }
-                        None => {
-                            break *default_value;
-                        }
-                    };
+                    // Jump over a run of nulls
+                    while datums_get(j).is_some_and(|d| d.is_null()) {
+                        j += increment;
+                    }
+                    if datums_get(j).is_none() {
+                        break;
+                    }
+                }
+                match datums_get(j) {
+                    Some(datum) => {
+                        datum
+                    }
+                    None => {
+                        *default_value
+                    }
                 }
             } else {
                 assert_eq!(offset, 0);
