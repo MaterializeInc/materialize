@@ -535,6 +535,17 @@ fn lag_lead_inner<'a>(
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
 ) -> Vec<Datum<'a>> {
+    if *ignore_nulls {
+        lag_lead_inner_ignore_nulls(args, lag_lead_type)
+    } else {
+        lag_lead_inner_respect_nulls(args, lag_lead_type)
+    }
+}
+
+fn lag_lead_inner_respect_nulls<'a>(
+    args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
+    lag_lead_type: &LagLeadType,
+) -> Vec<Datum<'a>> {
     let mut result: Vec<Datum> = Vec::with_capacity(args.len());
     for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
@@ -545,10 +556,9 @@ fn lag_lead_inner<'a>(
 
         let idx = i64::try_from(idx).expect("Array index does not fit in i64");
         let offset = i64::from(offset.unwrap_int32());
-        // By default, offset is applied backwards (for `lag`): flip the sign if `lead` should run instead
-        let (offset, decrement) = match lag_lead_type {
-            LagLeadType::Lag => (offset, 1),
-            LagLeadType::Lead => (-offset, -1),
+        let offset = match lag_lead_type {
+            LagLeadType::Lag => -offset,
+            LagLeadType::Lead => offset,
         };
 
         // Get a Datum from `datums`. Return None if index is out of range.
@@ -562,33 +572,123 @@ fn lag_lead_inner<'a>(
             }
         };
 
-        let lagged_value = if !ignore_nulls {
-            datums_get(idx - offset).unwrap_or(*default_value)
+        let lagged_value = datums_get(idx + offset).unwrap_or(*default_value);
+
+        result.push(lagged_value);
+    }
+
+    result
+}
+
+#[allow(clippy::as_conversions)]
+fn lag_lead_inner_ignore_nulls<'a>(
+    args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
+    lag_lead_type: &LagLeadType,
+) -> Vec<Datum<'a>> {
+    if i64::try_from(args.len()).is_err() {
+        panic!("window partition way too big")
+    }
+    // Preparation: Make sure we can jump over a run of nulls in constant time, i.e., regardless of
+    // how many nulls the run has. The following skip tables will point to the next non-null index.
+    let mut skip_nulls_backward = Vec::new();
+    let mut last_non_null: i64 = -1;
+    for (i, (d, _, _)) in args.iter().enumerate() {
+        if d.is_null() {
+            skip_nulls_backward.push(Some(i64::cast_from(last_non_null)));
         } else {
-            // We start j from idx, and step j until we have seen an abs(offset) number of non-null
-            // values.
-            //
-            // (This is a very naive implementation: We could avoid an inner loop, and instead step
-            // two indexes in one loop, with one index lagging behind. But a common use case is an
-            // offset of 1 and not too many nulls, for which this doesn't matter. And anyhow, the
-            // whole thing hopefully will be replaced by prefix sum soon.)
-            let mut to_go = num::abs(offset);
-            let mut j = idx;
-            loop {
-                j -= decrement;
+            skip_nulls_backward.push(None);
+            last_non_null = i as i64;
+        }
+    }
+    let mut skip_nulls_forward = Vec::new();
+    let mut last_non_null: i64 = args.len() as i64;
+    for (i, (d, _, _)) in args.iter().enumerate().rev() {
+        if d.is_null() {
+            skip_nulls_forward.push(Some(i64::cast_from(last_non_null)));
+        } else {
+            skip_nulls_forward.push(None);
+            last_non_null = i as i64;
+        }
+    }
+    skip_nulls_forward.reverse();
+
+    // The actual computation.
+    let mut result: Vec<Datum> = Vec::with_capacity(args.len());
+    for (idx, (_, offset, default_value)) in args.iter().enumerate() {
+        // Null offsets are acceptable, and always return null
+        if offset.is_null() {
+            result.push(*offset);
+            continue;
+        }
+
+        let idx = i64::try_from(idx).expect("Array index does not fit in i64");
+        let offset = i64::from(offset.unwrap_int32());
+        let offset = match lag_lead_type {
+            LagLeadType::Lag => -offset,
+            LagLeadType::Lead => offset,
+        };
+        let increment = offset.signum();
+
+        // Get a Datum from `datums`. Return None if index is out of range.
+        let datums_get = |i: i64| -> Option<Datum> {
+            match u64::try_from(i) {
+                Ok(i) => args
+                    .get(usize::cast_from(i))
+                    .map(|d| Some(d.0)) // succeeded in getting a Datum from the vec
+                    .unwrap_or(None), // overindexing
+                Err(_) => None, // underindexing (negative index)
+            }
+        };
+
+        let lagged_value = {
+            if increment != 0 {
+                // We start j from idx, and step j until we have seen an abs(offset) number of non-null
+                // values or reach the beginning or end of the partition.
+                //
+                // If offset is big, then this is slow: Considering the entire function, it's
+                // `O(partition_size * offset)`.
+                // However, a common use case is an offset of 1, for which this doesn't matter.
+                // TODO: For larger offsets, we could have a completely different implementation
+                // that steps two indexes in one loop, with one index lagging behind.
+                let mut j = idx;
+                for _ in 0..num::abs(offset) {
+                    j += increment;
+                    // Jump over a run of nulls
+                    if datums_get(j).is_some_and(|d| d.is_null()) {
+                        let ju = j as usize;
+                        if increment > 0 {
+                            j = skip_nulls_forward[ju].expect("checked above that it's null");
+                        } else {
+                            j = skip_nulls_backward[ju].expect("checked above that it's null");
+                        }
+                    }
+                    if datums_get(j).is_none() {
+                        break;
+                    }
+                }
                 match datums_get(j) {
+                    Some(datum) => datum,
+                    None => *default_value,
+                }
+            } else {
+                assert_eq!(offset, 0);
+                match datums_get(idx) {
                     Some(datum) => {
                         if !datum.is_null() {
-                            to_go -= 1;
-                            if to_go == 0 {
-                                break datum;
-                            }
+                            datum
+                        } else {
+                            // I can imagine returning here either `default_value` or `null`.
+                            // (I'm leaning towards `default_value`.)
+                            // We used to run into an infinite loop in this case, so panicking is
+                            // better. Started a SQL Council thread:
+                            // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+                            panic!("0 offset in lag/lead IGNORE NULLS");
                         }
                     }
                     None => {
-                        break *default_value;
+                        unreachable!()
                     }
-                };
+                }
             }
         };
 
