@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import multiprocessing
 import os
 import subprocess
 
@@ -109,6 +110,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "cargo",
             "llvm-cov",
             "nextest",
+            "--build-jobs",
+            str(multiprocessing.cpu_count() // 2),
             "--release",
             "--no-clean",
             "--workspace",
