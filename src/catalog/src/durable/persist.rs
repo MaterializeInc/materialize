@@ -43,7 +43,7 @@ use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -1046,7 +1046,10 @@ impl UnopenedPersistCatalogState {
                 match self.compare_and_append(fence_updates).await {
                     Ok(_) => break,
                     Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                    Err(CompareAndAppendError::UpperMismatch { .. }) => continue,
+                    Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                        warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                        continue;
+                    }
                 }
             } else {
                 break;
@@ -1793,7 +1796,10 @@ impl UnopenedPersistCatalogState {
             match self.compare_and_append(updates).await {
                 Ok(_) => break prev_value,
                 Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                Err(CompareAndAppendError::UpperMismatch { .. }) => continue,
+                Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                    warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                    continue;
+                }
             }
         };
         Ok(prev_value)
@@ -1829,7 +1835,10 @@ impl UnopenedPersistCatalogState {
             match self.compare_and_append(retractions).await {
                 Ok(_) => break,
                 Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                Err(CompareAndAppendError::UpperMismatch { .. }) => continue,
+                Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                    warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                    continue;
+                }
             }
         }
         Ok(())
