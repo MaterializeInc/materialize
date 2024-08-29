@@ -19,6 +19,7 @@ The Materialize Emulator is an all-in-one Docker image available on Docker Hub, 
 To launch the Docker container:
 
 ```
+docker pull materialize/materialized:latest
 docker run -d -p 6875:6875 -p 6876:6876 materialize/materialized:latest
 ```
 
