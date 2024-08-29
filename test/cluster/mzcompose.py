@@ -24,7 +24,7 @@ from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError, InterfaceError
 
-from materialize import buildkite
+from materialize import buildkite, ui
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -4214,7 +4214,8 @@ def workflow_test_http_race_condition(
     for thread in threads:
         thread.join()
 
-    stopping_time = datetime.now() + timedelta(seconds=30)
+    cleanup_seconds = 120 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 30
+    stopping_time = datetime.now() + timedelta(seconds=cleanup_seconds)
     while datetime.now() < stopping_time:
         result = c.sql_query(
             "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
@@ -4225,7 +4226,7 @@ def workflow_test_http_race_condition(
             f"There are supposed to be no sessions remaining, but there are:\n{result}"
         )
     else:
-        raise RuntimeError("Sessions did not clean up after 30s")
+        raise RuntimeError(f"Sessions did not clean up after {cleanup_seconds}s")
 
 
 def workflow_test_read_frontier_advancement(

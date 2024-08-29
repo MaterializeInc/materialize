@@ -45,7 +45,7 @@ use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
-use tracing::{debug, info};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -265,7 +265,7 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
 #[derive(Debug)]
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The [`Mode`] that this catalog was opened in.
-    mode: Mode,
+    pub(crate) mode: Mode,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -1016,13 +1016,9 @@ impl UnopenedPersistCatalogState {
         mode: Mode,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        let read_only = matches!(mode, Mode::Readonly);
-
-        if let Some(epoch_lower_bound) = &epoch_lower_bound {
-            info!(?epoch_lower_bound);
-        }
+        self.mode = mode;
+        let read_only = matches!(self.mode, Mode::Readonly);
 
         // Fence out previous catalogs.
         loop {
@@ -1034,11 +1030,8 @@ impl UnopenedPersistCatalogState {
             }
             let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
             // Only writable catalogs attempt to increment the epoch.
-            if matches!(mode, Mode::Writable) {
-                current_epoch = max(
-                    current_epoch + 1,
-                    epoch_lower_bound.unwrap_or(Epoch::MIN).get(),
-                );
+            if matches!(self.mode, Mode::Writable) {
+                current_epoch = current_epoch + 1;
             }
             let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
             fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
@@ -1046,13 +1039,12 @@ impl UnopenedPersistCatalogState {
             debug!(
                 ?self.upper,
                 ?prev_epoch,
-                ?epoch_lower_bound,
                 ?current_epoch,
                 "fencing previous catalogs"
             );
             self.epoch = current_epoch;
 
-            if matches!(mode, Mode::Writable) {
+            if matches!(self.mode, Mode::Writable) {
                 match self.compare_and_append(fence_updates).await {
                     Ok(_) => break,
                     Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
@@ -1064,16 +1056,19 @@ impl UnopenedPersistCatalogState {
         }
 
         let is_initialized = self.is_initialized_inner();
-        if !matches!(mode, Mode::Writable) && !is_initialized {
+        if !matches!(self.mode, Mode::Writable) && !is_initialized {
             return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
-                format!("catalog tables do not exist; will not create in {mode:?} mode"),
+                format!(
+                    "catalog tables do not exist; will not create in {:?} mode",
+                    self.mode
+                ),
             )));
         }
         soft_assert_ne_or_log!(self.upper, Timestamp::minimum());
 
         // Perform data migrations.
         if is_initialized && !read_only {
-            upgrade(&mut self, mode.clone()).await?;
+            upgrade(&mut self).await?;
         }
 
         debug!(
@@ -1082,7 +1077,7 @@ impl UnopenedPersistCatalogState {
             "initializing catalog state"
         );
         let mut catalog = PersistCatalogState {
-            mode: mode.clone(),
+            mode: self.mode,
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -1151,7 +1146,7 @@ impl UnopenedPersistCatalogState {
         // Now that we've fully opened the catalog at the current version, we can increment the
         // version in the catalog upgrade shard to signal to readers that the allowable versions
         // have increased.
-        if matches!(mode, Mode::Writable) {
+        if matches!(catalog.mode, Mode::Writable) {
             catalog
                 .increment_catalog_upgrade_shard_version(self.update_applier.organization_id)
                 .await;
@@ -1221,16 +1216,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(
-            Mode::Savepoint,
-            initial_ts,
-            bootstrap_args,
-            epoch_lower_bound,
-        )
-        .boxed()
-        .await
+        self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
+            .boxed()
+            .await
     }
 
     #[mz_ore::instrument]
@@ -1238,7 +1227,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args, None)
+        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args)
             .boxed()
             .await
     }
@@ -1248,16 +1237,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(
-            Mode::Writable,
-            initial_ts,
-            bootstrap_args,
-            epoch_lower_bound,
-        )
-        .boxed()
-        .await
+        self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
+            .boxed()
+            .await
     }
 
     #[mz_ore::instrument(level = "debug")]

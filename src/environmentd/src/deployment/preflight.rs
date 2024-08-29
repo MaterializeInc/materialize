@@ -77,7 +77,6 @@ pub async fn preflight_legacy(
                     default_cluster_replica_size: bootstrap_default_cluster_replica_size,
                     bootstrap_role,
                 },
-                None,
             )
             .await
         {
@@ -205,7 +204,6 @@ pub async fn preflight_0dt(
                             .clone(),
                         bootstrap_role: bootstrap_role.clone(),
                     },
-                    None,
                 )
                 .await
                 .unwrap_or_else(|error| {

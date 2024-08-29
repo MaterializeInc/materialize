@@ -21,7 +21,7 @@ abc:abc
 > VALIDATE CONNECTION privatelink_conn;
 
 # When run immediately: ERROR: Meta data fetch error: BrokerTransportFailure
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=60s
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=120s
 
 > CREATE CONNECTION redpanda_privatelink_conn TO KAFKA (
   AWS PRIVATELINK privatelink_conn (PORT 30292),

@@ -25,9 +25,13 @@ build --incompatible_strict_action_env
 
 # Bazel provides the macOS 14.5 SDK as the sysroot, we also set the minimum
 # version to prevent breaking the remote cache across developer machines.
-common:macos --copt=-mmacosx-version-min=14.0
-common:macos --linkopt=-mmacosx-version-min=14.0
+common --copt=-mmacosx-version-min=14.0
+common --linkopt=-mmacosx-version-min=14.0
 common --macos_sdk_version=14.0
+# Note(parkmycar): Ideally we would error on unused command line arguments, but
+# trying to constrain the above arguments to just macos doesn't seem to work.
+common --copt=-Wno-unused-command-line-argument
+common --linkopt=-Wno-unused-command-line-argument
 
 # Config for building protobuf.
 build --copt=-Wno-error=deprecated-declarations
@@ -56,8 +60,10 @@ build:macos --experimental_inprocess_symlink_creation
 build:macos --experimental_inmemory_sandbox_stashes
 
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
-common --explain=bazel-explain.log
-common --verbose_explanations
+#
+# TODO(parkmycar): Enable this under a "debug" or "verbose"
+# common --explain=bazel-explain.log
+# common --verbose_explanations
 
 # Compress any artifacts larger than 2MiB with zstd.
 common --remote_cache_compression

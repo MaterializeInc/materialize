@@ -511,7 +511,7 @@ impl Listeners {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
-                .open_savepoint(boot_ts, &bootstrap_args, None)
+                .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
 
             // In read-only mode, we intentionally do not call `set_is_leader`,
@@ -521,7 +521,7 @@ impl Listeners {
             adapter_storage
         } else {
             let adapter_storage = openable_adapter_storage
-                .open(boot_ts, &bootstrap_args, None)
+                .open(boot_ts, &bootstrap_args)
                 .await?;
 
             // Once we have successfully opened the adapter storage in

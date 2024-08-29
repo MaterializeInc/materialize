@@ -1386,7 +1386,7 @@ class Composition:
         mz_service: str = "materialized",
         timeout: int | None = None,
     ) -> None:
-        timeout = timeout or 900
+        timeout = timeout or (1800 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 900)
         print(
             f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
             end="",

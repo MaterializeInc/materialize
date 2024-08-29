@@ -2956,13 +2956,13 @@ mod tests {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args())
             .await
             .unwrap();
         let mut savepoint_state = state_builder
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
+            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
             .await
             .unwrap();
 

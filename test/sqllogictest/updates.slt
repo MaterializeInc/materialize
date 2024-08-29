@@ -188,6 +188,10 @@ SELECT generate_series(1, 1000000)
 statement ok
 CREATE TABLE t_big (a int);
 
+# Slow in coverage
+statement ok
+SET statement_timeout = '120s'
+
 statement ok
 INSERT INTO t_big SELECT generate_series(1, 1000000)
 

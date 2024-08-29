@@ -137,6 +137,8 @@ describe("query stream api", () => {
       }
     };
 
-    await expect(fetchData).rejects.toThrow("Expected a keyword at the beginning of a statement");
+    await expect(fetchData).rejects.toThrow(
+      "Expected a keyword at the beginning of a statement",
+    );
   });
 });
