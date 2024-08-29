@@ -531,11 +531,11 @@ impl Coordinator {
                 }
             }
         }
-        let hydrated = match self
-            .controller
-            .compute
-            .all_collections_hydrated_for_replicas(cluster.id, pending_replicas)
-        {
+        let hydrated = match self.controller.compute.collections_hydrated_for_replicas(
+            cluster.id,
+            pending_replicas,
+            &[].into(),
+        ) {
             Err(e) => {
                 return Err(AdapterError::internal("Failed to check hydration", e));
             }

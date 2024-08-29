@@ -552,6 +552,7 @@ impl Catalog {
             catalog,
             storage_collections_to_drop: _,
             migrated_storage_collections_0dt: _,
+            new_builtins: _,
             builtin_table_updates: _,
         } = Catalog::open(Config {
             storage,
