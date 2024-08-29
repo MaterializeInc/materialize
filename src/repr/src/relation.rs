@@ -979,8 +979,7 @@ impl VersionedRelationDesc {
     ///
     /// # Panics
     ///
-    /// Panics if a column with `name` does not exist, if the column was already dropped, or the
-    /// dropped column was used as a key.
+    /// Panics if a column with `name` does not exist or the dropped column was used as a key.
     #[must_use]
     pub fn drop_column<N>(&mut self, name: N) -> RelationVersion
     where
