@@ -186,51 +186,32 @@ pub async fn preflight_0dt(
             // Take over the catalog.
             info!("promoted; attempting takeover");
 
-            // NOTE: We don't do "smart" retries here, such as retrying at an
-            // interval and/or backing off. We want to get this fence in ASAP
-            // because we have been told to take over as the leader.
-            loop {
-                let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
-                    persist_client.clone(),
-                    environment_id.organization_id(),
-                    BUILD_INFO.semver_version(),
-                    Some(deploy_generation),
-                    Arc::clone(&catalog_metrics),
+            let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+                persist_client.clone(),
+                environment_id.organization_id(),
+                BUILD_INFO.semver_version(),
+                Some(deploy_generation),
+                Arc::clone(&catalog_metrics),
+            )
+            .await
+            .expect("incompatible catalog/persist version");
+
+            openable_adapter_storage
+                .open(
+                    boot_ts,
+                    &BootstrapArgs {
+                        default_cluster_replica_size: bootstrap_default_cluster_replica_size
+                            .clone(),
+                        bootstrap_role: bootstrap_role.clone(),
+                    },
                 )
                 .await
-                .expect("incompatible catalog/persist version");
-
-                let res = openable_adapter_storage
-                    .open(
-                        boot_ts,
-                        &BootstrapArgs {
-                            default_cluster_replica_size: bootstrap_default_cluster_replica_size
-                                .clone(),
-                            bootstrap_role: bootstrap_role.clone(),
-                        },
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "unexpected error while fencing out old deployment: {:?}",
+                        error
                     )
-                    .await;
-
-                match res {
-                    Ok(_catalog) => break,
-                    Err(error) => match error {
-                        CatalogError::Durable(
-                            error @ mz_catalog::durable::DurableCatalogError::UpperMismatch {
-                                ..
-                            },
-                        ) => {
-                            tracing::info!("upper mismatch while trying to fence out old deployment ({}), retrying...", error);
-                            continue;
-                        }
-                        error => {
-                            panic!(
-                                "unexpected error while fencing out old deployment: {:?}",
-                                error
-                            );
-                        }
-                    },
-                }
-            }
+                });
 
             // Reboot as the leader.
             halt!("fenced out old deployment; rebooting as leader")

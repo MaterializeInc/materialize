@@ -386,6 +386,8 @@ impl TestCatalogStateBuilder {
 }
 
 /// Creates an openable durable catalog state implemented using persist.
+///
+/// `deploy_generation` MUST be `Some` to initialize a new catalog.
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,

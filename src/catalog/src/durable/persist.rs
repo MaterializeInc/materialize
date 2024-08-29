@@ -13,7 +13,6 @@ mod tests;
 use std::cmp::max;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
-use std::future::Future;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -27,7 +26,6 @@ use mz_audit_log::VersionedEvent;
 use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
-use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{
     soft_assert_eq_no_log, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log,
     soft_assert_or_log, soft_panic_or_log,
@@ -45,7 +43,7 @@ use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -200,6 +198,42 @@ impl<T: Ord + Copy + Clone + Debug> FenceableToken<T> {
     }
 }
 
+/// An error that can occur while executing [`PersistHandle::compare_and_append`].
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CompareAndAppendError {
+    #[error(transparent)]
+    Fence(#[from] FenceError),
+    /// Catalog encountered an upper mismatch when trying to write to the catalog. This should only
+    /// happen while trying to fence out other catalogs.
+    #[error(
+        "expected catalog upper {expected_upper:?} did not match actual catalog upper {actual_upper:?}"
+    )]
+    UpperMismatch {
+        expected_upper: Timestamp,
+        actual_upper: Timestamp,
+    },
+}
+
+impl CompareAndAppendError {
+    pub(crate) fn unwrap_fence_error(self) -> FenceError {
+        match self {
+            CompareAndAppendError::Fence(e) => e,
+            e @ CompareAndAppendError::UpperMismatch { .. } => {
+                panic!("unexpected upper mismatch: {e:?}")
+            }
+        }
+    }
+}
+
+impl From<UpperMismatch<Timestamp>> for CompareAndAppendError {
+    fn from(upper_mismatch: UpperMismatch<Timestamp>) -> Self {
+        Self::UpperMismatch {
+            expected_upper: antichain_to_timestamp(upper_mismatch.expected),
+            actual_upper: antichain_to_timestamp(upper_mismatch.current),
+        }
+    }
+}
+
 pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
     /// Process and apply `update`.
     ///
@@ -318,7 +352,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindJson>(
         &mut self,
         updates: Vec<(S, Diff)>,
-    ) -> Result<Timestamp, DurableCatalogError> {
+    ) -> Result<Timestamp, CompareAndAppendError> {
         assert_eq!(self.mode, Mode::Writable);
 
         // This awkward code allows us to perform an expensive soft assert that requires cloning
@@ -984,30 +1018,42 @@ impl UnopenedPersistCatalogState {
         self.mode = mode;
         let read_only = matches!(self.mode, Mode::Readonly);
 
-        self.sync_to_current_upper().await?;
-        let prev_epoch = self.epoch.validate()?;
         // Fence out previous catalogs.
-        let mut fence_updates = Vec::with_capacity(2);
-        if let Some(prev_epoch) = prev_epoch {
-            fence_updates.push((StateUpdateKind::Epoch(prev_epoch), -1));
-        }
-        let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
-        // Only writable catalogs attempt to increment the epoch.
-        if matches!(self.mode, Mode::Writable) {
-            current_epoch = current_epoch + 1;
-        }
-        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
-        fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
-        let current_epoch = FenceableToken::new(Some(current_epoch), FenceError::epoch);
-        debug!(
-            ?self.upper,
-            ?prev_epoch,
-            ?current_epoch,
-            "fencing previous catalogs"
-        );
-        self.epoch = current_epoch;
-        if matches!(self.mode, Mode::Writable) {
-            self.compare_and_append(fence_updates).await?;
+        loop {
+            self.sync_to_current_upper().await?;
+            let prev_epoch = self.epoch.validate()?;
+            let mut fence_updates = Vec::with_capacity(2);
+            if let Some(prev_epoch) = prev_epoch {
+                fence_updates.push((StateUpdateKind::Epoch(prev_epoch), -1));
+            }
+            let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
+            // Only writable catalogs attempt to increment the epoch.
+            if matches!(self.mode, Mode::Writable) {
+                current_epoch = current_epoch + 1;
+            }
+            let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
+            fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
+            let current_epoch = FenceableToken::new(Some(current_epoch), FenceError::epoch);
+            debug!(
+                ?self.upper,
+                ?prev_epoch,
+                ?current_epoch,
+                "fencing previous catalogs"
+            );
+            self.epoch = current_epoch;
+
+            if matches!(self.mode, Mode::Writable) {
+                match self.compare_and_append(fence_updates).await {
+                    Ok(_) => break,
+                    Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                    Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                        warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                        continue;
+                    }
+                }
+            } else {
+                break;
+            }
         }
 
         let is_initialized = self.is_initialized_inner();
@@ -1498,7 +1544,10 @@ impl DurableCatalogState for PersistCatalogState {
             debug!("committing updates: {updates:?}");
 
             let next_upper = match catalog.mode {
-                Mode::Writable => catalog.compare_and_append(updates).await?,
+                Mode::Writable => catalog
+                    .compare_and_append(updates)
+                    .await
+                    .map_err(|e| e.unwrap_fence_error())?,
                 Mode::Savepoint => {
                     let ts = catalog.upper;
                     let updates =
@@ -1717,55 +1766,44 @@ impl UnopenedPersistCatalogState {
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug + Clone,
     {
-        let (_, prev) = retry(self, move |s| {
-            let key = key.clone();
-            let value = value.clone();
-            async {
-                let prev = s.debug_edit_inner::<T>(key, value).await;
-                (s, prev)
-            }
-        })
-        .await;
-        prev
-    }
-
-    #[mz_ore::instrument]
-    pub(crate) async fn debug_edit_inner<T: Collection>(
-        &mut self,
-        key: T::Key,
-        value: T::Value,
-    ) -> Result<Option<T::Value>, CatalogError>
-    where
-        T::Key: PartialEq + Eq + Debug + Clone,
-        T::Value: Debug + Clone,
-    {
-        let snapshot = self.current_snapshot().await?;
-        let trace = Trace::from_snapshot(snapshot);
-        let collection_trace = T::collection_trace(trace);
-        let prev_values: Vec<_> = collection_trace
-            .values
-            .into_iter()
-            .filter(|((k, _), _, diff)| {
-                soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
-                &key == k
-            })
-            .collect();
-
-        let prev_value = match &prev_values[..] {
-            [] => None,
-            [((_, v), _, _)] => Some(v.clone()),
-            prev_values => panic!("multiple values found for key {key:?}: {prev_values:?}"),
-        };
-
-        let mut updates: Vec<_> = prev_values
-            .into_iter()
-            .map(|((k, v), _, _)| (T::update(k, v), -1))
-            .collect();
-        updates.push((T::update(key, value), 1));
         // We must fence out all other catalogs since we are writing.
         let fence_updates = self.increment_epoch()?;
-        updates.extend(fence_updates);
-        self.compare_and_append(updates).await?;
+        let prev_value = loop {
+            let key = key.clone();
+            let value = value.clone();
+            let snapshot = self.current_snapshot().await?;
+            let trace = Trace::from_snapshot(snapshot);
+            let collection_trace = T::collection_trace(trace);
+            let prev_values: Vec<_> = collection_trace
+                .values
+                .into_iter()
+                .filter(|((k, _), _, diff)| {
+                    soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
+                    &key == k
+                })
+                .collect();
+
+            let prev_value = match &prev_values[..] {
+                [] => None,
+                [((_, v), _, _)] => Some(v.clone()),
+                prev_values => panic!("multiple values found for key {key:?}: {prev_values:?}"),
+            };
+
+            let mut updates: Vec<_> = prev_values
+                .into_iter()
+                .map(|((k, v), _, _)| (T::update(k, v), -1))
+                .collect();
+            updates.push((T::update(key, value), 1));
+            updates.extend(fence_updates.clone());
+            match self.compare_and_append(updates).await {
+                Ok(_) => break prev_value,
+                Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                    warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                    continue;
+                }
+            }
+        };
         Ok(prev_value)
     }
 
@@ -1779,40 +1817,32 @@ impl UnopenedPersistCatalogState {
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug,
     {
-        let (_, res) = retry(self, move |s| {
-            let key = key.clone();
-            async {
-                let res = s.debug_delete_inner::<T>(key).await;
-                (s, res)
-            }
-        })
-        .await;
-        res
-    }
-
-    /// Manually delete `key` from collection `T`.
-    #[mz_ore::instrument]
-    async fn debug_delete_inner<T: Collection>(&mut self, key: T::Key) -> Result<(), CatalogError>
-    where
-        T::Key: PartialEq + Eq + Debug,
-        T::Value: Debug,
-    {
-        let snapshot = self.current_snapshot().await?;
-        let trace = Trace::from_snapshot(snapshot);
-        let collection_trace = T::collection_trace(trace);
-        let mut retractions: Vec<_> = collection_trace
-            .values
-            .into_iter()
-            .filter(|((k, _), _, diff)| {
-                soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
-                &key == k
-            })
-            .map(|((k, v), _, _)| (T::update(k, v), -1))
-            .collect();
         // We must fence out all other catalogs since we are writing.
         let fence_updates = self.increment_epoch()?;
-        retractions.extend(fence_updates);
-        self.compare_and_append(retractions).await?;
+        loop {
+            let key = key.clone();
+            let snapshot = self.current_snapshot().await?;
+            let trace = Trace::from_snapshot(snapshot);
+            let collection_trace = T::collection_trace(trace);
+            let mut retractions: Vec<_> = collection_trace
+                .values
+                .into_iter()
+                .filter(|((k, _), _, diff)| {
+                    soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
+                    &key == k
+                })
+                .map(|((k, v), _, _)| (T::update(k, v), -1))
+                .collect();
+            retractions.extend(fence_updates.clone());
+            match self.compare_and_append(retractions).await {
+                Ok(_) => break,
+                Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                    warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                    continue;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1847,18 +1877,4 @@ impl UnopenedPersistCatalogState {
             (StateUpdateKind::Epoch(next_epoch), 1),
         ])
     }
-}
-
-/// Wrapper for [`Retry::retry_async_with_state`] so that all commands share the same retry behavior.
-async fn retry<F, S, U, R, T, E>(state: S, mut f: F) -> (S, Result<T, E>)
-where
-    F: FnMut(S) -> U,
-    U: Future<Output = (S, R)>,
-    R: Into<RetryResult<T, E>>,
-{
-    Retry::default()
-        .max_duration(Duration::from_secs(30))
-        .clamp_backoff(Duration::from_secs(1))
-        .retry_async_with_state(state, |_, s| f(s))
-        .await
 }
