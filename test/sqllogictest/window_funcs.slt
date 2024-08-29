@@ -2276,7 +2276,7 @@ create table t6(x int, y int);
 statement ok
 insert into t6 values (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18);
 
-query IIIIIIIIIIIIIII
+query IIIIIIIIIIIIIIIII
 select
   x,
   y,
@@ -2292,23 +2292,25 @@ select
   lag(y, 2, -1) ignore nulls over (order by x) as lag2_ign_def,
   lead(y, 2, -1) ignore nulls over (order by x) as lead2_ign_def,
   lag(y, 2, 16) ignore nulls over (order by x) as lag2_ign_def16,
-  lead(y, 2, 16) ignore nulls over (order by x) as lead2_ign_def16
+  lead(y, 2, 16) ignore nulls over (order by x) as lead2_ign_def16,
+  lag(y, -1, 100) ignore nulls over (order by x) as lag_neg_offset,
+  lead(y, -2, 100) ignore nulls over (order by x) as lead_neg_offset
 from t6
 order by x;
 ----
-1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8
-3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8
-5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14
-7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16
-9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16
-11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16
-13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18
-15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16
-17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16
+1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8  6  100
+3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8  6  100
+5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14  8  100
+7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16  14  2
+9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16  14  6
+11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16  14  6
+13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18  16  6
+15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16  18  8
+17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16  100  14
 
 # Same as above, but with a `partition by`
 
-query IIIIIIIIIIIIIII
+query IIIIIIIIIIIIIIIII
 select
   x,
   y,
@@ -2324,19 +2326,21 @@ select
   lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
   lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
   lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
-  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16
+  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16,
+  lag(y, -1, 100) ignore nulls over (partition by x%4 order by x) as lag_neg_offset,
+  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset
 from t6
 order by x%4, x;
 ----
-1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14
-5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18
-9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18
-13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16
-17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16
-3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16
-7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16
-11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16
-15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16
+1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100
+5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100
+9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2
+13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2
+17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6
+3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100
+7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100
+11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100
+15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100
 
 query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select first_value(x) ignore nulls over() from t6;

@@ -545,11 +545,11 @@ fn lag_lead_inner<'a>(
 
         let idx = i64::try_from(idx).expect("Array index does not fit in i64");
         let offset = i64::from(offset.unwrap_int32());
-        // By default, offset is applied backwards (for `lag`): flip the sign if `lead` should run instead
-        let (offset, decrement) = match lag_lead_type {
-            LagLeadType::Lag => (offset, 1),
-            LagLeadType::Lead => (-offset, -1),
+        let offset = match lag_lead_type {
+            LagLeadType::Lag => -offset,
+            LagLeadType::Lead => offset,
         };
+        let increment = offset.signum();
 
         // Get a Datum from `datums`. Return None if index is out of range.
         let datums_get = |i: i64| -> Option<Datum> {
@@ -563,7 +563,7 @@ fn lag_lead_inner<'a>(
         };
 
         let lagged_value = if !ignore_nulls {
-            datums_get(idx - offset).unwrap_or(*default_value)
+            datums_get(idx + offset).unwrap_or(*default_value)
         } else {
             // We start j from idx, and step j until we have seen an abs(offset) number of non-null
             // values.
@@ -575,7 +575,7 @@ fn lag_lead_inner<'a>(
             let mut to_go = num::abs(offset);
             let mut j = idx;
             loop {
-                j -= decrement;
+                j += increment;
                 match datums_get(j) {
                     Some(datum) => {
                         if !datum.is_null() {
