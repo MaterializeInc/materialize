@@ -1733,6 +1733,7 @@ pub(crate) mod tests {
     use std::ops::Range;
 
     use proptest::prelude::*;
+    use semver::Version;
 
     use crate::internal::state::tests::any_hollow_batch;
 
@@ -1792,6 +1793,44 @@ pub(crate) mod tests {
         }
 
         proptest!(|(trace in any_trace::<i64>(1..10))| { check(trace) })
+    }
+
+    #[mz_ore::test]
+    fn fueled_merge_reqs() {
+        let mut trace: Trace<u64> = Trace::default();
+        let fueled_reqs = trace.push_batch(crate::internal::state::tests::hollow(
+            0,
+            10,
+            &["n0011500/p3122e2a1-a0c7-429f-87aa-1019bf4f5f86"],
+            1000,
+        ));
+
+        assert!(fueled_reqs.is_empty());
+        assert_eq!(
+            trace.fueled_merge_reqs_before_ms(u64::MAX, None).count(),
+            0,
+            "no merge reqs when not filtering by version"
+        );
+        assert_eq!(
+            trace
+                .fueled_merge_reqs_before_ms(
+                    u64::MAX,
+                    Some(WriterKey::for_version(&Version::new(0, 50, 0)))
+                )
+                .count(),
+            0,
+            "zero batches are older than a past version"
+        );
+        assert_eq!(
+            trace
+                .fueled_merge_reqs_before_ms(
+                    u64::MAX,
+                    Some(WriterKey::for_version(&Version::new(99, 99, 0)))
+                )
+                .count(),
+            1,
+            "one batch is older than a future version"
+        );
     }
 
     #[mz_ore::test]
