@@ -19,13 +19,14 @@ The Materialize Emulator is an all-in-one Docker image available on Docker Hub, 
 To launch the Docker container:
 
 ```
-docker run -v mzdata:/mzdata -p 6875:6875 -p 6876:6876 materialize/materialized
+docker pull materialize/materialized:latest
+docker run -d -p 6875:6875 -p 6876:6876 materialize/materialized:latest
 ```
 
 After running this command...
 
-  * Materialize logs will be emitted to the stderr stream.
   * The SQL interface will be available on port 6875.
+  * Logs are available via `docker logs <container-id>`.
 
 To connect to the SQL interface using `psql`:
 

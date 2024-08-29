@@ -62,13 +62,13 @@ not suitable for production deployments</redb>.
    been already downloaded.
 
    ```sh
-   docker run -v mzdata:/mzdata -p 6875:6875 materialize/materialized
+   docker run -d -p 6875:6875 -p 6876:6876 materialize/materialized:{{< version >}}
    ```
 
    When running locally:
 
-   - Materialize Emulator logs are emitted to the `stderr`.
    - The SQL interface is available on port `6875`.
+   - Logs are available via `docker logs <container-id>`.
    - A default user `materialize` is created.
    - A default database `materialize` is created.
 
