@@ -572,23 +572,44 @@ fn lag_lead_inner<'a>(
             // two indexes in one loop, with one index lagging behind. But a common use case is an
             // offset of 1 and not too many nulls, for which this doesn't matter. And anyhow, the
             // whole thing hopefully will be replaced by prefix sum soon.)
-            let mut to_go = num::abs(offset);
-            let mut j = idx;
-            loop {
-                j += increment;
-                match datums_get(j) {
+            if increment != 0 {
+                let mut to_go = num::abs(offset);
+                let mut j = idx;
+                loop {
+                    j += increment;
+                    match datums_get(j) {
+                        Some(datum) => {
+                            if !datum.is_null() {
+                                to_go -= 1;
+                                if to_go == 0 {
+                                    break datum;
+                                }
+                            }
+                        }
+                        None => {
+                            break *default_value;
+                        }
+                    };
+                }
+            } else {
+                assert_eq!(offset, 0);
+                match datums_get(idx) {
                     Some(datum) => {
                         if !datum.is_null() {
-                            to_go -= 1;
-                            if to_go == 0 {
-                                break datum;
-                            }
+                            datum
+                        } else {
+                            // I can imagine returning here either `default_value` or `null`.
+                            // (I'm leaning towards `default_value`.)
+                            // We used to run into an infinite loop in this case, so panicking is
+                            // better. Started a SQL Council thread:
+                            // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+                            panic!("0 offset in lag/lead IGNORE NULLS");
                         }
                     }
                     None => {
-                        break *default_value;
+                        unreachable!()
                     }
-                };
+                }
             }
         };
 
