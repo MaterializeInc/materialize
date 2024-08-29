@@ -3369,7 +3369,7 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     name: "mz_source_references",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SOURCE_REFERENCES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("source_id", ScalarType::String.nullable(false))
         .with_column("namespace", ScalarType::String.nullable(true))
         .with_column("name", ScalarType::String.nullable(false))
@@ -3384,7 +3384,8 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
                 custom_id: None,
             }
             .nullable(true),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
