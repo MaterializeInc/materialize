@@ -13,7 +13,6 @@ mod tests;
 use std::cmp::max;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
-use std::future::Future;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -27,7 +26,6 @@ use mz_audit_log::VersionedEvent;
 use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
-use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{
     soft_assert_eq_no_log, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log,
     soft_assert_or_log, soft_panic_or_log,
@@ -1763,28 +1761,6 @@ impl UnopenedPersistCatalogState {
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug + Clone,
     {
-        let (_, prev) = retry(self, move |s| {
-            let key = key.clone();
-            let value = value.clone();
-            async {
-                let prev = s.debug_edit_inner::<T>(key, value).await;
-                (s, prev)
-            }
-        })
-        .await;
-        prev
-    }
-
-    #[mz_ore::instrument]
-    pub(crate) async fn debug_edit_inner<T: Collection>(
-        &mut self,
-        key: T::Key,
-        value: T::Value,
-    ) -> Result<Option<T::Value>, CatalogError>
-    where
-        T::Key: PartialEq + Eq + Debug + Clone,
-        T::Value: Debug + Clone,
-    {
         // We must fence out all other catalogs since we are writing.
         let fence_updates = self.increment_epoch()?;
         let prev_value = loop {
@@ -1829,24 +1805,6 @@ impl UnopenedPersistCatalogState {
         &mut self,
         key: T::Key,
     ) -> Result<(), CatalogError>
-    where
-        T::Key: PartialEq + Eq + Debug + Clone,
-        T::Value: Debug,
-    {
-        let (_, res) = retry(self, move |s| {
-            let key = key.clone();
-            async {
-                let res = s.debug_delete_inner::<T>(key).await;
-                (s, res)
-            }
-        })
-        .await;
-        res
-    }
-
-    /// Manually delete `key` from collection `T`.
-    #[mz_ore::instrument]
-    async fn debug_delete_inner<T: Collection>(&mut self, key: T::Key) -> Result<(), CatalogError>
     where
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug,
@@ -1908,18 +1866,4 @@ impl UnopenedPersistCatalogState {
             (StateUpdateKind::Epoch(next_epoch), 1),
         ])
     }
-}
-
-/// Wrapper for [`Retry::retry_async_with_state`] so that all commands share the same retry behavior.
-async fn retry<F, S, U, R, T, E>(state: S, mut f: F) -> (S, Result<T, E>)
-where
-    F: FnMut(S) -> U,
-    U: Future<Output = (S, R)>,
-    R: Into<RetryResult<T, E>>,
-{
-    Retry::default()
-        .max_duration(Duration::from_secs(30))
-        .clamp_backoff(Duration::from_secs(1))
-        .retry_async_with_state(state, |_, s| f(s))
-        .await
 }
