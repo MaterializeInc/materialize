@@ -16,6 +16,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
+import "expr/src/scalar.proto";
 import "pgcopy/src/copy.proto";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
@@ -116,6 +117,7 @@ message ProtoKafkaSinkConnectionV2 {
     optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
     optional uint64 headers_index = 22;
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
+    mz_expr.scalar.ProtoMirScalarExpr partition_by = 26;
     ProtoKafkaSinkFormat format = 11;
     oneof compression_type {
         google.protobuf.Empty none = 14;

@@ -724,7 +724,7 @@
       The array must be one-dimensional. Comparisons are done using `IS NOT
       DISTINCT FROM semantics, so it is possible to remove NULLs.
 
-- type: Hash functions
+- type: Hash
   functions:
     - signature: 'crc32(data: bytea) -> uint32'
       description: |

@@ -67,6 +67,7 @@ Field                               | Value  | Description
 `TOPIC`                             | `text`              | The name of the Kafka topic to write to.
 `COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
 `TRANSACTIONAL ID PREFIX`           | `text`              | The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+`PARTITION BY`                      | expression          | A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
 `PROGRESS GROUP ID PREFIX`          | `text`              | The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
 `TOPIC REPLICATION FACTOR`          | `int`               | The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
 `TOPIC PARTITION COUNT`             | `int`               | The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
@@ -126,11 +127,12 @@ Header keys starting with `materialize-` are reserved for Materialize's internal
 use. Materialize will ignore any headers in the map whose key starts with
 `materialize-`.
 
-**Known limitation:** Materialize does not permit adding multiple headers with
-the same key.
-
-**Known limitation:** Materialize cannot omit the headers column from the
-message value.
+**Known limitations:**
+  * Materialize does not permit adding multiple headers with
+    the same key.
+  * Materialize cannot omit the headers column from the message value.
+  * Materialize only supports using the `HEADERS` option with the [upsert
+    envelope](#upsert-envelope).
 
 ## Formats
 
@@ -429,6 +431,62 @@ message delivery, you should ensure that:
   processing is complete.
 
 For more details, see [the Kafka documentation](https://kafka.apache.org/documentation/).
+
+### Partitioning
+
+{{< private-preview />}}
+
+By default, Materialize assigns a partition to each message using the following
+strategy:
+
+  1. Encode the message's key in the specified format.
+  2. If the format uses a Confluent Schema Registry, strip out the
+     schema ID from the encoded bytes.
+  3. Hash the remaining encoded bytes using [SeaHash].
+  4. Divide the hash value by the topic's partition count and assign the
+     remainder as the message's partition.
+
+If a message has no key, all messages are sent to partition 0.
+
+To configure a custom partitioning strategy, you can use the `PARTITION BY`
+option. This option allows you to specify a SQL expression that computes a hash
+for each message, which determines what partition to assign to the message:
+
+```sql
+-- General syntax.
+CREATE SINK ... INTO KAFKA CONNECTION <name> (PARTITION BY = <expression>) ...;
+
+-- Example.
+CREATE SINK ... INTO KAFKA CONNECTION <name> (
+    PARTITION BY = kafka_murmur2(name || address)
+) ...;
+```
+
+The expression:
+  * Must have a type that can be assignment cast to [`uint8`].
+  * Can refer to any column in the sink's underlying relation.
+
+Materialize uses the computed hash value to assign a partition to each message
+as follows:
+
+  1. If the hash is `NULL` or computing the hash produces an error, assign
+     partition 0.
+  2. Otherwise, divide the hash value by the topic's partition count and assign
+     the remainder as the message's partition (i.e., `partition_id = hash %
+     partition_count`).
+
+Materialize provides several [hash functions](/sql/functions/#hash-func) which
+are commonly used in Kafka partition assignment:
+
+  * `crc32`
+  * `kafka_murmur2`
+  * `seahash`
+
+For a full example of using the `PARTITION BY` option, see [Custom
+partioning](#custom-partitioning).
+
+**Known limitation:** Materialize only supports using the `PARTITION BY`
+option with the [upsert envelope](#upsert-envelope).
 
 ## Required permissions
 
@@ -762,6 +820,32 @@ to the Confluent Schema Registry:
 See [Avro schema documentation](#avro-schema-documentation) for details
 about the rules by which Materialize attaches `doc` fields to records.
 
+#### Custom partitioning
+
+Suppose your Materialize deployment stores data about customers and their
+orders. You want to emit the order data to Kafka with upsert semantics so that
+only the latest state of each order is retained. However, you want the data to
+be partitioned by only customer ID (i.e., not order ID), so that all orders for
+a given customer go to the same partition.
+
+Create a sink using the `PARTITION BY` option to accomplish this:
+
+```sql
+CREATE SINK customer_orders
+  FROM ...
+  INTO KAFKA CONNECTION kafka_connection (
+    TOPIC 'customer-orders',
+    -- The partition hash includes only the customer ID, so the partition
+    -- will be assigned only based on the customer ID.
+    PARTITION BY = seahash(customer_id::text)
+  )
+  -- The key includes both the customer ID and order ID, so Kafka's compaction
+  -- will keep only the latest message for each order ID.
+  KEY (customer_id, order_id)
+  FORMAT JSON
+  ENVELOPE UPSERT;
+```
+
 ## Related pages
 
 - [`SHOW SINKS`](/sql/show-sinks)
@@ -791,3 +875,4 @@ about the rules by which Materialize attaches `doc` fields to records.
 [`timestamp with time zone`]: ../../types/timestamp
 [arrays]: ../../types/array
 [`kafka-topics.sh`]: https://docs.confluent.io/kafka/operations-tools/kafka-tools.html#kafka-topics-sh
+[SeaHash]: https://docs.rs/seahash/latest/seahash/

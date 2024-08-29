@@ -241,16 +241,11 @@ impl Encode for AvroEncoder {
         encode_message_unchecked(self.schema_id, row, &self.schema, &self.columns)
     }
 
-    fn encode_hashed_unchecked(&self, row: Row) -> (u64, Vec<u8>) {
-        let buf = encode_message_unchecked(self.schema_id, row, &self.schema, &self.columns);
+    fn hash(&self, buf: &[u8]) -> u64 {
         // Compute a stable hash by ignoring the avro header which might contain a
         // non-deterministic schema id.
-        let (_schema_id, payload) = crate::confluent::extract_avro_header(&buf).unwrap();
-        // We use seahash as it outperforms pretty much all all other options, and has great
-        // mathematically proven statistical properties. It truly is a remarkable non-cryptographic
-        // hash, more details can be found here: https://docs.rs/seahash/latest/seahash/
-        let hash = seahash::hash(payload);
-        (hash, buf)
+        let (_schema_id, payload) = crate::confluent::extract_avro_header(buf).unwrap();
+        seahash::hash(payload)
     }
 }
 

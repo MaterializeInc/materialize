@@ -146,7 +146,8 @@ use crate::plan::{
 };
 use crate::session::vars;
 use crate::session::vars::{
-    ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
+    ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -2685,7 +2686,22 @@ fn plan_sink(
     // VERSION defaults to 0
     let version = version.unwrap_or(0);
 
+    let has_partition_by = matches!(
+        connection_builder,
+        StorageSinkConnection::Kafka(KafkaSinkConnection {
+            partition_by: Some(_),
+            ..
+        })
+    );
+
     let partition_strategy = match partition_strategy.as_deref() {
+        // If someone sets the `PARTITION BY` option, we need to force upgrade
+        // to partition strategy v1, even if the region's default partition
+        // strategy is still v0, so that the partition hash is taken into
+        // account. There are no backwards compatibility concerns here because
+        // anything that uses `PARTITION BY` by definition does not depend on
+        // the legacy partitioning scheme.
+        Some("v0") if has_partition_by => SinkPartitionStrategy::V1,
         Some("v0") => SinkPartitionStrategy::V0,
         Some("v1") => SinkPartitionStrategy::V1,
         Some(strategy) => sql_bail!("{strategy} is not a valid partition strategy"),
@@ -2872,6 +2888,7 @@ fn kafka_sink_builder(
     let KafkaSinkConfigOptionExtracted {
         topic,
         compression_type,
+        partition_by,
         progress_group_id_prefix,
         transactional_id_prefix,
         legacy_ids,
@@ -3030,6 +3047,39 @@ fn kafka_sink_builder(
         format => bail_unsupported!(format!("sink format {:?}", format)),
     };
 
+    let partition_by = match &partition_by {
+        Some(partition_by) => {
+            scx.require_feature_flag(&ENABLE_KAFKA_SINK_PARTITION_BY)?;
+
+            match envelope {
+                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Debezium => {
+                    sql_bail!("PARTITION BY option is not supported with ENVELOPE DEBEZIUM")
+                }
+            };
+
+            let ecx = &ExprContext {
+                qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                name: "PARTITION BY",
+                scope: &Scope::from_source(None, value_desc.iter_names()),
+                relation_type: value_desc.typ(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let expr = plan_expr(ecx, partition_by)?.cast_to(
+                ecx,
+                CastContext::Assignment,
+                &ScalarType::UInt64,
+            )?;
+            let expr = expr.lower_uncorrelated()?;
+
+            Some(expr)
+        }
+        _ => None,
+    };
+
     // Map from the format specifier of the statement to the individual key/value formats for the sink.
     let format = match format {
         Some(FormatSpecifier::KeyValue { key, value }) => {
@@ -3064,6 +3114,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         headers_index,
         value_desc,
+        partition_by,
         compression_type,
         progress_group_id,
         transactional_id,

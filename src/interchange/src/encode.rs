@@ -14,11 +14,14 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 pub trait Encode {
     fn encode_unchecked(&self, row: Row) -> Vec<u8>;
 
-    /// Encodes the row and additionally returns a hash that is suitable for stable partitioning.
-    fn encode_hashed_unchecked(&self, row: mz_repr::Row) -> (u64, Vec<u8>) {
-        let buf = self.encode_unchecked(row);
-        let hash = seahash::hash(&buf);
-        (hash, buf)
+    /// Given the output of a call to [`Encode::encode_unchecked`], returns
+    /// a hash that is suitable for stable partitioning.
+    fn hash(&self, buf: &[u8]) -> u64 {
+        // We use seahash as it outperforms pretty much all other options, and
+        // has great mathematically proven statistical properties. It truly is a
+        // remarkable non-cryptographic hash. More details can be found here:
+        // https://docs.rs/seahash/latest/seahash/
+        seahash::hash(buf)
     }
 }
 

@@ -2041,6 +2041,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_kafka_sink_partition_by,
+        desc: "Enable the PARTITION BY option for Kafka sinks",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,

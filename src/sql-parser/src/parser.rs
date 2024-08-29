@@ -2473,6 +2473,7 @@ impl<'a> Parser<'a> {
     ) -> Result<KafkaSinkConfigOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             COMPRESSION,
+            PARTITION,
             PROGRESS,
             TOPIC,
             LEGACY,
@@ -2481,6 +2482,14 @@ impl<'a> Parser<'a> {
             COMPRESSION => {
                 self.expect_keyword(TYPE)?;
                 KafkaSinkConfigOptionName::CompressionType
+            }
+            PARTITION => {
+                self.expect_keyword(BY)?;
+                let _ = self.consume_token(&Token::Eq);
+                return Ok(KafkaSinkConfigOption {
+                    name: KafkaSinkConfigOptionName::PartitionBy,
+                    value: Some(WithOptionValue::Expr(self.parse_expr()?)),
+                });
             }
             PROGRESS => {
                 self.expect_keywords(&[GROUP, ID, PREFIX])?;

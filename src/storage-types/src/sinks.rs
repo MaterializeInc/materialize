@@ -14,6 +14,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
+use mz_expr::MirScalarExpr;
 use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -441,6 +442,9 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     /// The index of the column containing message headers value, if any.
     pub headers_index: Option<usize>,
     pub value_desc: RelationDesc,
+    /// An expression that, if present, computes a hash value that should be
+    /// used to determine the partition for each message.
+    pub partition_by: Option<MirScalarExpr>,
     pub topic: String,
     /// Options to use when creating the topic if it doesn't already exist.
     pub topic_options: KafkaTopicOptions,
@@ -534,6 +538,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
@@ -559,6 +564,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (headers_index == &other.headers_index, "headers_index"),
             (value_desc == &other.value_desc, "value_desc"),
+            (partition_by == &other.partition_by, "partition_by"),
             (topic == &other.topic, "topic"),
             (
                 compression_type == &other.compression_type,
@@ -606,6 +612,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
@@ -621,6 +628,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             headers_index,
             value_desc,
+            partition_by,
             topic,
             compression_type,
             progress_group_id,
@@ -678,6 +686,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             relation_key_indices: self.relation_key_indices.into_proto(),
             headers_index: self.headers_index.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
+            partition_by: self.partition_by.into_proto(),
             topic: self.topic.clone(),
             compression_type: Some(match self.compression_type {
                 KafkaSinkCompressionType::None => CompressionType::None(()),
@@ -713,6 +722,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             value_desc: proto
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
+            partition_by: proto.partition_by.into_rust()?,
             topic: proto.topic,
             compression_type: match proto.compression_type {
                 Some(CompressionType::None(())) => KafkaSinkCompressionType::None,

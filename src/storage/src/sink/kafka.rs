@@ -82,6 +82,7 @@ use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
 use maplit::btreemap;
+use mz_expr::MirScalarExpr;
 use mz_interchange::avro::{AvroEncoder, DiffPair};
 use mz_interchange::encode::Encode;
 use mz_interchange::envelopes::dbz_format;
@@ -97,7 +98,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::vec::VecExt;
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
@@ -1343,34 +1344,47 @@ fn encode_collection<G: Scope>(
             *capset = CapabilitySet::new();
 
             let mut row_buf = Row::default();
+            let mut datums = DatumVec::new();
 
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, rows) = event {
                     for ((key, value), time, diff) in rows {
+                        let mut hash = None;
+                        let mut headers = vec![];
+                        if connection.headers_index.is_some() || connection.partition_by.is_some() {
+                            // Header values and partition by values are derived from the row that
+                            // produces an event. But only the upsert envelope makes it unambiguous
+                            // as to whether to use the `before` or `after` from the event. The rule
+                            // is simple: use `after` if it exists (insertions and updates),
+                            // otherwise fall back to `before` (deletions).
+                            //
+                            // The assertions and unwrapping are safe here because the SQL planner
+                            // ensures that neither `headers_index` nor `partition_by` is set with
+                            // non-upsert envelopes.
+                            assert!(envelope == SinkEnvelope::Upsert);
+                            let unambiguous_row = value
+                                .after
+                                .as_ref()
+                                .or(value.before.as_ref())
+                                .expect("one of before or after must be set");
+                            let unambiguous_row = datums.borrow_with(unambiguous_row);
 
-                        let headers = match connection.headers_index {
-                            Some(i) => {
-                                // Only the upsert envelope makes it unambiguous
-                                // as to whether to use `before` or `after` to
-                                // compute the headers. The rule is simple: use
-                                // `after` if it exists (insertions and
-                                // updates), otherwise fall back to `before`
-                                // (deletions).
-                                assert!(envelope == SinkEnvelope::Upsert);
-                                let row = value.after.as_ref().or(value.before.as_ref()).expect("one of before or after must be set");
-                                encode_headers(row.iter().nth(i).unwrap())
+                            if let Some(i) = connection.headers_index {
+                                headers = encode_headers(unambiguous_row[i]);
                             }
-                            _ => vec![],
-                        };
-                        let (hash, key) = match key {
+
+                            if let Some(partition_by) = &connection.partition_by {
+                                hash = Some(evaluate_partition_by(partition_by, &unambiguous_row));
+                            }
+                        }
+                        let (key, hash) = match key {
                             Some(key) => {
-                                let (hash, key_enc) = key_encoder
-                                    .as_ref()
-                                    .expect("key present")
-                                    .encode_hashed_unchecked(key);
-                                (hash, Some(key_enc))
+                                let key_encoder = key_encoder.as_ref().expect("key present");
+                                let key = key_encoder.encode_unchecked(key);
+                                let hash = hash.unwrap_or_else(|| key_encoder.hash(&key));
+                                (Some(key), hash)
                             }
-                            None => (0, None)
+                            None => (None, hash.unwrap_or(0))
                         };
                         let value = match envelope {
                             SinkEnvelope::Upsert => value.after,
@@ -1420,6 +1434,34 @@ fn encode_headers(datum: Datum) -> Vec<KafkaHeader> {
         })
     }
     out
+}
+
+/// Evaluates a partition by expression on the given row, returning the hash
+/// value to use for partition assignment.
+///
+/// The provided expression must have type `Int32`, `Int64`, `UInt32`, or
+/// `UInt64`. If the expression produces an error when evaluated, or if the
+/// expression is of a signed integer type and produces a negative value, this
+/// function returns 0.
+fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
+    // NOTE(benesch): The way this function converts errors and invalid values
+    // to 0 is somewhat surpising. Ideally, we would put the sink in a
+    // permanently errored state if the partition by expression produces an
+    // error or invalid value. But we don't presently have a way for sinks to
+    // report errors (see #17688), so the current behavior was determined to be
+    // the best available option. The behavior is clearly documented in the
+    // user-facing `CREATE SINK` docs.
+    let temp_storage = RowArena::new();
+    match partition_by.eval(row, &temp_storage) {
+        Ok(hash) => match hash {
+            Datum::Int32(i) => i.try_into().unwrap_or(0),
+            Datum::Int64(i) => i.try_into().unwrap_or(0),
+            Datum::UInt32(u) => u64::from(u),
+            Datum::UInt64(u) => u,
+            _ => unreachable!(),
+        },
+        Err(_) => 0,
+    }
 }
 
 #[cfg(test)]
