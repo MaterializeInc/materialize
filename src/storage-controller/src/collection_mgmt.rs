@@ -139,7 +139,7 @@ where
     ///
     /// Every write succeeds at _some_ timestamp, and we never check what the
     /// actual contents of the collection (in persist) are.
-    append_only_collections:
+    webhook_collections:
         Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)>>>,
 
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
@@ -175,7 +175,7 @@ where
             read_only_rx,
             hacky_always_false_watch: (always_false_tx, always_false_rx),
             differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
-            append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
+            webhook_collections: Arc::new(Mutex::new(BTreeMap::new())),
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }
@@ -254,14 +254,14 @@ where
     ///
     /// The [CollectionManager] will automatically advance the upper of every
     /// registered collection every second.
-    pub(super) fn register_append_only_collection(
+    pub(super) fn register_webhook_collection(
         &self,
         id: GlobalId,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
         force_writable: bool,
     ) {
         let mut guard = self
-            .append_only_collections
+            .webhook_collections
             .lock()
             .expect("collection_mgmt panicked");
 
@@ -318,7 +318,7 @@ where
         }
 
         let prev = self
-            .append_only_collections
+            .webhook_collections
             .lock()
             .expect("CollectionManager panicked")
             .remove(&id);
@@ -333,35 +333,6 @@ where
         }
 
         Box::pin(futures::future::ready(()))
-    }
-
-    /// Appends `updates` to the append-only collection identified by `id`, at
-    /// _some_ timestamp. Does not wait for the append to complete.
-    ///
-    /// # Panics
-    /// - If `id` does not belong to an append-only collections.
-    /// - If this [`CollectionManager`] is in read-only mode.
-    /// - If the collection closed.
-    pub(super) async fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        if *self.read_only_rx.borrow() {
-            panic!("attempting blind write to {} while in read-only mode", id);
-        }
-
-        if !updates.is_empty() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .append_only_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing append-only collection");
-                update_tx.clone()
-            };
-
-            // Specifically _do not_ wait for the append to complete, just for it to be sent.
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
-        }
     }
 
     /// Updates the desired collection state of the differential collection identified by
@@ -406,7 +377,7 @@ where
         id: GlobalId,
     ) -> Result<MonotonicAppender<T>, StorageError<T>> {
         let guard = self
-            .append_only_collections
+            .webhook_collections
             .lock()
             .expect("CollectionManager panicked");
         let tx = guard

@@ -29,7 +29,6 @@ use mz_storage_client::client::{TimestamplessUpdate, Update};
 use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
-use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -170,6 +169,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
+        soon_debounce: Box<dyn Fn() -> T + Send + Sync>,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
@@ -178,6 +178,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
+                soon_debounce,
                 soon: BTreeMap::new(),
             };
             worker.run(rx).await
@@ -248,7 +249,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn append_soon(
         &self,
         id: GlobalId,
@@ -280,25 +280,26 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 }
 
 struct AppendSoon<T> {
-    min_commit_ts: Option<T>,
+    last_commit_ts: T,
     updates: Vec<TimestamplessUpdate>,
     txs: Vec<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl<T> Default for AppendSoon<T> {
+impl<T: Timestamp> Default for AppendSoon<T> {
     fn default() -> Self {
         Self {
-            min_commit_ts: Default::default(),
+            last_commit_ts: T::minimum(),
             updates: Default::default(),
             txs: Default::default(),
         }
     }
 }
 
-struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
+struct TxnsTableWorker<T> {
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
+    soon_debounce: Box<dyn Fn() -> T + Send + Sync>,
     soon: BTreeMap<GlobalId, AppendSoon<T>>,
 }
 
@@ -447,18 +448,24 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         // Sneak in any AppendSoon entries as necessary.
         let mut soon_txs = Vec::new();
         for (id, soon) in &mut self.soon {
+            if soon.updates.is_empty() {
+                continue;
+            };
             // Debounce these so we have to advance the physical upper less
             // often.
-            match &soon.min_commit_ts {
-                // Fall through
-                Some(min_commit_ts) if write_ts >= *min_commit_ts => {}
-                Some(_) => continue,
-                None => {
-                    debug_assert!(soon.updates.is_empty());
-                    debug_assert!(soon.txs.is_empty());
-                }
+            let min_commit_ts = soon.last_commit_ts.step_forward_by(&(self.soon_debounce)());
+            tracing::info!(
+                "WIP append soon {} {} {} {:?} vs {:?}",
+                id,
+                soon.updates.len(),
+                soon.txs.len(),
+                min_commit_ts,
+                write_ts
+            );
+            if write_ts < min_commit_ts {
+                continue;
             }
-            soon.min_commit_ts = None;
+            soon.last_commit_ts = write_ts.clone();
             updates.push((*id, std::mem::take(&mut soon.updates)));
             soon_txs.append(&mut soon.txs);
         }

@@ -564,9 +564,20 @@ where
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         Some(*self.txns_read.txns_id())
                     }
+                    DataSource::Introspection(typ) => match typ {
+                        // WIP
+                        IntrospectionType::SourceStatusHistory
+                        | IntrospectionType::SinkStatusHistory
+                        | IntrospectionType::PrivatelinkConnectionStatusHistory
+                        | IntrospectionType::PreparedStatementHistory
+                        | IntrospectionType::StatementExecutionHistory
+                        | IntrospectionType::SessionHistory
+                        | IntrospectionType::StatementLifecycleHistory
+                        | IntrospectionType::SqlText => Some(*self.txns_read.txns_id()),
+                        _ => None,
+                    },
                     DataSource::Ingestion(_)
                     | DataSource::IngestionExport { .. }
-                    | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
                     | DataSource::Other(DataSourceOther::Compute) => None,
@@ -737,8 +748,12 @@ where
                     // aware of read-only mode and will not attempt to write before told
                     // to do so.
                     //
-                    self.register_introspection_collection(id, *typ, write)
+                    let table_reg = self
+                        .register_introspection_collection(id, *typ, write)
                         .await?;
+                    if let Some(table_reg) = table_reg {
+                        table_registers.push(table_reg);
+                    }
                     self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
@@ -754,7 +769,7 @@ where
                     // and collection manager should only be responsible for
                     // built-in introspection collections?
                     self.collection_manager
-                        .register_append_only_collection(id, write, false);
+                        .register_webhook_collection(id, write, false);
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -2185,7 +2200,17 @@ where
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.collection_manager.blind_write(id, updates).await;
+        let updates = updates
+            .into_iter()
+            .map(|(row, diff)| TimestamplessUpdate { row, diff })
+            .collect();
+        tracing::info!(
+            "WIP append_introspection_updates {:?} {} {:?}",
+            type_,
+            id,
+            updates
+        );
+        let _rx = self.persist_table_worker.append_soon(id, updates);
     }
 
     async fn update_introspection_collection(
@@ -2411,7 +2436,11 @@ where
                 txns_id,
             )
             .await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns)
+            let soon_debounce = Box::new(|| {
+                // WIP dyncfg
+                T::from(1_000u64)
+            });
+            persist_handles::PersistTableWriteWorker::new_txns(txns, soon_debounce)
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
@@ -2420,7 +2449,7 @@ where
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
         let collection_status_manager = crate::collection_status::CollectionStatusManager::new(
-            collection_manager.clone(),
+            persist_table_worker.clone(),
             Arc::clone(&introspection_ids),
         );
 
@@ -2843,7 +2872,7 @@ where
         id: GlobalId,
         introspection_type: IntrospectionType,
         mut write_handle: WriteHandle<SourceData, (), T, Diff>,
-    ) -> Result<(), StorageError<T>> {
+    ) -> Result<Option<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>, StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
         // In read-only mode we create a new shard for all migrated storage collections. So we
@@ -2939,6 +2968,7 @@ where
                     )
                     .await?;
                 }
+                Ok(None)
             }
 
             // For these, we first have to prepare and then register with
@@ -2960,12 +2990,7 @@ where
                     )
                     .await?;
                 }
-
-                self.collection_manager.register_append_only_collection(
-                    id,
-                    write_handle,
-                    force_writable,
-                );
+                Ok(Some((id, write_handle)))
             }
 
             // Same as our other differential collections, but for these the
@@ -2991,6 +3016,7 @@ where
                     )
                     .await?;
                 }
+                Ok(None)
             }
 
             // Note [btv] - we don't truncate these, because that uses
@@ -3009,16 +3035,9 @@ where
                     )
                     .await?;
                 }
-
-                self.collection_manager.register_append_only_collection(
-                    id,
-                    write_handle,
-                    force_writable,
-                );
+                Ok(Some((id, write_handle)))
             }
         }
-
-        Ok(())
     }
 
     /// Does any work that is required before this controller instance starts
