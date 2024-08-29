@@ -512,8 +512,7 @@ async fn test_unopened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args())
+            .open(SYSTEM_TIME(), &test_bootstrap_args())
             .await
             .unwrap();
         // drain catalog updates.
@@ -540,8 +539,7 @@ async fn test_unopened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -586,8 +584,7 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
             .clone()
             .unwrap_build()
             .await
-            // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args())
+            .open(SYSTEM_TIME(), &test_bootstrap_args())
             .await
             .unwrap();
         // drain catalog updates.
@@ -615,8 +612,7 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -672,8 +668,7 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -682,8 +677,7 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -722,8 +716,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -733,8 +726,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -777,8 +769,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain updates.
@@ -792,8 +783,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain updates.
@@ -818,8 +808,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -858,7 +847,7 @@ async fn test_persist_version_fencing() {
             .unwrap_build()
             .await;
         let _persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args())
+            .open(SYSTEM_TIME(), &test_bootstrap_args())
             .await
             .unwrap();
 
