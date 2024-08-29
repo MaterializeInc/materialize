@@ -2936,7 +2936,6 @@ impl Coordinator {
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
-        storage_usage_retention_period: Option<Duration>,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
             // Watcher that listens for and reports cluster service status changes.
@@ -2949,14 +2948,6 @@ impl Coordinator {
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
             let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
             let last_message_watchdog = Arc::clone(&last_message);
-
-            // TODO(jkosh44) Do this in the background.
-            if let Some(retention_period) = storage_usage_retention_period {
-                let prune_start = Instant::now();
-                info!("startup: coord serve: storage usage prune beginning");
-                self.prune_storage_usage_events_on_startup(retention_period).await;
-                info!("startup: coord serve: storage usage prune complete in {:?}", prune_start.elapsed());
-            }
 
             spawn(|| "coord watchdog", async move {
                 // Every 5 seconds, attempt to measure how long it takes for the
@@ -4013,6 +4004,21 @@ pub fn serve(
                         )
                         .await
                         .map_err(AdapterError::Orchestrator)?;
+
+                    // TODO(jkosh44) Kick this off as a background task in
+                    // `serve` instead of blocking startup on the pruning.
+                    if let Some(retention_period) = storage_usage_retention_period {
+                        let prune_start = Instant::now();
+                        info!("startup: coord serve: storage usage prune beginning");
+                        coord
+                            .prune_storage_usage_events_on_startup(retention_period)
+                            .await;
+                        info!(
+                            "startup: coord serve: storage usage prune complete in {:?}",
+                            prune_start.elapsed()
+                        );
+                    }
+
                     Ok(())
                 });
                 let ok = bootstrap.is_ok();
@@ -4026,7 +4032,6 @@ pub fn serve(
                         strict_serializable_reads_rx,
                         cmd_rx,
                         group_commit_rx,
-                        storage_usage_retention_period,
                     ));
                 }
             })
