@@ -2342,6 +2342,36 @@ order by x%4, x;
 11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100
 15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100
 
+statement ok
+CREATE VIEW t6_more_nulls AS
+SELECT
+  x,
+  CASE WHEN y < 15 AND y > 7 THEN null ELSE y END AS y
+FROM t6;
+
+query IIIIIIII
+select
+  x,
+  y,
+  lag(y) ignore nulls over (order by x) as lag1,
+  lag(y,2) ignore nulls over (order by x) as lag2,
+  lag(y,3) ignore nulls over (order by x) as lag3,
+  lead(y) ignore nulls over (order by x) as lead1,
+  lead(y,2) ignore nulls over (order by x) as lead2,
+  lead(y,3) ignore nulls over (order by x) as lead3
+from t6_more_nulls
+order by x;
+----
+1  2  NULL  NULL  NULL  6  16  18
+3  NULL  2  NULL  NULL  6  16  18
+5  6  2  NULL  NULL  16  18  NULL
+7  NULL  6  2  NULL  16  18  NULL
+9  NULL  6  2  NULL  16  18  NULL
+11  NULL  6  2  NULL  16  18  NULL
+13  NULL  6  2  NULL  16  18  NULL
+15  16  6  2  NULL  18  NULL  NULL
+17  18  16  6  2  NULL  NULL  NULL
+
 query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select first_value(x) ignore nulls over() from t6;
 

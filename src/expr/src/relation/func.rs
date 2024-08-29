@@ -580,10 +580,39 @@ fn lag_lead_inner_respect_nulls<'a>(
     result
 }
 
+#[allow(clippy::as_conversions)]
 fn lag_lead_inner_ignore_nulls<'a>(
     args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
     lag_lead_type: &LagLeadType,
 ) -> Vec<Datum<'a>> {
+    if i64::try_from(args.len()).is_err() {
+        panic!("window partition way too big")
+    }
+    // Preparation: Make sure we can jump over a run of nulls in constant time, i.e., regardless of
+    // how many nulls the run has. The following skip tables will point to the next non-null index.
+    let mut skip_nulls_backward = Vec::new();
+    let mut last_non_null: i64 = -1;
+    for (i, (d, _, _)) in args.iter().enumerate() {
+        if d.is_null() {
+            skip_nulls_backward.push(Some(i64::cast_from(last_non_null)));
+        } else {
+            skip_nulls_backward.push(None);
+            last_non_null = i as i64;
+        }
+    }
+    let mut skip_nulls_forward = Vec::new();
+    let mut last_non_null: i64 = args.len() as i64;
+    for (i, (d, _, _)) in args.iter().enumerate().rev() {
+        if d.is_null() {
+            skip_nulls_forward.push(Some(i64::cast_from(last_non_null)));
+        } else {
+            skip_nulls_forward.push(None);
+            last_non_null = i as i64;
+        }
+    }
+    skip_nulls_forward.reverse();
+
+    // The actual computation.
     let mut result: Vec<Datum> = Vec::with_capacity(args.len());
     for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
@@ -616,27 +645,30 @@ fn lag_lead_inner_ignore_nulls<'a>(
                 // We start j from idx, and step j until we have seen an abs(offset) number of non-null
                 // values or reach the beginning or end of the partition.
                 //
-                // If offset is big, then this is slow: `O(partition_size * offset)`. We could avoid an
-                // inner loop, and instead step two indexes in one loop, with one index lagging behind.
-                // But a common use case is an offset of 1, for which this doesn't matter.
+                // If offset is big, then this is slow: Considering the entire function, it's
+                // `O(partition_size * offset)`.
+                // However, a common use case is an offset of 1, for which this doesn't matter.
+                // TODO: For larger offsets, we could have a completely different implementation
+                // that steps two indexes in one loop, with one index lagging behind.
                 let mut j = idx;
                 for _ in 0..num::abs(offset) {
                     j += increment;
                     // Jump over a run of nulls
-                    while datums_get(j).is_some_and(|d| d.is_null()) {
-                        j += increment;
+                    if datums_get(j).is_some_and(|d| d.is_null()) {
+                        let ju = j as usize;
+                        if increment > 0 {
+                            j = skip_nulls_forward[ju].expect("checked above that it's null");
+                        } else {
+                            j = skip_nulls_backward[ju].expect("checked above that it's null");
+                        }
                     }
                     if datums_get(j).is_none() {
                         break;
                     }
                 }
                 match datums_get(j) {
-                    Some(datum) => {
-                        datum
-                    }
-                    None => {
-                        *default_value
-                    }
+                    Some(datum) => datum,
+                    None => *default_value,
                 }
             } else {
                 assert_eq!(offset, 0);
