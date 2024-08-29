@@ -511,7 +511,6 @@ async fn upgrade_check(
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
                 bootstrap_role: None,
             },
-            None,
         )
         .await?;
 
