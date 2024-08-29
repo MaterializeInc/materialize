@@ -416,7 +416,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     let state_handle = mz_ore::task::spawn(|| "state", async move {
@@ -448,7 +448,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     let configs = state.snapshot().await.unwrap().configs;
@@ -483,7 +483,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap()
         .snapshot()
