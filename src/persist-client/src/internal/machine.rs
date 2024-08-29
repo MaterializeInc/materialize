@@ -54,6 +54,7 @@ use crate::internal::state::{
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
+use crate::iter::MINIMUM_CONSOLIDATED_VERSION;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
 use crate::schema::{CaESchema, SchemaId};
@@ -87,6 +88,14 @@ pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
     false,
     "If an append doesn't result in a compaction request, but there is some uncompacted batch \
     in state, compact that instead.",
+);
+
+pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
+    "persist_claim_compaction_percent",
+    100,
+    "Claim a compaction with the given percent chance, if claiming compactions is enabled. \
+    (If over 100, we'll always claim at least one; for example, if set to 365, we'll claim at least \
+    three and have a 65% chance of claiming a fourth.)",
 );
 
 impl<K, V, T, D> Machine<K, V, T, D>
@@ -424,7 +433,11 @@ where
                         debug_info,
                         INLINE_WRITES_TOTAL_MAX_BYTES.get(cfg),
                         RECORD_COMPACTIONS.get(cfg),
-                        CLAIM_UNCLAIMED_COMPACTIONS.get(cfg),
+                        if CLAIM_UNCLAIMED_COMPACTIONS.get(cfg) {
+                            CLAIM_COMPACTION_PERCENT.get(cfg)
+                        } else {
+                            0
+                        },
                     )
                 })
                 .await;

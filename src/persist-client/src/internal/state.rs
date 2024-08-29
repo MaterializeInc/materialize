@@ -21,6 +21,7 @@ use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
+use differential_dataflow::Hashable;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
@@ -1093,7 +1094,7 @@ where
         debug_info: &HandleDebugState,
         inline_writes_total_max_bytes: usize,
         record_compactions: bool,
-        claim_unclaimed_compactions: bool,
+        claim_compaction_percent: usize,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1194,13 +1195,19 @@ where
         let all_empty_reqs = merge_reqs
             .iter()
             .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
-        if record_compactions && claim_unclaimed_compactions && all_empty_reqs {
+        if record_compactions && all_empty_reqs {
+            let mut reqs_to_take = claim_compaction_percent / 100;
+            if (usize::cast_from(idempotency_token.hashed()) % 100)
+                < (claim_compaction_percent % 100)
+            {
+                reqs_to_take += 1;
+            }
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
             let min_writer = WriterKey::for_version(&crate::iter::MINIMUM_CONSOLIDATED_VERSION);
             merge_reqs.extend(
                 self.trace
                     .fueled_merge_reqs_before_ms(threshold_ms, Some(min_writer))
-                    .take(1),
+                    .take(reqs_to_take),
             )
         }
 
@@ -2608,7 +2615,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2627,7 +2634,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
 
@@ -2642,7 +2649,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2661,7 +2668,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2683,7 +2690,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
     }
@@ -2730,7 +2737,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
 
@@ -2804,7 +2811,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
 
@@ -2835,7 +2842,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
 
@@ -2898,7 +2905,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
         assert!(state
@@ -2912,7 +2919,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
 
@@ -2969,7 +2976,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
 
@@ -2990,7 +2997,7 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
             )
             .is_continue());
     }
@@ -3025,7 +3032,7 @@ pub(crate) mod tests {
             &debug_state(),
             0,
             true,
-            true,
+            100,
         );
         assert_eq!(state.maybe_gc(false), None);
 
