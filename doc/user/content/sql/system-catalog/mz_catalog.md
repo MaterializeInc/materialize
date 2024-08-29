@@ -266,6 +266,22 @@ Field                | Type     | Meaning
 `id`                 | [`text`] | The ID of the sink.
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
 
+## `mz_kafka_sources`
+
+{{< warn-if-unreleased v0.115 >}}
+The `mz_kafka_sources` table contains a row for each Kafka source in the system.
+
+This table was previously in the `mz_internal` schema. All queries previously referencing
+`mz_internal.mz_kafka_sources` should now reference `mz_catalog.mz_kafka_sources`.
+
+<!-- RELATION_SPEC mz_catalog.mz_kafka_sources -->
+| Field                  | Type           | Meaning                                                                                                   |
+|------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
+| `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
+| `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
+| `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
+
+
 ### `mz_list_types`
 
 The `mz_list_types` table contains a row for each list type in the system.

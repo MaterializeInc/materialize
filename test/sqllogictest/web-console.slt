@@ -283,13 +283,13 @@ SELECT id, address, name, parent_id, arrangement_records, elapsed_ns FROM all_op
 
 # Ensure indexes are used where expected.
 query T multiline
-EXPLAIN SELECT * FROM mz_internal.mz_kafka_sources
+EXPLAIN SELECT * FROM mz_catalog.mz_kafka_sources
 ----
 Explained Query (fast path):
-  ReadIndex on=mz_internal.mz_kafka_sources mz_kafka_sources_ind=[*** full scan ***]
+  ReadIndex on=mz_catalog.mz_kafka_sources mz_kafka_sources_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_kafka_sources_ind (*** full scan ***)
+  - mz_catalog.mz_kafka_sources_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 

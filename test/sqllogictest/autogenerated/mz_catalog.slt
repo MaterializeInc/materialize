@@ -190,6 +190,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 2  topic  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_kafka_sources' ORDER BY position
+----
+1  id  text
+2  group_id_prefix  text
+3  topic            text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_list_types' ORDER BY position
 ----
 1  id  text
@@ -424,6 +431,7 @@ mz_index_columns
 mz_indexes
 mz_kafka_connections
 mz_kafka_sinks
+mz_kafka_sources
 mz_list_types
 mz_map_types
 mz_materialized_views

@@ -2028,8 +2028,7 @@ pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
 });
 pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_kafka_sources",
-    // `mz_internal` for now, while we work out the desc.
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
@@ -7698,10 +7697,10 @@ ON mz_internal.mz_recent_activity_log_thinned (sql_hash)",
 
 pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_kafka_sources_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_KAFKA_SOURCES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.mz_kafka_sources (id)",
+ON mz_catalog.mz_kafka_sources (id)",
     is_retained_metrics_object: true,
 };
 
