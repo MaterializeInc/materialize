@@ -7476,3 +7476,62 @@ ORDER BY x,y;
 13  14  1111  182  2222  27  NULL  27
 15  16  1111  240  2222  31  14  31
 17  18  1111  306  2222  35  16  35
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_value_window_function_fusion = false
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN
+SELECT
+  *,
+  lag(x) OVER (),
+  lag(y) OVER ()
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#3]
+    Project (#3, #4, #6, #5)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[3](#2), record_get[0](#1))
+        FlatMap unnest_list(#0)
+          Reduce aggregates=[lag[order_by=[]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), 1, null))))]
+            Project (#1)
+              FlatMap unnest_list(#0)
+                Reduce aggregates=[lag[order_by=[]](row(row(row(#0, #1), row(#1, 1, null))))]
+                  ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_value_window_function_fusion = true
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN
+SELECT
+  *,
+  lag(x) OVER (),
+  lag(y) OVER ()
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#3]
+    Project (#3, #4, #7, #6)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1), record_get[0](#5), record_get[1](#5))
+        FlatMap unnest_list(#0)
+          Reduce aggregates=[fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null)))))]
+            ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF

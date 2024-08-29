@@ -353,7 +353,13 @@ fn column_type(
 /// should be to columns that are earlier than the first element of the group. (No need to check
 /// column references in the other direction, i.e., references in other expressions that refer to
 /// columns in the group.)
-pub fn fuse_window_functions(root: &mut HirRelationExpr) -> Result<(), RecursionLimitError> {
+pub fn fuse_window_functions(
+    root: &mut HirRelationExpr,
+    context: &crate::plan::lowering::Context,
+) -> Result<(), RecursionLimitError> {
+    if !context.config.enable_value_window_function_fusion {
+        return Ok(());
+    }
 
     impl HirScalarExpr {
         /// Similar to `MirScalarExpr::support`, but adapted to `HirScalarExpr` in a special way: it

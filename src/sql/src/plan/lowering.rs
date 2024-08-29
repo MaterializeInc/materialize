@@ -138,6 +138,7 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     /// Enable the extra null filter implemented in #28018.
     pub enable_outer_join_null_filter: bool,
+    pub enable_value_window_function_fusion: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -146,17 +147,18 @@ impl From<&SystemVars> for Config {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
+            enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
         }
     }
 }
 
 /// Context passed to the lowering. This is wired to most parts of the lowering.
-struct Context<'a> {
+pub(crate) struct Context<'a> {
     /// Feature flags affecting the behavior of lowering.
-    config: &'a Config,
+    pub config: &'a Config,
     /// Optional, because some callers don't have an `OptimizerMetrics` handy. When it's None, we
     /// simply don't write metrics.
-    metrics: Option<&'a OptimizerMetrics>,
+    pub metrics: Option<&'a OptimizerMetrics>,
 }
 
 impl HirRelationExpr {
@@ -190,7 +192,7 @@ impl HirRelationExpr {
                     let mut id_gen = mz_ore::id_gen::IdGen::default();
                     transform_expr::split_subquery_predicates(&mut other);
                     transform_expr::try_simplify_quantified_comparisons(&mut other);
-                    transform_expr::fuse_window_functions(&mut other)?;
+                    transform_expr::fuse_window_functions(&mut other, &context)?;
                     MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
                         .let_in_fallible(&mut id_gen, |id_gen, get_outer| {
                             other.applied_to(
