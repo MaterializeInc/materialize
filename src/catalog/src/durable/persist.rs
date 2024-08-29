@@ -1550,7 +1550,9 @@ fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
 /// Returns the schema of the `Row`s/`SourceData`s stored in the persist
 /// shard backing the catalog.
 fn desc() -> RelationDesc {
-    RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
+    RelationDesc::builder()
+        .with_column("data", ScalarType::Jsonb.nullable(false))
+        .finish()
 }
 
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given

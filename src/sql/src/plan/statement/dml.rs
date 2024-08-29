@@ -257,7 +257,7 @@ pub fn describe_explain_plan(
     scx: &StatementContext,
     explain: ExplainPlanStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let mut relation_desc = RelationDesc::empty();
+    let mut relation_desc = RelationDesc::builder();
 
     match explain.stage() {
         ExplainStage::RawPlan => {
@@ -291,6 +291,7 @@ pub fn describe_explain_plan(
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
     };
+    let relation_desc = relation_desc.finish();
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match explain.explainee {
@@ -304,12 +305,13 @@ pub fn describe_explain_pushdown(
     scx: &StatementContext,
     statement: ExplainPushdownStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let relation_desc = RelationDesc::empty()
+    let relation_desc = RelationDesc::builder()
         .with_column("Source", ScalarType::String.nullable(false))
         .with_column("Total Bytes", ScalarType::UInt64.nullable(false))
         .with_column("Selected Bytes", ScalarType::UInt64.nullable(false))
         .with_column("Total Parts", ScalarType::UInt64.nullable(false))
-        .with_column("Selected Parts", ScalarType::UInt64.nullable(false));
+        .with_column("Selected Parts", ScalarType::UInt64.nullable(false))
+        .finish();
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match statement.explainee {
@@ -323,8 +325,9 @@ pub fn describe_explain_timestamp(
     scx: &StatementContext,
     ExplainTimestampStatement { select, .. }: ExplainTimestampStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let mut relation_desc = RelationDesc::empty();
-    relation_desc = relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
+    let relation_desc = RelationDesc::builder()
+        .with_column("Timestamp", ScalarType::String.nullable(false))
+        .finish();
 
     Ok(StatementDesc::new(Some(relation_desc))
         .with_params(describe_select(scx, select)?.param_types))
@@ -334,8 +337,9 @@ pub fn describe_explain_schema(
     _: &StatementContext,
     ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    let mut relation_desc = RelationDesc::empty();
-    relation_desc = relation_desc.with_column("Schema", ScalarType::String.nullable(false));
+    let relation_desc = RelationDesc::builder()
+        .with_column("Schema", ScalarType::String.nullable(false))
+        .finish();
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
@@ -725,7 +729,7 @@ pub fn describe_subscribe(
     };
     let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
-    let mut desc = RelationDesc::empty().with_column(
+    let mut desc = RelationDesc::builder().with_column(
         "mz_timestamp",
         ScalarType::Numeric {
             max_scale: Some(NumericMaxScale::ZERO),
@@ -754,8 +758,8 @@ pub fn describe_subscribe(
                 .into_iter()
                 .map(normalize::column_name)
                 .collect_vec();
-            let mut before_values_desc = RelationDesc::empty();
-            let mut after_values_desc = RelationDesc::empty();
+            let mut before_values_desc = RelationDesc::builder();
+            let mut after_values_desc = RelationDesc::builder();
 
             // Add the key columns in the order that they're specified.
             for column_name in &key_columns {
@@ -794,7 +798,7 @@ pub fn describe_subscribe(
             desc = desc.concat(after_values_desc);
         }
     }
-    Ok(StatementDesc::new(Some(desc)))
+    Ok(StatementDesc::new(Some(desc.finish())))
 }
 
 pub fn plan_subscribe(

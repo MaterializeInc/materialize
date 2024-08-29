@@ -231,7 +231,9 @@ mod tests {
     use crate::sources::SourceData;
 
     fn validate_stats(column_type: &ColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
-        let schema = RelationDesc::empty().with_column("col", column_type.clone());
+        let schema = RelationDesc::builder()
+            .with_column("col", column_type.clone())
+            .finish();
 
         let mut builder = PartBuilder2::new(&schema, &UnitSchema);
         let mut row = SourceData(Ok(Row::default()));

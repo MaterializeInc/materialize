@@ -86,7 +86,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
 }
 
 pub static KAFKA_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column(
             "partition",
             ScalarType::Range {
@@ -95,6 +95,7 @@ pub static KAFKA_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
             .nullable(false),
         )
         .with_column("offset", ScalarType::UInt64.nullable(true))
+        .finish()
 });
 
 impl KafkaSourceConnection {
@@ -194,11 +195,15 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
     }
 
     fn key_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("key", ScalarType::Bytes.nullable(true))
+        RelationDesc::builder()
+            .with_column("key", ScalarType::Bytes.nullable(true))
+            .finish()
     }
 
     fn value_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("value", ScalarType::Bytes.nullable(true))
+        RelationDesc::builder()
+            .with_column("value", ScalarType::Bytes.nullable(true))
+            .finish()
     }
 
     fn timestamp_desc(&self) -> RelationDesc {

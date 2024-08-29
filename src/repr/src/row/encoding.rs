@@ -478,12 +478,13 @@ mod tests {
             }
         });
 
-        let mut desc = RelationDesc::empty();
+        let mut desc = RelationDesc::builder();
         for (idx, _) in row.iter().enumerate() {
             // HACK(parkmycar): We don't currently validate the types of the `RelationDesc` are
             // correct, just the number of columns. So we can fill in any type here.
             desc = desc.with_column(idx.to_string(), ScalarType::Int32.nullable(true));
         }
+        let desc = desc.finish();
 
         let encoded = row.encode_to_vec();
         assert_eq!(Row::decode(&encoded, &desc), Ok(row));

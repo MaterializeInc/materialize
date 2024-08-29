@@ -52,7 +52,8 @@ pub use crate::global_id::GlobalId;
 pub use crate::relation::{
     arb_relation_desc_diff, arb_row_for_relation, ColumnName, ColumnType, NotNullViolation,
     PropRelationDescDiff, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
-    RelationDesc, RelationType,
+    RelationDesc, RelationDescBuilder, RelationType, RelationVersion, RelationVersionSelector,
+    VersionedRelationDesc,
 };
 pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
 pub use crate::row::encoding2::{RowColumnarDecoder, RowColumnarEncoder};

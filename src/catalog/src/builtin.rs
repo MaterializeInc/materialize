@@ -2003,10 +2003,11 @@ pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_SINKS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
-        .with_key(vec![0]),
+        .with_key(vec![0])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2014,13 +2015,14 @@ pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     name: "mz_kafka_connections",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_CONNECTIONS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column(
             "brokers",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
-        .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
+        .with_column("sink_progress_topic", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2029,10 +2031,11 @@ pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     // `mz_internal` for now, while we work out the desc.
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("group_id_prefix", ScalarType::String.nullable(false))
-        .with_column("topic", ScalarType::String.nullable(false)),
+        .with_column("topic", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2040,10 +2043,11 @@ pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     name: "mz_postgres_sources",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_POSTGRES_SOURCES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("replication_slot", ScalarType::String.nullable(false))
-        .with_column("timeline_id", ScalarType::UInt64.nullable(true)),
+        .with_column("timeline_id", ScalarType::UInt64.nullable(true))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2051,10 +2055,11 @@ pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| 
     name: "mz_postgres_source_tables",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("schema_name", ScalarType::String.nullable(false))
-        .with_column("table_name", ScalarType::String.nullable(false)),
+        .with_column("table_name", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2062,10 +2067,11 @@ pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     name: "mz_mysql_source_tables",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("schema_name", ScalarType::String.nullable(false))
-        .with_column("table_name", ScalarType::String.nullable(false)),
+        .with_column("table_name", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2073,9 +2079,10 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     name: "mz_object_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("referenced_object_id", ScalarType::String.nullable(false)),
+        .with_column("referenced_object_id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2084,9 +2091,10 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
     data_source: IntrospectionType::ComputeDependencies,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("dependency_id", ScalarType::String.nullable(false)),
+        .with_column("dependency_id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2096,12 +2104,13 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinSo
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
         data_source: IntrospectionType::ComputeOperatorHydrationStatus,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("object_id", ScalarType::String.nullable(false))
             .with_column("physical_plan_node_id", ScalarType::UInt64.nullable(false))
             .with_column("replica_id", ScalarType::String.nullable(false))
             .with_column("worker_id", ScalarType::UInt64.nullable(false))
-            .with_column("hydrated", ScalarType::Bool.nullable(false)),
+            .with_column("hydrated", ScalarType::Bool.nullable(false))
+            .finish(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -2110,7 +2119,7 @@ pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_DATABASES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2120,7 +2129,8 @@ pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2128,7 +2138,7 @@ pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SCHEMAS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("database_id", ScalarType::String.nullable(true))
@@ -2139,7 +2149,8 @@ pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2147,7 +2158,7 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_columns",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_COLUMNS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false)) // not a key
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("position", ScalarType::UInt64.nullable(false))
@@ -2155,7 +2166,8 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("default", ScalarType::String.nullable(true))
         .with_column("type_oid", ScalarType::Oid.nullable(false))
-        .with_column("type_mod", ScalarType::Int32.nullable(false)),
+        .with_column("type_mod", ScalarType::Int32.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2163,7 +2175,7 @@ pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_indexes",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_INDEXES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2173,7 +2185,8 @@ pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("create_sql", ScalarType::String.nullable(false))
         .with_column("redacted_create_sql", ScalarType::String.nullable(false))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2181,12 +2194,13 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     name: "mz_index_columns",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_INDEX_COLUMNS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("index_id", ScalarType::String.nullable(false))
         .with_column("index_position", ScalarType::UInt64.nullable(false))
         .with_column("on_position", ScalarType::UInt64.nullable(true))
         .with_column("on_expression", ScalarType::String.nullable(true))
-        .with_column("nullable", ScalarType::Bool.nullable(false)),
+        .with_column("nullable", ScalarType::Bool.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2194,7 +2208,7 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_TABLES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2207,7 +2221,8 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("create_sql", ScalarType::String.nullable(true))
         .with_column("redacted_create_sql", ScalarType::String.nullable(true))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2215,7 +2230,7 @@ pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     name: "mz_connections",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CONNECTIONS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2229,7 +2244,8 @@ pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
         .with_column("create_sql", ScalarType::String.nullable(false))
         .with_column("redacted_create_sql", ScalarType::String.nullable(false))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2237,10 +2253,11 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
     name: "mz_ssh_tunnel_connections",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SSH_TUNNEL_CONNECTIONS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("public_key_1", ScalarType::String.nullable(false))
-        .with_column("public_key_2", ScalarType::String.nullable(false)),
+        .with_column("public_key_2", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2248,7 +2265,7 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_sources",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SOURCES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2268,7 +2285,8 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("create_sql", ScalarType::String.nullable(true))
         .with_column("redacted_create_sql", ScalarType::String.nullable(true))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2276,7 +2294,7 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_sinks",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SINKS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2295,7 +2313,8 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("create_sql", ScalarType::String.nullable(false))
         .with_column("redacted_create_sql", ScalarType::String.nullable(false))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2303,7 +2322,7 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_views",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_VIEWS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2317,7 +2336,8 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("create_sql", ScalarType::String.nullable(false))
         .with_column("redacted_create_sql", ScalarType::String.nullable(false))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2325,7 +2345,7 @@ pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
     name: "mz_materialized_views",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_MATERIALIZED_VIEWS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2340,7 +2360,8 @@ pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
         .with_column("create_sql", ScalarType::String.nullable(false))
         .with_column("redacted_create_sql", ScalarType::String.nullable(false))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2349,7 +2370,7 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> =
         name: "mz_materialized_view_refresh_strategies",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::TABLE_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("materialized_view_id", ScalarType::String.nullable(false))
             .with_column("type", ScalarType::String.nullable(false))
             .with_column("interval", ScalarType::Interval.nullable(true))
@@ -2360,7 +2381,8 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> =
             .with_column(
                 "at",
                 ScalarType::TimestampTz { precision: None }.nullable(true),
-            ),
+            )
+            .finish(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -2368,7 +2390,7 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_TYPES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2382,7 +2404,8 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("create_sql", ScalarType::String.nullable(true))
         .with_column("redacted_create_sql", ScalarType::String.nullable(true))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2392,10 +2415,11 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     name: "mz_type_pg_metadata",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_TYPE_PG_METADATA_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("typinput", ScalarType::Oid.nullable(false))
-        .with_column("typreceive", ScalarType::Oid.nullable(false)),
+        .with_column("typreceive", ScalarType::Oid.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2403,9 +2427,10 @@ pub static MZ_ARRAY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     name: "mz_array_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ARRAY_TYPES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("element_id", ScalarType::String.nullable(false)),
+        .with_column("element_id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2413,7 +2438,9 @@ pub static MZ_BASE_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_BASE_TYPES_OID,
-    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2421,7 +2448,7 @@ pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     name: "mz_list_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_LIST_TYPES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false))
         .with_column(
@@ -2431,7 +2458,8 @@ pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
                 custom_id: None,
             }
             .nullable(true),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2439,7 +2467,7 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     name: "mz_map_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_MAP_TYPES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("key_id", ScalarType::String.nullable(false))
         .with_column("value_id", ScalarType::String.nullable(false))
@@ -2458,7 +2486,8 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
                 custom_id: None,
             }
             .nullable(true),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2466,13 +2495,14 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_roles",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("inherit", ScalarType::Bool.nullable(false))
         .with_key(vec![0])
-        .with_key(vec![1]),
+        .with_key(vec![1])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2480,10 +2510,11 @@ pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     name: "mz_role_members",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLE_MEMBERS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column("member", ScalarType::String.nullable(false))
-        .with_column("grantor", ScalarType::String.nullable(false)),
+        .with_column("grantor", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2491,10 +2522,11 @@ pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     name: "mz_role_parameters",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column("parameter_name", ScalarType::String.nullable(false))
-        .with_column("parameter_value", ScalarType::String.nullable(false)),
+        .with_column("parameter_value", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2502,7 +2534,9 @@ pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_PSEUDO_TYPES_OID,
-    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2510,7 +2544,7 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     name: "mz_functions",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_FUNCTIONS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false)) // not a key!
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2525,7 +2559,8 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
         )
         .with_column("return_type_id", ScalarType::String.nullable(true))
         .with_column("returns_set", ScalarType::Bool.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2533,14 +2568,15 @@ pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     name: "mz_operators",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_OPERATORS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column(
             "argument_type_ids",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
-        .with_column("return_type_id", ScalarType::String.nullable(true)),
+        .with_column("return_type_id", ScalarType::String.nullable(true))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2548,10 +2584,11 @@ pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     name: "mz_aggregates",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_AGGREGATES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("agg_kind", ScalarType::String.nullable(false))
-        .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
+        .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2560,7 +2597,7 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTERS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
@@ -2585,7 +2622,8 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "introspection_interval",
             ScalarType::Interval.nullable(true),
         )
-        .with_key(vec![0]),
+        .with_key(vec![0])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2594,10 +2632,11 @@ pub static MZ_CLUSTER_WORKLOAD_CLASSES: LazyLock<BuiltinTable> = LazyLock::new(|
     name: "mz_cluster_workload_classes",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_WORKLOAD_CLASSES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("workload_class", ScalarType::String.nullable(true))
-        .with_key(vec![0]),
+        .with_key(vec![0])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2615,13 +2654,14 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     name: "mz_cluster_schedules",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_SCHEDULES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column(
             "refresh_hydration_time_estimate",
             ScalarType::Interval.nullable(true),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2630,7 +2670,7 @@ pub static MZ_SECRETS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_secrets",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SECRETS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
@@ -2639,7 +2679,8 @@ pub static MZ_SECRETS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2648,7 +2689,7 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     name: "mz_cluster_replicas",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
@@ -2657,7 +2698,8 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         // hasn't specified them.
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
-        .with_column("disk", ScalarType::Bool.nullable(true)),
+        .with_column("disk", ScalarType::Bool.nullable(true))
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2666,7 +2708,9 @@ pub static MZ_INTERNAL_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(
     name: "mz_internal_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_INTERNAL_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2675,7 +2719,9 @@ pub static MZ_PENDING_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|
     name: "mz_pending_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_PENDING_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2684,7 +2730,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinTable> = LazyLock::new(|
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_STATUSES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
@@ -2692,7 +2738,8 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinTable> = LazyLock::new(|
         .with_column(
             "updated_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2701,7 +2748,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
     name: "mz_cluster_replica_sizes",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_SIZES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("size", ScalarType::String.nullable(false))
         .with_column("processes", ScalarType::UInt64.nullable(false))
         .with_column("workers", ScalarType::UInt64.nullable(false))
@@ -2711,7 +2758,8 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
         .with_column(
             "credits_per_hour",
             ScalarType::Numeric { max_scale: None }.nullable(false),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2720,7 +2768,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_AUDIT_EVENTS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
@@ -2730,7 +2778,8 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_key(vec![0]),
+        .with_key(vec![0])
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2964,13 +3013,14 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> =
         name: "mz_statement_lifecycle_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_STATEMENT_LIFECYCLE_HISTORY_OID,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("statement_id", ScalarType::Uuid.nullable(false))
             .with_column("event_type", ScalarType::String.nullable(false))
             .with_column(
                 "occurred_at",
                 ScalarType::TimestampTz { precision: None }.nullable(false),
-            ),
+            )
+            .finish(),
         data_source: IntrospectionType::StatementLifecycleHistory,
         is_retained_metrics_object: false,
         // TODO[btv]: Maybe this should be public instead of
@@ -3103,14 +3153,15 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: LazyLock<BuiltinTable> = LazyLock::new(|| 
     name: "mz_storage_usage_by_shard",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_STORAGE_USAGE_BY_SHARD_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("shard_id", ScalarType::String.nullable(true))
         .with_column("size_bytes", ScalarType::UInt64.nullable(false))
         .with_column(
             "collection_timestamp",
             ScalarType::TimestampTz { precision: None }.nullable(false),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3119,7 +3170,9 @@ pub static MZ_EGRESS_IPS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     name: "mz_egress_ips",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_EGRESS_IPS_OID,
-    desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
+    desc: RelationDesc::builder()
+        .with_column("egress_ip", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3129,9 +3182,10 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinTable> =
         name: "mz_aws_privatelink_connections",
         schema: MZ_CATALOG_SCHEMA,
         oid: oid::TABLE_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("id", ScalarType::String.nullable(false))
-            .with_column("principal", ScalarType::String.nullable(false)),
+            .with_column("principal", ScalarType::String.nullable(false))
+            .finish(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -3140,7 +3194,7 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     name: "mz_aws_connections",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_AWS_CONNECTIONS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("endpoint", ScalarType::String.nullable(true))
         .with_column("region", ScalarType::String.nullable(true))
@@ -3159,7 +3213,8 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
         )
         .with_column("principal", ScalarType::String.nullable(true))
         .with_column("external_id", ScalarType::String.nullable(true))
-        .with_column("example_trust_policy", ScalarType::Jsonb.nullable(true)),
+        .with_column("example_trust_policy", ScalarType::Jsonb.nullable(true))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3170,12 +3225,13 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinTable> = LazyLock::new(||
     // the corresponding Storage tables.
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_METRICS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
-        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
+        .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -3186,10 +3242,11 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
         data_source: IntrospectionType::ReplicaFrontiers,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("object_id", ScalarType::String.nullable(false))
             .with_column("replica_id", ScalarType::String.nullable(false))
-            .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true)),
+            .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true))
+            .finish(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -3199,10 +3256,11 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSourc
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_FRONTIERS_OID,
     data_source: IntrospectionType::Frontiers,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("read_frontier", ScalarType::MzTimestamp.nullable(true))
-        .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true)),
+        .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3226,13 +3284,14 @@ pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> =
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_MATERIALIZED_VIEW_REFRESHES_OID,
         data_source: IntrospectionType::ComputeMaterializedViewRefreshes,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("materialized_view_id", ScalarType::String.nullable(false))
             .with_column(
                 "last_completed_refresh",
                 ScalarType::MzTimestamp.nullable(true),
             )
-            .with_column("next_refresh", ScalarType::MzTimestamp.nullable(true)),
+            .with_column("next_refresh", ScalarType::MzTimestamp.nullable(true))
+            .finish(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -3241,7 +3300,7 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     name: "mz_subscriptions",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
@@ -3256,7 +3315,8 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
                 custom_id: None,
             }
             .nullable(false),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3265,14 +3325,15 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_sessions",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SESSIONS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("connection_id", ScalarType::UInt32.nullable(false))
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column(
             "connected_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3281,13 +3342,14 @@ pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
     name: "mz_default_privileges",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_DEFAULT_PRIVILEGES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column("database_id", ScalarType::String.nullable(true))
         .with_column("schema_id", ScalarType::String.nullable(true))
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("grantee", ScalarType::String.nullable(false))
-        .with_column("privileges", ScalarType::String.nullable(false)),
+        .with_column("privileges", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3296,7 +3358,9 @@ pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     name: "mz_system_privileges",
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_SYSTEM_PRIVILEGES_OID,
-    desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
+    desc: RelationDesc::builder()
+        .with_column("privileges", ScalarType::MzAclItem.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3305,11 +3369,12 @@ pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_comments",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_COMMENTS_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("object_sub_id", ScalarType::Int32.nullable(true))
-        .with_column("comment", ScalarType::String.nullable(false)),
+        .with_column("comment", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3318,7 +3383,7 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     name: "mz_source_references",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SOURCE_REFERENCES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("source_id", ScalarType::String.nullable(false))
         .with_column("namespace", ScalarType::String.nullable(true))
         .with_column("name", ScalarType::String.nullable(false))
@@ -3333,7 +3398,8 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
                 custom_id: None,
             }
             .nullable(true),
-        ),
+        )
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3342,10 +3408,11 @@ pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     name: "mz_webhook_sources",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_WEBHOOK_SOURCES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("url", ScalarType::String.nullable(false)),
+        .with_column("url", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -3355,10 +3422,11 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> =
         name: "mz_history_retention_strategies",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("strategy", ScalarType::String.nullable(false))
-            .with_column("value", ScalarType::Jsonb.nullable(false)),
+            .with_column("value", ScalarType::Jsonb.nullable(false))
+            .finish(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
@@ -3389,9 +3457,10 @@ pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinSource> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_STORAGE_SHARDS_OID,
     data_source: IntrospectionType::ShardMapping,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("shard_id", ScalarType::String.nullable(false)),
+        .with_column("shard_id", ScalarType::String.nullable(false))
+        .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -4900,13 +4969,14 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
         name: "mz_compute_error_counts_raw_unified",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
-        desc: RelationDesc::empty()
+        desc: RelationDesc::builder()
             .with_column("replica_id", ScalarType::String.nullable(false))
             .with_column("object_id", ScalarType::String.nullable(false))
             .with_column(
                 "count",
                 ScalarType::Numeric { max_scale: None }.nullable(false),
-            ),
+            )
+            .finish(),
         data_source: IntrospectionType::ComputeErrorCounts,
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -4916,10 +4986,11 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinSource> = LazyLock::new(|
     name: "mz_compute_hydration_times",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_TIMES_OID,
-    desc: RelationDesc::empty()
+    desc: RelationDesc::builder()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("time_ns", ScalarType::UInt64.nullable(true)),
+        .with_column("time_ns", ScalarType::UInt64.nullable(true))
+        .finish(),
     data_source: IntrospectionType::ComputeHydrationTimes,
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],

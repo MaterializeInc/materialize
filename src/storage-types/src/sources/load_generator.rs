@@ -50,7 +50,9 @@ pub struct LoadGeneratorSourceConnection {
 }
 
 pub static LOAD_GEN_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+    RelationDesc::builder()
+        .with_column("offset", ScalarType::UInt64.nullable(true))
+        .finish()
 });
 
 impl SourceConnection for LoadGeneratorSourceConnection {
@@ -66,7 +68,9 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         match &self.load_generator {
             LoadGenerator::KeyValue(_) => {
                 // `"key"` is overridden by the key_envelope in planning.
-                RelationDesc::empty().with_column("key", ScalarType::UInt64.nullable(false))
+                RelationDesc::builder()
+                    .with_column("key", ScalarType::UInt64.nullable(false))
+                    .finish()
             }
             _ => RelationDesc::empty(),
         }
@@ -75,13 +79,15 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn value_desc(&self) -> RelationDesc {
         match &self.load_generator {
             LoadGenerator::Auction => RelationDesc::empty(),
-            LoadGenerator::Clock => RelationDesc::empty().with_column(
-                "time",
-                ScalarType::TimestampTz { precision: None }.nullable(false),
-            ),
+            LoadGenerator::Clock => RelationDesc::builder()
+                .with_column(
+                    "time",
+                    ScalarType::TimestampTz { precision: None }.nullable(false),
+                )
+                .finish(),
             LoadGenerator::Datums => {
                 let mut desc =
-                    RelationDesc::empty().with_column("rowid", ScalarType::Int64.nullable(false));
+                    RelationDesc::builder().with_column("rowid", ScalarType::Int64.nullable(false));
                 let typs = ScalarType::enumerate();
                 let mut names = BTreeSet::new();
                 for typ in typs {
@@ -99,22 +105,22 @@ impl SourceConnection for LoadGeneratorSourceConnection {
                     names.insert(name.clone());
                     desc = desc.with_column(name, typ.clone().nullable(true));
                 }
-                desc
+                desc.finish()
             }
-            LoadGenerator::Counter { .. } => {
-                RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false))
-            }
+            LoadGenerator::Counter { .. } => RelationDesc::builder()
+                .with_column("counter", ScalarType::Int64.nullable(false))
+                .finish(),
             LoadGenerator::Marketing => RelationDesc::empty(),
             LoadGenerator::Tpch { .. } => RelationDesc::empty(),
             LoadGenerator::KeyValue(KeyValueLoadGenerator { include_offset, .. }) => {
-                let mut desc = RelationDesc::empty()
+                let mut desc = RelationDesc::builder()
                     .with_column("partition", ScalarType::UInt64.nullable(false))
                     .with_column("value", ScalarType::Bytes.nullable(false));
 
                 if let Some(offset_name) = include_offset.as_deref() {
                     desc = desc.with_column(offset_name, ScalarType::UInt64.nullable(false));
                 }
-                desc
+                desc.finish()
             }
         }
     }
@@ -194,30 +200,33 @@ impl LoadGenerator {
             LoadGenerator::Auction => vec![
                 (
                     "organizations",
-                    RelationDesc::empty()
+                    RelationDesc::builder()
                         .with_column("id", ScalarType::Int64.nullable(false))
                         .with_column("name", ScalarType::String.nullable(false))
-                        .with_key(vec![0]),
+                        .with_key(vec![0])
+                        .finish(),
                 ),
                 (
                     "users",
-                    RelationDesc::empty()
+                    RelationDesc::builder()
                         .with_column("id", ScalarType::Int64.nullable(false))
                         .with_column("org_id", ScalarType::Int64.nullable(false))
                         .with_column("name", ScalarType::String.nullable(false))
-                        .with_key(vec![0]),
+                        .with_key(vec![0])
+                        .finish(),
                 ),
                 (
                     "accounts",
-                    RelationDesc::empty()
+                    RelationDesc::builder()
                         .with_column("id", ScalarType::Int64.nullable(false))
                         .with_column("org_id", ScalarType::Int64.nullable(false))
                         .with_column("balance", ScalarType::Int64.nullable(false))
-                        .with_key(vec![0]),
+                        .with_key(vec![0])
+                        .finish(),
                 ),
                 (
                     "auctions",
-                    RelationDesc::empty()
+                    RelationDesc::builder()
                         .with_column("id", ScalarType::Int64.nullable(false))
                         .with_column("seller", ScalarType::Int64.nullable(false))
                         .with_column("item", ScalarType::String.nullable(false))
@@ -225,11 +234,12 @@ impl LoadGenerator {
                             "end_time",
                             ScalarType::TimestampTz { precision: None }.nullable(false),
                         )
-                        .with_key(vec![0]),
+                        .with_key(vec![0])
+                        .finish(),
                 ),
                 (
                     "bids",
-                    RelationDesc::empty()
+                    RelationDesc::builder()
                         .with_column("id", ScalarType::Int64.nullable(false))
                         .with_column("buyer", ScalarType::Int64.nullable(false))
                         .with_column("auction_id", ScalarType::Int64.nullable(false))
@@ -238,7 +248,8 @@ impl LoadGenerator {
                             "bid_time",
                             ScalarType::TimestampTz { precision: None }.nullable(false),
                         )
-                        .with_key(vec![0]),
+                        .with_key(vec![0])
+                        .finish(),
                 ),
             ],
             LoadGenerator::Clock => vec![],
@@ -247,15 +258,16 @@ impl LoadGenerator {
                 vec![
                     (
                         "customers",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("email", ScalarType::String.nullable(false))
                             .with_column("income", ScalarType::Int64.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "impressions",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("customer_id", ScalarType::Int64.nullable(false))
                             .with_column("campaign_id", ScalarType::Int64.nullable(false))
@@ -263,21 +275,22 @@ impl LoadGenerator {
                                 "impression_time",
                                 ScalarType::TimestampTz { precision: None }.nullable(false),
                             )
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "clicks",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("impression_id", ScalarType::Int64.nullable(false))
                             .with_column(
                                 "click_time",
                                 ScalarType::TimestampTz { precision: None }.nullable(false),
                             )
-                            .without_keys(),
+                            .finish(),
                     ),
                     (
                         "leads",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("customer_id", ScalarType::Int64.nullable(false))
                             .with_column(
@@ -289,11 +302,12 @@ impl LoadGenerator {
                                 ScalarType::TimestampTz { precision: None }.nullable(true),
                             )
                             .with_column("conversion_amount", ScalarType::Int64.nullable(true))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "coupons",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("lead_id", ScalarType::Int64.nullable(false))
                             .with_column(
@@ -301,11 +315,12 @@ impl LoadGenerator {
                                 ScalarType::TimestampTz { precision: None }.nullable(false),
                             )
                             .with_column("amount", ScalarType::Int64.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "conversion_predictions",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("lead_id", ScalarType::Int64.nullable(false))
                             .with_column("experiment_bucket", ScalarType::String.nullable(false))
                             .with_column(
@@ -313,7 +328,7 @@ impl LoadGenerator {
                                 ScalarType::TimestampTz { precision: None }.nullable(false),
                             )
                             .with_column("score", ScalarType::Float64.nullable(false))
-                            .without_keys(),
+                            .finish(),
                     ),
                 ]
             }
@@ -327,7 +342,7 @@ impl LoadGenerator {
                 vec![
                     (
                         "supplier",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("s_suppkey", identifier.clone())
                             .with_column("s_name", ScalarType::String.nullable(false))
                             .with_column("s_address", ScalarType::String.nullable(false))
@@ -335,11 +350,12 @@ impl LoadGenerator {
                             .with_column("s_phone", ScalarType::String.nullable(false))
                             .with_column("s_acctbal", decimal.clone())
                             .with_column("s_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "part",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("p_partkey", identifier.clone())
                             .with_column("p_name", ScalarType::String.nullable(false))
                             .with_column("p_mfgr", ScalarType::String.nullable(false))
@@ -349,21 +365,23 @@ impl LoadGenerator {
                             .with_column("p_container", ScalarType::String.nullable(false))
                             .with_column("p_retailprice", decimal.clone())
                             .with_column("p_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "partsupp",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("ps_partkey", identifier.clone())
                             .with_column("ps_suppkey", identifier.clone())
                             .with_column("ps_availqty", ScalarType::Int32.nullable(false))
                             .with_column("ps_supplycost", decimal.clone())
                             .with_column("ps_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0, 1]),
+                            .with_key(vec![0, 1])
+                            .finish(),
                     ),
                     (
                         "customer",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("c_custkey", identifier.clone())
                             .with_column("c_name", ScalarType::String.nullable(false))
                             .with_column("c_address", ScalarType::String.nullable(false))
@@ -372,11 +390,12 @@ impl LoadGenerator {
                             .with_column("c_acctbal", decimal.clone())
                             .with_column("c_mktsegment", ScalarType::String.nullable(false))
                             .with_column("c_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "orders",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("o_orderkey", identifier.clone())
                             .with_column("o_custkey", identifier.clone())
                             .with_column("o_orderstatus", ScalarType::String.nullable(false))
@@ -386,11 +405,12 @@ impl LoadGenerator {
                             .with_column("o_clerk", ScalarType::String.nullable(false))
                             .with_column("o_shippriority", ScalarType::Int32.nullable(false))
                             .with_column("o_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "lineitem",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("l_orderkey", identifier.clone())
                             .with_column("l_partkey", identifier.clone())
                             .with_column("l_suppkey", identifier.clone())
@@ -407,24 +427,27 @@ impl LoadGenerator {
                             .with_column("l_shipinstruct", ScalarType::String.nullable(false))
                             .with_column("l_shipmode", ScalarType::String.nullable(false))
                             .with_column("l_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0, 3]),
+                            .with_key(vec![0, 3])
+                            .finish(),
                     ),
                     (
                         "nation",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("n_nationkey", identifier.clone())
                             .with_column("n_name", ScalarType::String.nullable(false))
                             .with_column("n_regionkey", identifier.clone())
                             .with_column("n_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                     (
                         "region",
-                        RelationDesc::empty()
+                        RelationDesc::builder()
                             .with_column("r_regionkey", identifier)
                             .with_column("r_name", ScalarType::String.nullable(false))
                             .with_column("r_comment", ScalarType::String.nullable(false))
-                            .with_key(vec![0]),
+                            .with_key(vec![0])
+                            .finish(),
                     ),
                 ]
             }

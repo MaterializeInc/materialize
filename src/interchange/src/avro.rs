@@ -62,9 +62,10 @@ mod tests {
         }"#;
 
         let desc = schema_to_relationdesc(parse_schema(schema)?)?;
-        let expected_desc = RelationDesc::empty()
+        let expected_desc = RelationDesc::builder()
             .with_column("f1", ScalarType::Int32.nullable(false))
-            .with_column("f2", ScalarType::String.nullable(false));
+            .with_column("f2", ScalarType::String.nullable(false))
+            .finish();
 
         assert_eq!(desc, expected_desc);
         Ok(())
@@ -162,7 +163,9 @@ mod tests {
             ),
         ];
         for (typ, datum, expected) in valid_pairings {
-            let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
+            let desc = RelationDesc::builder()
+                .with_column("column1", typ.nullable(false))
+                .finish();
             let schema_generator =
                 AvroSchemaGenerator::new(desc, false, Default::default(), "row", false, None, true)
                     .unwrap();

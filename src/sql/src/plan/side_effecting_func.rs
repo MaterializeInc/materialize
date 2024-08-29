@@ -78,8 +78,9 @@ pub fn describe_select_if_side_effecting(
     // We currently support only a single call to a side-effecting function
     // without an alias, so there is always a single output column is named
     // after the function.
-    let desc =
-        RelationDesc::empty().with_column(sef_call.imp.name, sef_call.imp.return_type.clone());
+    let desc = RelationDesc::builder()
+        .with_column(sef_call.imp.name, sef_call.imp.return_type.clone())
+        .finish();
 
     Ok(Some(desc))
 }

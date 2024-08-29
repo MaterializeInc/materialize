@@ -66,10 +66,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
 }
 
 pub static MYSQL_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    RelationDesc::empty()
+    RelationDesc::builder()
         .with_column("source_id_lower", ScalarType::Uuid.nullable(false))
         .with_column("source_id_upper", ScalarType::Uuid.nullable(false))
         .with_column("transaction_id", ScalarType::UInt64.nullable(true))
+        .finish()
 });
 
 impl MySqlSourceConnection {

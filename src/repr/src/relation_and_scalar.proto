@@ -38,9 +38,19 @@ message ProtoColumnType {
     bool nullable = 2;
 }
 
+message ProtoRelationVersion {
+    uint64 value = 1;
+}
+
+message ProtoColumnMetadata {
+    ProtoRelationVersion added = 1;
+    ProtoRelationVersion dropped = 2;
+}
+
 message ProtoRelationDesc {
     ProtoRelationType typ = 1;
     repeated ProtoColumnName names = 2;
+    repeated ProtoColumnMetadata metadata = 3;
 }
 
 message ProtoScalarType {

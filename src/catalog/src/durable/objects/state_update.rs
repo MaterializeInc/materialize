@@ -897,7 +897,7 @@ mod tests {
             // Verify that we can map encode into the "raw" json format. This
             // validates things like contained integers fitting in f64.
             let raw = StateUpdateKindJson::from(kind.clone());
-            let desc = RelationDesc::empty().with_column("a", ScalarType::Jsonb.nullable(false));
+            let desc = RelationDesc::builder().with_column("a", ScalarType::Jsonb.nullable(false)).finish();
 
             // Verify that the raw roundtrips through the SourceData Codec impl.
             let source_data = SourceData::from(raw.clone());

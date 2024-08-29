@@ -55,14 +55,18 @@ mod tests {
         }
 
         // Non-nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
+        let schema = RelationDesc::builder()
+            .with_column("col", scalar_type.clone().nullable(false))
+            .finish();
         for row in rows.iter() {
             datum_stats_roundtrip_trim(&schema, [row]);
         }
         datum_stats_roundtrip_trim(&schema, &rows[..]);
 
         // Nullable version of the column.
-        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
+        let schema = RelationDesc::builder()
+            .with_column("col", scalar_type.nullable(true))
+            .finish();
         rows.push(Row::pack(std::iter::once(Datum::Null)));
         for row in rows.iter() {
             datum_stats_roundtrip_trim(&schema, [row]);

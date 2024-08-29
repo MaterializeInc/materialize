@@ -363,31 +363,35 @@ impl LogVariant {
     /// TODO(#25239): Add documentation.
     pub fn desc(&self) -> RelationDesc {
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Operates) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("name", ScalarType::String.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Channels) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_index", ScalarType::UInt64.nullable(false))
                 .with_column("from_port", ScalarType::UInt64.nullable(false))
                 .with_column("to_index", ScalarType::UInt64.nullable(false))
                 .with_column("to_port", ScalarType::UInt64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
-                .with_column("id", ScalarType::UInt64.nullable(false))
-                .with_column("worker_id", ScalarType::UInt64.nullable(false)),
-
-            LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::builder()
+                .with_column("id", ScalarType::UInt64.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
+
+            LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::builder()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column(
@@ -398,34 +402,40 @@ impl LogVariant {
                     }
                     .nullable(false),
                 )
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Parks) => RelationDesc::builder()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
-                .with_column("requested_ns", ScalarType::UInt64.nullable(false)),
+                .with_column("requested_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::BatchesReceived) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::BatchesReceived) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::BatchesSent) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::BatchesSent) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::builder()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
+                .with_column("to_worker_id", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::builder()
                 .with_column(
                     "address",
                     ScalarType::List {
@@ -437,7 +447,8 @@ impl LogVariant {
                 .with_column("port", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("update_type", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::MzTimestamp.nullable(true)),
+                .with_column("time", ScalarType::MzTimestamp.nullable(true))
+                .finish(),
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
@@ -448,57 +459,68 @@ impl LogVariant {
             | LogVariant::Differential(DifferentialLog::BatcherAllocations)
             | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
             | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => RelationDesc::empty()
-                .with_column("operator_id", ScalarType::UInt64.nullable(false))
-                .with_column("worker_id", ScalarType::UInt64.nullable(false)),
+            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => {
+                RelationDesc::builder()
+                    .with_column("operator_id", ScalarType::UInt64.nullable(false))
+                    .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                    .finish()
+            }
 
-            LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
-                .with_key(vec![0, 1, 2]),
+                .with_key(vec![0, 1, 2])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::builder()
                 .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("type", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::builder()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("type", ScalarType::String.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::builder()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::ErrorCount) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ErrorCount) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
 
-            LogVariant::Compute(ComputeLog::HydrationTime) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::HydrationTime) => RelationDesc::builder()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time_ns", ScalarType::UInt64.nullable(true))
-                .with_key(vec![0, 1]),
+                .with_key(vec![0, 1])
+                .finish(),
         }
     }
 }
