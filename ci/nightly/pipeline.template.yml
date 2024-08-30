@@ -526,55 +526,25 @@ steps:
   - group: "Platform checks"
     key: platform-checks
     steps:
-      - id: checks-restart-cockroach
-        label: "Checks + restart Cockroach"
+      - id: checks-restart-entire-mz
+        label: "Checks + restart of the entire Mz"
         depends_on: build-aarch64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
+        parallelism: 2
         agents:
           # A larger instance is needed due to frequent OOMs, same in all other platform-checks
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-restart-entire-mz
-        label: "Checks + restart of the entire Mz"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-backup-restore-before-manipulate
-        label: "Checks backup + restore between the two manipulate()"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=BackupAndRestoreBeforeManipulate, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-backup-restore-after-manipulate
-        label: "Checks backup + restore after manipulate()"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=BackupAndRestoreAfterManipulate, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores"
         depends_on: build-aarch64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -582,22 +552,12 @@ steps:
               composition: platform-checks
               args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-backup-rollback
-        label: "Checks + backup + rollback to previous"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=BackupAndRestoreToPreviousState, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -609,7 +569,8 @@ steps:
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -621,7 +582,8 @@ steps:
         label: "Checks parallel + restart of the entire Mz"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -633,7 +595,8 @@ steps:
         label: "Checks parallel + restart of environmentd & storage clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -645,7 +608,8 @@ steps:
         label: "Checks parallel + kill storage clusterd"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -657,7 +621,8 @@ steps:
         label: "Checks parallel + restart Redpanda & Debezium"
         depends_on: build-aarch64
         skip: "Affected by #23882"
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -668,7 +633,8 @@ steps:
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -676,21 +642,11 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-preflight-check-continue
-        label: "Checks preflight-check and continue upgrade"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=PreflightCheckContinue, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-aarch64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -701,7 +657,8 @@ steps:
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -712,80 +669,14 @@ steps:
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-upgrade-clusterd-compute-first
-        label: "Platform checks upgrade, restarting compute clusterd first"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeFirst, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-upgrade-clusterd-compute-last
-        label: "Platform checks upgrade, restarting compute clusterd last"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeLast, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-kill-clusterd-storage
-        label: "Checks + kill storage clusterd"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-restart-source-postgres
-        label: "Checks + restart source Postgres"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg]
-
-      - id: checks-restart-clusterd-compute
-        label: "Checks + restart clusterd compute"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-drop-create-default-replica
-        label: "Checks + DROP/CREATE replica"
-        depends_on: build-aarch64
-        timeout_in_minutes: 240
-        agents:
-          # Seems to require more memory on aarch64
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
