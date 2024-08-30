@@ -580,11 +580,16 @@ fn lag_lead_inner_respect_nulls<'a>(
     result
 }
 
+// `i64` indexes get involved in this function because it's convenient to allow negative indexes and
+// have `datums_get` fail on them, and thus handle the beginning and end of the input vector
+// uniformly, rather than checking underflow separately during index manipulations.
 #[allow(clippy::as_conversions)]
 fn lag_lead_inner_ignore_nulls<'a>(
     args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
     lag_lead_type: &LagLeadType,
 ) -> Vec<Datum<'a>> {
+    // We check here once that even the largest index fits in `i64`, and then do silent `as`
+    // conversions from `usize` indexes to `i64` indexes throughout this function.
     if i64::try_from(args.len()).is_err() {
         panic!("window partition way too big")
     }
@@ -598,7 +603,7 @@ fn lag_lead_inner_ignore_nulls<'a>(
         .zip_eq(skip_nulls_backward.iter_mut());
     for ((i, (d, _, _)), slot) in pairs {
         if d.is_null() {
-            *slot = Some(i64::cast_from(last_non_null));
+            *slot = Some(last_non_null);
         } else {
             last_non_null = i as i64;
         }
@@ -612,7 +617,7 @@ fn lag_lead_inner_ignore_nulls<'a>(
         .zip_eq(skip_nulls_forward.iter_mut().rev());
     for ((i, (d, _, _)), slot) in pairs {
         if d.is_null() {
-            *slot = Some(i64::cast_from(last_non_null));
+            *slot = Some(last_non_null);
         } else {
             last_non_null = i as i64;
         }
@@ -627,8 +632,8 @@ fn lag_lead_inner_ignore_nulls<'a>(
             continue;
         }
 
-        let idx = i64::try_from(idx).expect("Array index does not fit in i64");
-        let offset = i64::from(offset.unwrap_int32());
+        let idx = idx as i64; // checked at the beginning of the function that len() fits
+        let offset = i64::cast_from(offset.unwrap_int32());
         let offset = match lag_lead_type {
             LagLeadType::Lag => -offset,
             LagLeadType::Lead => offset,
@@ -661,7 +666,7 @@ fn lag_lead_inner_ignore_nulls<'a>(
                     j += increment;
                     // Jump over a run of nulls
                     if datums_get(j).is_some_and(|d| d.is_null()) {
-                        let ju = j as usize;
+                        let ju = j as usize; // `j >= 0` because of the above `is_some_and`
                         if increment > 0 {
                             j = skip_nulls_forward[ju].expect("checked above that it's null");
                         } else {
@@ -678,22 +683,16 @@ fn lag_lead_inner_ignore_nulls<'a>(
                 }
             } else {
                 assert_eq!(offset, 0);
-                match datums_get(idx) {
-                    Some(datum) => {
-                        if !datum.is_null() {
-                            datum
-                        } else {
-                            // I can imagine returning here either `default_value` or `null`.
-                            // (I'm leaning towards `default_value`.)
-                            // We used to run into an infinite loop in this case, so panicking is
-                            // better. Started a SQL Council thread:
-                            // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
-                            panic!("0 offset in lag/lead IGNORE NULLS");
-                        }
-                    }
-                    None => {
-                        unreachable!()
-                    }
+                let datum = datums_get(idx).expect("known to exist");
+                if !datum.is_null() {
+                    datum
+                } else {
+                    // I can imagine returning here either `default_value` or `null`.
+                    // (I'm leaning towards `default_value`.)
+                    // We used to run into an infinite loop in this case, so panicking is
+                    // better. Started a SQL Council thread:
+                    // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+                    panic!("0 offset in lag/lead IGNORE NULLS");
                 }
             }
         };

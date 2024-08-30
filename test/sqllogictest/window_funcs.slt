@@ -2378,6 +2378,39 @@ order by x;
 15  16  6  2  NULL  18  NULL  NULL
 17  18  16  6  2  NULL  NULL  NULL
 
+# Test the `offset = 0` code path. This currently doesn't work with nulls if IGNORE NULLS is specified,
+# so we just filter out nulls for now.
+# See https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+# Also tests negative dynamic offsets.
+statement ok
+CREATE VIEW t6_no_nulls AS
+SELECT
+  x,
+  COALESCE(y,-11) AS y
+FROM t6;
+
+query IIIIIII
+SELECT
+  x,
+  y,
+  y/10,
+  lag(y, y/10) OVER (ORDER BY x),
+  lag(y, y/10) IGNORE NULLS OVER (ORDER BY x),
+  lead(y, y/10) OVER (ORDER BY x),
+  lead(y, y/10) IGNORE NULLS OVER (ORDER BY x)
+FROM t6_no_nulls
+ORDER BY x;
+----
+1  2  0  2  2  2  2
+3  -11  -1  6  6  2  2
+5  6  0  6  6  6  6
+7  8  0  8  8  8  8
+9  -11  -1  -11  -11  8  8
+11  -11  -1  14  14  -11  -11
+13  14  1  -11  -11  16  16
+15  16  1  14  14  18  18
+17  18  1  16  16  NULL  NULL
+
 query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select first_value(x) ignore nulls over() from t6;
 
