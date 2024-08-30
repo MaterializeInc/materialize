@@ -229,7 +229,7 @@ impl BlobTraceUpdates {
                     ColumnarRecordsStructuredExt { key, val },
                 );
                 // Recurse at most once, since this data is now structured.
-                self.get_or_make_structured::<K, V>(key_schema, value_schema)
+                self.get_or_make_structured::<K, V>(key_schema, val_schema)
             }
             BlobTraceUpdates::Both(_, structured) => structured,
         }
