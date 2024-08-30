@@ -217,7 +217,7 @@ impl BlobTraceUpdates {
     pub fn get_or_make_structured<K: Codec, V: Codec>(
         &mut self,
         key_schema: &K::Schema,
-        value_schema: &V::Schema,
+        val_schema: &V::Schema,
     ) -> &ColumnarRecordsStructuredExt {
         match self {
             BlobTraceUpdates::Row(records) => {
