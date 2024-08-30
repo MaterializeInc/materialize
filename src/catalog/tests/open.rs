@@ -923,6 +923,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
 
     // Open should be successful without retrying, even though there is an active state.
     let _state = state_builder
+        .clone()
         .unwrap_build()
         .await
         .open(SYSTEM_TIME(), &test_bootstrap_args())
@@ -930,4 +931,12 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .unwrap();
 
     state_handle.await.unwrap();
+
+    // Open again to ensure that we didn't commit an invalid retraction.
+    let _state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .await
+        .unwrap();
 }
