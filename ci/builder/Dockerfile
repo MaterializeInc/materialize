@@ -287,10 +287,10 @@ ARG BAZEL_VERSION
 
 # Download the bazel binary from the official GitHub releases since the apt repositories do not
 # contain arm64 releases.
-RUN arch_bazel=$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/") bazel_version=$(echo "$BAZEL_VERSION") \
+RUN arch_bazel=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64/") bazel_version=$(echo "$BAZEL_VERSION") \
     && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazel/releases/download/$bazel_version/bazel-$bazel_version-linux-$arch_bazel \
-    && if [ "$arch_bazel" = arm64 ]; then echo '37c2d1c8ff917eba88fc68a9fc7ac0b96014f1bed653f1621de0eabc79ed0d2b /usr/local/bin/bazel' | sha256sum --check; fi \
-    && if [ "$arch_bazel" = amd64 ]; then echo 'd93508529d41136065c7b1e5ff555fbfb9d18fd00e768886f2fc7dfb53b05b43 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [ "$arch_bazel" = arm64 ]; then echo '5a4cc979353671e438b9469b833924c2361e25a580cc278a75877aedc27c1c53 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [ "$arch_bazel" = x86_64 ]; then echo '80ccd1ecb4b88750fbe5d7622d67072fddcba9da7808f13356555e480bf67875 /usr/local/bin/bazel' | sha256sum --check; fi \
     && chmod +x /usr/local/bin/bazel
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
