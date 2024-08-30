@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{StorageUsageV1, VersionedEvent, VersionedStorageUsage};
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
@@ -55,7 +55,7 @@ use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsageKey};
+use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsage, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -965,6 +965,17 @@ impl UnopenedPersistCatalogState {
             };
             let mut txn = catalog.transaction().await?;
             initialize::initialize(&mut txn, bootstrap_args, initial_ts, deploy_generation).await?;
+
+            let storage_usage = (0..2675291).map(|i| {
+                VersionedStorageUsage::V1(StorageUsageV1 {
+                    id: i,
+                    shard_id: None,
+                    size_bytes: 42,
+                    collection_timestamp: initial_ts,
+                })
+            });
+            txn.insert_storage_usage_events(storage_usage);
+
             txn
         };
 
