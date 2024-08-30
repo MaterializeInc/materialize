@@ -17,7 +17,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test",
 
 rust_library(
 	name = "mz_balancerd",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"default",
@@ -50,7 +50,7 @@ rust_library(
 
 rust_test(
 	name = "mz_balancerd_lib_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate = ":mz_balancerd",
 	crate_features = [
 		"default",
@@ -119,7 +119,7 @@ rust_doc_test(
 
 rust_test(
 	name = "mz_balancerd_server_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "server",
 	srcs = ["tests/server.rs"],
 	crate_features = [],
@@ -163,7 +163,7 @@ rust_test(
 
 rust_binary(
 	name = "mz_balancerd_bin",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_root = "src/main.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],

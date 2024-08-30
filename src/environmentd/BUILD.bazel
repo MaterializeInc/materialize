@@ -18,7 +18,7 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 rust_library(
 	name = "mz_environmentd",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	srcs = glob(["src/**/*.rs"]),
 	crate_features = [
 		"default",
@@ -87,7 +87,7 @@ rust_library(
 
 rust_test(
 	name = "mz_environmentd_lib_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate = ":mz_environmentd",
 	crate_features = [
 		"default",
@@ -232,7 +232,7 @@ cargo_build_script(
 
 rust_test(
 	name = "mz_environmentd_auth_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "auth",
 	srcs = ["tests/auth.rs"],
 	crate_features = [],
@@ -300,7 +300,7 @@ rust_test(
 
 rust_test(
 	name = "mz_environmentd_cli_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "cli",
 	srcs = ["tests/cli.rs"],
 	crate_features = [],
@@ -368,7 +368,7 @@ rust_test(
 
 rust_test(
 	name = "mz_environmentd_pgwire_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "pgwire",
 	srcs = ["tests/pgwire.rs"],
 	crate_features = [],
@@ -436,7 +436,7 @@ rust_test(
 
 rust_test(
 	name = "mz_environmentd_server_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "server",
 	srcs = ["tests/server.rs"],
 	crate_features = [],
@@ -504,7 +504,7 @@ rust_test(
 
 rust_test(
 	name = "mz_environmentd_sql_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "sql",
 	srcs = ["tests/sql.rs"],
 	crate_features = [],
@@ -572,7 +572,7 @@ rust_test(
 
 rust_test(
 	name = "mz_environmentd_timezones_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "timezones",
 	srcs = ["tests/timezones.rs"],
 	crate_features = [],
@@ -640,7 +640,7 @@ rust_test(
 
 rust_test(
 	name = "mz_environmentd_tracing_tests",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_name = "tracing",
 	srcs = ["tests/tracing.rs"],
 	crate_features = [],
@@ -708,7 +708,7 @@ rust_test(
 
 rust_binary(
 	name = "environmentd",
-	version = "0.115.0-dev.0",
+	version = "0.115.0",
 	crate_root = "src/bin/environmentd/main.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],
