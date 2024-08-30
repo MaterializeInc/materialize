@@ -19,6 +19,7 @@ use futures::future;
 use hyper_util::rt::TokioIo;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cluster::server::ClusterConfig;
 use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_http_util::DynamicFilterTarget;
@@ -291,7 +292,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start storage server.
     let (_storage_server, storage_client) = mz_storage::serve(
-        mz_cluster::server::ClusterConfig {
+        ClusterConfig {
             metrics_registry: metrics_registry.clone(),
             persist_clients: Arc::clone(&persist_clients),
             txns_ctx: txns_ctx.clone(),
@@ -318,7 +319,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start compute server.
     let (_compute_server, compute_client) = mz_compute::server::serve(
-        mz_cluster::server::ClusterConfig {
+        ClusterConfig {
             metrics_registry,
             persist_clients,
             txns_ctx,

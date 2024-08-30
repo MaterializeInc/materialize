@@ -33,6 +33,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::communication::initialize_networking;
+use crate::types::AsRunnableWorker;
 
 type PartitionedClient<C, R, A> = Partitioned<LocalClient<C, R, A>, C, R>;
 
@@ -52,7 +53,7 @@ pub struct ClusterConfig {
 /// A client managing access to the local portion of a Timely cluster
 pub struct ClusterClient<Client, Worker, C, R>
 where
-    Worker: crate::types::AsRunnableWorker<C, R>,
+    Worker: AsRunnableWorker<C, R>,
 {
     /// The actual client to talk to the cluster
     inner: Option<Client>,
@@ -109,7 +110,7 @@ where
     C: Send + 'static,
     R: Send + 'static,
     (C, R): Partitionable<C, R>,
-    Worker: crate::types::AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
+    Worker: AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
 {
     let tokio_executor = tokio::runtime::Handle::current();
     let timely_container = Arc::new(tokio::sync::Mutex::new(None));
@@ -139,7 +140,7 @@ where
     C: Send + 'static,
     R: Send + 'static,
     (C, R): Partitionable<C, R>,
-    Worker: crate::types::AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
+    Worker: AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
 {
     fn new(
         timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
@@ -336,7 +337,7 @@ where
     }
 }
 
-impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
+impl<Client: Debug, Worker: AsRunnableWorker<C, R>, C, R> Debug
     for ClusterClient<Client, Worker, C, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -354,7 +355,7 @@ where
     C: Send + Debug + mz_cluster_client::client::TryIntoTimelyConfig + 'static,
     R: Send + Debug + 'static,
     (C, R): Partitionable<C, R>,
-    Worker: crate::types::AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,
+    Worker: AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,
     Worker::Activatable: Send + Sync + 'static + Debug,
 {
     async fn send(&mut self, cmd: C) -> Result<(), Error> {

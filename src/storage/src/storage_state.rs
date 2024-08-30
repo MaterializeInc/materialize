@@ -78,7 +78,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, Thread};
 
 use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
@@ -135,7 +135,7 @@ pub struct Worker<'w, A: Allocate> {
     pub client_rx: crossbeam_channel::Receiver<(
         CommandReceiver,
         ResponseSender,
-        mpsc::UnboundedSender<std::thread::Thread>,
+        mpsc::UnboundedSender<Thread>,
     )>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
@@ -148,7 +148,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         client_rx: crossbeam_channel::Receiver<(
             CommandReceiver,
             ResponseSender,
-            mpsc::UnboundedSender<std::thread::Thread>,
+            mpsc::UnboundedSender<Thread>,
         )>,
         metrics: StorageMetrics,
         now: NowFn,
