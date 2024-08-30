@@ -79,6 +79,15 @@ pub enum DurableCatalogError {
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
     Storage(StorageError<Timestamp>),
+    /// Catalog encountered an upper mismatch when trying to write to the catalog. This should only
+    /// happen while trying to fence out other catalogs.
+    #[error(
+        "expected catalog upper {expected_upper:?} did not match actual catalog upper {actual_upper:?}"
+    )]
+    UpperMismatch {
+        expected_upper: Timestamp,
+        actual_upper: Timestamp,
+    },
     /// An internal programming error.
     #[error("Internal catalog error: {0}")]
     Internal(String),
@@ -91,7 +100,8 @@ impl DurableCatalogError {
             DurableCatalogError::Fence(_)
             | DurableCatalogError::IncompatibleDataVersion { .. }
             | DurableCatalogError::IncompatiblePersistVersion { .. }
-            | DurableCatalogError::Proto(_) => true,
+            | DurableCatalogError::Proto(_)
+            | DurableCatalogError::UpperMismatch { .. } => true,
             DurableCatalogError::Uninitialized
             | DurableCatalogError::NotWritable(_)
             | DurableCatalogError::DuplicateKey
@@ -128,6 +138,15 @@ impl From<StorageError<Timestamp>> for DurableCatalogError {
 impl From<TryFromProtoError> for DurableCatalogError {
     fn from(e: TryFromProtoError) -> Self {
         DurableCatalogError::Proto(e)
+    }
+}
+
+impl From<UpperMismatch<Timestamp>> for DurableCatalogError {
+    fn from(upper_mismatch: UpperMismatch<Timestamp>) -> Self {
+        Self::UpperMismatch {
+            expected_upper: antichain_to_timestamp(upper_mismatch.expected),
+            actual_upper: antichain_to_timestamp(upper_mismatch.current),
+        }
     }
 }
 
