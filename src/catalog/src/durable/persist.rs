@@ -587,7 +587,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             self.snapshot
                 .windows(2)
                 .all(|updates| updates[0].1 <= updates[1].1),
-            "snapshot should be sorted by timestamp, {:?}",
+            "snapshot should be sorted by timestamp, {:#?}",
             self.snapshot
         );
 
@@ -966,7 +966,7 @@ impl UnopenedPersistCatalogState {
         // updates, then we might accidentally fence ourselves out.
         soft_assert_no_log!(
             snapshot.iter().all(|(_, _, diff)| *diff == 1),
-            "snapshot should be consolidated: {snapshot:?}"
+            "snapshot should be consolidated: {snapshot:#?}"
         );
         let updates = snapshot
             .into_iter()
@@ -1019,40 +1019,38 @@ impl UnopenedPersistCatalogState {
         let read_only = matches!(self.mode, Mode::Readonly);
 
         // Fence out previous catalogs.
-        loop {
-            self.sync_to_current_upper().await?;
-            let prev_epoch = self.epoch.validate()?;
-            let mut fence_updates = Vec::with_capacity(2);
-            if let Some(prev_epoch) = prev_epoch {
-                fence_updates.push((StateUpdateKind::Epoch(prev_epoch), -1));
-            }
-            let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
-            // Only writable catalogs attempt to increment the epoch.
-            if matches!(self.mode, Mode::Writable) {
-                current_epoch = current_epoch + 1;
-            }
-            let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
-            fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
-            let current_epoch = FenceableToken::new(Some(current_epoch), FenceError::epoch);
-            debug!(
-                ?self.upper,
-                ?prev_epoch,
-                ?current_epoch,
-                "fencing previous catalogs"
-            );
-            self.epoch = current_epoch;
-
-            if matches!(self.mode, Mode::Writable) {
-                match self.compare_and_append(fence_updates).await {
+        self.sync_to_current_upper().await?;
+        let prev_epoch = self.epoch.validate()?;
+        let mut fence_updates = Vec::with_capacity(2);
+        if let Some(prev_epoch) = prev_epoch {
+            fence_updates.push((StateUpdateKind::Epoch(prev_epoch), -1));
+        }
+        let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
+        // Only writable catalogs attempt to increment the epoch.
+        if matches!(self.mode, Mode::Writable) {
+            current_epoch = current_epoch + 1;
+        }
+        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
+        fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
+        let current_epoch = FenceableToken::new(Some(current_epoch), FenceError::epoch);
+        debug!(
+            ?self.upper,
+            ?prev_epoch,
+            ?current_epoch,
+            "fencing previous catalogs"
+        );
+        self.epoch = current_epoch;
+        if matches!(self.mode, Mode::Writable) {
+            loop {
+                match self.compare_and_append(fence_updates.clone()).await {
                     Ok(_) => break,
                     Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
                     Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
                         warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                        self.sync_to_current_upper().await?;
                         continue;
                     }
                 }
-            } else {
-                break;
             }
         }
 
@@ -1117,7 +1115,7 @@ impl UnopenedPersistCatalogState {
                     .filter(|(kind, _, _)| !matches!(kind, StateUpdateKind::Epoch(_)))
                     .count(),
                 0,
-                "trace should not contain any updates for an uninitialized catalog: {:?}",
+                "trace should not contain any updates for an uninitialized catalog: {:#?}",
                 catalog.snapshot
             );
             let Some(deploy_generation) = deploy_generation else {
@@ -1526,7 +1524,7 @@ impl DurableCatalogState for PersistCatalogState {
             // semantics that the stash uses.
             if !txn_batch.is_empty() && catalog.is_read_only() {
                 return Err(DurableCatalogError::NotWritable(format!(
-                    "cannot commit a transaction in a read-only catalog: {txn_batch:?}"
+                    "cannot commit a transaction in a read-only catalog: {txn_batch:#?}"
                 ))
                 .into());
             }
@@ -1676,7 +1674,7 @@ async fn snapshot_binary_inner(
         .expect("we have advanced the restart_as_of by the since");
     soft_assert_no_log!(
         snapshot.iter().all(|(_, _, diff)| *diff == 1),
-        "snapshot_and_fetch guarantees a consolidated result: {snapshot:?}"
+        "snapshot_and_fetch guarantees a consolidated result: {snapshot:#?}"
     );
     snapshot
         .into_iter()
