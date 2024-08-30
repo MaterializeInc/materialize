@@ -237,19 +237,25 @@ T = TypeVar("T", bound=int | float)
 
 
 class ReportMeasurement(Generic[T]):
-    result: T
-    min: T
-    max: T
-    mean: T
-    variance: float
+    result: T | None
+    min: T | None
+    max: T | None
+    mean: T | None
+    variance: float | None
 
-    def __init__(self, points: list[T]):
+    def __init__(self, points: list[T | None]):
         self.result = points[0]
-        if self.result is not None:
-            self.min = min(points)
-            self.max = max(points)
-            self.mean = mean(points)
-            self.variance = variance(points)
+        set_points = [point for point in points if point is not None]
+        if self.result is not None and set_points:
+            self.min = min(set_points)
+            self.max = max(set_points)
+            self.mean = mean(set_points)
+            self.variance = variance(set_points)
+        else:
+            self.min = None
+            self.max = None
+            self.mean = None
+            self.variance = None
 
 
 class Report:
