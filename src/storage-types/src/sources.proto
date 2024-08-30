@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (a compatible change: Field "1" on message
+// "ProtoSourceExportDetails" changed type from "google.protobuf.Empty"
+// to "mz_storage_types.sources.kafka.ProtoKafkaSourceExportDetails".)
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
@@ -72,7 +76,7 @@ message ProtoCompression {
 
 message ProtoSourceExportDetails {
     oneof kind {
-        google.protobuf.Empty kafka = 1;
+        mz_storage_types.sources.kafka.ProtoKafkaSourceExportDetails kafka = 1;
         mz_storage_types.sources.postgres.ProtoPostgresSourceExportDetails postgres = 2;
         mz_storage_types.sources.mysql.ProtoMySqlSourceExportDetails mysql = 3;
         mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportDetails loadgen = 4;

@@ -43,6 +43,10 @@ message ProtoKafkaMetadataKind {
     }
 }
 
+message ProtoKafkaSourceExportDetails {
+    repeated ProtoKafkaMetadataColumn metadata_columns = 1;
+}
+
 message ProtoKafkaHeader {
     string key = 1;
     bool use_bytes = 2;
