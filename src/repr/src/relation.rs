@@ -1322,6 +1322,7 @@ mod tests {
     use prost::Message;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn smoktest_at_version() {
         let desc = RelationDesc::builder()
             .with_column("a", ScalarType::Bool.nullable(true))
@@ -1426,6 +1427,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_dropping_columns_with_keys() {
         let desc = RelationDesc::builder()
             .with_column("a", ScalarType::Bool.nullable(true))
@@ -1509,6 +1511,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn roundtrip_relation_desc_without_metadata() {
         let typ = ProtoRelationType {
             column_types: vec![
@@ -1572,6 +1575,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_add_column_with_same_name_prev_dropped() {
         let desc = RelationDesc::builder()
             .with_column("a", ScalarType::Bool.nullable(true))
@@ -1616,6 +1620,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_relation_desc_roundtrips() {
         fn testcase(og: RelationDesc) {
             let bytes = og.into_proto().encode_to_vec();
