@@ -37,11 +37,14 @@ Emulator](/get-started/install-materialize-emulator/) to test locally. However,
 the Materialize Emulator does not provide the full experience of using
 Materialize.
 
-## Step 0. Sign in to Materialize
+## Step 0. Open the SQL Shell or a SQL client.
 
-Navigate to the [Materialize console](https://console.materialize.com/) and sign
-in. By default, you should land in the SQL Shell. If you're already signed in,
-you can access the SQL Shell in the left-hand menu.
+- If you have a Materialize account, navigate to the [Materialize
+  Console](https://console.materialize.com/) and sign in. By default, you should
+  be in the SQL Shell.  If you're already signed in, you can access the SQL Shell in the left-hand menu.
+
+- If you are using the Materialize Emulator, connect to the Materialize Emulator
+  using your preferred SQL client.
 
 ## Step 1. Ingest streaming data
 
@@ -220,8 +223,14 @@ fraudulent accounts.
     CREATE TABLE fraud_accounts (id bigint);
     ```
 
-1. In a new browser window, side-by-side with this one, navigate to the [Materialize console](https://console.materialize.com/),
-   and pop open another SQL Shell.
+1. Open another SQL Shell or SQL client.
+
+   - If using the Materialize Console, in a new browser window, side-by-side
+     with this one, navigate to the [Materialize
+     console](https://console.materialize.com/), and pop open another SQL Shell.
+
+   - If running against the Materialize Emulator, open another instance of your
+     preferred SQL client and connect to the Materialize Emulator.
 
 1. To see results change over time, let's `SUBSCRIBE` to a query that returns
    the Top 5 auction winners, overall.
