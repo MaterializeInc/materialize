@@ -223,7 +223,7 @@ impl BlobTraceUpdates {
             BlobTraceUpdates::Row(records) => {
                 let key = codec_to_schema2::<K>(key_schema, records.keys()).expect("valid keys");
                 let val =
-                    codec_to_schema2::<V>(value_schema, records.vals()).expect("valid values");
+                    codec_to_schema2::<V>(val_schema, records.vals()).expect("valid values");
                 *self = BlobTraceUpdates::Both(
                     records.clone(),
                     ColumnarRecordsStructuredExt { key, val },
