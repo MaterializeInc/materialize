@@ -550,7 +550,7 @@ fn lag_lead_inner_respect_nulls<'a>(
     for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
         if offset.is_null() {
-            result.push(*offset);
+            result.push(Datum::Null);
             continue;
         }
 
@@ -580,49 +580,60 @@ fn lag_lead_inner_respect_nulls<'a>(
     result
 }
 
+// `i64` indexes get involved in this function because it's convenient to allow negative indexes and
+// have `datums_get` fail on them, and thus handle the beginning and end of the input vector
+// uniformly, rather than checking underflow separately during index manipulations.
 #[allow(clippy::as_conversions)]
 fn lag_lead_inner_ignore_nulls<'a>(
     args: Vec<(Datum<'a>, Datum<'a>, Datum<'a>)>,
     lag_lead_type: &LagLeadType,
 ) -> Vec<Datum<'a>> {
+    // We check here once that even the largest index fits in `i64`, and then do silent `as`
+    // conversions from `usize` indexes to `i64` indexes throughout this function.
     if i64::try_from(args.len()).is_err() {
         panic!("window partition way too big")
     }
     // Preparation: Make sure we can jump over a run of nulls in constant time, i.e., regardless of
     // how many nulls the run has. The following skip tables will point to the next non-null index.
-    let mut skip_nulls_backward = Vec::new();
+    let mut skip_nulls_backward = vec![None; args.len()];
     let mut last_non_null: i64 = -1;
-    for (i, (d, _, _)) in args.iter().enumerate() {
+    let pairs = args
+        .iter()
+        .enumerate()
+        .zip_eq(skip_nulls_backward.iter_mut());
+    for ((i, (d, _, _)), slot) in pairs {
         if d.is_null() {
-            skip_nulls_backward.push(Some(i64::cast_from(last_non_null)));
+            *slot = Some(last_non_null);
         } else {
-            skip_nulls_backward.push(None);
             last_non_null = i as i64;
         }
     }
-    let mut skip_nulls_forward = Vec::new();
+    let mut skip_nulls_forward = vec![None; args.len()];
     let mut last_non_null: i64 = args.len() as i64;
-    for (i, (d, _, _)) in args.iter().enumerate().rev() {
+    let pairs = args
+        .iter()
+        .enumerate()
+        .rev()
+        .zip_eq(skip_nulls_forward.iter_mut().rev());
+    for ((i, (d, _, _)), slot) in pairs {
         if d.is_null() {
-            skip_nulls_forward.push(Some(i64::cast_from(last_non_null)));
+            *slot = Some(last_non_null);
         } else {
-            skip_nulls_forward.push(None);
             last_non_null = i as i64;
         }
     }
-    skip_nulls_forward.reverse();
 
     // The actual computation.
     let mut result: Vec<Datum> = Vec::with_capacity(args.len());
     for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
         if offset.is_null() {
-            result.push(*offset);
+            result.push(Datum::Null);
             continue;
         }
 
-        let idx = i64::try_from(idx).expect("Array index does not fit in i64");
-        let offset = i64::from(offset.unwrap_int32());
+        let idx = idx as i64; // checked at the beginning of the function that len() fits
+        let offset = i64::cast_from(offset.unwrap_int32());
         let offset = match lag_lead_type {
             LagLeadType::Lag => -offset,
             LagLeadType::Lead => offset,
@@ -640,55 +651,48 @@ fn lag_lead_inner_ignore_nulls<'a>(
             }
         };
 
-        let lagged_value = {
-            if increment != 0 {
-                // We start j from idx, and step j until we have seen an abs(offset) number of non-null
-                // values or reach the beginning or end of the partition.
-                //
-                // If offset is big, then this is slow: Considering the entire function, it's
-                // `O(partition_size * offset)`.
-                // However, a common use case is an offset of 1, for which this doesn't matter.
-                // TODO: For larger offsets, we could have a completely different implementation
-                // that steps two indexes in one loop, with one index lagging behind.
-                let mut j = idx;
-                for _ in 0..num::abs(offset) {
-                    j += increment;
-                    // Jump over a run of nulls
-                    if datums_get(j).is_some_and(|d| d.is_null()) {
-                        let ju = j as usize;
-                        if increment > 0 {
-                            j = skip_nulls_forward[ju].expect("checked above that it's null");
-                        } else {
-                            j = skip_nulls_backward[ju].expect("checked above that it's null");
-                        }
-                    }
-                    if datums_get(j).is_none() {
-                        break;
+        let lagged_value = if increment != 0 {
+            // We start j from idx, and step j until we have seen an abs(offset) number of non-null
+            // values or reach the beginning or end of the partition.
+            //
+            // If offset is big, then this is slow: Considering the entire function, it's
+            // `O(partition_size * offset)`.
+            // However, a common use case is an offset of 1, for which this doesn't matter.
+            // TODO: For larger offsets, we could have a completely different implementation
+            // that starts the inner loop from the index where we found the previous result:
+            // https://github.com/MaterializeInc/materialize/pull/29287#discussion_r1738695174
+            let mut j = idx;
+            for _ in 0..num::abs(offset) {
+                j += increment;
+                // Jump over a run of nulls
+                if datums_get(j).is_some_and(|d| d.is_null()) {
+                    let ju = j as usize; // `j >= 0` because of the above `is_some_and`
+                    if increment > 0 {
+                        j = skip_nulls_forward[ju].expect("checked above that it's null");
+                    } else {
+                        j = skip_nulls_backward[ju].expect("checked above that it's null");
                     }
                 }
-                match datums_get(j) {
-                    Some(datum) => datum,
-                    None => *default_value,
+                if datums_get(j).is_none() {
+                    break;
                 }
+            }
+            match datums_get(j) {
+                Some(datum) => datum,
+                None => *default_value,
+            }
+        } else {
+            assert_eq!(offset, 0);
+            let datum = datums_get(idx).expect("known to exist");
+            if !datum.is_null() {
+                datum
             } else {
-                assert_eq!(offset, 0);
-                match datums_get(idx) {
-                    Some(datum) => {
-                        if !datum.is_null() {
-                            datum
-                        } else {
-                            // I can imagine returning here either `default_value` or `null`.
-                            // (I'm leaning towards `default_value`.)
-                            // We used to run into an infinite loop in this case, so panicking is
-                            // better. Started a SQL Council thread:
-                            // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
-                            panic!("0 offset in lag/lead IGNORE NULLS");
-                        }
-                    }
-                    None => {
-                        unreachable!()
-                    }
-                }
+                // I can imagine returning here either `default_value` or `null`.
+                // (I'm leaning towards `default_value`.)
+                // We used to run into an infinite loop in this case, so panicking is
+                // better. Started a SQL Council thread:
+                // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+                panic!("0 offset in lag/lead IGNORE NULLS");
             }
         };
 

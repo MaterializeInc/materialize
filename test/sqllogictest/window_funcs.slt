@@ -2276,7 +2276,7 @@ create table t6(x int, y int);
 statement ok
 insert into t6 values (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18);
 
-query IIIIIIIIIIIIIIIII
+query IIIIIIIIIIIIIIIIIIII
 select
   x,
   y,
@@ -2294,23 +2294,26 @@ select
   lag(y, 2, 16) ignore nulls over (order by x) as lag2_ign_def16,
   lead(y, 2, 16) ignore nulls over (order by x) as lead2_ign_def16,
   lag(y, -1, 100) ignore nulls over (order by x) as lag_neg_offset,
-  lead(y, -2, 100) ignore nulls over (order by x) as lead_neg_offset
+  lead(y, -2, 100) ignore nulls over (order by x) as lead_neg_offset,
+  lag(y, y/5+1) ignore nulls over (order by x) as lag_dynamic_offset,
+  lead(y, y/5+1) ignore nulls over (order by x) as lead_dynamic_offset,
+  lag(y, null) ignore nulls over (order by x) as lag_literal_null_offset
 from t6
 order by x;
 ----
-1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8  6  100
-3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8  6  100
-5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14  8  100
-7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16  14  2
-9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16  14  6
-11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16  14  6
-13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18  16  6
-15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16  18  8
-17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16  100  14
+1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8  6  100  NULL  6  NULL
+3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8  6  100  NULL  NULL  NULL
+5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14  8  100  NULL  14  NULL
+7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16  14  2  2  16  NULL
+9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16  14  6  NULL  NULL  NULL
+11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16  14  6  NULL  NULL  NULL
+13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18  16  6  2  NULL  NULL
+15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16  18  8  2  NULL  NULL
+17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16  100  14  6  NULL  NULL
 
 # Same as above, but with a `partition by`
 
-query IIIIIIIIIIIIIIIII
+query IIIIIIIIIIIIIIIIIIII
 select
   x,
   y,
@@ -2328,19 +2331,22 @@ select
   lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
   lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16,
   lag(y, -1, 100) ignore nulls over (partition by x%4 order by x) as lag_neg_offset,
-  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset
+  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset,
+  lag(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lag_dynamic_offset,
+  lead(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lead_dynamic_offset,
+  lag(y, null) ignore nulls over (partition by x%4 order by x) as lag_literal_null_offset
 from t6
 order by x%4, x;
 ----
-1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100
-5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100
-9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2
-13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2
-17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6
-3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100
-7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100
-11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100
-15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100
+1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100  NULL  6  NULL
+5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100  NULL  18  NULL
+9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2  NULL  NULL  NULL
+13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2  NULL  NULL  NULL
+17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6  NULL  NULL  NULL
+3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100  NULL  NULL  NULL
+7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100  NULL  NULL  NULL
 
 statement ok
 CREATE VIEW t6_more_nulls AS
@@ -2371,6 +2377,39 @@ order by x;
 13  NULL  6  2  NULL  16  18  NULL
 15  16  6  2  NULL  18  NULL  NULL
 17  18  16  6  2  NULL  NULL  NULL
+
+# Test the `offset = 0` code path. This currently doesn't work with nulls if IGNORE NULLS is specified,
+# so we just filter out nulls for now.
+# See https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+# Also tests negative dynamic offsets.
+statement ok
+CREATE VIEW t6_no_nulls AS
+SELECT
+  x,
+  COALESCE(y,-11) AS y
+FROM t6;
+
+query IIIIIII
+SELECT
+  x,
+  y,
+  y/10,
+  lag(y, y/10) OVER (ORDER BY x),
+  lag(y, y/10) IGNORE NULLS OVER (ORDER BY x),
+  lead(y, y/10) OVER (ORDER BY x),
+  lead(y, y/10) IGNORE NULLS OVER (ORDER BY x)
+FROM t6_no_nulls
+ORDER BY x;
+----
+1  2  0  2  2  2  2
+3  -11  -1  6  6  2  2
+5  6  0  6  6  6  6
+7  8  0  8  8  8  8
+9  -11  -1  -11  -11  8  8
+11  -11  -1  14  14  -11  -11
+13  14  1  -11  -11  16  16
+15  16  1  14  14  18  18
+17  18  1  16  16  NULL  NULL
 
 query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select first_value(x) ignore nulls over() from t6;
