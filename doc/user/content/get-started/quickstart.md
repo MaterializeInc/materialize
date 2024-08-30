@@ -696,7 +696,7 @@ data comes in, this step creates the following views for completed auctions:
    for example, you frequently serve results directly from a source, you can
    also create indexes on sources to maintain in-memory up-to-date source data
    within the cluster.
-   
+
    1. For example, run the following queries on `bids` without an index:
 
       ```mzsql
@@ -754,7 +754,7 @@ This quickstart created an index on a view to maintain in-memory up-to-date
 results in the cluster. In Materialize, both indexes on views and materialized
 views incrementally update the view results. Indexes maintain the view results
 in memory within a cluster while the materialized views persist the query
-results in durable storage and is available across clusters. 
+results in durable storage and is available across clusters.
 
 {{% views-indexes/table-usage-pattern %}}
 
