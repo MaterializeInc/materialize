@@ -2369,16 +2369,10 @@ impl Coordinator {
                 self.catalog().resolve_full_name(system_table.name(), None),
                 id,
             );
-            let current_contents_fut = self
-                .controller
-                .storage
-                .snapshot_async(id, read_ts)
-                .await
-                .unwrap_or_terminate("cannot fail to fetch snapshot");
+            let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
             let task = spawn(|| format!("snapshot-{}", id), async move {
                 let current_contents = current_contents_fut
                     .await
-                    .expect("sender hung up")
                     .unwrap_or_terminate("cannot fail to fetch snapshot");
                 debug!(
                     "coordinator init: table ({}) size {}",

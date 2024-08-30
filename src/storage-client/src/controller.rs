@@ -593,22 +593,11 @@ pub trait StorageController: Debug {
     ) -> Result<Arc<WebhookStatistics>, StorageError<Self::Timestamp>>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
-    async fn snapshot(
+    fn snapshot(
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>;
-
-    /// Returns a future that returns the snapshot of the contents of the local input named `id` at
-    /// `as_of`.
-    async fn snapshot_async(
-        &mut self,
-        id: GlobalId,
-        as_of: Self::Timestamp,
-    ) -> Result<
-        oneshot::Receiver<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>,
-        StorageError<Self::Timestamp>,
-    >;
+    ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>;
 
     /// Returns the snapshot of the contents of the local input named `id` at
     /// the largest readable `as_of`.
