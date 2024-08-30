@@ -651,49 +651,48 @@ fn lag_lead_inner_ignore_nulls<'a>(
             }
         };
 
-        let lagged_value = {
-            if increment != 0 {
-                // We start j from idx, and step j until we have seen an abs(offset) number of non-null
-                // values or reach the beginning or end of the partition.
-                //
-                // If offset is big, then this is slow: Considering the entire function, it's
-                // `O(partition_size * offset)`.
-                // However, a common use case is an offset of 1, for which this doesn't matter.
-                // TODO: For larger offsets, we could have a completely different implementation
-                // that steps two indexes in one loop, with one index lagging behind.
-                let mut j = idx;
-                for _ in 0..num::abs(offset) {
-                    j += increment;
-                    // Jump over a run of nulls
-                    if datums_get(j).is_some_and(|d| d.is_null()) {
-                        let ju = j as usize; // `j >= 0` because of the above `is_some_and`
-                        if increment > 0 {
-                            j = skip_nulls_forward[ju].expect("checked above that it's null");
-                        } else {
-                            j = skip_nulls_backward[ju].expect("checked above that it's null");
-                        }
-                    }
-                    if datums_get(j).is_none() {
-                        break;
+        let lagged_value = if increment != 0 {
+            // We start j from idx, and step j until we have seen an abs(offset) number of non-null
+            // values or reach the beginning or end of the partition.
+            //
+            // If offset is big, then this is slow: Considering the entire function, it's
+            // `O(partition_size * offset)`.
+            // However, a common use case is an offset of 1, for which this doesn't matter.
+            // TODO: For larger offsets, we could have a completely different implementation
+            // that starts the inner loop from the index where we found the previous result:
+            // https://github.com/MaterializeInc/materialize/pull/29287#discussion_r1738695174
+            let mut j = idx;
+            for _ in 0..num::abs(offset) {
+                j += increment;
+                // Jump over a run of nulls
+                if datums_get(j).is_some_and(|d| d.is_null()) {
+                    let ju = j as usize; // `j >= 0` because of the above `is_some_and`
+                    if increment > 0 {
+                        j = skip_nulls_forward[ju].expect("checked above that it's null");
+                    } else {
+                        j = skip_nulls_backward[ju].expect("checked above that it's null");
                     }
                 }
-                match datums_get(j) {
-                    Some(datum) => datum,
-                    None => *default_value,
+                if datums_get(j).is_none() {
+                    break;
                 }
+            }
+            match datums_get(j) {
+                Some(datum) => datum,
+                None => *default_value,
+            }
+        } else {
+            assert_eq!(offset, 0);
+            let datum = datums_get(idx).expect("known to exist");
+            if !datum.is_null() {
+                datum
             } else {
-                assert_eq!(offset, 0);
-                let datum = datums_get(idx).expect("known to exist");
-                if !datum.is_null() {
-                    datum
-                } else {
-                    // I can imagine returning here either `default_value` or `null`.
-                    // (I'm leaning towards `default_value`.)
-                    // We used to run into an infinite loop in this case, so panicking is
-                    // better. Started a SQL Council thread:
-                    // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
-                    panic!("0 offset in lag/lead IGNORE NULLS");
-                }
+                // I can imagine returning here either `default_value` or `null`.
+                // (I'm leaning towards `default_value`.)
+                // We used to run into an infinite loop in this case, so panicking is
+                // better. Started a SQL Council thread:
+                // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+                panic!("0 offset in lag/lead IGNORE NULLS");
             }
         };
 
