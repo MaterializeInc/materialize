@@ -550,7 +550,7 @@ fn lag_lead_inner_respect_nulls<'a>(
     for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
         if offset.is_null() {
-            result.push(*offset);
+            result.push(Datum::Null);
             continue;
         }
 
@@ -590,34 +590,40 @@ fn lag_lead_inner_ignore_nulls<'a>(
     }
     // Preparation: Make sure we can jump over a run of nulls in constant time, i.e., regardless of
     // how many nulls the run has. The following skip tables will point to the next non-null index.
-    let mut skip_nulls_backward = Vec::new();
+    let mut skip_nulls_backward = vec![None; args.len()];
     let mut last_non_null: i64 = -1;
-    for (i, (d, _, _)) in args.iter().enumerate() {
+    let pairs = args
+        .iter()
+        .enumerate()
+        .zip_eq(skip_nulls_backward.iter_mut());
+    for ((i, (d, _, _)), slot) in pairs {
         if d.is_null() {
-            skip_nulls_backward.push(Some(i64::cast_from(last_non_null)));
+            *slot = Some(i64::cast_from(last_non_null));
         } else {
-            skip_nulls_backward.push(None);
             last_non_null = i as i64;
         }
     }
-    let mut skip_nulls_forward = Vec::new();
+    let mut skip_nulls_forward = vec![None; args.len()];
     let mut last_non_null: i64 = args.len() as i64;
-    for (i, (d, _, _)) in args.iter().enumerate().rev() {
+    let pairs = args
+        .iter()
+        .enumerate()
+        .rev()
+        .zip_eq(skip_nulls_forward.iter_mut().rev());
+    for ((i, (d, _, _)), slot) in pairs {
         if d.is_null() {
-            skip_nulls_forward.push(Some(i64::cast_from(last_non_null)));
+            *slot = Some(i64::cast_from(last_non_null));
         } else {
-            skip_nulls_forward.push(None);
             last_non_null = i as i64;
         }
     }
-    skip_nulls_forward.reverse();
 
     // The actual computation.
     let mut result: Vec<Datum> = Vec::with_capacity(args.len());
     for (idx, (_, offset, default_value)) in args.iter().enumerate() {
         // Null offsets are acceptable, and always return null
         if offset.is_null() {
-            result.push(*offset);
+            result.push(Datum::Null);
             continue;
         }
 
