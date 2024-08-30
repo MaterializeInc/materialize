@@ -15,7 +15,7 @@
 set -euo pipefail
 
 arch=$(uname -m)
-arch=$(echo $arch | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/" )
+arch=$(echo "$arch" | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/" )
 
 # Install APT dependencies.
 apt-get update
