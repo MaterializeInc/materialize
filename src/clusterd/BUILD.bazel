@@ -18,7 +18,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 
 rust_binary(
 	name = "clusterd",
-	version = "0.115.0-dev.0",
+	version = "0.116.0-dev.0",
 	crate_root = "src/bin/clusterd.rs",
 	srcs = glob(["src/**/*.rs"]),
 	features = [],
