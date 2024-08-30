@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::thread::Thread;
 
-use mz_cluster::server::{ClusterConfig, TimelyContainerRef};
+use mz_cluster::server::{ClusterClient, ClusterConfig};
 use mz_cluster::types::AsRunnableWorker;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
@@ -23,13 +23,14 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::metrics::StorageMetrics;
 use crate::storage_state::{StorageInstanceContext, Worker};
 
 /// Configures a dataflow server.
-#[derive(Clone)]
+#[derive(Clone, derivative::Derivative)]
+#[derivative(Debug)]
 pub struct Config {
     /// Function to get wall time now.
     pub now: NowFn,
@@ -41,6 +42,7 @@ pub struct Config {
     /// Metrics for storage
     pub metrics: StorageMetrics,
     /// Shared rocksdb write buffer manager
+    #[derivative(Debug = "ignore")]
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
@@ -57,13 +59,7 @@ pub fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-) -> Result<
-    (
-        TimelyContainerRef<StorageCommand, StorageResponse, Thread>,
-        impl Fn() -> Box<dyn StorageClient>,
-    ),
-    anyhow::Error,
-> {
+) -> Box<dyn StorageClient> {
     // Various metrics related things.
     let metrics = StorageMetrics::register_with(&generic_config.metrics_registry);
 
@@ -75,23 +71,13 @@ pub fn serve(
         instance_context,
         metrics,
         // The shared RocksDB `WriteBufferManager` is shared between the workers.
-        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the first worker attempts to initialize it.
+        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
+        // first worker attempts to initialize it.
         shared_rocksdb_write_buffer_manager,
     };
 
-    let (timely_container, client_builder) = mz_cluster::server::serve::<
-        Config,
-        StorageCommand,
-        StorageResponse,
-    >(generic_config, config)?;
-    let client_builder = {
-        move || {
-            let client: Box<dyn StorageClient> = client_builder();
-            client
-        }
-    };
-
-    Ok((timely_container, client_builder))
+    let client = ClusterClient::new(generic_config, config);
+    Box::new(client)
 }
 
 impl AsRunnableWorker<StorageCommand, StorageResponse> for Config {
@@ -100,18 +86,17 @@ impl AsRunnableWorker<StorageCommand, StorageResponse> for Config {
     fn build_and_run<A: timely::communication::Allocate>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        (command_rx, response_tx, activator_tx): (
             crossbeam_channel::Receiver<StorageCommand>,
             mpsc::UnboundedSender<StorageResponse>,
-            mpsc::UnboundedSender<Thread>,
-        )>,
+            oneshot::Sender<Thread>,
+        ),
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
             timely_worker,
-            client_rx,
             config.metrics,
             config.now.clone(),
             config.connection_context,
@@ -121,6 +106,6 @@ impl AsRunnableWorker<StorageCommand, StorageResponse> for Config {
             tracing_handle,
             config.shared_rocksdb_write_buffer_manager,
         )
-        .run();
+        .run(command_rx, response_tx, activator_tx);
     }
 }

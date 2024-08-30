@@ -105,7 +105,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -130,13 +130,6 @@ pub struct Worker<'w, A: Allocate> {
     ///
     /// NOTE: This is `pub` for testing.
     pub timely_worker: &'w mut TimelyWorker<A>,
-    /// The channel over which communication handles for newly connected clients
-    /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(
-        CommandReceiver,
-        ResponseSender,
-        mpsc::UnboundedSender<Thread>,
-    )>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -145,11 +138,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
         timely_worker: &'w mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
-            CommandReceiver,
-            ResponseSender,
-            mpsc::UnboundedSender<Thread>,
-        )>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -242,7 +230,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // internal to the worker/not be exposed to source/sink implementations.
         Self {
             timely_worker,
-            client_rx,
             storage_state,
         }
     }
@@ -325,13 +312,15 @@ pub struct StorageState {
 /// Extra context for a storage instance.
 /// This is extra information that is used when rendering source
 /// and sinks that is not tied to the source/connection configuration itself.
-#[derive(Clone)]
+#[derive(Clone, derivative::Derivative)]
+#[derivative(Debug)]
 pub struct StorageInstanceContext {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
     /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
     /// across sources!). This `Env` lets us control some resources (like background threads)
     /// process-wide.
+    #[derivative(Debug = "ignore")]
     pub rocksdb_env: rocksdb::Env,
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
@@ -363,21 +352,17 @@ impl StorageInstanceContext {
 
 impl<'w, A: Allocate> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
-    pub fn run(&mut self) {
-        let mut shutdown = false;
-        while !shutdown {
-            match self.client_rx.recv() {
-                Ok((rx, tx, activator_tx)) => {
-                    // This might fail if the client has already shut down, which is fine.
-                    // `run_client` knows how to handle a disconnected client.
-                    let _ = activator_tx.send(std::thread::current());
-                    self.run_client(rx, tx)
-                }
-                Err(_) => {
-                    shutdown = true;
-                }
-            }
-        }
+    pub fn run(
+        &mut self,
+        command_rx: crossbeam_channel::Receiver<StorageCommand>,
+        response_tx: mpsc::UnboundedSender<StorageResponse>,
+        activator_tx: oneshot::Sender<Thread>,
+    ) {
+        // This might fail if the client has already shut down, which is fine.
+        // `run_client` knows how to handle a disconnected client.
+        let _ = activator_tx.send(std::thread::current());
+
+        self.run_client(command_rx, response_tx);
     }
 
     /// Runs this (timely) storage worker until the given `command_rx` is

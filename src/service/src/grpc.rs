@@ -242,20 +242,17 @@ where
 /// The implementation of the bidirectional stream method should call
 /// [`GrpcServer::forward_bidi_stream`] to stitch the bidirectional stream to
 /// the client underlying this server.
-pub struct GrpcServer<F> {
-    state: Arc<GrpcServerState<F>>,
+pub struct GrpcServer<G> {
+    state: Arc<GrpcServerState<G>>,
 }
 
-struct GrpcServerState<F> {
+struct GrpcServerState<G> {
     cancel_tx: Mutex<oneshot::Sender<()>>,
-    client_builder: F,
+    client: Mutex<G>,
     metrics: PerGrpcServerMetrics,
 }
 
-impl<F, G> GrpcServer<F>
-where
-    F: Fn() -> G + Send + Sync + 'static,
-{
+impl<G> GrpcServer<G> {
     /// Starts the server, listening for gRPC connections on `listen_addr`.
     ///
     /// The trait bounds on `S` are intimidating, but it is the return type of
@@ -268,7 +265,7 @@ where
         metrics: &GrpcServerMetrics,
         listen_addr: SocketAddr,
         version: Version,
-        client_builder: F,
+        client: G,
         service_builder: Fs,
     ) -> impl Future<Output = Result<(), anyhow::Error>>
     where
@@ -286,7 +283,7 @@ where
         let (cancel_tx, _cancel_rx) = oneshot::channel();
         let state = GrpcServerState {
             cancel_tx: Mutex::new(cancel_tx),
-            client_builder,
+            client: Mutex::new(client),
             metrics: metrics.for_server(S::NAME),
         };
         let server = Self {
@@ -339,12 +336,13 @@ where
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         *self.state.cancel_tx.lock().await = cancel_tx;
 
-        // Construct a new client and forward commands and responses until
-        // canceled.
         let mut request = request.into_inner();
         let state = Arc::clone(&self.state);
         let stream = stream! {
-            let mut client = (state.client_builder)();
+            // Take control of the underlying client. We'll hold onto it until either the
+            // connection drops or a new connection cancels us.
+            let mut client = state.client.lock().await;
+
             loop {
                 select! {
                     command = request.next() => {

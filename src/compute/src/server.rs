@@ -17,9 +17,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_cluster::server::{ClusterConfig, TimelyContainerRef};
+use mz_cluster::server::{ClusterClient, ClusterConfig};
 use mz_cluster::types::AsRunnableWorker;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -39,8 +38,8 @@ use timely::dataflow::operators::Operator;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{info, trace, warn};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
@@ -70,32 +69,12 @@ pub struct Config {
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
-pub fn serve(
-    config: ClusterConfig,
-    context: ComputeInstanceContext,
-) -> Result<
-    (
-        TimelyContainerRef<ComputeCommand, ComputeResponse, SyncActivator>,
-        impl Fn() -> Box<dyn ComputeClient>,
-    ),
-    Error,
-> {
+pub fn serve(config: ClusterConfig, context: ComputeInstanceContext) -> Box<dyn ComputeClient> {
     let metrics = ComputeMetrics::register_with(&config.metrics_registry);
     let compute_config = Config { metrics, context };
 
-    let (timely_container, client_builder) = mz_cluster::server::serve::<
-        Config,
-        ComputeCommand,
-        ComputeResponse,
-    >(config, compute_config)?;
-    let client_builder = {
-        move || {
-            let client: Box<dyn ComputeClient> = client_builder();
-            client
-        }
-    };
-
-    Ok((timely_container, client_builder))
+    let client = ClusterClient::new(config, compute_config);
+    Box::new(client)
 }
 
 /// Endpoint used by workers to receive compute commands.
@@ -178,13 +157,6 @@ impl CommandReceiverQueue {
 struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
-    /// The channel over which communication handles for newly connected clients
-    /// are delivered.
-    client_rx: crossbeam_channel::Receiver<(
-        crossbeam_channel::Receiver<ComputeCommand>,
-        mpsc::UnboundedSender<ComputeResponse>,
-        mpsc::UnboundedSender<SyncActivator>,
-    )>,
     compute_state: Option<ComputeState>,
     /// Compute metrics.
     metrics: ComputeMetrics,
@@ -204,11 +176,11 @@ impl AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
     fn build_and_run<A: Allocate + 'static>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        (command_rx, response_tx, activator_tx): (
             crossbeam_channel::Receiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
-            mpsc::UnboundedSender<SyncActivator>,
-        )>,
+            oneshot::Sender<SyncActivator>,
+        ),
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
@@ -219,7 +191,6 @@ impl AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
 
         Worker {
             timely_worker,
-            client_rx,
             metrics: config.metrics,
             context: config.context,
             persist_clients,
@@ -227,7 +198,7 @@ impl AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
             compute_state: None,
             tracing_handle,
         }
-        .run()
+        .run(command_rx, response_tx, activator_tx);
     }
 }
 
@@ -276,19 +247,6 @@ fn set_core_affinity(_worker_id: usize) {
 }
 
 impl<'w, A: Allocate + 'static> Worker<'w, A> {
-    /// Waits for client connections and runs them to completion.
-    pub fn run(&mut self) {
-        let mut shutdown = false;
-        while !shutdown {
-            match self.client_rx.recv() {
-                Ok((rx, tx, activator_tx)) => {
-                    self.setup_channel_and_run_client(rx, tx, activator_tx)
-                }
-                Err(_) => shutdown = true,
-            }
-        }
-    }
-
     fn split_command<T: Timestamp>(
         command: ComputeCommand<T>,
         parts: usize,
@@ -332,11 +290,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    fn setup_channel_and_run_client(
+    fn run(
         &mut self,
         command_rx: crossbeam_channel::Receiver<ComputeCommand>,
         response_tx: mpsc::UnboundedSender<ComputeResponse>,
-        activator_tx: mpsc::UnboundedSender<SyncActivator>,
+        activator_tx: oneshot::Sender<SyncActivator>,
     ) {
         let cmd_queue = Rc::new(RefCell::new(
             VecDeque::<Result<ComputeCommand, TryRecvError>>::new(),
