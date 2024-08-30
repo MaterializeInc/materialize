@@ -62,7 +62,7 @@ not suitable for production deployments</redb>.
    been already downloaded.
 
    ```sh
-   docker run -d -p 6875:6875 -p 6876:6876 materialize/materialized:{{< version >}}
+   docker run -d -p 6875:6875 -p 6876:6876 materialize/materialized
    ```
 
    When running locally:
