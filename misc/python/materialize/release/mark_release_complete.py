@@ -19,6 +19,7 @@ from materialize.release.util import doc_file_path
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("release_version")
+    parser.add_argument("patch")
     args = parser.parse_args()
 
     remote = git.get_remote()
@@ -27,7 +28,7 @@ def main():
     release_version_doc_file = doc_file_path(args.release_version)
     release_version_doc_file.write_text(
         release_version_doc_file.read_text().replace(
-            "released: false", "released: true"
+            "released: false", f"released: true\npatch: {args.patch}"
         )
     )
     git.add_file(str(release_version_doc_file))
