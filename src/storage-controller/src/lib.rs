@@ -81,8 +81,8 @@ use mz_txn_wal::txns::TxnsHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::mpsc;
 use tokio::sync::watch::{channel, Sender};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
@@ -1584,14 +1584,31 @@ where
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>> {
+        self.snapshot_async(id, as_of)
+            .await?
+            .await
+            .expect("sender hung up")
+    }
+
+    async fn snapshot_async(
+        &mut self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<
+        oneshot::Receiver<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    > {
         let metadata = &self.storage_collections.collection_metadata(id)?;
-        let contents = match metadata.txns_shard.as_ref() {
+        let contents_fut = match metadata.txns_shard.as_ref() {
             None => {
                 // We're not using txn-wal for tables, so we can take a snapshot directly.
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                read_handle
-                    .snapshot_and_fetch(Antichain::from_elem(as_of))
-                    .await
+                async move {
+                    read_handle
+                        .snapshot_and_fetch(Antichain::from_elem(as_of))
+                        .await
+                }
+                .boxed()
             }
             Some(txns_id) => {
                 // We _are_ using txn-wal for tables. It advances the physical upper of the
@@ -1614,22 +1631,37 @@ where
                     .data_snapshot(metadata.data_shard, as_of.clone())
                     .await;
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                data_snapshot.snapshot_and_fetch(&mut read_handle).await
+                async move { data_snapshot.snapshot_and_fetch(&mut read_handle).await }.boxed()
             }
         };
-        match contents {
-            Ok(contents) => {
-                let mut snapshot = Vec::with_capacity(contents.len());
-                for ((data, _), _, diff) in contents {
-                    // TODO(petrosagg): We should accumulate the errors too and let the user
-                    // interprret the result
-                    let row = data.expect("invalid protobuf data").0?;
-                    snapshot.push((row, diff));
+        let (tx, rx) = oneshot::channel();
+        mz_ore::task::spawn(|| format!("snapshot-{id}"), async move {
+            let contents = contents_fut.await;
+            let res = match contents {
+                Ok(contents) => {
+                    let mut snapshot = Vec::with_capacity(contents.len());
+                    for ((data, _), _, diff) in contents {
+                        // TODO(petrosagg): We should accumulate the errors too and let the user
+                        // interpret the result
+                        match data.expect("invalid protobuf data").0 {
+                            Ok(row) => snapshot.push((row, diff)),
+                            Err(e) => {
+                                // Not an error if the receiver hung up.
+                                let _ = tx.send(Err(e.into()));
+                                return;
+                            }
+                        }
+                    }
+                    Ok(snapshot)
                 }
-                Ok(snapshot)
-            }
-            Err(_) => Err(StorageError::ReadBeforeSince(id)),
-        }
+                Err(_) => Err(StorageError::ReadBeforeSince(id)),
+            };
+
+            // Not an error if the receiver hung up.
+            let _ = tx.send(res);
+        });
+
+        Ok(rx)
     }
 
     async fn snapshot_latest(
@@ -3523,7 +3555,7 @@ where
 
         // We create a new read handle every time someone requests a snapshot and then immediately
         // expire it instead of keeping a read handle permanently in our state to avoid having it
-        // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
+        // heartbeat continuously. The assumption is that calls to snapshot are rare and therefore
         // worth it to always create a new handle.
         let read_handle = persist_client
             .open_leased_reader::<SourceData, (), _, _>(
