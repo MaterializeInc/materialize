@@ -712,7 +712,8 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
 
     open_panics = {}
     for line in iter(data.readline, b""):
-        line = line.rstrip(b"\n")
+        # Don't try to match regexes on HUGE lines, since it can take too long
+        line = line.rstrip(b"\n")[:8192]
         if match := PANIC_IN_SERVICE_START_RE.match(line):
             service = match.group("service")
             assert (
