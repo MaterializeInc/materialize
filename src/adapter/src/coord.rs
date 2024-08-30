@@ -2196,8 +2196,15 @@ impl Coordinator {
             futures::future::ready(()).boxed()
         };
 
+        info!(
+            "startup: coordinator init: bootstrap: postamble complete in {:?}",
+            postamble_start.elapsed()
+        );
+
+        let builtin_update_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: generate builtin updates beginning");
         let builtin_updates_fut = if self.controller.read_only() {
-            info!("startup: coordinator init: bootstrap: stashing builtin table updates while in read-only mode");
+            info!("coordinator init: bootstrap: stashing builtin table updates while in read-only mode");
 
             self.buffered_builtin_table_updates
                 .as_mut()
@@ -2208,7 +2215,13 @@ impl Coordinator {
         } else {
             self.bootstrap_tables(&entries, builtin_table_updates).await
         };
+        info!(
+            "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
+            builtin_update_start.elapsed()
+        );
 
+        let cleanup_secrets_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: generate secret cleanup beginning");
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
@@ -2270,10 +2283,9 @@ impl Coordinator {
                 }
             }
         };
-
         info!(
-            "startup: coordinator init: bootstrap: postamble complete in {:?}",
-            postamble_start.elapsed()
+            "startup: coordinator init: bootstrap: generate secret cleanup complete in {:?}",
+            cleanup_secrets_start.elapsed()
         );
 
         // Run all of our final steps concurrently.
@@ -2347,28 +2359,41 @@ impl Coordinator {
             entry.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
                 && entry.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
         };
+        let mut retraction_tasks = Vec::new();
         for system_table in entries.iter().filter(|entry| {
             entry.is_table() && entry.id().is_system() && !is_storage_usage_by_shard(entry)
         }) {
+            let id = system_table.id();
             debug!(
                 "coordinator init: resetting system table {} ({})",
                 self.catalog().resolve_full_name(system_table.name(), None),
-                system_table.id()
+                id,
             );
-            let current_contents = self
-                .controller
-                .storage
-                .snapshot(system_table.id(), read_ts)
-                .await
-                .unwrap_or_terminate("cannot fail to fetch snapshot");
-            debug!("coordinator init: table size {}", current_contents.len());
-            let retractions = current_contents
-                .into_iter()
-                .map(|(row, diff)| BuiltinTableUpdate {
-                    id: system_table.id(),
-                    row,
-                    diff: diff.neg(),
-                });
+            let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
+            let task = spawn(|| format!("snapshot-{}", id), async move {
+                let current_contents = current_contents_fut
+                    .await
+                    .unwrap_or_terminate("cannot fail to fetch snapshot");
+                debug!(
+                    "coordinator init: table ({}) size {}",
+                    id,
+                    current_contents.len()
+                );
+                current_contents
+                    .into_iter()
+                    .map(|(row, diff)| BuiltinTableUpdate {
+                        id,
+                        row,
+                        diff: diff.neg(),
+                    })
+                    .collect::<Vec<_>>()
+            });
+            retraction_tasks.push(task);
+        }
+
+        let retractions_res = futures::future::join_all(retraction_tasks).await;
+        for retractions in retractions_res {
+            let retractions = retractions.expect("cannot fail to fetch snapshot");
             builtin_table_updates.extend(retractions);
         }
 
