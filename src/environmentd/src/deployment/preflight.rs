@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use mz_adapter::ResultExt;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
 use mz_ore::channel::trigger;
 use mz_ore::exit;
@@ -59,7 +59,7 @@ pub async fn preflight_legacy(
         catalog_metrics,
         hydration_max_wait: _,
     }: PreflightInput,
-) -> Result<Box<dyn OpenableDurableCatalogState>, anyhow::Error> {
+) -> Result<Box<dyn OpenableDurableCatalogState>, CatalogError> {
     tracing::info!("Requested deploy generation {deploy_generation}");
 
     if !openable_adapter_storage.is_initialized().await? {
@@ -99,7 +99,8 @@ pub async fn preflight_legacy(
                 .await?);
             }
             Err(e) => {
-                return Err(anyhow!(e).context("Catalog upgrade would have failed with this error"))
+                tracing::warn!(error = %e, "catalog upgrade would have failed");
+                return Err(e);
             }
         }
 
@@ -141,7 +142,7 @@ pub async fn preflight_0dt(
         catalog_metrics,
         hydration_max_wait,
     }: PreflightInput,
-) -> Result<PreflightOutput, anyhow::Error> {
+) -> Result<PreflightOutput, CatalogError> {
     info!(%deploy_generation, ?hydration_max_wait, "performing 0dt preflight checks");
 
     if !openable_adapter_storage.is_initialized().await? {
@@ -206,12 +207,7 @@ pub async fn preflight_0dt(
                     },
                 )
                 .await
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "unexpected error while fencing out old deployment: {:?}",
-                        error
-                    )
-                });
+                .unwrap_or_terminate("unexpected error while fencing out old deployment");
 
             // Reboot as the leader.
             halt!("fenced out old deployment; rebooting as leader")

@@ -9,13 +9,14 @@
 
 use std::fmt::Debug;
 
+use mz_catalog::durable::{DurableCatalogError, FenceError};
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
     SubscribeTargetError,
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{halt, soft_assert_no_log};
+use mz_ore::{exit, halt, soft_assert_no_log};
 use mz_repr::{RelationDesc, RowIterator, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
@@ -265,32 +266,38 @@ pub fn describe(
 }
 
 pub trait ResultExt<T> {
-    /// Like [`Result::expect`], but terminates the process with `halt` instead
-    /// of `panic` if the underlying error is a condition that should halt,
-    /// rather than panic the process.
+    /// Like [`Result::expect`], but terminates the process with `halt` or
+    /// exit code 0 instead of `panic` if the error indicates that it should
+    /// cause a halt of graceful termination.
     fn unwrap_or_terminate(self, context: &str) -> T;
 
-    /// Terminates the process with `halt` if `self` is an error that should halt.
-    /// Otherwise does nothing.
+    /// Terminates the process with `halt` or exit code 0 if `self` is an
+    /// error that should halt or cause graceful termination. Otherwise,
+    /// does nothing.
     fn maybe_terminate(self, context: &str) -> Self;
 }
 
 impl<T, E> ResultExt<T> for Result<T, E>
 where
-    E: ShouldHalt + Debug,
+    E: ShouldTerminateGracefully + Debug,
 {
     fn unwrap_or_terminate(self, context: &str) -> T {
         match self {
             Ok(t) => t,
-            Err(e) if e.should_halt() => halt!("{context}: {e:?}"),
-            Err(e) => panic!("{context}: {e:?}"),
+            Err(e) => match e.should_terminate_gracefully() {
+                Terminate::Gracefully => exit!(0, "{context}: {e:?}"),
+                Terminate::Halt => halt!("{context}: {e:?}"),
+                Terminate::Panic => panic!("{context}: {e:?}"),
+            },
         }
     }
 
     fn maybe_terminate(self, context: &str) -> Self {
         if let Err(e) = &self {
-            if e.should_halt() {
-                halt!("{context}: {e:?}");
+            match e.should_terminate_gracefully() {
+                Terminate::Gracefully => exit!(0, "{context}: {e:?}"),
+                Terminate::Halt => halt!("{context}: {e:?}"),
+                Terminate::Panic => {}
             }
         }
 
@@ -298,53 +305,82 @@ where
     }
 }
 
-/// A trait for errors that should halt rather than panic the process.
-trait ShouldHalt {
-    /// Reports whether the error should halt rather than panic the process.
-    fn should_halt(&self) -> bool;
+/// An enum describing how to terminate
+enum Terminate {
+    Gracefully,
+    Halt,
+    Panic,
 }
 
-impl ShouldHalt for AdapterError {
-    fn should_halt(&self) -> bool {
+/// A trait for errors that should halt or terminate gracefully rather than
+/// panic the process.
+trait ShouldTerminateGracefully {
+    /// Reports whether the error should halt of terminate the process
+    /// gracefully rather than panic.
+    fn should_terminate_gracefully(&self) -> Terminate;
+}
+
+impl ShouldTerminateGracefully for AdapterError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
-            AdapterError::Catalog(e) => e.should_halt(),
-            _ => false,
+            AdapterError::Catalog(e) => e.should_terminate_gracefully(),
+            _ => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for mz_catalog::memory::error::Error {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for mz_catalog::memory::error::Error {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match &self.kind {
-            mz_catalog::memory::error::ErrorKind::Durable(e) => e.should_halt(),
-            _ => false,
+            mz_catalog::memory::error::ErrorKind::Durable(e) => e.should_terminate_gracefully(),
+            _ => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for mz_catalog::durable::CatalogError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for mz_catalog::durable::CatalogError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match &self {
-            Self::Durable(e) => e.should_halt(),
-            _ => false,
+            Self::Durable(e) => e.should_terminate_gracefully(),
+            _ => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
-    fn should_halt(&self) -> bool {
-        self.should_halt()
+impl ShouldTerminateGracefully for DurableCatalogError {
+    fn should_terminate_gracefully(&self) -> Terminate {
+        match self {
+            DurableCatalogError::Fence(err) => err.should_terminate_gracefully(),
+            DurableCatalogError::IncompatibleDataVersion { .. }
+            | DurableCatalogError::IncompatiblePersistVersion { .. }
+            | DurableCatalogError::Proto(_)
+            | DurableCatalogError::Uninitialized
+            | DurableCatalogError::NotWritable(_)
+            | DurableCatalogError::DuplicateKey
+            | DurableCatalogError::UniquenessViolation
+            | DurableCatalogError::Storage(_)
+            | DurableCatalogError::Internal(_) => Terminate::Panic,
+        }
     }
 }
 
-impl<T> ShouldHalt for StorageError<T> {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for FenceError {
+    fn should_terminate_gracefully(&self) -> Terminate {
+        match self {
+            FenceError::DeployGeneration { .. } => Terminate::Gracefully,
+            FenceError::Epoch { .. } | FenceError::MigrationUpper { .. } => Terminate::Halt,
+        }
+    }
+}
+
+impl<T> ShouldTerminateGracefully for StorageError<T> {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             StorageError::ResourceExhausted(_)
             | StorageError::CollectionMetadataAlreadyExists(_)
             | StorageError::PersistShardAlreadyInUse(_)
-            | StorageError::TxnWalShardAlreadyExists => true,
-            StorageError::UpdateBeyondUpper(_)
+            | StorageError::TxnWalShardAlreadyExists
+            | StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
             | StorageError::InvalidUsage(_)
@@ -361,78 +397,78 @@ impl<T> ShouldHalt for StorageError<T> {
             | StorageError::ShuttingDown(_)
             | StorageError::MissingSubsourceReference { .. }
             | StorageError::RtrTimeout(_)
-            | StorageError::RtrDropFailure(_) => false,
+            | StorageError::RtrDropFailure(_) => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for DataflowCreationError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for DataflowCreationError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             DataflowCreationError::SinceViolation(_)
             | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
             | DataflowCreationError::MissingAsOf
             | DataflowCreationError::EmptyAsOfForSubscribe
-            | DataflowCreationError::EmptyAsOfForCopyTo => false,
+            | DataflowCreationError::EmptyAsOfForCopyTo => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for CollectionUpdateError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for CollectionUpdateError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             CollectionUpdateError::InstanceMissing(_)
-            | CollectionUpdateError::CollectionMissing(_) => false,
+            | CollectionUpdateError::CollectionMissing(_) => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for PeekError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for PeekError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             PeekError::SinceViolation(_)
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
-            | PeekError::ReplicaMissing(_) => false,
+            | PeekError::ReplicaMissing(_) => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for ReadPolicyError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for ReadPolicyError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             ReadPolicyError::InstanceMissing(_)
             | ReadPolicyError::CollectionMissing(_)
-            | ReadPolicyError::WriteOnlyCollection(_) => false,
+            | ReadPolicyError::WriteOnlyCollection(_) => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for SubscribeTargetError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for SubscribeTargetError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             SubscribeTargetError::InstanceMissing(_)
             | SubscribeTargetError::SubscribeMissing(_)
             | SubscribeTargetError::ReplicaMissing(_)
-            | SubscribeTargetError::SubscribeAlreadyStarted => false,
+            | SubscribeTargetError::SubscribeAlreadyStarted => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for TransformError {
-    fn should_halt(&self) -> bool {
+impl ShouldTerminateGracefully for TransformError {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             TransformError::Internal(_)
             | TransformError::IdentifierMissing(_)
-            | TransformError::CallerShouldPanic(_) => false,
+            | TransformError::CallerShouldPanic(_) => Terminate::Panic,
         }
     }
 }
 
-impl ShouldHalt for InstanceMissing {
-    fn should_halt(&self) -> bool {
-        false
+impl ShouldTerminateGracefully for InstanceMissing {
+    fn should_terminate_gracefully(&self) -> Terminate {
+        Terminate::Panic
     }
 }
 
