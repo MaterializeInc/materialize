@@ -85,31 +85,6 @@ pub enum DurableCatalogError {
 }
 
 impl DurableCatalogError {
-    /// Reports whether the error should halt rather than panic the process.
-    pub fn should_halt(&self) -> bool {
-        match self {
-            DurableCatalogError::Fence(_)
-            | DurableCatalogError::IncompatibleDataVersion { .. }
-            | DurableCatalogError::IncompatiblePersistVersion { .. }
-            | DurableCatalogError::Proto(_) => true,
-            DurableCatalogError::Uninitialized
-            | DurableCatalogError::NotWritable(_)
-            | DurableCatalogError::DuplicateKey
-            | DurableCatalogError::UniquenessViolation
-            | DurableCatalogError::Storage(_)
-            | DurableCatalogError::Internal(_) => false,
-        }
-    }
-
-    /// Reports whether the error is unrecoverable (retrying will never succeed,
-    /// or a retry is not safe due to an indeterminate state).
-    pub fn is_unrecoverable(&self) -> bool {
-        match self {
-            DurableCatalogError::Fence(_) | DurableCatalogError::Uninitialized => true,
-            _ => false,
-        }
-    }
-
     /// Reports whether the error can be recovered if we opened the catalog in a writeable mode.
     pub fn can_recover_with_write_mode(&self) -> bool {
         match self {

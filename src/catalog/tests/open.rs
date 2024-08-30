@@ -577,8 +577,11 @@ async fn test_persist_unopened_deploy_generation_fencing() {
 async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogStateBuilder) {
     // Initialize catalog.
     let deploy_generation = 0;
+    let version = semver::Version::new(0, 1, 0);
     let zdt_deployment_max_wait = Duration::from_millis(666);
-    let state_builder = state_builder.with_deploy_generation(deploy_generation);
+    let state_builder = state_builder
+        .with_deploy_generation(deploy_generation)
+        .with_version(version);
     {
         let mut state = state_builder
             .clone()
@@ -643,7 +646,21 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
     );
 
     // Re-initializing with the old deploy version doesn't work.
-    let err = state_builder.build().await.unwrap_err();
+    let err = state_builder.clone().build().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            DurableCatalogError::Fence(FenceError::DeployGeneration { .. })
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    // Re-initializing with the old deploy version and earlier version returns a fence error.
+    let err = state_builder
+        .with_version(semver::Version::new(0, 0, 0))
+        .build()
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             err,

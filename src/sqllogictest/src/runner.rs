@@ -1101,7 +1101,8 @@ impl<'a> RunnerInner<'a> {
         // by the server to be shutdown at the end of each file. If we were to
         // share a Tokio runtime, tasks from the last file's server would still
         // be live at the start of the next file's server.
-        let (server_addr_tx, server_addr_rx) = oneshot::channel();
+        let (server_addr_tx, server_addr_rx): (oneshot::Sender<Result<_, anyhow::Error>>, _) =
+            oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
@@ -1119,7 +1120,7 @@ impl<'a> RunnerInner<'a> {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
-                        .send(Err(e))
+                        .send(Err(e.into()))
                         .expect("receiver should not drop first");
                     return;
                 }
