@@ -389,29 +389,19 @@ exist in the storage layer and are not rendered as any sort of dataflow. Instead
 against any webhook validation options (such as checking an HMAC), and then decodes
 the request body and writes the results directly to a persist collection.
 
-Webhook sources will be migrated to the new model at the SQL level, to allow for
-'schema changes' and multiple outputs using the same `CREATE TABLE .. FROM SOURCE`
-statement syntax as other sources.
-Since the `encoding` and `envelope` options will be moved to that table statement
-this will also allow a webhook request to be decoded differently for each table.
+Rather than continuing to try and have webhooks look like a 'source' at the SQL
+layer while implementing completely different behavior for them under the hood,
+instead we will introduce a new SQL statement called `CREATE TABLE .. FROM WEBHOOK`
+that aligns well with our new source-statement model but more accurately describes
+webhooks and allows future divergence without unnecessary coupling to the
+source model.
 
-Under the hood, we will continue to have `environmentd` receive Webhook requests
-and write directly to a persist collection. However this code will be modified
-to just do request validation and then write the _raw_ request body as bytes
-and a map of all headers to the persist collection without doing any decoding.
+For the purposes of this project, existing `CREATE SOURCE .. FROM WEBHOOK`
+statements will be migrated to `CREATE TABLE .. FROM WEBHOOK` statements, and
+the under-the-hood logic will remain the same for webhook sources.
 
-We will then create a new `Persist Source` that operates exactly like all other source
-types such that the storage layer renders a dataflow and the source operator reads
-from an existing persist collection -- in this case the 'raw' webhook collection being
-written to by `environmentd`. This `Persist Source` can have multiple `SourceExports`
-like other sources, and each export can define its own `encoding` and `envelope` processing
-to convert the raw bytes of each request into the appropriate relation schema.
-The progress collection for the webhook source will essentially be the frontier of
-the underlying 'raw' persist collection that each request is written to.
-
-One open question is whether the external-reference in a `CREATE TABLE .. FROM SOURCE`
-statement of a Webhook source will have any meaning, since it's unclear what referencable
-objects are at the time of statement creation.
+In the future, we can refactor webhook objects in the codebase to resemble
+tables more-so than source objects.
 
 ### Migration of source statements and collections
 
@@ -565,6 +555,33 @@ problems outlined above:
    easier effort to implement, but rather than doing this work in the short term
    for it to be later ripped out, it is preferable to implement the interface
    that solves both this need and the other problems outlined above.
+
+### Webhook Source Alternatives
+
+1.  Webhook sources will be migrated to the new model at the SQL level, using the
+    same `CREATE TABLE .. FROM SOURCE` statement syntax as other sources.
+    Since the `encoding` and `envelope` options will be moved to that table statement
+    this will also allow a webhook request to be decoded differently for each table.
+
+    Under the hood, we will continue to have `environmentd` receive Webhook requests
+    and write directly to a persist collection. However this code will be modified
+    to just do request validation and then write the _raw_ request body as bytes
+    and a map of all headers to the persist collection without doing any decoding.
+
+    We will then create a new `Persist Source` that operates exactly like all other source
+    types such that the storage layer renders a dataflow and the source operator reads
+    from an existing persist collection -- in this case the 'raw' webhook collection being
+    written to by `environmentd`. This `Persist Source` can have multiple `SourceExports`
+    like other sources, and each export can define its own `encoding` and `envelope` processing
+    to convert the raw bytes of each request into the appropriate relation schema.
+    The progress collection for the webhook source will essentially be the frontier of
+    the underlying 'raw' persist collection that each request is written to.
+
+    This approach was discussed offline and deemed unnecessary scope since we do not
+    yet have a reason to need multiple 'exports' from a webhook source with different
+    encoding/envelope configuration, and if we do we would likely implement something
+    more specific to webhooks such as a way to de-multiplex a webhook request
+    into multiple tables based on some inner substructure.
 
 ## Remaining open questions
 
