@@ -156,7 +156,7 @@ IGNORE_RE = re.compile(
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey
-    # TODO(def-) Remove when #29199 is fixed
+    # TODO(def-) Remove in ~3 weeks
     | .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev\.\d+)?,\ current:\ \d+\.\d+\.\d+(-dev\.\d+)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ forward\ at\ a\ time
     )
     """,
