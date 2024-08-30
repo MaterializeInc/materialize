@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+arch=$(uname -m)
+arch=$(echo $arch | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/" )
+
 # Install APT dependencies.
 apt-get update
 apt-get install -y \
@@ -53,6 +56,12 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plu
 
 # Install Rust.
 sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y"
+
+# Install Bazel.
+sudo sh -c "curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-$arch" \
+    && if [[ "$arch" = arm64 ]]; then echo '467ec3821aca5e278c8570b7c25e0dfc1a061d2873be89e4a266aaf488148426 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [[ "$arch" = amd64 ]]; then echo 'd9af1fa808c0529753c3befda75123236a711d971d3485a390507122148773a3 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && sudo sh -c "chmod +x /usr/local/bin/bazel"
 
 # Install the AWS CLI.
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" > awscliv2.zip
