@@ -1656,10 +1656,14 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 #[cfg(test)]
 mod tests {
     use arrow::array::ArrayData;
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::ArrowNativeType;
     use arrow::row::SortField;
     use mz_ore::assert_err;
+    use mz_ore::collections::CollectionExt;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
+    use mz_persist_types::arrow::ArrayOrd;
     use mz_persist_types::columnar::{codec_to_schema2, schema2_to_codec};
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
@@ -1780,13 +1784,31 @@ mod tests {
         assert_eq!(col2.as_ref(), &col);
 
         // Validate that we only generate supported array types
-        let converter =
-            arrow::row::RowConverter::new(vec![SortField::new(col.data_type().clone())])
-                .expect("sortable");
+        let converter = arrow::row::RowConverter::new(vec![SortField::new_with_options(
+            col.data_type().clone(),
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        )])
+        .expect("sortable");
         let rows = converter
             .convert_columns(&[Arc::new(col.clone())])
             .expect("convertible");
-        assert_eq!(rows.iter().count(), col.len());
+        let mut row_vec = rows.iter().collect::<Vec<_>>();
+        row_vec.sort();
+        let row_col = converter
+            .convert_rows(row_vec)
+            .expect("convertible")
+            .into_element();
+        assert_eq!(row_col.len(), col.len());
+
+        let ord = ArrayOrd::new(&col);
+        let mut indices = (0..u64::usize_as(col.len())).collect::<Vec<_>>();
+        indices.sort_by_key(|i| ord.at(i.as_usize()));
+        let ord_col =
+            ::arrow::compute::take(&col, &UInt64Array::from(indices), None).expect("takeable");
+        assert_eq!(row_col.as_ref(), ord_col.as_ref());
     }
 
     #[mz_ore::test]

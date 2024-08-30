@@ -102,6 +102,9 @@ def get_default_system_parameters(
         "persist_batch_columnar_format_percent": "10",
         "persist_batch_delete_enabled": "true",
         "persist_batch_record_part_format": "true",
+        "persist_batch_record_run_meta": (
+            "true" if version >= MzVersion.parse_mz("v0.115.0-dev") else "false"
+        ),
         "persist_fast_path_limit": "1000",
         "persist_inline_writes_single_max_bytes": "4096",
         "persist_inline_writes_total_max_bytes": "1048576",

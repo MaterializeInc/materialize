@@ -42,7 +42,7 @@ use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
+use crate::iter::{CodecSort, Consolidator};
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
@@ -898,7 +898,7 @@ pub(crate) struct UnexpiredReadHandleState {
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     consolidator: Consolidator<T, D>,
     _lease: Lease,
     schemas: Schemas<K, V>,
@@ -991,6 +991,7 @@ where
         let mut consolidator = Consolidator::new(
             format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
             self.shard_id(),
+            CodecSort::default(),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
@@ -999,14 +1000,14 @@ where
                 as_of: as_of.clone(),
             },
             self.cfg.dynamic.compaction_memory_bound_bytes(),
-            SPLIT_OLD_RUNS.get(&self.cfg.configs),
         );
 
         let lease = self.lease_seqno();
         for batch in batches {
-            for (_meta, run) in batch.runs() {
+            for (meta, run) in batch.runs() {
                 consolidator.enqueue_run(
                     &batch.desc,
+                    meta,
                     run.into_iter()
                         .filter(|p| should_fetch_part(p.stats()))
                         .cloned(),

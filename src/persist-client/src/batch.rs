@@ -351,6 +351,7 @@ pub struct BatchBuilderConfig {
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) record_run_meta: bool,
+    pub(crate) expected_order: RunOrder,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -396,6 +397,12 @@ pub(crate) const RECORD_RUN_META: Config<bool> = Config::new(
     "If set, record actual run-level metadata like schema and ordering instead of defaults (Materialize).",
 );
 
+pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
+    "persist_batch_structured_order",
+    false,
+    "If enabled, output compaction batches in structured-data order.",
+);
+
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
 /// bigger than this, it will be broken up into smaller, independent pieces.
 /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen to
@@ -424,12 +431,25 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
 
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
-    pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
+    pub fn new(value: &PersistConfig, _writer_id: &WriterId, expect_consolidated: bool) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
 
         let batch_columnar_format =
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
         let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
+
+        let record_run_meta = RECORD_RUN_META.get(value);
+        let expected_order = if expect_consolidated {
+            // We never generate structured-order runs when we're not also generating metadata,
+            // or the reader couldn't recognize them.
+            if record_run_meta && STRUCTURED_ORDER.get(value) {
+                RunOrder::Structured
+            } else {
+                RunOrder::Codec
+            }
+        } else {
+            RunOrder::Unordered
+        };
 
         BatchBuilderConfig {
             writer_key,
@@ -450,7 +470,8 @@ impl BatchBuilderConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
-            record_run_meta: RECORD_RUN_META.get(value),
+            record_run_meta,
+            expected_order,
         }
     }
 
@@ -611,7 +632,6 @@ where
     version: Version,
     blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
-    expect_consolidated: bool,
 
     buffer: BatchBuffer,
 
@@ -650,7 +670,6 @@ where
         version: Version,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
-        expect_consolidated: bool,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.clone(),
@@ -668,7 +687,6 @@ where
             blob,
             buffer: BatchBuffer::new(Arc::clone(&metrics), cfg.blob_target_size),
             metrics,
-            expect_consolidated,
             max_kvt_in_run: None,
             parts_written: 0,
             runs: Vec::new(),
@@ -723,14 +741,10 @@ where
         let remainder = self.buffer.drain();
         self.flush_part(stats_schemas, remainder).await;
 
-        let run_meta = self.parts.cfg.run_meta(
-            if self.expect_consolidated {
-                RunOrder::Codec
-            } else {
-                RunOrder::Unordered
-            },
-            stats_schemas.id,
-        );
+        let run_meta = self
+            .parts
+            .cfg
+            .run_meta(self.parts.cfg.expected_order, stats_schemas.id);
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
         let parts = self.parts.finish().await;
@@ -796,7 +810,7 @@ where
             let keys = columnar.keys();
             if keys.is_empty() {
                 &[]
-            } else if self.expect_consolidated {
+            } else if self.parts.cfg.expected_order == RunOrder::Codec {
                 columnar.keys().value(0)
             } else {
                 ::arrow::compute::min_binary(columnar.keys()).expect("min of nonempty array")
@@ -811,23 +825,48 @@ where
         }
         let diffs_sum = diffs_sum::<D>(&columnar).expect("part is non empty");
 
-        if self.expect_consolidated {
-            // if our parts are consolidated, we can rely on their sorted order to
-            // appropriately determine runs of ordered parts
-            let ((min_part_k, min_part_v), min_part_t, _d) =
-                columnar.get(0).expect("num updates is greater than zero");
-            let min_part_t = T::decode(min_part_t);
-            let ((max_part_k, max_part_v), max_part_t, _d) = columnar
-                .get(num_updates.saturating_sub(1))
-                .expect("num updates is greater than zero");
-            let max_part_t = T::decode(max_part_t);
+        match self.parts.cfg.expected_order {
+            RunOrder::Codec => {
+                // if our parts are written in codec order, we can rely on their sorted order to
+                // appropriately determine runs of ordered parts
+                let ((min_part_k, min_part_v), min_part_t, _d) =
+                    columnar.get(0).expect("num updates is greater than zero");
+                let min_part_t = T::decode(min_part_t);
+                let ((max_part_k, max_part_v), max_part_t, _d) = columnar
+                    .get(num_updates.saturating_sub(1))
+                    .expect("num updates is greater than zero");
+                let max_part_t = T::decode(max_part_t);
 
-            if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
-                // Our caller has promised to provide us data in sorted order. Verify that
-                // the smallest data in the part is not regressing... but for now, keep splitting
-                // runs as before.
-                if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
-                    soft_panic_or_log!("expected data in sorted order");
+                if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
+                    // Our caller has promised to provide us data in sorted order. Verify that
+                    // the smallest data in the part is not regressing... but for now, keep splitting
+                    // runs as before.
+                    if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
+                        soft_panic_or_log!("expected data in sorted order");
+                        self.runs.push(self.parts_written);
+                        self.run_meta.push(
+                            self.parts
+                                .cfg
+                                .run_meta(RunOrder::Unordered, stats_schemas.id),
+                        )
+                    }
+
+                    // given the above check, whether or not we extended an existing run or
+                    // started a new one, this part contains the greatest KVT in the run
+                    max_run_k.clear();
+                    max_run_v.clear();
+                    max_run_k.extend_from_slice(max_part_k);
+                    max_run_v.extend_from_slice(max_part_v);
+                    *max_run_t = max_part_t;
+                } else {
+                    self.max_kvt_in_run =
+                        Some((max_part_k.to_vec(), max_part_v.to_vec(), max_part_t));
+                }
+            }
+            RunOrder::Unordered => {
+                // if our parts are not consolidated, we simply say each part is its own run.
+                // NB: there is an implicit run starting at index 0
+                if self.parts_written > 0 {
                     self.runs.push(self.parts_written);
                     self.run_meta.push(
                         self.parts
@@ -835,27 +874,9 @@ where
                             .run_meta(RunOrder::Unordered, stats_schemas.id),
                     )
                 }
-
-                // given the above check, whether or not we extended an existing run or
-                // started a new one, this part contains the greatest KVT in the run
-                max_run_k.clear();
-                max_run_v.clear();
-                max_run_k.extend_from_slice(max_part_k);
-                max_run_v.extend_from_slice(max_part_v);
-                *max_run_t = max_part_t;
-            } else {
-                self.max_kvt_in_run = Some((max_part_k.to_vec(), max_part_v.to_vec(), max_part_t));
             }
-        } else {
-            // if our parts are not consolidated, we simply say each part is its own run.
-            // NB: there is an implicit run starting at index 0
-            if self.parts_written > 0 {
-                self.runs.push(self.parts_written);
-                self.run_meta.push(
-                    self.parts
-                        .cfg
-                        .run_meta(RunOrder::Unordered, stats_schemas.id),
-                )
+            RunOrder::Structured => {
+                // Nothing to do - we should generate a single long run.
             }
         }
 

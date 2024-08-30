@@ -315,7 +315,7 @@ impl<T: Ord> Ord for BatchPart<T> {
 }
 
 /// What order are the parts in this run in?
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize)]
 pub(crate) enum RunOrder {
     /// They're in no particular order.
     Unordered,

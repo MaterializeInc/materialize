@@ -1696,7 +1696,8 @@ pub mod datadriven {
             .flat_map(DirectiveArgs::parse_update)
             .collect();
 
-        let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new());
+        let mut cfg =
+            BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new(), consolidate);
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1720,7 +1721,6 @@ pub mod datadriven {
             datadriven.client.cfg.build_version.clone(),
             since,
             Some(upper.clone()),
-            consolidate,
         );
         let mut builder = BatchBuilder {
             stats_schemas: schemas.clone(),
@@ -2316,7 +2316,7 @@ pub mod datadriven {
                 }
                 CompareAndAppendRes::InlineBackpressure => {
                     let mut b = datadriven.to_batch(batch.clone());
-                    let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &writer_id);
+                    let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &writer_id, false);
                     let schemas = Schemas::<String, ()> {
                         id: None,
                         key: Arc::new(StringSchema),
@@ -2426,7 +2426,7 @@ pub mod tests {
                 .await;
             // Flush this batch out so the CaA doesn't get inline writes
             // backpressure.
-            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id);
+            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id, false);
             batch
                 .flush_to_blob(
                     &cfg,
