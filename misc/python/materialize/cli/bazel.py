@@ -28,6 +28,8 @@ def main() -> int:
 
     if args.action == "gen":
         gen_cmd(sub_args)
+    elif args.action == "fmt":
+        fmt_cmd(sub_args)
     elif args.action == "output_path":
         output_path_cmd(sub_args)
     else:
@@ -58,6 +60,13 @@ def gen_cmd(args: list[str]):
     gen(path)
 
 
+def fmt_cmd(args: list[str]):
+    """Invokes the fmt function."""
+    assert len(args) <= 1, "expected at most one path to format"
+    path = args[0] if len(args) == 1 else None
+    fmt(path)
+
+
 def output_path_cmd(args: list[str]):
     """Invokes the output_path function."""
     assert len(args) == 1, "expected a single Bazel target"
@@ -84,16 +93,41 @@ def gen(path):
 
     # Note: We build cargo-gazelle with optimizations because the speedup is
     # worth it and Bazel should cache the resulting binary.
-
-    # TODO(parkmycar): Use Bazel to run this lint.
     cmd_args = [
-        "cargo",
+        "bazel",
         "run",
-        "--release",
-        "--no-default-features",
-        "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
+        "-c",
+        "opt",
+        "@//misc/bazel/cargo-gazelle:main",
         "--",
         "--path",
+        f"{str(path)}",
+    ]
+    subprocess.run(cmd_args, check=True)
+
+    # Make sure we format everything after generating it so the linter doesn't
+    # conflict with the formatter.
+    fmt(path.parent)
+
+
+def fmt(path):
+    """
+    Formats all of the `BUILD`, `.bzl`, and `WORKSPACE` files at the provided path.
+
+    Defaults to formatting the entire Materialize repository.
+    """
+
+    if not path:
+        path = MZ_ROOT
+
+    cmd_args = [
+        "bazel",
+        "run",
+        "-c",
+        "opt",
+        "//misc/bazel/tools:buildifier",
+        "--",
+        "-r",
         f"{str(path)}",
     ]
     subprocess.run(cmd_args, check=True)
