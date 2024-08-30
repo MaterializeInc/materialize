@@ -250,7 +250,7 @@ class ReportMeasurement(Generic[T]):
             self.min = min(set_points)
             self.max = max(set_points)
             self.mean = mean(set_points)
-            self.variance = variance(set_points)
+            self.variance = variance(set_points) if len(set_points) > 1 else None
         else:
             self.min = None
             self.max = None
