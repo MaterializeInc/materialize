@@ -28,6 +28,7 @@
 pub mod serialization;
 pub(crate) mod state_update;
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use mz_audit_log::VersionedEvent;
@@ -47,6 +48,7 @@ use proptest_derive::Arbitrary;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::objects::serialization::proto;
+use crate::durable::Epoch;
 
 // Structs used to pass information to outside modules.
 
@@ -981,6 +983,26 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn empty() -> Snapshot {
         Snapshot::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Arbitrary)]
+pub struct FenceToken {
+    pub(crate) deploy_generation: u64,
+    pub(crate) epoch: Epoch,
+}
+
+impl PartialOrd for FenceToken {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FenceToken {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.deploy_generation
+            .cmp(&other.deploy_generation)
+            .then(self.epoch.cmp(&other.epoch))
     }
 }
 

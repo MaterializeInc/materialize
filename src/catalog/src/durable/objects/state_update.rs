@@ -44,7 +44,7 @@ use tracing::error;
 
 use crate::durable::debug::CollectionType;
 use crate::durable::objects::serialization::proto;
-use crate::durable::objects::DurableType;
+use crate::durable::objects::{DurableType, FenceToken};
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{DurableCatalogError, Epoch};
@@ -213,6 +213,7 @@ pub enum StateUpdateKind {
     Database(proto::DatabaseKey, proto::DatabaseValue),
     DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
     Epoch(Epoch),
+    FenceToken(FenceToken),
     IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
     IntrospectionSourceIndex(
         proto::ClusterIntrospectionSourceIndexKey,
@@ -248,6 +249,7 @@ impl StateUpdateKind {
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
             StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivileges),
             StateUpdateKind::Epoch(_) => None,
+            StateUpdateKind::FenceToken(_) => None,
             StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAlloc),
             StateUpdateKind::IntrospectionSourceIndex(_, _) => {
                 Some(CollectionType::ComputeIntrospectionSourceIndex)
@@ -416,6 +418,7 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             }
             // Not exposed to higher layers.
             StateUpdateKind::Config(_, _)
+            | StateUpdateKind::FenceToken(_)
             | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
@@ -516,6 +519,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     proto::state_update_kind::Kind::Epoch(proto::state_update_kind::Epoch {
                         epoch: epoch.get(),
                     })
+                }
+                StateUpdateKind::FenceToken(fence_token) => {
+                    proto::state_update_kind::Kind::FenceToken(
+                        proto::state_update_kind::FenceToken {
+                            deploy_generation: fence_token.deploy_generation,
+                            epoch: fence_token.epoch.get(),
+                        },
+                    )
                 }
                 StateUpdateKind::IdAllocator(key, value) => {
                     proto::state_update_kind::Kind::IdAlloc(proto::state_update_kind::IdAlloc {
@@ -696,6 +707,17 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 }) => StateUpdateKind::Epoch(Epoch::new(epoch).ok_or_else(|| {
                     TryFromProtoError::missing_field("state_update_kind::Epoch::epoch")
                 })?),
+                proto::state_update_kind::Kind::FenceToken(
+                    proto::state_update_kind::FenceToken {
+                        deploy_generation,
+                        epoch,
+                    },
+                ) => StateUpdateKind::FenceToken(FenceToken {
+                    deploy_generation,
+                    epoch: Epoch::new(epoch).ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::Epoch::epoch")
+                    })?,
+                }),
                 proto::state_update_kind::Kind::IdAlloc(proto::state_update_kind::IdAlloc {
                     key,
                     value,

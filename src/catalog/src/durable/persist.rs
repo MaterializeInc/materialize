@@ -701,6 +701,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::Epoch(_epoch) => {
                         // Ignore for snapshots.
                     }
+                    StateUpdateKind::FenceToken(_token) => {
+                        // Ignore for snapshots.
+                    }
                     StateUpdateKind::IdAllocator(key, value) => {
                         apply(&mut snapshot.id_allocator, key, value, diff);
                     }
@@ -1710,6 +1713,9 @@ impl Trace {
                 StateUpdateKind::Database(k, v) => trace.databases.values.push(((k, v), ts, diff)),
                 StateUpdateKind::DefaultPrivilege(k, v) => {
                     trace.default_privileges.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::FenceToken(_) => {
+                    // Fence token not included in trace.
                 }
                 StateUpdateKind::Epoch(_) => {
                     // Epoch not included in trace.
