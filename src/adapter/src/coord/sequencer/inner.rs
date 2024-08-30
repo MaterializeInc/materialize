@@ -53,7 +53,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, Type,
+    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::{assert_none, instrument};
@@ -512,6 +512,8 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                // TODO(roshan): This will be unnecessary when we drop support for
+                // automatically created subsources.
                 // To improve the performance of creating a source and many
                 // subsources, we create all of the collections at once. If we
                 // created each collection independently, we would reschedule
@@ -608,17 +610,14 @@ impl Coordinator {
                 // SUBSOURCE, and all other SUBSOURCES of a SOURCE will depend
                 // on it. Both subsources and sources will show up as a `Source`
                 // in the above.
-                let mut read_policies: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> =
-                    BTreeMap::new();
                 // Although there should only be one parent source that sequence_create_source is
                 // ever called with, hedge our bets a bit and collect the compaction windows for
                 // each id in the bundle (these should all be identical). This is some extra work
                 // but seems safer.
-                let policies = coord
+                let read_policies = coord
                     .catalog()
                     .state()
                     .source_compaction_windows(source_ids);
-                read_policies.extend(policies);
                 for (compaction_window, storage_policies) in read_policies {
                     coord
                         .initialize_storage_read_policies(storage_policies, compaction_window)
@@ -888,14 +887,33 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
+        let data_source = match table.data_source {
+            plan::TableDataSource::TableWrites { defaults } => {
+                TableDataSource::TableWrites { defaults }
+            }
+            plan::TableDataSource::DataSource(data_source_plan) => match data_source_plan {
+                plan::DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                }),
+                o => {
+                    unreachable!("CREATE TABLE data source got {:?}", o)
+                }
+            },
+        };
         let table = Table {
             create_sql: Some(table.create_sql),
             desc: table.desc,
-            defaults: table.defaults,
             conn_id: conn_id.cloned(),
             resolved_ids,
             custom_logical_compaction_window: table.compaction_window,
             is_retained_metrics_object: false,
+            data_source,
         };
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
@@ -906,50 +924,109 @@ impl Coordinator {
 
         let catalog_result = self
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
-                // Determine the initial validity for the table.
-                let register_ts = coord.get_local_write_ts().await.timestamp;
+                // The table data_source determines whether this table will be written to
+                // by environmentd (e.g. with INSERT INTO statements) or by the storage layer
+                // (e.g. a source-fed table).
+                match table.data_source {
+                    TableDataSource::TableWrites { defaults: _ } => {
+                        // Determine the initial validity for the table.
+                        let register_ts = coord.get_local_write_ts().await.timestamp;
 
-                // After acquiring `register_ts` but before using it, we need to
-                // be sure we're still the leader. Otherwise a new generation
-                // may also be trying to use `register_ts` for a different
-                // purpose.
-                //
-                // See #28216.
-                coord
-                    .catalog
-                    .confirm_leadership()
-                    .await
-                    .unwrap_or_terminate("unable to confirm leadership");
+                        // After acquiring `register_ts` but before using it, we need to
+                        // be sure we're still the leader. Otherwise a new generation
+                        // may also be trying to use `register_ts` for a different
+                        // purpose.
+                        //
+                        // See #28216.
+                        coord
+                            .catalog
+                            .confirm_leadership()
+                            .await
+                            .unwrap_or_terminate("unable to confirm leadership");
 
-                if let Some(id) = ctx.extra().contents() {
-                    coord.set_statement_execution_timestamp(id, register_ts);
+                        if let Some(id) = ctx.extra().contents() {
+                            coord.set_statement_execution_timestamp(id, register_ts);
+                        }
+
+                        let collection_desc = CollectionDescription::from_desc(
+                            table.desc.clone(),
+                            DataSourceOther::TableWrites,
+                        );
+                        let storage_metadata = coord.catalog.state().storage_metadata();
+                        coord
+                            .controller
+                            .storage
+                            .create_collections(
+                                storage_metadata,
+                                Some(register_ts),
+                                vec![(table_id, collection_desc)],
+                            )
+                            .await
+                            .unwrap_or_terminate("cannot fail to create collections");
+                        coord.apply_local_write(register_ts).await;
+
+                        coord
+                            .initialize_storage_read_policies(
+                                btreeset![table_id],
+                                table
+                                    .custom_logical_compaction_window
+                                    .unwrap_or(CompactionWindow::Default),
+                            )
+                            .await;
+                    }
+                    TableDataSource::DataSource(data_source) => {
+                        match data_source {
+                            DataSourceDesc::IngestionExport {
+                                ingestion_id,
+                                external_reference,
+                                details,
+                            } => {
+                                // TODO: It's a little weird that a table will be present in this
+                                // source status collection, we might want to split out into a separate
+                                // status collection.
+                                let status_collection_id =
+                                    Some(coord.catalog().resolve_builtin_storage_collection(
+                                        &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                                    ));
+                                let collection_desc = CollectionDescription::<Timestamp> {
+                                    desc: table.desc.clone(),
+                                    data_source: DataSource::IngestionExport {
+                                        ingestion_id,
+                                        external_reference,
+                                        details,
+                                    },
+                                    since: None,
+                                    status_collection_id,
+                                };
+                                let storage_metadata = coord.catalog.state().storage_metadata();
+                                coord
+                                    .controller
+                                    .storage
+                                    .create_collections(
+                                        storage_metadata,
+                                        None,
+                                        vec![(table_id, collection_desc)],
+                                    )
+                                    .await
+                                    .unwrap_or_terminate("cannot fail to create collections");
+
+                                let read_policies = coord
+                                    .catalog()
+                                    .state()
+                                    .source_compaction_windows(vec![table_id]);
+                                for (compaction_window, storage_policies) in read_policies {
+                                    coord
+                                        .initialize_storage_read_policies(
+                                            storage_policies,
+                                            compaction_window,
+                                        )
+                                        .await;
+                                }
+                            }
+                            _ => unreachable!("CREATE TABLE data source got {:?}", data_source),
+                        }
+                    }
                 }
-
-                let collection_desc = CollectionDescription::from_desc(
-                    table.desc.clone(),
-                    DataSourceOther::TableWrites,
-                );
-                let storage_metadata = coord.catalog.state().storage_metadata();
-                coord
-                    .controller
-                    .storage
-                    .create_collections(
-                        storage_metadata,
-                        Some(register_ts),
-                        vec![(table_id, collection_desc)],
-                    )
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-                coord.apply_local_write(register_ts).await;
-
-                coord
-                    .initialize_storage_read_policies(
-                        btreeset![table_id],
-                        table
-                            .custom_logical_compaction_window
-                            .unwrap_or(CompactionWindow::Default),
-                    )
-                    .await;
             })
             .await;
 

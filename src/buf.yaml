@@ -51,7 +51,7 @@ breaking:
     - storage-types/src/connections/aws.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/string_or_secret.proto
-    # reason: no reason specified
+    # reason: a compatible change from google.protobuf.Empty
     - storage-types/src/sources.proto
 lint:
   use:

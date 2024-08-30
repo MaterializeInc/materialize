@@ -17,6 +17,7 @@ use mz_catalog::{durable::Transaction, memory::objects::StateUpdateKind};
 use mz_dyncfg::ConfigSet;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
+use mz_proto::RustType;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::VisitMut;
@@ -27,6 +28,7 @@ use mz_sql::ast::{
 };
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
+use prost::Message;
 use semver::Version;
 use tracing::info;
 
@@ -127,6 +129,7 @@ pub(crate) async fn migrate(
             // arbitrary changes to the catalog.
             ast_rewrite_create_postgres_subsource_text_columns(stmt, all_items_and_statements)?;
             ast_rewrite_create_sink_partition_strategy(&configs, stmt)?;
+            ast_rewrite_create_load_gen_subsource_details(stmt)?;
             if catalog_version < Version::parse("0.112.0-dev").expect("known to be valid") {
                 ast_rewrite_create_sink_default_compression(stmt)?;
             }
@@ -387,6 +390,111 @@ fn ast_rewrite_create_postgres_subsource_text_columns(
         source_id_to_stmt,
     }
     .visit_statement_mut(stmt);
+
+    Ok(())
+}
+
+/// Populates the 'details' option stored on Load Generator Subsource statements
+/// with the output type of the subsource, to avoid needing to parse 'external references'
+/// anywhere beyond SQL statement purification.
+fn ast_rewrite_create_load_gen_subsource_details(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{CreateSubsourceOptionName, CreateSubsourceStatement, WithOptionValue};
+    use mz_storage_types::sources::load_generator::{
+        AuctionView, LoadGeneratorOutput, MarketingView,
+        ProtoLoadGeneratorSourceExportStatementDetails, TpchView, LOAD_GENERATOR_DATABASE_NAME,
+    };
+    use mz_storage_types::sources::proto_source_export_statement_details::Kind;
+    use mz_storage_types::sources::ProtoSourceExportStatementDetails;
+
+    struct Rewriter {}
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter {
+        fn visit_create_subsource_statement_mut(
+            &mut self,
+            node: &'ast mut CreateSubsourceStatement<Raw>,
+        ) {
+            match &node.of_source {
+                // Not a source-export subsource
+                None => (),
+                Some(_source) => {
+                    let details_option = node
+                        .with_options
+                        .iter()
+                        .find(|o| o.name == CreateSubsourceOptionName::Details)
+                        .expect("subsources must have details");
+                    let details_val = match &details_option.value {
+                        Some(WithOptionValue::Value(Value::String(details))) => details,
+                        _ => unreachable!("subsource details value must be a string"),
+                    };
+                    let details = hex::decode(details_val)
+                        .expect("subsource details must be a hex-encoded string");
+                    let details = ProtoSourceExportStatementDetails::decode(&*details)
+                        .expect("subsource details failed to decode");
+                    match details.kind {
+                        Some(Kind::Loadgen(loadgen_details)) => {
+                            if loadgen_details.output.is_some() {
+                                // This subsource already has the output in its details
+                                return;
+                            }
+                        }
+                        // Not a loadgen subsource
+                        _ => return,
+                    }
+
+                    // Figure out the correct load-gen output for this subsource based on the
+                    // external reference normalized and stored during purification. This is
+                    // only needed one time for this migration and in the future we will determine
+                    // the output directly during purification.
+                    let external_reference = node
+                        .with_options
+                        .iter()
+                        .find(|o| o.name == CreateSubsourceOptionName::ExternalReference)
+                        .expect("subsources must have external reference");
+                    let output = match &external_reference.value {
+                        Some(WithOptionValue::UnresolvedItemName(name)) => {
+                            // This name is generated during purification
+                            // by the `load_generator_ast_to_generator` function as
+                            // (LOAD_GENERATOR_DATABASE_NAME, LoadGenerator::schema_name(), view_name)
+                            let inner = &name.0;
+                            assert_eq!(inner[0].as_str(), LOAD_GENERATOR_DATABASE_NAME);
+                            match inner[1].as_str() {
+                                "auction" => LoadGeneratorOutput::Auction(AuctionView::from(
+                                    inner[2].as_str(),
+                                )),
+                                "marketing" => LoadGeneratorOutput::Marketing(MarketingView::from(
+                                    inner[2].as_str(),
+                                )),
+                                "tpch" => {
+                                    LoadGeneratorOutput::Tpch(TpchView::from(inner[2].as_str()))
+                                }
+                                _ => LoadGeneratorOutput::Default,
+                            }
+                        }
+                        _ => unreachable!("external reference must be an unresolved item name"),
+                    };
+                    let new_details = ProtoSourceExportStatementDetails {
+                        kind: Some(Kind::Loadgen(
+                            ProtoLoadGeneratorSourceExportStatementDetails {
+                                output: Some(output.into_proto()),
+                            },
+                        )),
+                    };
+                    let details_option = node
+                        .with_options
+                        .iter_mut()
+                        .find(|o| o.name == CreateSubsourceOptionName::Details)
+                        .expect("subsources must have details");
+                    details_option.value = Some(WithOptionValue::Value(Value::String(
+                        hex::encode(new_details.encode_to_vec()),
+                    )));
+                }
+            }
+        }
+    }
+
+    Rewriter {}.visit_statement_mut(stmt);
 
     Ok(())
 }

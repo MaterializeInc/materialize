@@ -24,7 +24,7 @@ use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use kafka::KafkaSourceExportDetails;
-use load_generator::LoadGeneratorSourceExportDetails;
+use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use mz_persist_types::stats::{
@@ -1175,8 +1175,6 @@ impl RustType<ProtoSourceExportDetails> for SourceExportDetails {
 /// to generate the appropriate `SourceExportDetails` struct during planning.
 /// NOTE that this is serialized as proto to the catalog, so any changes here
 /// must be backwards compatible or will require a migration.
-/// We only support `CREATE SUBSOURCE` statements for Postgres and MySQL
-/// for now, so we only need to support those here.
 pub enum SourceExportStatementDetails {
     Postgres {
         table: mz_postgres_util::desc::PostgresTableDesc,
@@ -1185,7 +1183,9 @@ pub enum SourceExportStatementDetails {
         table: mz_mysql_util::MySqlTableDesc,
         initial_gtid_set: String,
     },
-    LoadGenerator,
+    LoadGenerator {
+        output: LoadGeneratorOutput,
+    },
 }
 
 impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
@@ -1209,9 +1209,15 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     },
                 )),
             },
-            SourceExportStatementDetails::LoadGenerator => ProtoSourceExportStatementDetails {
-                kind: Some(proto_source_export_statement_details::Kind::Loadgen(())),
-            },
+            SourceExportStatementDetails::LoadGenerator { output } => {
+                ProtoSourceExportStatementDetails {
+                    kind: Some(proto_source_export_statement_details::Kind::Loadgen(
+                        load_generator::ProtoLoadGeneratorSourceExportStatementDetails {
+                            output: output.into_proto().into(),
+                        },
+                    )),
+                }
+            }
         }
     }
 
@@ -1219,25 +1225,22 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
         use proto_source_export_statement_details::Kind;
         Ok(match proto.kind {
             Some(Kind::Postgres(details)) => SourceExportStatementDetails::Postgres {
-                table: mz_postgres_util::desc::PostgresTableDesc::from_proto(
-                    details.table.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "ProtoPostgresSourceExportStatementDetails::table",
-                        )
-                    })?,
-                )?,
+                table: details
+                    .table
+                    .into_rust_if_some("ProtoPostgresSourceExportStatementDetails::table")?,
             },
             Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
-                table: mz_mysql_util::MySqlTableDesc::from_proto(details.table.ok_or_else(
-                    || {
-                        TryFromProtoError::missing_field(
-                            "ProtoMySqlSourceExportStatementDetails::table",
-                        )
-                    },
-                )?)?,
+                table: details
+                    .table
+                    .into_rust_if_some("ProtoMySqlSourceExportStatementDetails::table")?,
+
                 initial_gtid_set: details.initial_gtid_set,
             },
-            Some(Kind::Loadgen(())) => SourceExportStatementDetails::LoadGenerator,
+            Some(Kind::Loadgen(details)) => SourceExportStatementDetails::LoadGenerator {
+                output: details
+                    .output
+                    .into_rust_if_some("ProtoLoadGeneratorSourceExportStatementDetails::output")?,
+            },
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoSourceExportStatementDetails::kind",

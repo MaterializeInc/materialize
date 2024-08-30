@@ -34,7 +34,7 @@ use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogItem, ClusterReplicaProcessStatus, ClusterVariant, Connection, DataSourceDesc, Func,
-    Index, MaterializedView, Sink, Table, Type, View,
+    Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -620,7 +620,10 @@ impl CatalogState {
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
             let defaults = match entry.item() {
-                CatalogItem::Table(table) => Some(&table.defaults),
+                CatalogItem::Table(Table {
+                    data_source: TableDataSource::TableWrites { defaults },
+                    ..
+                }) => Some(defaults),
                 _ => None,
             };
             for (i, (column_name, column_type)) in desc.iter().enumerate() {

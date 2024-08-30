@@ -104,7 +104,7 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, Source,
+    DataSourceDesc, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::InstanceMissing;
@@ -2401,8 +2401,8 @@ impl Coordinator {
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
 
-        let source_desc = |source: &Source| {
-            let (data_source, status_collection_id) = match source.data_source.clone() {
+        let source_desc = |data_source: &DataSourceDesc, desc: &RelationDesc| {
+            let (data_source, status_collection_id) = match data_source.clone() {
                 // Re-announce the source description.
                 DataSourceDesc::Ingestion {
                     ingestion_desc:
@@ -2445,7 +2445,7 @@ impl Coordinator {
                 }
             };
             CollectionDescription {
-                desc: source.desc.clone(),
+                desc: desc.clone(),
                 data_source,
                 since: None,
                 status_collection_id,
@@ -2457,12 +2457,21 @@ impl Coordinator {
             .filter_map(|entry| {
                 let id = entry.id();
                 match entry.item() {
-                    CatalogItem::Source(source) => Some((id, source_desc(source))),
+                    CatalogItem::Source(source) => {
+                        Some((id, source_desc(&source.data_source, &source.desc)))
+                    }
                     CatalogItem::Table(table) => {
-                        let collection_desc = CollectionDescription::from_desc(
-                            table.desc.clone(),
-                            DataSourceOther::TableWrites,
-                        );
+                        let collection_desc = match &table.data_source {
+                            TableDataSource::TableWrites { defaults: _ } => {
+                                CollectionDescription::from_desc(
+                                    table.desc.clone(),
+                                    DataSourceOther::TableWrites,
+                                )
+                            }
+                            TableDataSource::DataSource(data_source_desc) => {
+                                source_desc(data_source_desc, &table.desc)
+                            }
+                        };
                         Some((id, collection_desc))
                     }
                     CatalogItem::MaterializedView(mv) => {

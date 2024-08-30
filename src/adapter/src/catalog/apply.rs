@@ -29,8 +29,8 @@ use mz_catalog::durable::{CatalogError, DurableCatalogError};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
-    Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table, TemporaryItem, Type,
-    UpdateFrom,
+    Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table, TableDataSource,
+    TemporaryItem, Type, UpdateFrom,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::controller::ComputeReplicaConfig;
@@ -589,7 +589,6 @@ impl CatalogState {
                     CatalogItem::Table(Table {
                         create_sql: None,
                         desc: table.desc.clone(),
-                        defaults: vec![Expr::null(); table.desc.arity()],
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(
@@ -601,6 +600,9 @@ impl CatalogState {
                             },
                         ),
                         is_retained_metrics_object: table.is_retained_metrics_object,
+                        data_source: TableDataSource::TableWrites {
+                            defaults: vec![Expr::null(); table.desc.arity()],
+                        },
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),

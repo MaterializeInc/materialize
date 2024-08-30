@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use mz_adapter::catalog::{Catalog, Op};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
-use mz_catalog::memory::objects::{CatalogItem, Table};
+use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_repr::RelationDesc;
 use mz_sql::ast::Statement;
@@ -95,11 +95,13 @@ async fn datadriven() {
                                                 test_case.input.trim_end()
                                             )),
                                             desc: RelationDesc::empty(),
-                                            defaults: vec![],
                                             conn_id: None,
                                             resolved_ids: ResolvedIds(BTreeSet::new()),
                                             custom_logical_compaction_window: None,
                                             is_retained_metrics_object: false,
+                                            data_source: TableDataSource::TableWrites {
+                                                defaults: vec![],
+                                            },
                                         }),
                                         owner_id: MZ_SYSTEM_ROLE_ID,
                                     }],

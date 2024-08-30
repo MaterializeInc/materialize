@@ -51,7 +51,7 @@ use mz_sql_parser::ast::{
     AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnOption, CommentObjectType, CommentStatement,
+    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
     CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
@@ -91,7 +91,7 @@ use mz_storage_types::sources::envelope::{
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
-    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
+    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceConnection,
     LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
@@ -140,9 +140,9 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::{
@@ -396,9 +396,9 @@ pub fn plan_create_table(
     let table = Table {
         create_sql,
         desc,
-        defaults,
         temporary,
         compaction_window,
+        data_source: TableDataSource::TableWrites { defaults },
     };
     Ok(Plan::CreateTable(CreateTablePlan {
         name,
@@ -1222,6 +1222,112 @@ pub fn plan_create_source(
     }))
 }
 
+fn plan_source_export_desc(
+    scx: &StatementContext,
+    name: &UnresolvedItemName,
+    columns: &Vec<ColumnDef<Aug>>,
+    constraints: &Vec<TableConstraint<Aug>>,
+) -> Result<RelationDesc, PlanError> {
+    let names: Vec<_> = columns
+        .iter()
+        .map(|c| normalize::column_name(c.name.clone()))
+        .collect();
+
+    if let Some(dup) = names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    // Build initial relation type that handles declared data types
+    // and NOT NULL constraints.
+    let mut column_types = Vec::with_capacity(columns.len());
+    let mut keys = Vec::new();
+
+    for (i, c) in columns.into_iter().enumerate() {
+        let aug_data_type = &c.data_type;
+        let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
+        let mut nullable = true;
+        for option in &c.options {
+            match &option.option {
+                ColumnOption::NotNull => nullable = false,
+                ColumnOption::Default(_) => {
+                    bail_unsupported!("Source export with default value")
+                }
+                ColumnOption::Unique { is_primary } => {
+                    keys.push(vec![i]);
+                    if *is_primary {
+                        nullable = false;
+                    }
+                }
+                other => {
+                    bail_unsupported!(format!("Source export with column constraint: {}", other))
+                }
+            }
+        }
+        column_types.push(ty.nullable(nullable));
+    }
+
+    let mut seen_primary = false;
+    'c: for constraint in constraints {
+        match constraint {
+            TableConstraint::Unique {
+                name: _,
+                columns,
+                is_primary,
+                nulls_not_distinct,
+            } => {
+                if seen_primary && *is_primary {
+                    sql_bail!(
+                        "multiple primary keys for source export {} are not allowed",
+                        name.to_ast_string_stable()
+                    );
+                }
+                seen_primary = *is_primary || seen_primary;
+
+                let mut key = vec![];
+                for column in columns {
+                    let column = normalize::column_name(column.clone());
+                    match names.iter().position(|name| *name == column) {
+                        None => sql_bail!("unknown column in constraint: {}", column),
+                        Some(i) => {
+                            let nullable = &mut column_types[i].nullable;
+                            if *is_primary {
+                                if *nulls_not_distinct {
+                                    sql_bail!(
+                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
+                                    );
+                                }
+                                *nullable = false;
+                            } else if !(*nulls_not_distinct || !*nullable) {
+                                // Non-primary key unique constraints are only keys if all of their
+                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
+                                break 'c;
+                            }
+
+                            key.push(i);
+                        }
+                    }
+                }
+
+                if *is_primary {
+                    keys.insert(0, key);
+                } else {
+                    keys.push(key);
+                }
+            }
+            TableConstraint::ForeignKey { .. } => {
+                bail_unsupported!("Source export with a foreign key")
+            }
+            TableConstraint::Check { .. } => {
+                bail_unsupported!("Source export with a check constraint")
+            }
+        }
+    }
+
+    let typ = RelationType::new(column_types).with_keys(keys);
+    let desc = RelationDesc::new(typ, names);
+    Ok(desc)
+}
+
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
@@ -1262,103 +1368,7 @@ pub fn plan_create_subsource(
         "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
     );
 
-    let names: Vec<_> = columns
-        .iter()
-        .map(|c| normalize::column_name(c.name.clone()))
-        .collect();
-
-    if let Some(dup) = names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.as_str().quoted());
-    }
-
-    // Build initial relation type that handles declared data types
-    // and NOT NULL constraints.
-    let mut column_types = Vec::with_capacity(columns.len());
-    let mut keys = Vec::new();
-
-    for (i, c) in columns.into_iter().enumerate() {
-        let aug_data_type = &c.data_type;
-        let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
-        let mut nullable = true;
-        for option in &c.options {
-            match &option.option {
-                ColumnOption::NotNull => nullable = false,
-                ColumnOption::Default(_) => {
-                    bail_unsupported!("Subsources cannot have default values")
-                }
-                ColumnOption::Unique { is_primary } => {
-                    keys.push(vec![i]);
-                    if *is_primary {
-                        nullable = false;
-                    }
-                }
-                other => {
-                    bail_unsupported!(format!(
-                        "CREATE SUBSOURCE with column constraint: {}",
-                        other
-                    ))
-                }
-            }
-        }
-        column_types.push(ty.nullable(nullable));
-    }
-
-    let mut seen_primary = false;
-    'c: for constraint in constraints {
-        match constraint {
-            TableConstraint::Unique {
-                name: _,
-                columns,
-                is_primary,
-                nulls_not_distinct,
-            } => {
-                if seen_primary && *is_primary {
-                    sql_bail!(
-                        "multiple primary keys for source {} are not allowed",
-                        name.to_ast_string_stable()
-                    );
-                }
-                seen_primary = *is_primary || seen_primary;
-
-                let mut key = vec![];
-                for column in columns {
-                    let column = normalize::column_name(column.clone());
-                    match names.iter().position(|name| *name == column) {
-                        None => sql_bail!("unknown column in constraint: {}", column),
-                        Some(i) => {
-                            let nullable = &mut column_types[i].nullable;
-                            if *is_primary {
-                                if *nulls_not_distinct {
-                                    sql_bail!(
-                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
-                                    );
-                                }
-                                *nullable = false;
-                            } else if !(*nulls_not_distinct || !*nullable) {
-                                // Non-primary key unique constraints are only keys if all of their
-                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
-                                break 'c;
-                            }
-
-                            key.push(i);
-                        }
-                    }
-                }
-
-                if *is_primary {
-                    keys.insert(0, key);
-                } else {
-                    keys.push(key);
-                }
-            }
-            TableConstraint::ForeignKey { .. } => {
-                bail_unsupported!("CREATE SUBSOURCE with a foreign key")
-            }
-            TableConstraint::Check { .. } => {
-                bail_unsupported!("CREATE SUBSOURCE with a check constraint")
-            }
-        }
-    }
+    let desc = plan_source_export_desc(scx, name, columns, constraints)?;
 
     let data_source = if let Some(source_reference) = of_source {
         // This is a subsource with the "natural" dependency order, i.e. it is
@@ -1399,12 +1409,8 @@ pub fn plan_create_subsource(
                     .map(|c| c.into_string())
                     .collect(),
             }),
-            SourceExportStatementDetails::LoadGenerator => {
-                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
-                    output: mz_storage_types::sources::load_generator::external_reference_to_output(
-                        &external_reference,
-                    ),
-                })
+            SourceExportStatementDetails::LoadGenerator { output } => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
             }
         };
         DataSourceDesc::IngestionExport {
@@ -1422,9 +1428,6 @@ pub fn plan_create_subsource(
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
-
-    let typ = RelationType::new(column_types).with_keys(keys);
-    let desc = RelationDesc::new(typ, names);
 
     let source = Source {
         create_sql,
@@ -1450,28 +1453,94 @@ generate_extracted_config!(
 );
 
 pub fn plan_create_table_from_source(
-    _scx: &StatementContext,
+    scx: &StatementContext,
     stmt: CreateTableFromSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE)?;
+
     let CreateTableFromSourceStatement {
-        name: _,
-        columns: _,
-        constraints: _,
-        if_not_exists: _,
-        source: _,
-        external_reference: _,
+        name,
+        columns,
+        constraints,
+        if_not_exists,
+        source,
+        external_reference,
         with_options,
     } = &stmt;
 
     let TableFromSourceOptionExtracted {
-        text_columns: _,
-        ignore_columns: _,
-        details: _,
+        text_columns,
+        ignore_columns,
+        details,
         seen: _,
     } = with_options.clone().try_into()?;
 
-    // TODO(roshan): Implement this
-    bail_unsupported!("CREATE TABLE .. FROM SOURCE")
+    let source_item = scx.get_item_by_resolved_name(source)?;
+    let ingestion_id = source_item.id();
+
+    let desc = plan_source_export_desc(scx, name, columns, constraints)?;
+
+    // Decode the details option stored on the statement, which contains information
+    // created during the purification process.
+    let details = details
+        .as_ref()
+        .ok_or_else(|| sql_err!("internal error: source-export missing details"))?;
+    let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
+    let details =
+        ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+    let details =
+        SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+    let details = match details {
+        SourceExportStatementDetails::Postgres { table } => {
+            SourceExportDetails::Postgres(PostgresSourceExportDetails {
+                column_casts: crate::pure::postgres::generate_column_casts(
+                    scx,
+                    &table,
+                    &text_columns,
+                )?,
+                table,
+            })
+        }
+        SourceExportStatementDetails::MySql {
+            table,
+            initial_gtid_set,
+        } => SourceExportDetails::MySql(MySqlSourceExportDetails {
+            table,
+            initial_gtid_set,
+            text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
+            ignore_columns: ignore_columns
+                .into_iter()
+                .map(|c| c.into_string())
+                .collect(),
+        }),
+        SourceExportStatementDetails::LoadGenerator { output } => {
+            SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
+        }
+    };
+    let data_source = DataSourceDesc::IngestionExport {
+        ingestion_id,
+        external_reference: external_reference.clone(),
+        details,
+    };
+
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+    let if_not_exists = *if_not_exists;
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateTableFromSource(stmt))?;
+
+    let table = Table {
+        create_sql,
+        desc,
+        temporary: false,
+        compaction_window: None,
+        data_source: TableDataSource::DataSource(data_source),
+    };
+
+    Ok(Plan::CreateTable(CreateTablePlan {
+        name,
+        table,
+        if_not_exists,
+    }))
 }
 
 generate_extracted_config!(
@@ -1539,7 +1608,13 @@ pub(crate) fn load_generator_ast_to_generator(
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
     include_metadata: &[SourceIncludeMetadata],
-) -> Result<(LoadGenerator, Option<BTreeMap<FullItemName, RelationDesc>>), PlanError> {
+) -> Result<
+    (
+        LoadGenerator,
+        Option<BTreeMap<FullItemName, (RelationDesc, LoadGeneratorOutput)>>,
+    ),
+    PlanError,
+> {
     let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
     extracted.ensure_only_valid_options(loadgen)?;
 
@@ -1675,7 +1750,7 @@ pub(crate) fn load_generator_ast_to_generator(
     };
 
     let mut available_subsources = BTreeMap::new();
-    for (name, desc) in load_generator.views() {
+    for (name, desc, output) in load_generator.views() {
         let name = FullItemName {
             database: RawDatabaseSpecifier::Name(
                 mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
@@ -1683,7 +1758,7 @@ pub(crate) fn load_generator_ast_to_generator(
             schema: load_generator.schema_name().into(),
             item: name.to_string(),
         };
-        available_subsources.insert(name, desc);
+        available_subsources.insert(name, (desc, output));
     }
     let available_subsources = if available_subsources.is_empty() {
         None

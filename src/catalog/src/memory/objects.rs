@@ -536,14 +536,13 @@ pub struct Table {
     pub create_sql: Option<String>,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr<Aug>>,
-    #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    pub data_source: TableDataSource,
 }
 
 impl Table {
@@ -552,6 +551,19 @@ impl Table {
     pub fn timeline(&self) -> Timeline {
         Timeline::EpochMilliseconds
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum TableDataSource {
+    /// The table owns data created via INSERT/UPDATE/DELETE statements.
+    TableWrites {
+        #[serde(skip)]
+        defaults: Vec<Expr<Aug>>,
+    },
+
+    /// The table receives its data from the identified `DataSourceDesc`.
+    /// This table type does not support INSERT/UPDATE/DELETE statements.
+    DataSource(DataSourceDesc),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2377,8 +2389,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn table_details(&self) -> Option<&[Expr<Aug>]> {
-        if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
-            Some(defaults)
+        if let CatalogItem::Table(Table {
+            data_source: TableDataSource::TableWrites { defaults },
+            ..
+        }) = self.item()
+        {
+            Some(defaults.as_slice())
         } else {
             None
         }

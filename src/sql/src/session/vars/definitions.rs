@@ -1890,6 +1890,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_create_table_from_source,
+        desc: "CREATE TABLE .. FROM SOURCE",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_unsafe_functions,
         desc: "executing potentially dangerous functions",
         default: false,
