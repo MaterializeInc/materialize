@@ -6,6 +6,12 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+"""
+Tests with limited amount of memory, makes sure that the scenarios keep working
+and do not regress. Contains tests for large data ingestions.
+"""
+
 import math
 from dataclasses import dataclass
 from string import ascii_lowercase

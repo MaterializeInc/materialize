@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Zippy generates a pseudo-random sequence of DDLs, DMLs, failures, data
+validation and other events and runs it sequentially. By keeping track of the
+expected state it can verify results for correctness.
+"""
+
 import random
 import re
 from datetime import timedelta

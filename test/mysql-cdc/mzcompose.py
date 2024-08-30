@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Functional test for the native (non-Debezium) MySQL sources.
+"""
+
 import threading
 from textwrap import dedent
 

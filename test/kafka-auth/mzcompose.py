@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Tests that Materialize can connect to Kafka's various connection modes:
+plaintext, ssl, mssl, sasl_plaintext, sasl_ssl, sasl_mssl
+"""
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

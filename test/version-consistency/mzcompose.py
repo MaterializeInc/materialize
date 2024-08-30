@@ -6,6 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+"""
+Test the consistency with another mz version.
+"""
+
 import argparse
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -45,10 +50,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """
-    Test the consistency with another mz version.
-    """
-
     c.down(destroy_volumes=True)
 
     test = VersionConsistencyTest()

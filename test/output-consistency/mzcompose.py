@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test the output consistency of different query evaluation strategies (e.g.,
+dataflow rendering and constant folding).
+"""
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -26,10 +31,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """
-    Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
-    """
-
     c.down(destroy_volumes=True)
 
     c.up("materialized")

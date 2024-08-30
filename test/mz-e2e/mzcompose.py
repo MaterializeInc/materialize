@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Tests the mz command line tool against a real Cloud instance
+"""
+
 import argparse
 import csv
 import json

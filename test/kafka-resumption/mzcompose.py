@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test that the Kafka <-> Materialize connection (source + sink) can survive
+network problems and interruptions using Toxiyproxy.
+"""
+
 import argparse
 import random
 

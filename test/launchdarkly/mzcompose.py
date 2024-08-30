@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test the LaunchDarkly integration, get configuration flags from LD.
+"""
+
 from itertools import chain
 from os import environ
 from textwrap import dedent

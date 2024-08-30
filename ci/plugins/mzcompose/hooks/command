@@ -97,7 +97,13 @@ if is_truthy "${CI_HEAP_PROFILES:-}"; then
     ) &
 fi
 
-ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}\`"
+TEST_CMD="bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}"
+echo "$TEST_CMD" > test_cmd
+TEST_DESC="$(mzcompose description)"
+echo "$TEST_DESC" > test_desc
+
+ci_uncollapsed_heading ":docker: Running \`$TEST_CMD\`"
+echo "$TEST_DESC"
 
 mzcompose run "${run_args[@]}" |& tee run.log
 RESULT=$?

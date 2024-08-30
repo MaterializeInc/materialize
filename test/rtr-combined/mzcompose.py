@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test that real-time recency works w/ slow ingest of upstream data from Kafka+MySQL+Postgres
+"""
+
 import random
 import threading
 import time
@@ -36,9 +40,6 @@ SERVICES = [
 ]
 
 
-#
-# Test that real-time recency works w/ slow ingest of upstream data.
-#
 def workflow_default(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "materialized")

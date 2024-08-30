@@ -6,6 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+"""Test the retain history feature."""
+
 import time
 from datetime import datetime
 from textwrap import dedent
@@ -23,7 +26,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    """Test the retain history feature."""
     setup(c)
     run_test_with_mv_on_table(c)
     run_test_with_mv_on_table_with_altered_retention(c)

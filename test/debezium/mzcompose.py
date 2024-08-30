@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Connect Postgres/SQL Server/MySQL to Materialize using Kafka+Debezium
+"""
+
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka

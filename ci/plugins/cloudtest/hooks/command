@@ -49,5 +49,8 @@ rm -f kubectl-*.log
 ci_collapsed_heading "kail: Start a new instance"
 NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context "$K8S_CONTEXT" --log-level info
 
-ci_uncollapsed_heading "cloudtest: Running \`bin/pytest ${run_args[*]}\`"
+TEST_CMD="bin/pytest ${run_args[*]}"
+echo "$TEST_CMD" > test_cmd
+
+ci_uncollapsed_heading "cloudtest: Running \`$TEST_CMD\`"
 stdbuf --output=L --error=L bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log

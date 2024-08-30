@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Functional tests which require separate clusterd containers (intead of the
+usual clusterd included in the materialized container).
+"""
+
 import json
 import random
 import re

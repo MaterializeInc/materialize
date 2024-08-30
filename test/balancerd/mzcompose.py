@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Tests using the balancerd service instead of connecting to materialized directly.
+Uses the frontegg-mock instead of a real frontend backend.
+"""
+
 import json
 import ssl
 import uuid

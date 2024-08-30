@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test that skipping versions when upgrading will fail.
+"""
 
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
@@ -34,10 +37,6 @@ def workflow_default(c: Composition) -> None:
 
 
 def workflow_test_version_skips(c: Composition) -> None:
-    """
-    Test that skipping versions when upgrading will fail.
-    """
-
     current_version = MzVersion.parse_cargo()
 
     # If the current version is `v0.X.0-dev`, two_minor_releases_before will be `v0.X-2.Y`.

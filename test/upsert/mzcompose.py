@@ -10,6 +10,10 @@
 # This mzcompose currently tests `UPSERT` sources with `DISK` configured.
 # TODO(guswynn): move ALL upsert-related tests into this directory.
 
+"""
+Test Kafka Upsert sources using Testdrive.
+"""
+
 from pathlib import Path
 from textwrap import dedent
 

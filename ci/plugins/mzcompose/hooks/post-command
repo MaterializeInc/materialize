@@ -82,7 +82,7 @@ CI_ANNOTATE_ERRORS_RESULT=0
 # Uploading large files currently sometimes hangs, as a temporary workaround
 # timeout and don't fail, TODO(def-) Remove timeout again
 timeout 300 buildkite-agent artifact upload "$artifacts_str" || true
-bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$(cat test_cmd)" --test-desc="$(cat test_desc)" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
 buildkite-agent artifact upload "ci-annotate-errors.log"
 
 if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ]; then

@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test toxiproxy disruptions in the persist pubsub connection.
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent

@@ -112,6 +112,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     CpCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
     DescribeCommand().register(parser, subparsers)
+    DescriptionCommand().register(parser, subparsers)
     DownCommand().register(parser, subparsers)
     EventsCommand.register(parser, subparsers)
     ExecCommand.register(parser, subparsers)
@@ -336,6 +337,11 @@ class DescribeCommand(Command):
 
         name_width = min(max(len(name) for name, _ in workflows), 16)
 
+        if composition.description:
+            print("Description:")
+            print(composition.description)
+            print()
+
         print("Services:")
         for name in sorted(composition.compose["services"]):
             print(f"    {name}")
@@ -356,6 +362,15 @@ class DescribeCommand(Command):
     $ ./mzcompose run WORKFLOW --help
 """
         )
+
+
+class DescriptionCommand(Command):
+    name = "description"
+    help = "fetch the Python code description from mzcompose.py"
+
+    def run(self, args: argparse.Namespace) -> None:
+        composition = load_composition(args)
+        print(composition.description)
 
 
 class SqlCommand(Command):

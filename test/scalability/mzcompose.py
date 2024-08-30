@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Benchmark for how various queries scale, compares against old Materialize versions.
+"""
+
 import argparse
 import sys
 from pathlib import Path

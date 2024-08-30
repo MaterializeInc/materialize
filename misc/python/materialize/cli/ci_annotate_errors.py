@@ -282,6 +282,8 @@ class Annotation:
     buildkite_job_id: str
     is_failure: bool
     build_history_on_main: BuildHistory
+    test_cmd: str
+    test_desc: str
     unknown_errors: Sequence[ObservedBaseError] = field(default_factory=list)
     known_errors: Sequence[ObservedBaseError] = field(default_factory=list)
 
@@ -302,6 +304,7 @@ class Annotation:
             title = f"{title}, but no error in logs found"
 
         markdown = title
+
         if self.build_history_on_main.has_entries():
             markdown += ", " + self.build_history_on_main.to_markdown()
 
@@ -333,6 +336,8 @@ class Annotation:
             self.known_errors, approx_max_length - len(markdown)
         )
 
+        markdown += f"\n<details><summary>Test details & reproducer</summary>\n{self.test_desc}\n<pre>{self.test_cmd}</pre>\n</details>\n"
+
         if wrap_in_details:
             markdown = f"<details>{markdown}\n</details>"
 
@@ -349,6 +354,8 @@ and finds associated open GitHub issues in Materialize repository.""",
     )
 
     parser.add_argument("--cloud-hostname", type=str)
+    parser.add_argument("--test-cmd", type=str)
+    parser.add_argument("--test-desc", type=str, default="")
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
@@ -364,7 +371,7 @@ and finds associated open GitHub issues in Materialize repository.""",
         )
 
         number_of_unknown_errors = annotate_logged_errors(
-            args.log_files, test_analytics
+            args.log_files, test_analytics, args.test_cmd, args.test_desc
         )
     except Exception as e:
         test_analytics.on_upload_failed(e)
@@ -388,6 +395,8 @@ def annotate_errors(
     known_errors: Sequence[ObservedBaseError],
     build_history_on_main: BuildHistory,
     test_analytics_db: TestAnalyticsDb,
+    test_cmd: str,
+    test_desc: str,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
@@ -402,6 +411,8 @@ def annotate_errors(
         build_history_on_main=build_history_on_main,
         unknown_errors=unknown_errors,
         known_errors=known_errors,
+        test_cmd=test_cmd,
+        test_desc=test_desc,
     )
 
     add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
@@ -427,7 +438,7 @@ def group_identical_errors(
 
 
 def annotate_logged_errors(
-    log_files: list[str], test_analytics: TestAnalyticsDb
+    log_files: list[str], test_analytics: TestAnalyticsDb, test_cmd: str, test_desc: str
 ) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
@@ -595,7 +606,14 @@ def annotate_logged_errors(
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
     build_history_on_main = get_failures_on_main(test_analytics)
-    annotate_errors(unknown_errors, known_errors, build_history_on_main, test_analytics)
+    annotate_errors(
+        unknown_errors,
+        known_errors,
+        build_history_on_main,
+        test_analytics,
+        test_cmd,
+        test_desc,
+    )
 
     if unknown_errors:
         print(
@@ -623,6 +641,8 @@ def annotate_logged_errors(
             build_history_on_main=build_history_on_main,
             unknown_errors=[],
             known_errors=[],
+            test_cmd=test_cmd,
+            test_desc=test_desc,
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
 

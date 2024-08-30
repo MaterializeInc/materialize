@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test replica isolation by introducing faults of various kinds in replica1 and
+then making sure that the cluster continues to operate properly
+"""
+
+
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -404,10 +410,6 @@ disruptions = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Test replica isolation by introducing faults of various kinds in replica1
-    and then making sure that the cluster continues to operate properly
-    """
-
     parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
     args = parser.parse_args()

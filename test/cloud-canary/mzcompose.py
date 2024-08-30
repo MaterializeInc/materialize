@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Deploy the current version on a real Staging Cloud, and run some basic
+verifications, like ingesting data from Kafka and Redpanda Cloud using AWS
+Privatelink. Runs only on main and release branches.
+"""
+
 import argparse
 import glob
 import itertools
