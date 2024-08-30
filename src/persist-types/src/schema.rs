@@ -363,6 +363,7 @@ mod tests {
                 assert_eq!(new.data_type(), migrated.data_type());
             }
         }
+
         fn struct_(fields: impl IntoIterator<Item = (&'static str, DataType, bool)>) -> DataType {
             let fields = fields
                 .into_iter()
@@ -491,6 +492,51 @@ mod tests {
         // Regression test for migrating a RelationDesc with no columns
         // (which gets encoded as a NullArray) to a RelationDesc with one
         // nullable column.
-        testcase(Null, struct_([("a", Boolean, true)]), Some(false))
+        testcase(Null, struct_([("a", Boolean, true)]), Some(false));
+
+        // Test that we can migrate the old maparray columns to listarrays if the contents match.
+        testcase(
+            Map(
+                Field::new_struct(
+                    "map_entries",
+                    vec![
+                        Field::new("keys", Utf8, false),
+                        Field::new("values", Boolean, true),
+                    ],
+                    false,
+                )
+                .into(),
+                true,
+            ),
+            List(
+                Field::new_struct(
+                    "map_entries",
+                    vec![
+                        Field::new("keys", Utf8, false),
+                        Field::new("values", Boolean, true),
+                    ],
+                    false,
+                )
+                .into(),
+            ),
+            Some(false),
+        );
+
+        // Recursively migrate list contents
+        testcase(
+            List(Field::new_struct("entries", vec![Field::new("keys", Utf8, false)], true).into()),
+            List(
+                Field::new_struct(
+                    "entries",
+                    vec![
+                        Field::new("keys", Utf8, false),
+                        Field::new("values", Boolean, true),
+                    ],
+                    true,
+                )
+                .into(),
+            ),
+            Some(false),
+        );
     }
 }
