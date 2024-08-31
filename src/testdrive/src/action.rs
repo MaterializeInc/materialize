@@ -749,6 +749,7 @@ impl Run for PosCommand {
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
                     "kafka-wait-topic" => kafka::run_wait_topic(builtin, state).await,
+                    "kafka-delete-records" => kafka::run_delete_records(builtin, state).await,
                     "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,

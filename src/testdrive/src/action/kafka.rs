@@ -9,6 +9,7 @@
 
 mod add_partitions;
 mod create_topic;
+mod delete_records;
 mod delete_topic;
 mod ingest;
 mod verify_commit;
@@ -18,6 +19,7 @@ mod wait_topic;
 
 pub use add_partitions::run_add_partitions;
 pub use create_topic::run_create_topic;
+pub use delete_records::run_delete_records;
 pub use delete_topic::run_delete_topic;
 pub use ingest::run_ingest;
 pub use verify_commit::run_verify_commit;
