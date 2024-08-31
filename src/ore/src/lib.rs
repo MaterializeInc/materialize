@@ -68,6 +68,7 @@ pub mod netio;
 pub mod now;
 pub mod num;
 pub mod option;
+#[cfg(not(target_family = "wasm"))]
 pub mod panic;
 pub mod path;
 pub mod permutations;

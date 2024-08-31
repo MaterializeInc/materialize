@@ -106,7 +106,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    mz_ore::panic::set_abort_on_panic();
+    mz_ore::panic::install_enhanced_handler();
 
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),

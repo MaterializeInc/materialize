@@ -31,6 +31,7 @@ either = "1.8.0"
 flatcontainer = { version = "0.5.0", optional = true }
 futures = { version = "0.3.25", optional = true }
 hibitset = { version = "0.6.4", optional = true }
+itertools = "0.10.5"
 lgalloc = { version = "0.3", optional = true }
 libc = { version = "0.2.138", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }

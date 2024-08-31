@@ -5559,6 +5559,7 @@ dependencies = [
  "http 1.1.0",
  "hyper-tls 0.6.0",
  "hyper-util",
+ "itertools 0.10.5",
  "lgalloc",
  "libc",
  "mz-ore",

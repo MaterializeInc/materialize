@@ -55,7 +55,7 @@ pub async fn run<S: Service + 'static>(args: Args) -> Result<(), anyhow::Error> 
     // tricky to be confident that we're not accidentally swallowing
     // panics in async tasks (in fact there was a bug that did exactly
     // this at one point), so abort on any panics to be extra sure.
-    mz_ore::panic::set_abort_on_panic();
+    mz_ore::panic::install_enhanced_handler();
 
     // Run the maelstrom stuff in a spawn_blocking because it internally
     // spawns tasks, so the runtime needs to be in the TLC.
