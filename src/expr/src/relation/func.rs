@@ -286,8 +286,8 @@ where
     order_aggregate_datums_with_rank(datums, order_by).map(|(expr, _order_row)| expr)
 }
 
-// Assuming datums is a List, sort them by the 2nd through Nth elements
-// corresponding to order_by, then return the 1st element and computed order by expression.
+/// Assuming datums is a List, sort them by the 2nd through Nth elements
+/// corresponding to order_by, then return the 1st element and computed order by expression.
 fn order_aggregate_datums_with_rank<'a, I>(
     datums: I,
     order_by: &[ColumnOrder],
@@ -297,11 +297,12 @@ where
 {
     let mut rows: Vec<(Datum, Row)> = datums
         .into_iter()
-        .filter_map(|d| {
+        .map(|d| {
             let list = d.unwrap_list();
-            let expr = list.iter().next().unwrap();
-            let order_row = Row::pack(list.iter().skip(1));
-            Some((expr, order_row))
+            let mut list_it = list.iter();
+            let expr = list_it.next().unwrap();
+            let order_row = Row::pack(list_it);
+            (expr, order_row)
         })
         .collect();
 
@@ -312,7 +313,11 @@ where
         let right_datums = right_datum_vec.borrow_with(&right.1);
         compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
     };
-    rows.sort_by(&mut sort_by);
+    // `sort_unstable_by` can be faster and uses less memory than `sort_by`. An unstable sort is
+    // enough here, because if two elements are equal in our `compare` function, then the elements
+    // are actually binary-equal (because of the `tiebreaker` given to `compare_columns`), so it
+    // doesn't matter what order they end up in.
+    rows.sort_unstable_by(&mut sort_by);
     rows.into_iter()
 }
 
@@ -961,6 +966,7 @@ where
 
     let input_datums_with_ranks = order_aggregate_datums_with_rank(input_datums, order_by);
 
+    // TODO: `with_capacity`
     let mut encoded_argsss = vec![Vec::new(); funcs.len()];
     let mut original_rows = Vec::new();
     let mut order_by_rows = Vec::new();
@@ -978,6 +984,7 @@ where
         }
     }
 
+    // TODO: `with_capacity`
     let mut results_per_row = vec![Vec::new(); original_rows.len()];
     for (func, encoded_argss) in funcs.iter().zip_eq(encoded_argsss) {
         let results = match func {
