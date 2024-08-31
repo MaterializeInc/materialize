@@ -1081,9 +1081,10 @@ pub static KAFKA_SOCKET_KEEPALIVE: VarDefinition = VarDefinition::new(
 /// `kafka_transaction_timeout`, or less than 10ms.
 pub static KAFKA_SOCKET_TIMEOUT: VarDefinition = VarDefinition::new(
     "kafka_socket_timeout",
-    value!(Duration; mz_kafka_util::client::DEFAULT_SOCKET_TIMEOUT),
+    value!(Option<Duration>; None),
     "Controls `socket.timeout.ms` for rdkafka \
-        client connections. Defaults to the rdkafka default (60000ms). \
+        client connections. Defaults to the rdkafka default (60000ms) or \
+        the set transaction timeout + 100ms, whichever one is smaller. \
         Cannot be greater than 300000ms, more than 100ms greater than \
         `kafka_transaction_timeout`, or less than 10ms.",
     false,
@@ -1123,9 +1124,9 @@ pub static KAFKA_FETCH_METADATA_TIMEOUT: VarDefinition = VarDefinition::new(
 /// Controls the timeout when fetching kafka progress records. Defaults to 60s.
 pub static KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: VarDefinition = VarDefinition::new(
     "kafka_progress_record_fetch_timeout",
-    value!(Duration; mz_kafka_util::client::DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT),
+    value!(Option<Duration>; None),
     "Controls the timeout when fetching kafka progress records. \
-        Defaults to 60s.",
+        Defaults to 60s or the transaction timeout, whichever one is larger.",
     false,
 );
 

@@ -785,11 +785,11 @@ impl TimeoutConfig {
     /// range are defaulted and cause an error log.
     pub fn build(
         keepalive: bool,
-        socket_timeout: Duration,
+        socket_timeout: Option<Duration>,
         transaction_timeout: Duration,
         socket_connection_setup_timeout: Duration,
         fetch_metadata_timeout: Duration,
-        progress_record_fetch_timeout: Duration,
+        progress_record_fetch_timeout: Option<Duration>,
         default_metadata_fetch_interval: Duration,
     ) -> TimeoutConfig {
         // Constrain values based on ranges here:
@@ -816,6 +816,10 @@ impl TimeoutConfig {
             transaction_timeout
         };
 
+        let progress_record_fetch_timeout_derived_default =
+            std::cmp::max(transaction_timeout, DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT);
+        let progress_record_fetch_timeout =
+            progress_record_fetch_timeout.unwrap_or(progress_record_fetch_timeout_derived_default);
         let progress_record_fetch_timeout = if progress_record_fetch_timeout < transaction_timeout {
             error!(
                 "progress record fetch ({progress_record_fetch_timeout:?}) less than transaction \
@@ -832,10 +836,9 @@ impl TimeoutConfig {
             transaction_timeout + Duration::from_millis(100),
             Duration::from_secs(300),
         );
-        let derived_default = std::cmp::min(
-            transaction_timeout + Duration::from_millis(100),
-            DEFAULT_SOCKET_TIMEOUT,
-        );
+        let socket_timeout_derived_default =
+            std::cmp::min(max_socket_timeout, DEFAULT_SOCKET_TIMEOUT);
+        let socket_timeout = socket_timeout.unwrap_or(socket_timeout_derived_default);
         let socket_timeout = if socket_timeout > max_socket_timeout {
             error!(
                 "socket_timeout ({socket_timeout:?}) greater than max \
@@ -847,9 +850,9 @@ impl TimeoutConfig {
         } else if socket_timeout.as_millis() < 10 {
             error!(
                 "socket_timeout ({socket_timeout:?}) less than min \
-                of 10ms, defaulting to the default of {derived_default:?}"
+                of 10ms, defaulting to the default of {socket_timeout_derived_default:?}"
             );
-            derived_default
+            socket_timeout_derived_default
         } else {
             socket_timeout
         };
