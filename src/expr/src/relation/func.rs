@@ -859,9 +859,10 @@ where
     let datums = order_aggregate_datums_with_rank(datums, order_by);
 
     // Decode the input (OriginalRow, InputValue) into separate datums, while keeping the OrderByRow
-    let mut args = Vec::new();
-    let mut original_rows = Vec::new();
-    let mut order_by_rows = Vec::new();
+    let size_hint = datums.size_hint().0;
+    let mut args = Vec::with_capacity(size_hint);
+    let mut original_rows = Vec::with_capacity(size_hint);
+    let mut order_by_rows = Vec::with_capacity(size_hint);
     for (d, order_by_row) in datums.into_iter() {
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
@@ -1001,10 +1002,10 @@ where
 
     let input_datums_with_ranks = order_aggregate_datums_with_rank(input_datums, order_by);
 
-    // TODO: `with_capacity`
-    let mut encoded_argsss = vec![Vec::new(); funcs.len()];
-    let mut original_rows = Vec::new();
-    let mut order_by_rows = Vec::new();
+    let size_hint = input_datums_with_ranks.size_hint().0;
+    let mut encoded_argsss = vec![Vec::with_capacity(size_hint); funcs.len()];
+    let mut original_rows = Vec::with_capacity(size_hint);
+    let mut order_by_rows = Vec::with_capacity(size_hint);
     for (d, order_by_row) in input_datums_with_ranks {
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
@@ -1019,8 +1020,7 @@ where
         }
     }
 
-    // TODO: `with_capacity`
-    let mut results_per_row = vec![Vec::new(); original_rows.len()];
+    let mut results_per_row = vec![Vec::with_capacity(funcs.len()); original_rows.len()];
     for (func, encoded_argss) in funcs.iter().zip_eq(encoded_argsss) {
         let results = match func {
             AggregateFunc::LagLead {
