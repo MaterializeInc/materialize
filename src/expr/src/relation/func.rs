@@ -276,7 +276,7 @@ where
 
 // Assuming datums is a List, sort them by the 2nd through Nth elements
 // corresponding to order_by, then return the 1st element.
-fn order_aggregate_datums<'a, I>(
+pub fn order_aggregate_datums<'a, I>(
     datums: I,
     order_by: &[ColumnOrder],
 ) -> impl Iterator<Item = Datum<'a>>
@@ -3491,11 +3491,12 @@ impl fmt::Display for TableFunc {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc,
+    };
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
-
-    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
 
     proptest! {
        #[mz_ore::test]

@@ -13,6 +13,10 @@ workspace = true
 name = "like_pattern"
 harness = false
 
+[[bench]]
+name = "window_functions"
+harness = false
+
 [dependencies]
 aho-corasick = "1.1.3"
 anyhow = "1.0.66"
@@ -69,6 +73,7 @@ datadriven = "0.8.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.60"
+rand = "0.8.5"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
