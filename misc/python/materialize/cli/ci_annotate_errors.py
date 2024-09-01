@@ -725,16 +725,13 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
                 # Handling every services.log line here, filter to
                 # handle only the ones which are currently in a panic
                 # handler:
-                if panic_msg := open_panics.get(match.group("service")):
-                    if b"stack backtrace:" in line:
-                        del open_panics[match.group("service")]
-                        if IGNORE_RE.search(panic_msg):
-                            continue
-                        collected_panics.append(ErrorLog(panic_msg, log_file_name))
-                    else:
-                        open_panics[match.group("service")] = (
-                            panic_msg + b" " + match.group("msg")
-                        )
+                if panic_start := open_panics.get(match.group("service")):
+                    del open_panics[match.group("service")]
+                    if IGNORE_RE.search(match.group(0)):
+                        continue
+                    collected_panics.append(
+                        ErrorLog(panic_start + b" " + match.group("msg"), log_file_name)
+                    )
     assert not open_panics, f"Panic log never finished: {open_panics}"
 
     return collected_panics

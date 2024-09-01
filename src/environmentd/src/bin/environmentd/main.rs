@@ -607,7 +607,7 @@ fn main() {
 }
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
-    mz_ore::panic::set_abort_on_panic();
+    mz_ore::panic::install_enhanced_handler();
     let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be

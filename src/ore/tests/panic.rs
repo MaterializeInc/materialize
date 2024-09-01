@@ -15,7 +15,7 @@
 
 use std::panic;
 
-use mz_ore::panic::{catch_unwind, set_abort_on_panic};
+use mz_ore::panic::{catch_unwind, install_enhanced_handler};
 use scopeguard::defer;
 
 // IMPORTANT!!! Do not add any additional tests to this file. This test sets and
@@ -29,7 +29,7 @@ fn catch_panic() {
         panic::set_hook(old_hook);
     }
 
-    set_abort_on_panic();
+    install_enhanced_handler();
 
     let result = catch_unwind(|| {
         panic!("panicked");

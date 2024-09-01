@@ -136,6 +136,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    mz_ore::panic::install_enhanced_handler();
+
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
@@ -146,7 +148,6 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    mz_ore::panic::set_abort_on_panic();
     let metrics_registry = MetricsRegistry::new();
     let (tracing_handle, _tracing_guard) = args
         .tracing
