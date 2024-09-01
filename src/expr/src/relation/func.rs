@@ -295,30 +295,53 @@ fn order_aggregate_datums_with_rank<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let mut rows: Vec<(Datum, Row)> = datums
+    let mut rows: Vec<(Datum, Vec<Datum>)> = datums
         .into_iter()
         .map(|d| {
             let list = d.unwrap_list();
             let mut list_it = list.iter();
-            let expr = list_it.next().unwrap();
-            let order_row = Row::pack(list_it);
-            (expr, order_row)
+            let payload = list_it.next().unwrap();
+
+            // We decode the order_by Datums here instead of the comparison function, because the
+            // comparison function is expected to be called `O(log n)` times on each input row.
+            // The only downside is that the decoded data might be bigger, but I think that's fine,
+            // because:
+            // - if we have a window partition so big that this would create a memory problem, then
+            //   the non-incrementalness of window functions will create a serious CPU problem
+            //   anyway,
+            // - and anyhow various other parts of the window function code already do decoding
+            //   upfront.
+            let mut order_by_datums = Vec::with_capacity(order_by.len());
+            for _ in 0..order_by.len() {
+                order_by_datums.push(
+                    list_it
+                        .next()
+                        .expect("must have exactly the same number of Datums as `order_by`"),
+                );
+            }
+
+            (payload, order_by_datums)
         })
         .collect();
 
-    let mut left_datum_vec = mz_repr::DatumVec::new();
-    let mut right_datum_vec = mz_repr::DatumVec::new();
-    let mut sort_by = |left: &(_, Row), right: &(_, Row)| {
-        let left_datums = left_datum_vec.borrow_with(&left.1);
-        let right_datums = right_datum_vec.borrow_with(&right.1);
-        compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
-    };
+    let mut sort_by =
+        |(payload_left, left_order_by_datums): &(Datum, Vec<Datum>),
+         (payload_right, right_order_by_datums): &(Datum, Vec<Datum>)| {
+            compare_columns(
+                order_by,
+                left_order_by_datums,
+                right_order_by_datums,
+                || payload_left.cmp(payload_right),
+            )
+        };
     // `sort_unstable_by` can be faster and uses less memory than `sort_by`. An unstable sort is
     // enough here, because if two elements are equal in our `compare` function, then the elements
     // are actually binary-equal (because of the `tiebreaker` given to `compare_columns`), so it
     // doesn't matter what order they end up in.
     rows.sort_unstable_by(&mut sort_by);
+
     rows.into_iter()
+        .map(|(payload, order_by_datums)| (payload, Row::pack(order_by_datums.into_iter())))
 }
 
 fn array_concat<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
