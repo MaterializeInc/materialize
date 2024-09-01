@@ -72,9 +72,11 @@ use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
     WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
 };
+use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger;
 use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
+use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -154,7 +156,6 @@ use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp as _};
-use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -182,15 +183,13 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{
-    dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
-};
+use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
-use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
+use crate::{flags, AdapterNotice, ReadHolds};
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
@@ -1852,20 +1851,25 @@ impl Coordinator {
             optimize_dataflows_start.elapsed()
         );
 
+        // Select dataflow as-ofs. This step relies on the storage collections created by
+        // `bootstrap_storage_collections` and the dataflow plans created by
+        // `bootstrap_dataflow_plans`.
+        let bootstrap_as_ofs_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: dataflow as-of bootstrapping beginning");
+        let dataflow_read_holds = self.bootstrap_dataflow_as_ofs().await;
+        info!(
+            "startup: coordinator init: bootstrap: dataflow as-of bootstrapping complete in {:?}",
+            bootstrap_as_ofs_start.elapsed()
+        );
+
         let postamble_start = Instant::now();
         info!("startup: coordinator init: bootstrap: postamble beginning");
-
-        // Discover storage constrains on compute dataflows. Needed for as-of selection below.
-        // These steps rely on the dataflow plans created by `bootstrap_dataflow_plans`.
-        let mut dataflow_storage_constraints = self.collect_dataflow_storage_constraints();
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
 
         let mut privatelink_connections = BTreeMap::new();
-
-        let local_read_ts_for_index_bootstrapping = self.get_local_read_ts().await;
 
         for entry in &entries {
             // TODO(#26794): we should move this invariant into `CatalogEntry`.
@@ -1944,41 +1948,11 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        let mut df_desc = self
+                        let df_desc = self
                             .catalog()
                             .try_get_physical_plan(&entry.id())
                             .expect("added in `bootstrap_dataflow_plans`")
                             .clone();
-
-                        // Timestamp selection
-                        let storage_constraints = dataflow_storage_constraints
-                            .remove(&entry.id())
-                            .expect("all dataflow storage constraints were collected");
-
-                        let compaction_window = if idx.is_retained_metrics_object {
-                            let retention =
-                                self.catalog().state().system_config().metrics_retention();
-                            match u64::try_from(retention.as_millis()) {
-                                Ok(d) => CompactionWindow::Duration(Timestamp::new(d)),
-                                Err(_) => {
-                                    tracing::error!(
-                                        "absurd metrics retention duration: {retention:?}"
-                                    );
-                                    CompactionWindow::DisableCompaction
-                                }
-                            }
-                        } else {
-                            idx.custom_logical_compaction_window.unwrap_or_default()
-                        };
-
-                        let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
-                            &df_desc,
-                            idx.cluster_id,
-                            storage_constraints,
-                            compaction_window,
-                            local_read_ts_for_index_bootstrapping,
-                        );
-                        df_desc.set_as_of(as_of);
 
                         let df_meta = self
                             .catalog()
@@ -2006,10 +1980,6 @@ impl Coordinator {
                             .compute
                             .create_dataflow(idx.cluster_id, df_desc)
                             .unwrap_or_terminate("cannot fail to create dataflows");
-
-                        // Drop read holds after the dataflow has been shipped, at which
-                        // point compute will have put in its own read holds.
-                        drop(read_holds);
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -2026,19 +1996,6 @@ impl Coordinator {
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
-                    // Timestamp selection
-                    let storage_constraints = dataflow_storage_constraints
-                        .remove(&entry.id())
-                        .expect("all dataflow storage constraints were collected");
-
-                    let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
-                        &df_desc,
-                        mview.cluster_id,
-                        storage_constraints,
-                        mview.custom_logical_compaction_window.unwrap_or_default(),
-                        local_read_ts_for_index_bootstrapping,
-                    );
-                    df_desc.set_as_of(as_of);
                     if let Some(initial_as_of) = mview.initial_as_of.clone() {
                         df_desc.set_initial_as_of(initial_as_of);
                     }
@@ -2068,10 +2025,6 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, mview.cluster_id).await;
-
-                    // Drop read holds after the dataflow has been shipped, at which
-                    // point compute will have put in its own read holds.
-                    drop(read_holds);
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
@@ -2118,8 +2071,9 @@ impl Coordinator {
             }
         }
 
-        // Having installed all entries, creating all constraints, we can now relax read policies.
-        //
+        // Having installed all entries, creating all constraints, we can now drop read holds and
+        // relax read policies.
+        drop(dataflow_read_holds);
         // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
@@ -2681,279 +2635,45 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Collects for each compute dataflow (index, MV) the storage collections that constrain
-    /// timestamp selection.
+    /// Selects for each compute dataflow an as-of suitable for bootstrapping it.
     ///
-    /// The returned information is required during coordinator bootstrap for index and MV as-of
-    /// selection, to ensure that selected as-ofs satisfy these constraints.
+    /// Returns a set of [`ReadHold`]s that ensures the read frontiers of involved collections stay
+    /// in place and that must not be dropped before all compute dataflows have been created with
+    /// the compute controller.
     ///
-    /// This method expects all dataflow plans to be available, so it must run after
+    /// This method expects all storage collections and dataflow plans to be available, so it must
+    /// run after [`Coordinator::bootstrap_storage_collections`] and
     /// [`Coordinator::bootstrap_dataflow_plans`].
-    fn collect_dataflow_storage_constraints(&self) -> BTreeMap<GlobalId, StorageConstraints> {
-        let is_storage_collection =
-            |id: &GlobalId| self.controller.storage.check_exists(*id).is_ok();
-
-        // Collect index imports and direct storage constraints for all dataflows.
-        let mut index_imports: BTreeMap<_, Vec<_>> = Default::default();
-        let mut constraints: BTreeMap<_, StorageConstraints> = Default::default();
-        let catalog = self.catalog();
-        for entry in catalog.entries() {
+    async fn bootstrap_dataflow_as_ofs(&mut self) -> BTreeMap<GlobalId, ReadHold<Timestamp>> {
+        let mut catalog_ids = Vec::new();
+        let mut dataflows = Vec::new();
+        let mut read_policies = BTreeMap::new();
+        for entry in self.catalog.entries() {
             let id = entry.id();
-            if let Some(plan) = catalog.try_get_physical_plan(&id) {
-                let index_import_ids = plan.index_imports.keys().copied().collect();
-                let storage_import_ids = plan.source_imports.keys().copied().collect();
-                let sink_export_ids = plan.sink_exports.keys().copied();
-                let storage_export_ids = sink_export_ids.filter(is_storage_collection).collect();
+            if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
+                catalog_ids.push(id);
+                dataflows.push(plan.clone());
 
-                index_imports.insert(id, index_import_ids);
-                constraints.insert(
-                    id,
-                    StorageConstraints {
-                        dependencies: storage_import_ids,
-                        dependants: storage_export_ids,
-                    },
-                );
-            }
+                if let Some(compaction_window) = entry.item().initial_logical_compaction_window() {
+                    read_policies.insert(id, compaction_window.into());
+                }
+            };
         }
 
-        // Collect transitive constraints through indexes.
-        //
-        // Objects with larger IDs tend to depend on objects with smaller IDs. We don't want to
-        // rely on that being true, but we can use it to be more efficient. We do so by having two
-        // fixpoint loops. The first iterates forwards through the index dependencies to propagate
-        // `dependencies` constraints, the seconds iterates backwards through the index
-        // dependencies to propagate `dependants` constraints.
-
-        fn fixpoint(mut step: impl FnMut(&mut bool)) {
-            loop {
-                let mut changed = false;
-                step(&mut changed);
-                if !changed {
-                    break;
-                }
-            }
-        }
-
-        fixpoint(|changed| {
-            for (id, idx_deps) in index_imports.iter() {
-                let transitive_deps: Vec<_> = idx_deps
-                    .iter()
-                    .flat_map(|dep_id| constraints[dep_id].dependencies.iter().copied())
-                    .collect();
-                let entry = constraints.get_mut(id).expect("inserted above");
-                for dep_id in transitive_deps {
-                    *changed |= entry.dependencies.insert(dep_id);
-                }
-            }
-        });
-        fixpoint(|changed| {
-            for (id, idx_deps) in index_imports.iter().rev() {
-                let transitive_depts = constraints[id].dependants.clone();
-                if transitive_depts.is_empty() {
-                    continue;
-                }
-                for dep_id in idx_deps {
-                    let entry = constraints.get_mut(dep_id).expect("inserted above");
-                    for dept_id in &transitive_depts {
-                        *changed |= entry.dependants.insert(*dept_id);
-                    }
-                }
-            }
-        });
-
-        constraints
-    }
-
-    /// Returns an `as_of` suitable for bootstrapping the given index or materialized view
-    /// dataflow, along with a [ReadHolds] that ensures the sinces of involved collections
-    /// stay in place.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the given dataflow exports neither an index nor a materialized view.
-    fn bootstrap_dataflow_as_of(
-        &mut self,
-        dataflow: &DataflowDescription<Plan>,
-        cluster_id: ComputeInstanceId,
-        storage_constraints: StorageConstraints,
-        compaction_window: CompactionWindow,
-        local_read_ts: Timestamp,
-    ) -> (Antichain<Timestamp>, ReadHolds<Timestamp>) {
-        // Supporting multi-export dataflows is not impossible but complicates the logic, so we
-        // punt on it until we actually want to create such dataflows.
-        assert!(
-            dataflow.export_ids().count() <= 1,
-            "multi-export dataflows not supported"
+        let read_ts = self.get_local_read_ts().await;
+        let read_holds = as_of_selection::run(
+            &mut dataflows,
+            &read_policies,
+            &*self.controller.storage_collections,
+            read_ts,
         );
 
-        // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
-        // the `since`s of all dependencies.
-        let direct_dependencies = dataflow_import_id_bundle(dataflow, cluster_id);
-
-        // We're putting in place read holds, to prevent the since of
-        // dependencies moving along concurrently, pulling the rug from under
-        // us!
-        let read_holds = self.acquire_read_holds(&direct_dependencies);
-
-        let min_as_of = self.least_valid_read(&read_holds);
-
-        // We must not select an `as_of` that is beyond any times that have not yet been written to
-        // downstream storage collections (i.e., materialized views). If we would, we might skip
-        // times in the output of these storage collections, violating correctness. So our chosen
-        // `as_of` must be at most the meet of the `upper`s of all dependent storage collections.
-        //
-        // An exception are storage collections that have an `upper` that's less than their `since`
-        // (most likely because they have not yet produced their snapshot). For these collections
-        // we only need to provide output starting from their `since`s, so these serve as upper
-        // bounds for our `as_of`.
-        let mut max_as_of = Antichain::new();
-        let dependent_frontiers =
-            self.storage_frontiers(storage_constraints.dependants.iter().cloned().collect());
-        for (_id, since, upper) in dependent_frontiers {
-            max_as_of.meet_assign(&since.join(&upper));
+        let catalog = self.catalog_mut();
+        for (id, plan) in catalog_ids.into_iter().zip(dataflows) {
+            catalog.set_physical_plan(id, plan);
         }
 
-        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
-        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
-        // might still be installed on replicas, but ideally not much farther as that would prevent
-        // dataflow warmup.
-        //
-        // The compute controller maintains warmup capabilities for each dataflow, at the meet of
-        // the greatest available read frontiers (i.e. `upper.step_back()`) of all dataflow inputs.
-        // Dataflows installed on replicas are thus prevented from compacting beyond these warmup
-        // frontiers, so if we can reconstruct them, we know that reconciliation will succeed. Note
-        // that to reconstruct a warmup frontier, we must only take into account the frontiers of
-        // (transitive) storage dependencies: The frontiers of index dependencies can regress
-        // across restarts, so we'd risk ending up with a warmup frontier that is too early to
-        // ensure successful reconciliation.
-        //
-        // Note that choosing the warmup frontier only based on storage dependencies means that the
-        // dataflow might have to wait for indexes in between to catch up to this frontier, if
-        // their `as_of` is selected earlier.
-        let storage_dependencies = storage_constraints.dependencies_bundle();
-        let warmup_frontier = self.greatest_available_read(&storage_dependencies);
-
-        // Apply additional constraints based on whether this dataflow exports an index or a
-        // materialized view.
-        let write_frontier;
-        let candidate_as_of = if dataflow.exported_index_ids().next().is_some() {
-            // Index dataflow.
-
-            write_frontier = self.least_valid_write(&storage_dependencies);
-            if let Some(ts) = write_frontier.as_option() {
-                // If the index has a compaction window configured, we should hold back the `as_of`
-                // to ensure this window is queryable after the index was created. Doing so should
-                // not break compute reconciliation because the compute controller should have
-                // prevented replicas from compacting their installed dataflows into the compaction
-                // window.
-                let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(*ts));
-                soft_assert_or_log!(
-                    !max_compaction_frontier.is_empty(),
-                    "`max_compaction_frontier` unexpectedly empty",
-                );
-                // We hold back the `as_of` to near the current time. This is needed for indexes on
-                // REFRESH MVs, because otherwise the `as_of` would be near the next refresh time,
-                // making the index unreadable until then.
-                //
-                // This is fine for Compute reconciliation, because Adapter was keeping a read hold
-                // on indexes before the restart at the Oracle read ts (see `advance_timelines`),
-                // and the Oracle read ts can't go backwards between restarts.
-                max_compaction_frontier.meet(&Antichain::from_elem(local_read_ts))
-            } else {
-                // The write frontier is empty. This can happen for constant collections, and for
-                // an index on a REFRESH MV that is past its last refresh. Installing an index with
-                // an empty frontier is not useful since that index would not be readable, so we
-                // bail using the minimum frontier instead. This is something we could refine in
-                // the future.
-                min_as_of.clone()
-            }
-        } else if let Some(sink_id) = dataflow.persist_sink_ids().next() {
-            // Materialized view dataflow.
-
-            let (since, upper) = self
-                .controller
-                .storage
-                .collection_frontiers(sink_id)
-                .expect("collection does not exist");
-
-            // Materialized view dataflows are only depended on by their target storage collection,
-            // so `write_frontier` should never be greater than `max_as_of`.
-            soft_assert_or_log!(
-                PartialOrder::less_equal(&upper, &max_as_of),
-                "`write_frontier` unexpectedly greater than `max_as_of`; \
-                materialized view {sink_id}, max_as_of {max_as_of:?}, since {since:?}, upper {upper:?}",
-            );
-
-            write_frontier = upper;
-
-            // If the target storage collection of a materialized view is already sealed, there is
-            // no need to install a dataflow in the first place.
-            if write_frontier.is_empty() {
-                Antichain::new()
-            } else {
-                warmup_frontier.clone()
-            }
-        } else {
-            // Neither an index nor a materialized view dataflow.
-            panic!("bootstrapping only supports indexes and materialized views");
-        };
-
-        let as_of = if self.controller.read_only() {
-            // Choose something that is most likely to make dependent dataflows
-            // hydrate. But this will likely make it so that reconciliation
-            // cannot re-use already-running dataflows.
-            //
-            // The latter is fine, though, because in read-only mode we're
-            // likely bringing up new cluster processes anyways.
-            //
-            // NOTE: This is working around a quirk in how we normally select
-            // as_ofs for dataflows: we don't take dependent dataflows into
-            // account when bounding the as_of, so it can happen that we end up
-            // in a situation where a downstream dataflow cannot hydrate even
-            // though it's transitive storage collection dependencies would have
-            // the data at the as_of that is required. This is a band-aid
-            // solution until we have
-            // https://github.com/MaterializeInc/materialize/issues/28440
-            min_as_of.clone()
-        } else if PartialOrder::less_equal(&min_as_of, &max_as_of) {
-            // Determine the `as_of` by bounding the candidate from below and above by the
-            // correctness constraints `min_as_of` and `max_as_of`, respectively.
-            candidate_as_of.join(&min_as_of).meet(&max_as_of)
-        } else {
-            // This should not happen. If we get here that means we _will_ skip times in some of
-            // the dependent storage collections, which is a correctness bug. However, skipping
-            // times is probably preferable to panicking and thus making the entire environment
-            // unavailable. So we chose to handle this case gracefully and only log an error,
-            // unless soft-asserts are enabled, and continue with the `min_as_of` to make us skip
-            // as few times as possible.
-            mz_ore::soft_panic_or_log!(
-                "error bootstrapping dataflow `as_of`: \
-                 `min_as_of` {:?} greater than `max_as_of` {:?} \
-                 (import_ids={}, export_ids={}, storage_constraints={:?})",
-                min_as_of.elements(),
-                max_as_of.elements(),
-                dataflow.display_import_ids(),
-                dataflow.display_export_ids(),
-                storage_constraints,
-            );
-            min_as_of.clone()
-        };
-
-        tracing::info!(
-            export_ids = %dataflow.display_export_ids(),
-            %cluster_id,
-            as_of = ?as_of.elements(),
-            min_as_of = ?min_as_of.elements(),
-            max_as_of = ?max_as_of.elements(),
-            warmup_frontier = ?warmup_frontier.elements(),
-            ?local_read_ts,
-            write_frontier = ?write_frontier.elements(),
-            ?compaction_window,
-            ?storage_constraints,
-            "bootstrapping dataflow `as_of`",
-        );
-
-        (as_of, read_holds)
+        read_holds
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
@@ -4240,27 +3960,6 @@ pub async fn load_remote_system_parameters(
         }
     } else {
         Ok(None)
-    }
-}
-
-/// The set of storage collections that constrain bootstrap timestamp selection for a given
-/// dataflow.
-///
-/// The set of constraints includes both dependencies and dependants, which constrain the valid
-/// timestamps from below and above, respectively. It includes transitive dependencies/dependants
-/// through indexes, but not through other storage collections.
-#[derive(Debug, Default)]
-struct StorageConstraints {
-    dependencies: BTreeSet<GlobalId>,
-    dependants: BTreeSet<GlobalId>,
-}
-
-impl StorageConstraints {
-    fn dependencies_bundle(&self) -> CollectionIdBundle {
-        CollectionIdBundle {
-            storage_ids: self.dependencies.clone(),
-            compute_ids: Default::default(),
-        }
     }
 }
 
