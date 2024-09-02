@@ -344,21 +344,17 @@ rust_toolchains(
 load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
 crate_universe_dependencies()
 
-load("@rules_rust//crate_universe:defs.bzl", "crates_repository", "crate")
+load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
+
 crates_repository(
     name = "crates_io",
     cargo_lockfile = "//:Cargo.lock",
-    rust_version = RUST_VERSION,
     annotations = {
         "decnumber-sys": [crate.annotation(
-            gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decnumber.bazel",
+            gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
-            compile_data = [":decnumber_static_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath :decnumber_static_lib)",
-                "-lstatic=decnumber",
-            ]
+            deps = [":decnumber"],
         )],
         "librocksdb-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
@@ -390,24 +386,20 @@ crates_repository(
                 ":snappy_lib",
             ],
         )],
-        "rdkafka-sys": [crate.annotation(
+        "tikv-jemalloc-sys": [crate.annotation(
             gen_build_script = False,
+            rustc_flags = ["--cfg=prefixed"],
+            deps = ["@jemalloc"],
+        )],
+        "rdkafka-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.librdkafka.bazel",
+            gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
             deps = [":librdkafka"],
-            compile_data = [":rdkafka_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath :rdkafka_lib)",
-                "-lstatic=rdkafka",
-            ]
         )],
         "libz-sys": [crate.annotation(
             gen_build_script = False,
-            compile_data = ["@zlib//:zlib_static_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath @zlib//:zlib_static_lib)",
-                "-lstatic=zlib",
-            ]
+            deps = ["@zlib"],
         )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
@@ -427,11 +419,11 @@ crates_repository(
             # Note: We shouldn't ever depend on protobuf-src, but if we do, don't try to bootstrap
             # `protoc`.
             gen_build_script = False,
-            rustc_env = { "INSTALL_DIR": "fake" },
+            rustc_env = {"INSTALL_DIR": "fake"},
         )],
         "protobuf-native": [crate.annotation(
-            gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.protobuf-native.bazel",
+            gen_build_script = False,
             deps = [":protobuf-native-bridge"],
         )],
         "psm": [crate.annotation(
@@ -565,10 +557,7 @@ crates_repository(
         "//:test/test-util/Cargo.toml",
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
     ],
-    # When `isolated` is true, Bazel will create a new `$CARGO_HOME`, i.e. it
-    # won't use `~/.cargo`, when re-pinning. This is nice but not totally
-    # necessary, and it makes re-pinning painfully slow, so we disable it.
-    isolated = False,
+    rust_version = RUST_VERSION,
     # Only used if developing rules_rust.
     # generator = "@cargo_bazel_bootstrap//:cargo-bazel",
 )
