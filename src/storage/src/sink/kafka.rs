@@ -995,9 +995,14 @@ async fn determine_sink_progress(
                 Offset::Offset(position) => position,
                 // An invalid offset indicates the consumer has not yet read a
                 // message. Since we assigned the consumer to the beginning of
-                // the topic, it's safe to return 0 here, which indicates the
-                // position before the first possible message.
-                Offset::Invalid => 0,
+                // the topic, it's safe to return the low water mark here, which
+                // indicates the position before the first possible message.
+                //
+                // Note that it's important to return the low water mark and not
+                // the minimum possible offset (i.e., zero) in order to break
+                // out of the loop if the topic is empty but the low water mark
+                // is greater than zero.
+                Offset::Invalid => lo,
                 _ => bail!(
                     "Consumer::position returned offset of wrong type: {:?}",
                     position
