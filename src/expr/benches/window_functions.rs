@@ -48,13 +48,11 @@ use rand::distributions::{Distribution, Uniform};
 /// ```
 /// and then vary the size of the `generate_series`, and watch whether `v2_ind` is able to keep up.
 fn order_aggregate_datums_benchmark(c: &mut Criterion) {
-
     let mut group = c.benchmark_group("window_function_benches");
 
     let scale = 1000000;
 
     group.bench_function("order_aggregate_datums", |b| {
-
         let mut rng = rand::thread_rng();
         let temp_storage = RowArena::new();
 
@@ -112,7 +110,6 @@ fn order_aggregate_datums_benchmark(c: &mut Criterion) {
             // Do something with the result to force the iterator.
             .for_each(|d| assert!(!d.is_null()));
         })
-
     });
 }
 

@@ -283,7 +283,9 @@ pub fn order_aggregate_datums<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    order_aggregate_datums_with_rank(datums, order_by).map(|(expr, _order_row)| expr)
+    order_aggregate_datums_with_rank_inner(datums, order_by)
+        .into_iter()
+        .map(|(payload, _order_datums)| payload)
 }
 
 /// Assuming datums is a List, sort them by the 2nd through Nth elements
@@ -295,7 +297,19 @@ fn order_aggregate_datums_with_rank<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let mut rows: Vec<(Datum, Vec<Datum>)> = datums
+    order_aggregate_datums_with_rank_inner(datums, order_by)
+        .into_iter()
+        .map(|(payload, order_by_datums)| (payload, Row::pack(order_by_datums)))
+}
+
+fn order_aggregate_datums_with_rank_inner<'a, I>(
+    datums: I,
+    order_by: &[ColumnOrder],
+) -> Vec<(Datum<'a>, Vec<Datum<'a>>)>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let mut decoded: Vec<(Datum, Vec<Datum>)> = datums
         .into_iter()
         .map(|d| {
             let list = d.unwrap_list();
@@ -338,10 +352,8 @@ where
     // enough here, because if two elements are equal in our `compare` function, then the elements
     // are actually binary-equal (because of the `tiebreaker` given to `compare_columns`), so it
     // doesn't matter what order they end up in.
-    rows.sort_unstable_by(&mut sort_by);
-
-    rows.into_iter()
-        .map(|(payload, order_by_datums)| (payload, Row::pack(order_by_datums.into_iter())))
+    decoded.sort_unstable_by(&mut sort_by);
+    decoded
 }
 
 fn array_concat<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
@@ -3521,9 +3533,7 @@ impl fmt::Display for TableFunc {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc,
-    };
+    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
