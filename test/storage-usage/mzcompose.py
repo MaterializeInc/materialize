@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Verify how much storage is being used, based on mz_storage_usage and
+mz_recent_storage_usage.
+"""
+
 import time
 from dataclasses import dataclass
 from textwrap import dedent

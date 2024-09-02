@@ -6,6 +6,13 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+"""
+Run SQL tests using an instance of Mz that is embedded in the sqllogic binary
+itself. Good for basic SQL tests, but can't interact with sources like
+MySQL/Kafka, see Testdrive for that.
+"""
+
 from __future__ import annotations
 
 import argparse

@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Runs a randomized parallel workload stressing all parts of Materialize, can
+mostly find panics and unexpected errors. See zippy for a sequential randomized
+tests which can verify correctness.
+"""
 
 import random
 

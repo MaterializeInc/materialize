@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test the detection and reporting of source/sink errors by introducing a
+Disruption and then checking the mz_internal.mz_*_statuses tables
+"""
+
 import random
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -540,10 +545,6 @@ disruptions: list[Disruption] = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Test the detection and reporting of source/sink errors by
-    introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
-    """
-
     parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
     args = parser.parse_args()

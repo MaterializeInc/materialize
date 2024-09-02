@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Use SQLsmith to generate random queries (AST/code based) and run them against
+Materialize: https://github.com/MaterializeInc/sqlsmith The queries can be
+complex, but we can't verify correctness or performance.
+"""
+
 import json
 import random
 import time

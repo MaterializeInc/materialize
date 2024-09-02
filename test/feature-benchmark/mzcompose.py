@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Simple benchmark of mostly individual queries using testdrive. Can find
+wallclock/memory/messages regressions in single-connection query executions,
+not suitable for concurrency.
+"""
+
 import argparse
 import os
 import sys

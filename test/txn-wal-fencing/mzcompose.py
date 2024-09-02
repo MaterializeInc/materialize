@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Introduce a second Mz instance while a concurrent workload is running for the
+purpose of exercising fencing.
+"""
+
 import random
 import time
 from concurrent import futures
@@ -89,7 +94,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    """Introduce a second Mz instance while a concurrent workload is running for the purpose of exercising fencing."""
     for workload in WORKLOADS:
         run_workload(c, workload)
 

@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Postgres source tests with interruptions, test that Materialize can recover.
+"""
+
 import time
 
 from materialize import buildkite

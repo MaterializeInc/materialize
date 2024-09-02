@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Functional tests for the COPY TO S3 command against a local minio service
+instead of a real AWS S3.
+"""
 
 import csv
 import json

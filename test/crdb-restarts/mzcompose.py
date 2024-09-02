@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Disrupt Cockroach and verify that Materialize recovers from it.
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent

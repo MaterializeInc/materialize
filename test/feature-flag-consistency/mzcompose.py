@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Verify that Materialize has the same results with different sets of feature flags.
+"""
+
 from materialize.feature_flag_consistency.feature_flag_consistency_test import (
     FeatureFlagConsistencyTest,
 )

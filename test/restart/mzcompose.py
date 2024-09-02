@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Testdrive-based tests involving restarting materialized (including its clusterd
+processes). See cluster tests for separate clusterds, see platform-checks for
+further restart scenarios.
+"""
+
 import json
 import time
 from textwrap import dedent

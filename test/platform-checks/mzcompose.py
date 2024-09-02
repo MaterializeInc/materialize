@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Write a single set of .td fragments for a particular feature or functionality
+and then have Zippy execute them in upgrade, 0dt-upgrade, restart, recovery and
+failure contexts.
+"""
+
 import os
 from enum import Enum
 

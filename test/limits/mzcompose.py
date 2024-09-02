@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Stresses Materialize with large number of objects, large ingestions, etc. Good
+to prevent regressions in basic functionality for larger installations.
+"""
+
 import contextlib
 import json
 import sys

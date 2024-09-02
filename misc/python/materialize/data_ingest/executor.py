@@ -15,6 +15,7 @@ from typing import Any
 import confluent_kafka  # type: ignore
 import pg8000
 import pymysql
+import pymysql.cursors
 from confluent_kafka.admin import AdminClient  # type: ignore
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient  # type: ignore
 from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
@@ -85,7 +86,7 @@ class Executor:
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         raise NotImplementedError
 
-    def execute(self, cur: pg8000.Cursor, query: str) -> None:
+    def execute(self, cur: pg8000.Cursor | pymysql.cursors.Cursor, query: str) -> None:
         if self.logging_exe is not None:
             self.logging_exe.log(query)
 

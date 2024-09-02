@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Test cluster isolation by introducing faults of various kinds in cluster1 and
+then making sure that cluster2 continues to operate properly
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -94,9 +99,6 @@ contains: statement timeout
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Test cluster isolation by introducing faults of various kinds in cluster1
-    and then making sure that cluster2 continues to operate properly
-    """
 
     parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 

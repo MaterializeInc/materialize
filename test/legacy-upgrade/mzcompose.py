@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Verifies that objects created in previous versions of Materialize are still
-operational after an upgrade.
+"""
+Verifies that objects created in previous versions of Materialize are still
+operational after an upgrade. See also the newer platform-checks' upgrade scenarios.
 """
 
 import random

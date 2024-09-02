@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Runs the Rust-based unit tests in Debug mode.
+"""
+
 import json
 import multiprocessing
 import os

@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Functional test for MySQL source with real-time recency enabled. Queries should
+block until results are available instead of returning out of date results.
+"""
+
 import random
 
 from materialize.mzcompose.composition import Composition

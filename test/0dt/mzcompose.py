@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+"""
+Explicit deterministic tests for read-only mode and zero downtime deploys (same
+version, no upgrade).
+"""
+
 import time
 from textwrap import dedent
 
