@@ -7,10 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
-load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
-load("@bazel_skylib//rules:select_file.bzl", "select_file")
-
 """Additive BUILD file for the decimal-sys Rust crate."""
 
 cc_library(
@@ -60,12 +56,5 @@ cc_library(
         # correctly define `DECLITEND`.
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    visibility = ["//visibility:public"],
-)
-
-# Place the compiled static library in the right place so rustc can find it.
-copy_to_directory(
-    name = "decnumber_static_lib",
-    srcs = [":decnumber"],
     visibility = ["//visibility:public"],
 )

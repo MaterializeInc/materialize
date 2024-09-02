@@ -20,7 +20,6 @@ Copied from https://github.com/protocolbuffers/protobuf/blob/v3.9.1/third_party/
 """
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 
 _ZLIB_HEADERS = [
     "crc32.h",
@@ -77,13 +76,6 @@ cc_library(
         ],
     }),
     includes = ["zlib/include/"],
-    visibility = ["//visibility:public"],
-)
-
-# Place the compiled static library in the right place so rustc can find it.
-copy_to_directory(
-    name = "zlib_static_lib",
-    srcs = [":zlib"],
     visibility = ["//visibility:public"],
 )
 

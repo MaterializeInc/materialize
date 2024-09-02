@@ -197,11 +197,15 @@ copy_to_directory(
     visibility = ["//visibility:public"],
 )
 
-# Select the include folder so we can specify `ROCKSDB_INCLUDE_DIR`
-select_file(
+# Copy the include folder so we can specify `ROCKSDB_INCLUDE_DIR`
+#
+# Note: We used to use `select_file` here but it generated symlinks that
+# overlapped with others and spammed the logs with WARNINGs.
+copy_to_directory(
     name = "rocksdb_include",
-    srcs = ":out_dir",
-    subpath = "include",
+    out = "include",
+    srcs = [":out_dir"],
+    root_paths = ["rocksdb/include"],
     visibility = ["//visibility:public"],
 )
 

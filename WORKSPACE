@@ -32,7 +32,9 @@ included by calling a `*_dependencies()` macro.
 # Note: In an ideal world the two rule sets would be combined into one.
 
 BAZEL_SKYLIB_VERSION = "1.6.1"
+
 BAZEL_SKYLIB_INTEGRITY = "sha256-nziIakBUjG6WwQa3UvJCEw7hGqoGila6flb0UR8z5PI="
+
 maybe(
     http_archive,
     name = "bazel_skylib",
@@ -44,7 +46,9 @@ maybe(
 )
 
 ASPECT_BAZEL_LIB_VERSION = "2.7.0"
+
 ASPECT_BAZEL_LIB_INTEGRITY = "sha256-NX2tnSEjJ8NdkkQZDvAQqtMV5z/6G+0aKeIMNy+co0Y="
+
 maybe(
     http_archive,
     name = "aspect_bazel_lib",
@@ -52,10 +56,12 @@ maybe(
     strip_prefix = "bazel-lib-{0}".format(ASPECT_BAZEL_LIB_VERSION),
     url = "https://github.com/aspect-build/bazel-lib/releases/download/v{0}/bazel-lib-v{0}.tar.gz".format(ASPECT_BAZEL_LIB_VERSION),
 )
+
 load("@aspect_bazel_lib//lib:repositories.bzl", "aspect_bazel_lib_dependencies", "aspect_bazel_lib_register_toolchains")
 
 # Required bazel-lib dependencies
 aspect_bazel_lib_dependencies()
+
 # Register bazel-lib toolchains
 aspect_bazel_lib_register_toolchains()
 
@@ -66,7 +72,9 @@ aspect_bazel_lib_register_toolchains()
 # rule set.
 
 RULES_CC_VERSION = "0.0.9"
+
 RULES_CC_INTEGRITY = "sha256-IDeHW5pEVtzkp50RKorohbvEqtlo5lh9ym5k86CQDN8="
+
 maybe(
     http_archive,
     name = "rules_cc",
@@ -82,7 +90,9 @@ maybe(
 # Rules for building archives, e.g. `tar` or `zip`, for packages.
 
 RULES_PKG_VERSION = "0.7.0"
+
 RULES_PKG_INTEGRITY = "sha256-iimOgydi7aGDBZfWT+fbWBeKqEzVkm121bdE1lWJQcI="
+
 maybe(
     http_archive,
     name = "rules_pkg",
@@ -117,7 +127,9 @@ maybe(
 #    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/de4a79280f54d8796e86b7ab0b631939b7b44d05>
 
 RULES_FOREIGN_CC_VERSION = "de4a79280f54d8796e86b7ab0b631939b7b44d05"
+
 RULES_FOREIGN_CC_INTEGRITY = "sha256-WwRg/GJuUjT3SMJEagTni2ZH+g3szIkHaqGgbYCN1u0="
+
 maybe(
     http_archive,
     name = "rules_foreign_cc",
@@ -125,6 +137,7 @@ maybe(
     strip_prefix = "rules_foreign_cc-{0}".format(RULES_FOREIGN_CC_VERSION),
     url = "https://github.com/MaterializeInc/rules_foreign_cc/archive/{0}.tar.gz".format(RULES_FOREIGN_CC_VERSION),
 )
+
 load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
 
 rules_foreign_cc_dependencies(make_version = "4.2")
@@ -140,6 +153,7 @@ rules_foreign_cc_dependencies(make_version = "4.2")
 
 # Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
 TOOLCHAINS_LLVM_VERSION = "1.0.0"
+
 TOOLCHAINS_LLVM_INTEGRITY = "sha256-6RxDYfmQEaVIFOGvvlxDbg0ymHEUajzVjCOitK+1Bzc="
 
 # System roots that we use, this is where clang will search for things like libc.
@@ -156,6 +170,7 @@ filegroup(
 """
 
 DARWIN_SYSROOT_VERSION = "14.5"
+
 DARWIN_SYSROOT_INTEGRITY = "sha256-k8OxF+DSVq0L1dy1S9TPqhFxDHF/bT32Ust3a1ldat8="
 
 http_archive(
@@ -212,9 +227,11 @@ maybe(
 )
 
 load("@toolchains_llvm//toolchain:deps.bzl", "bazel_toolchain_dependencies")
+
 bazel_toolchain_dependencies()
 
 load("@toolchains_llvm//toolchain:rules.bzl", "llvm_toolchain")
+
 llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
@@ -245,6 +262,7 @@ llvm_toolchain(
 )
 
 load("@llvm_toolchain//:toolchains.bzl", "llvm_register_toolchains")
+
 llvm_register_toolchains()
 
 # `rules_perl`
@@ -252,6 +270,7 @@ llvm_register_toolchains()
 # Provides a `perl` toolchain which is required to build some libraries (e.g. openssl).
 
 RULES_PERL_VERISON = "0.1.0"
+
 RULES_PERL_INTEGRITY = "sha256-XO+tvypJvzQh7eAJ8sWiyYNquueSYg7S/5kYQTN1UyU="
 
 maybe(
@@ -263,9 +282,11 @@ maybe(
         "https://github.com/bazelbuild/rules_perl/archive/refs/tags/{0}.tar.gz".format(RULES_PERL_VERISON),
     ],
 )
+
 load("@rules_perl//perl:deps.bzl", "perl_register_toolchains", "perl_rules_dependencies")
 
 perl_rules_dependencies()
+
 perl_register_toolchains()
 
 # Extra setup.
@@ -274,12 +295,14 @@ perl_register_toolchains()
 # specific to a single library we move their definitions into separate files
 # to avoid cluter.
 load("//misc/bazel/c_deps:extra_setup.bzl", "protoc_setup")
+
 protoc_setup()
 
 # C Repositories
 #
 # Loads all of the C dependencies that we rely on.
 load("//misc/bazel/c_deps:repositories.bzl", "c_repositories")
+
 c_repositories()
 
 # `rules_rust`
@@ -288,6 +311,7 @@ c_repositories()
 # dependencies.
 
 RULES_RUST_VERSION = "0.49.3"
+
 RULES_RUST_INTEGRITY = "sha256-3QBrdyIdWeTRQSB8DnrfEbH7YNFEC4/KA7+SVheTKmA="
 
 maybe(
@@ -301,6 +325,7 @@ maybe(
 )
 
 load("@rules_rust//rust:repositories.bzl", "rules_rust_dependencies")
+
 rules_rust_dependencies()
 
 # `rustc`
@@ -311,6 +336,7 @@ rules_rust_dependencies()
 RUST_VERSION = "1.80.1"
 
 load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
+
 rust_toolchains(
     RUST_VERSION,
     {
@@ -336,27 +362,24 @@ rust_toolchains(
             "rust-std": "e7b766fce1cd89c02bde33f8cc3a81f341c52677258a546df2bee1c7090e9fc5",
         },
         "x86_64-apple-darwin": {},
-    }
+    },
 )
 
 # Load all dependencies for crate_universe.
 load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
+
 crate_universe_dependencies()
 
-load("@rules_rust//crate_universe:defs.bzl", "crates_repository", "crate")
+load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
+
 crates_repository(
     name = "crates_io",
-    rust_version = RUST_VERSION,
     annotations = {
         "decnumber-sys": [crate.annotation(
-            gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decnumber.bazel",
+            gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
-            compile_data = [":decnumber_static_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath :decnumber_static_lib)",
-                "-lstatic=decnumber",
-            ]
+            deps = [":decnumber"],
         )],
         "librocksdb-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
@@ -388,24 +411,20 @@ crates_repository(
                 ":snappy_lib",
             ],
         )],
-        "rdkafka-sys": [crate.annotation(
+        "tikv-jemalloc-sys": [crate.annotation(
             gen_build_script = False,
+            rustc_flags = ["--cfg=prefixed"],
+            deps = ["@jemalloc"],
+        )],
+        "rdkafka-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.librdkafka.bazel",
+            gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
             deps = [":librdkafka"],
-            compile_data = [":rdkafka_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath :rdkafka_lib)",
-                "-lstatic=rdkafka",
-            ]
         )],
         "libz-sys": [crate.annotation(
             gen_build_script = False,
-            compile_data = ["@zlib//:zlib_static_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath @zlib//:zlib_static_lib)",
-                "-lstatic=zlib",
-            ]
+            deps = ["@zlib"],
         )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
@@ -425,11 +444,11 @@ crates_repository(
             # Note: We shouldn't ever depend on protobuf-src, but if we do, don't try to bootstrap
             # `protoc`.
             gen_build_script = False,
-            rustc_env = { "INSTALL_DIR": "fake" },
+            rustc_env = {"INSTALL_DIR": "fake"},
         )],
         "protobuf-native": [crate.annotation(
-            gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.protobuf-native.bazel",
+            gen_build_script = False,
             deps = [":protobuf-native-bridge"],
         )],
         "psm": [crate.annotation(
@@ -579,14 +598,15 @@ crates_repository(
         "//:test/test-util/Cargo.toml",
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
     ],
+    rust_version = RUST_VERSION,
     # Only used if developing rules_rust.
     # generator = "@cargo_bazel_bootstrap//:cargo-bazel",
 )
 
 load("@crates_io//:defs.bzl", "crate_repositories")
+
 crate_repositories()
 
-load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
 crate_universe_dependencies()
 
 # Third-Party Rust Tools
@@ -595,6 +615,7 @@ crate_universe_dependencies()
 # with Bazel we need to include the `cxx` command line binary.
 
 load("//misc/bazel/rust_deps:repositories.bzl", "rust_repositories")
+
 rust_repositories()
 
 # Load and include any dependencies the third-party Rust binaries require.
@@ -606,6 +627,7 @@ rust_repositories()
 # TODO(parkmycar): This should get better when we switch to bzlmod.
 
 load("@cxxbridge//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")
+
 cxxbridge_cmd_deps()
 
 # git Submodules
@@ -615,6 +637,6 @@ cxxbridge_cmd_deps()
 
 new_local_repository(
     name = "fivetran_sdk",
-    path = "misc/fivetran-sdk",
     build_file = "//misc/bazel:git_submodules/BUILD.fivetran_sdk.bazel",
+    path = "misc/fivetran-sdk",
 )
