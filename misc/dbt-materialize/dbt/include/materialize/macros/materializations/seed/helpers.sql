@@ -15,7 +15,7 @@
 
 {% macro materialize__reset_csv_table(model, full_refresh, old_relation, agate_table, cluster) %}
     {% set sql = "" %}
-    -- Allow setting a cluster configuration for seeds in dbt_project.yml or
+    -- Allow setting a cluster configuration for seeds in `dbt_project.yml` or
     -- a .yml file in the seed target path. If no cluster is configured, use
     -- the target cluster from `profiles.yml`. If none exists, fall back to the
     -- default cluster configured for the connected user.

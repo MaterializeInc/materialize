@@ -1,5 +1,27 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Enable the `cluster` configuration for seeds, which allows specifying a target
+  cluster for `dbt seed` to run against (which is required for specific seed
+  operations).
+
+  ```yaml
+    # dbt_project.yml
+  seeds:
+    +cluster: 'dbt_seed_cluster'
+  ```
+
+  ```yaml
+  # /seeds/properties.yml
+  version: 2
+
+  seeds:
+    - name: test_29324
+      config:
+        cluster: dbt_seed_cluster
+  ```
+
 ## 1.8.5 - 2024-08-21
 
 * Fix a bug in the `materialize__drop_relation` macro that prevented using the

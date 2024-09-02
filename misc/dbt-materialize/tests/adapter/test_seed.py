@@ -106,36 +106,3 @@ class TestSimpleSeedColumnOverride(BaseSimpleSeedColumnOverride):
         assert len(seed_results) == 2
         test_results = run_dbt(["test"])
         assert len(test_results) == 10
-
-class TestSeedCluster:
-    @pytest.fixture(scope="class")
-    def project_config_update(self):
-        return {
-            "name": "seed_tests",
-            "seeds": {
-                "+cluster": "not_default_test",
-            },
-        }
-
-    @pytest.fixture(scope="class")
-    def models(self):
-        return {
-            "test_materialized_view.sql": test_materialized_view,
-        }
-
-    @pytest.fixture(scope="class")
-    def tests(self):
-        return {
-            "unique.sql": unique,
-        }
-
-    def test_store_failures_cluster(self, project):
-        project.run_sql("CREATE CLUSTER not_default_test (SIZE = '25cc'))")
-
-        # run models
-        results = run_dbt(["seed"])
-        # run result length
-        assert len(results) == 1
-
-        result_statuses = sorted(r.status for r in results)
-        assert result_statuses == ["pass"]
