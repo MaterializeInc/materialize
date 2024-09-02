@@ -2,10 +2,6 @@
 # `build:[ linux | macos | windows | freebsd | openbsd ]`
 common --enable_platform_specific_config
 
-# C Toolchain Configuration
-common --compiler=clang++
-common --cxxopt=-stdlib=libc++
-
 # LLVM's libc++ has different assertion modes which can be configured to catch
 # undefined behavior. See: <https://libcxx.llvm.org/Hardening.html>
 #

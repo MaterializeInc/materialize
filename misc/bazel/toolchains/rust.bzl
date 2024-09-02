@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_rust//rust:repositories.bzl", "rust_repository_set", "DEFAULT_TOOLCHAIN_TRIPLES")
+load("@rules_rust//rust:repositories.bzl", "DEFAULT_TOOLCHAIN_TRIPLES", "rust_repository_set")
 
 def rust_toolchains(version, targets):
     """
@@ -35,6 +35,15 @@ def rust_toolchains(version, targets):
             key = "{0}-{1}-{2}".format(resource, version, target)
             integrity[key] = sha256
 
+        CROSS_COMPILING_COMPONENTS = ["rust-std"]
+        for extra_target in extra_targets:
+            for component in CROSS_COMPILING_COMPONENTS:
+                sha256 = targets[extra_target].get(component)
+                if not sha256:
+                    continue
+                key = "{0}-{1}-{2}".format(component, version, extra_target)
+                integrity[key] = sha256
+
         rust_repository_set(
             name = DEFAULT_TOOLCHAIN_TRIPLES[target],
             edition = "2021",
@@ -43,6 +52,6 @@ def rust_toolchains(version, targets):
             versions = [version],
             sha256s = integrity,
             urls = [
-                "https://github.com/MaterializeInc/toolchains/releases/download/rust-{VERSION}/{{}}.tar.zst".format(VERSION=version)
+                "https://github.com/MaterializeInc/toolchains/releases/download/rust-{VERSION}/{{}}.tar.zst".format(VERSION = version),
             ],
         )

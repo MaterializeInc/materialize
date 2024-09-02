@@ -13,11 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
-
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@bazel_skylib//rules:select_file.bzl", "select_file")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 """Additive BUILD file for the librocksdb-sys Rust crate."""
 
@@ -37,9 +36,8 @@ cc_library(
         ":snappy_stubs_public_h",
     ],
     hdrs = [
-        "snappy/snappy.h"
+        "snappy/snappy.h",
     ],
-    includes = ["snappy/."],
     copts = [
         "-DHAVE_CONFIG_H",
         "-fno-exceptions",
@@ -48,6 +46,7 @@ cc_library(
         "-Wno-implicit-function-declaration",
     ],
     defines = ["HAVE_SYS_UIO_H"],
+    includes = ["snappy/."],
 )
 
 genrule(
@@ -123,7 +122,6 @@ filegroup(
 
 cmake(
     name = "rocksdb",
-    working_directory = "rocksdb/",
     build_args = ["-j8"],
     generate_args = [
         "-DWITH_SNAPPY=1",
@@ -146,19 +144,32 @@ cmake(
         "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=0",
         # Uncomment this if you ever need to debug what library cmake is resolving.
         # "-DCMAKE_FIND_DEBUG_MODE=TRUE",
-    ] + select({
-        "@platforms//os:macos": ["-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0"],
-        "//conditions:default": [],
-    }),
+    ] + select(
+        {
+            "@platforms//os:macos": [
+                "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0",
+                "-DCMAKE_SYSTEM_NAME=Darwin",
+            ],
+            "@platforms//os:linux": ["-DCMAKE_SYSTEM_NAME=Linux"],
+        },
+        no_match_error = "Building rocksdb for the specified OS is not supported.",
+    ) + select(
+        {
+            "@platforms//cpu:x86_64": ["-DCMAKE_SYSTEM_PROCESSOR=x86_64"],
+            "@platforms//cpu:aarch64": ["-DCMAKE_SYSTEM_PROCESSOR=aarch64"],
+        },
+        no_match_error = "Building rocksdb for the specified CPU is not supported.",
+    ),
     lib_source = ":rocksdb_srcs",
-    targets = ["rocksdb"],
     out_static_libs = ["librocksdb.a"],
+    targets = ["rocksdb"],
+    visibility = ["//visibility:public"],
+    working_directory = "rocksdb/",
     deps = [
         ":snappy",
-        "@lz4//:lz4",
-        "@zstd//:zstd",
+        "@lz4",
+        "@zstd",
     ],
-    visibility = ["//visibility:public"],
 )
 
 filegroup(
@@ -172,6 +183,7 @@ select_file(
     srcs = ":out_dir",
     subpath = "librocksdb.a",
 )
+
 copy_file(
     name = "librocksdb_copy",
     src = ":librocksdb",
@@ -198,6 +210,7 @@ select_file(
     srcs = ":snappy",
     subpath = "libsnappy.a",
 )
+
 copy_to_directory(
     name = "snappy_lib",
     srcs = [":libsnappy"],

@@ -363,28 +363,33 @@ crates_repository(
         "librocksdb-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
             # Note: The below targets are from the additive build file.
+            #
+            # HACK(parkmycar): The `librocksdb-sys` build script runs bindgen for us, and to
+            # support cross compiling we need to provide the sysroot to the build script so
+            # bindgen can find it. Providing the sysroot and relying on the raw paths is quite
+            # fragile, the fix is to use `@rules_rust//bindgen/...` rules with our Clang toolchain.
+            build_script_data = [
+                ":rocksdb_lib",
+                ":rocksdb_include",
+                ":snappy_lib",
+                "@linux_sysroot-aarch64//:sysroot",
+                "@linux_sysroot-x86_64//:sysroot",
+            ],
             build_script_env = {
                 "ROCKSDB_STATIC": "true",
                 "ROCKSDB_LIB_DIR": "$(execpath :rocksdb_lib)",
                 "ROCKSDB_INCLUDE_DIR": "$(execpath :rocksdb_include)",
                 "SNAPPY_STATIC": "true",
                 "SNAPPY_LIB_DIR": "$(execpath :snappy_lib)",
+                "BINDGEN_EXTRA_CLANG_ARGS_aarch64-unknown-linux-gnu": "--sysroot=external/linux_sysroot-aarch64",
+                "BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu": "--sysroot=external/linux_sysroot-x86_64",
             },
-            build_script_data = [
+            compile_data = [
                 ":rocksdb_lib",
                 ":rocksdb_include",
                 ":snappy_lib",
             ],
-            compile_data = [":rocksdb_lib", ":rocksdb_include", ":snappy_lib"],
         )],
-        # TODO(parkmycar): Re-enable linking with a jemalloc built by Bazel.
-        # "tikv-jemalloc-sys": [crate.annotation(
-        #     build_script_env = {
-        #         "JEMALLOC_OVERRIDE": "$(execpath @jemalloc//:libjemalloc)",
-        #     },
-        #     build_script_data = ["@jemalloc//:libjemalloc"],
-        #     compile_data = ["@jemalloc//:libjemalloc"],
-        # )],
         "rdkafka-sys": [crate.annotation(
             gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.librdkafka.bazel",
@@ -428,6 +433,20 @@ crates_repository(
             gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.protobuf-native.bazel",
             deps = [":protobuf-native-bridge"],
+        )],
+        "psm": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.psm.bazel",
+            gen_build_script = False,
+            # Note: All of the targets we build for support switching stacks, if we ever want to
+            # support Windows we'll have to revist this.
+            rustc_flags = [
+                "--check-cfg=cfg(switchable_stack,asm,link_asm)",
+                "--cfg=asm",
+                "--cfg=link_asm",
+                "--cfg=switchable_stack",
+            ],
+            # Note: This is a target we add from the additive build file above.
+            deps = ["psm_s"],
         )],
         "launchdarkly-server-sdk": [crate.annotation(
             build_script_env = {
