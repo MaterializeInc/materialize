@@ -322,6 +322,11 @@ steps:
               composition: limits
               run: main
         timeout_in_minutes: 180
+        # TODO(def-) Move to larger agents to prevent flakiness
+        retry:
+          automatic:
+            - exit_status: "*"
+              limit: 1
 
       - id: limits-instance-size
         label: "Instance size limits"
@@ -335,6 +340,11 @@ steps:
               composition: limits
               run: instance-size
         timeout_in_minutes: 50
+        # TODO(def-) Move to larger agents to prevent flakiness
+        retry:
+          automatic:
+            - exit_status: "*"
+              limit: 1
 
       - id: bounded-memory
         label: "Bounded Memory"
