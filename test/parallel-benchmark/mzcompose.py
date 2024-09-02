@@ -13,7 +13,6 @@ actions concurrently, measures various kinds of statistics.
 """
 
 import collections
-import datetime
 import gc
 import queue
 import random
@@ -107,11 +106,11 @@ def parse_pg_conn_string(conn_string: str) -> PgConnInfo:
 
 class Measurement:
     value: float
-    timestamp: datetime.datetime
+    timestamp: float
 
-    def __init__(self, value: float, timestamp: datetime.datetime | None = None):
+    def __init__(self, value: float, timestamp: float | None = None):
         self.value = value
-        self.timestamp = timestamp or datetime.datetime.now()
+        self.timestamp = timestamp or time.time()
 
     def __str__(self) -> str:
         return f"{self.timestamp} {self.value}"
@@ -120,15 +119,13 @@ class Measurement:
 class Action:
     def run(
         self,
+        start_time: float,
         conns: queue.Queue,
         measurements: collections.defaultdict[str, list[Measurement]],
     ):
-        start_time = datetime.datetime.now()
         self._run(conns)
-        duration = datetime.datetime.now() - start_time
-        measurements[str(self)].append(
-            Measurement(duration.total_seconds(), start_time)
-        )
+        duration = time.time() - start_time
+        measurements[str(self)].append(Measurement(duration, start_time))
 
     def _run(self, conns: queue.Queue):
         raise NotImplementedError
@@ -206,8 +203,14 @@ class PooledQuery(Action):
         return f"{self.query} (pooled)"
 
 
+def sleep_until(timestamp: float) -> None:
+    time_to_sleep = timestamp - time.time()
+    if time_to_sleep > 0:
+        time.sleep(time_to_sleep)
+
+
 class Distribution:
-    def generate(self, duration: int) -> Iterator[None]:
+    def generate(self, duration: int) -> Iterator[float]:
         raise NotImplementedError
 
 
@@ -217,11 +220,12 @@ class Periodic(Distribution):
     def __init__(self, per_second: int):
         self.per_second = per_second
 
-    def generate(self, duration: int) -> Iterator[None]:
-        sleep_time = 1 / self.per_second
+    def generate(self, duration: int) -> Iterator[float]:
+        next_time = time.time()
         for i in range(duration * self.per_second):
-            yield
-            time.sleep(sleep_time)
+            yield next_time
+            next_time += 1 / self.per_second
+            sleep_until(next_time)
 
 
 class Gaussian(Distribution):
@@ -231,12 +235,13 @@ class Gaussian(Distribution):
         self.mean = mean
         self.stddev = stddev
 
-    def generate(self, duration: int) -> Iterator[None]:
-        end_time = datetime.datetime.now() + datetime.timedelta(seconds=duration)
-        while datetime.datetime.now() < end_time:
-            yield
-            sleep_time = max(0, random.gauss(self.mean, self.stddev))
-            time.sleep(sleep_time)
+    def generate(self, duration: int) -> Iterator[float]:
+        end_time = time.time() + duration
+        next_time = time.time()
+        while time.time() < end_time:
+            yield next_time
+            next_time += max(0, random.gauss(self.mean, self.stddev))
+            sleep_until(next_time)
 
 
 class PhaseAction:
@@ -262,8 +267,8 @@ class OpenLoop(PhaseAction):
         conns: queue.Queue,
         measurements: collections.defaultdict[str, list[Measurement]],
     ) -> None:
-        for _ in self.dist.generate(duration):
-            jobs.put(lambda: self.action.run(conns, measurements))
+        for start_time in self.dist.generate(duration):
+            jobs.put(lambda: self.action.run(start_time, conns, measurements))
 
 
 class ClosedLoop(PhaseAction):
@@ -277,9 +282,9 @@ class ClosedLoop(PhaseAction):
         conns: queue.Queue,
         measurements: collections.defaultdict[str, list[Measurement]],
     ) -> None:
-        end_time = datetime.datetime.now() + datetime.timedelta(seconds=duration)
-        while datetime.datetime.now() < end_time:
-            self.action.run(conns, measurements)
+        end_time = time.time() + duration
+        while time.time() < end_time:
+            self.action.run(time.time(), conns, measurements)
 
 
 class Phase:
@@ -801,182 +806,182 @@ class PoolRead(Scenario):
         )
 
 
-class ReadReplicaBenchmark(Scenario):
-    """https://www.notion.so/materialize/Read-Replica-Benchmark-90b60e455ba648c3a8c9a53297d09492"""
-
-    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
-        self.init(
-            [
-                TdPhase(
-                    """
-                    > DROP SECRET IF EXISTS pgpass CASCADE
-                    > CREATE SECRET pgpass AS 'postgres'
-                    > CREATE CONNECTION pg TO POSTGRES (
-                        HOST postgres,
-                        DATABASE postgres,
-                        USER postgres,
-                        PASSWORD SECRET pgpass
-                      )
-
-                    $ postgres-execute connection=postgres://postgres:postgres@postgres
-                    ALTER USER postgres WITH replication;
-                    CREATE TABLE customers (customer_id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, address VARCHAR(255), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                    ALTER TABLE customers REPLICA IDENTITY FULL;
-                    CREATE TABLE accounts (account_id SERIAL PRIMARY KEY, customer_id INT REFERENCES customers(customer_id) ON DELETE CASCADE, account_type VARCHAR(50) NOT NULL, balance DECIMAL(18, 2) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                    ALTER TABLE accounts REPLICA IDENTITY FULL;
-                    CREATE TABLE securities (security_id SERIAL PRIMARY KEY, ticker VARCHAR(10) NOT NULL UNIQUE, name VARCHAR(255), sector VARCHAR(50), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                    ALTER TABLE securities REPLICA IDENTITY FULL;
-                    CREATE TABLE trades (trade_id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(account_id) ON DELETE CASCADE, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, trade_type VARCHAR(10) NOT NULL CHECK (trade_type IN ('buy', 'sell')), quantity INT NOT NULL, price DECIMAL(18, 4) NOT NULL, trade_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                    ALTER TABLE trades REPLICA IDENTITY FULL;
-                    CREATE TABLE orders (order_id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(account_id) ON DELETE CASCADE, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, order_type VARCHAR(10) NOT NULL CHECK (order_type IN ('buy', 'sell')), quantity INT NOT NULL, limit_price DECIMAL(18, 4), status VARCHAR(10) NOT NULL CHECK (status IN ('pending', 'completed', 'canceled')), order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                    ALTER TABLE orders REPLICA IDENTITY FULL;
-                    CREATE TABLE market_data (market_data_id SERIAL PRIMARY KEY, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, price DECIMAL(18, 4) NOT NULL, volume INT NOT NULL, market_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                    ALTER TABLE market_data REPLICA IDENTITY FULL;
-                    CREATE PUBLICATION mz_source FOR ALL TABLES;
-
-                    > CREATE SOURCE mz_source
-                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                      FOR ALL TABLES;
-
-                    > CREATE VIEW customer_portfolio AS
-                      SELECT c.customer_id, c.name, a.account_id, s.ticker, s.name AS security_name,
-                             SUM(t.quantity * t.price) AS total_value
-                      FROM customers c
-                      JOIN accounts a ON c.customer_id = a.customer_id
-                      JOIN trades t ON a.account_id = t.account_id
-                      JOIN securities s ON t.security_id = s.security_id
-                      GROUP BY c.customer_id, c.name, a.account_id, s.ticker, s.name;
-
-                    > CREATE VIEW top_performers AS
-                      WITH ranked_performers AS (
-                          SELECT s.ticker, s.name, SUM(t.quantity) AS total_traded_volume,
-                                 ROW_NUMBER() OVER (ORDER BY SUM(t.quantity) DESC) AS rank
-                          FROM trades t
-                          JOIN securities s ON t.security_id = s.security_id
-                          GROUP BY s.ticker, s.name
-                      )
-                      SELECT ticker, name, total_traded_volume, rank
-                      FROM ranked_performers
-                      WHERE rank <= 10;
-
-                    > CREATE VIEW market_overview AS
-                      SELECT s.sector, AVG(md.price) AS avg_price, SUM(md.volume) AS total_volume,
-                             MAX(md.market_date) AS last_update
-                      FROM securities s
-                      LEFT JOIN market_data md ON s.security_id = md.security_id
-                      GROUP BY s.sector
-                      HAVING MAX(md.market_date) > NOW() - INTERVAL '5 minutes';
-
-                    > CREATE VIEW recent_large_trades AS
-                      SELECT t.trade_id, a.account_id, s.ticker, t.quantity, t.price, t.trade_date
-                      FROM trades t
-                      JOIN accounts a ON t.account_id = a.account_id
-                      JOIN securities s ON t.security_id = s.security_id
-                      WHERE t.quantity > (SELECT AVG(quantity) FROM trades) * 5
-                      AND t.trade_date > NOW() - INTERVAL '1 hour';
-
-                    > CREATE VIEW customer_order_book AS
-                      SELECT c.customer_id, c.name, COUNT(o.order_id) AS open_orders,
-                             SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) AS completed_orders
-                      FROM customers c
-                      JOIN accounts a ON c.customer_id = a.customer_id
-                      JOIN orders o ON a.account_id = o.account_id
-                      GROUP BY c.customer_id, c.name;
-
-                    > CREATE VIEW sector_performance AS
-                      SELECT s.sector, AVG(t.price) AS avg_trade_price, COUNT(t.trade_id) AS trade_count,
-                             SUM(t.quantity) AS total_volume
-                      FROM trades t
-                      JOIN securities s ON t.security_id = s.security_id
-                      GROUP BY s.sector;
-
-                    > CREATE VIEW account_activity_summary AS
-                      SELECT a.account_id, COUNT(t.trade_id) AS trade_count,
-                             SUM(t.quantity * t.price) AS total_trade_value,
-                             MAX(t.trade_date) AS last_trade_date
-                      FROM accounts a
-                      LEFT JOIN trades t ON a.account_id = t.account_id
-                      GROUP BY a.account_id;
-
-                    > CREATE VIEW daily_market_movements AS
-                      SELECT md.security_id, s.ticker, s.name,
-                             md.price AS current_price,
-                             LAG(md.price) OVER (PARTITION BY md.security_id ORDER BY md.market_date) AS previous_price,
-                             (md.price - LAG(md.price) OVER (PARTITION BY md.security_id ORDER BY md.market_date)) AS price_change,
-                             md.market_date
-                      FROM market_data md
-                      JOIN securities s ON md.security_id = s.security_id
-                      WHERE md.market_date > NOW() - INTERVAL '1 day';
-
-                    > CREATE VIEW high_value_customers AS
-                      SELECT c.customer_id, c.name, SUM(a.balance) AS total_balance
-                      FROM customers c
-                      JOIN accounts a ON c.customer_id = a.customer_id
-                      GROUP BY c.customer_id, c.name
-                      HAVING SUM(a.balance) > 1000000;
-
-                    > CREATE VIEW pending_orders_summary AS
-                      SELECT s.ticker, s.name, COUNT(o.order_id) AS pending_order_count,
-                             SUM(o.quantity) AS pending_volume,
-                             AVG(o.limit_price) AS avg_limit_price
-                      FROM orders o
-                      JOIN securities s ON o.security_id = s.security_id
-                      WHERE o.status = 'pending'
-                      GROUP BY s.ticker, s.name;
-
-                    > CREATE VIEW trade_volume_by_hour AS
-                      SELECT EXTRACT(HOUR FROM t.trade_date) AS trade_hour,
-                             COUNT(t.trade_id) AS trade_count,
-                             SUM(t.quantity) AS total_quantity
-                      FROM trades t
-                      GROUP BY EXTRACT(HOUR FROM t.trade_date);
-
-                    > CREATE VIEW top_securities_by_sector AS
-                      WITH ranked_securities AS (
-                          SELECT s.sector, s.ticker, s.name,
-                                 SUM(t.quantity) AS total_volume,
-                                 ROW_NUMBER() OVER (PARTITION BY s.sector ORDER BY SUM(t.quantity) DESC) AS sector_rank
-                          FROM trades t
-                          JOIN securities s ON t.security_id = s.security_id
-                          GROUP BY s.sector, s.ticker, s.name
-                      )
-                      SELECT sector, ticker, name, total_volume, sector_rank
-                      FROM ranked_securities
-                      WHERE sector_rank <= 5;
-
-                    > CREATE VIEW recent_trades_by_account AS
-                      SELECT a.account_id, s.ticker, t.quantity, t.price, t.trade_date
-                      FROM trades t
-                      JOIN accounts a ON t.account_id = a.account_id
-                      JOIN securities s ON t.security_id = s.security_id
-                      WHERE t.trade_date > NOW() - INTERVAL '1 day';
-
-                    > CREATE VIEW order_fulfillment_rates AS
-                      SELECT c.customer_id, c.name,
-                             COUNT(o.order_id) AS total_orders,
-                             SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) AS fulfilled_orders,
-                             (SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) * 100.0 / COUNT(o.order_id)) AS fulfillment_rate
-                      FROM customers c
-                      JOIN accounts a ON c.customer_id = a.customer_id
-                      JOIN orders o ON a.account_id = o.account_id
-                      GROUP BY c.customer_id, c.name;
-
-                    > CREATE VIEW sector_order_activity AS
-                      SELECT s.sector, COUNT(o.order_id) AS order_count,
-                             SUM(o.quantity) AS total_quantity,
-                             AVG(o.limit_price) AS avg_limit_price
-                      FROM orders o
-                      JOIN securities s ON o.security_id = s.security_id
-                      GROUP BY s.sector;
-                    """
-                ),
-                # TODO: Inserts, Selects
-                LoadPhase(
-                    duration=120,
-                    actions=[],
-                ),
-            ]
-        )
+# class ReadReplicaBenchmark(Scenario):
+#     """https://www.notion.so/materialize/Read-Replica-Benchmark-90b60e455ba648c3a8c9a53297d09492"""
+#
+#     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+#         self.init(
+#             [
+#                 TdPhase(
+#                     """
+#                     > DROP SECRET IF EXISTS pgpass CASCADE
+#                     > CREATE SECRET pgpass AS 'postgres'
+#                     > CREATE CONNECTION pg TO POSTGRES (
+#                         HOST postgres,
+#                         DATABASE postgres,
+#                         USER postgres,
+#                         PASSWORD SECRET pgpass
+#                       )
+#
+#                     $ postgres-execute connection=postgres://postgres:postgres@postgres
+#                     ALTER USER postgres WITH replication;
+#                     CREATE TABLE customers (customer_id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, address VARCHAR(255), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+#                     ALTER TABLE customers REPLICA IDENTITY FULL;
+#                     CREATE TABLE accounts (account_id SERIAL PRIMARY KEY, customer_id INT REFERENCES customers(customer_id) ON DELETE CASCADE, account_type VARCHAR(50) NOT NULL, balance DECIMAL(18, 2) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+#                     ALTER TABLE accounts REPLICA IDENTITY FULL;
+#                     CREATE TABLE securities (security_id SERIAL PRIMARY KEY, ticker VARCHAR(10) NOT NULL UNIQUE, name VARCHAR(255), sector VARCHAR(50), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+#                     ALTER TABLE securities REPLICA IDENTITY FULL;
+#                     CREATE TABLE trades (trade_id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(account_id) ON DELETE CASCADE, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, trade_type VARCHAR(10) NOT NULL CHECK (trade_type IN ('buy', 'sell')), quantity INT NOT NULL, price DECIMAL(18, 4) NOT NULL, trade_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+#                     ALTER TABLE trades REPLICA IDENTITY FULL;
+#                     CREATE TABLE orders (order_id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(account_id) ON DELETE CASCADE, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, order_type VARCHAR(10) NOT NULL CHECK (order_type IN ('buy', 'sell')), quantity INT NOT NULL, limit_price DECIMAL(18, 4), status VARCHAR(10) NOT NULL CHECK (status IN ('pending', 'completed', 'canceled')), order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+#                     ALTER TABLE orders REPLICA IDENTITY FULL;
+#                     CREATE TABLE market_data (market_data_id SERIAL PRIMARY KEY, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, price DECIMAL(18, 4) NOT NULL, volume INT NOT NULL, market_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+#                     ALTER TABLE market_data REPLICA IDENTITY FULL;
+#                     CREATE PUBLICATION mz_source FOR ALL TABLES;
+#
+#                     > CREATE SOURCE mz_source
+#                       FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+#                       FOR ALL TABLES;
+#
+#                     > CREATE VIEW customer_portfolio AS
+#                       SELECT c.customer_id, c.name, a.account_id, s.ticker, s.name AS security_name,
+#                              SUM(t.quantity * t.price) AS total_value
+#                       FROM customers c
+#                       JOIN accounts a ON c.customer_id = a.customer_id
+#                       JOIN trades t ON a.account_id = t.account_id
+#                       JOIN securities s ON t.security_id = s.security_id
+#                       GROUP BY c.customer_id, c.name, a.account_id, s.ticker, s.name;
+#
+#                     > CREATE VIEW top_performers AS
+#                       WITH ranked_performers AS (
+#                           SELECT s.ticker, s.name, SUM(t.quantity) AS total_traded_volume,
+#                                  ROW_NUMBER() OVER (ORDER BY SUM(t.quantity) DESC) AS rank
+#                           FROM trades t
+#                           JOIN securities s ON t.security_id = s.security_id
+#                           GROUP BY s.ticker, s.name
+#                       )
+#                       SELECT ticker, name, total_traded_volume, rank
+#                       FROM ranked_performers
+#                       WHERE rank <= 10;
+#
+#                     > CREATE VIEW market_overview AS
+#                       SELECT s.sector, AVG(md.price) AS avg_price, SUM(md.volume) AS total_volume,
+#                              MAX(md.market_date) AS last_update
+#                       FROM securities s
+#                       LEFT JOIN market_data md ON s.security_id = md.security_id
+#                       GROUP BY s.sector
+#                       HAVING MAX(md.market_date) > NOW() - INTERVAL '5 minutes';
+#
+#                     > CREATE VIEW recent_large_trades AS
+#                       SELECT t.trade_id, a.account_id, s.ticker, t.quantity, t.price, t.trade_date
+#                       FROM trades t
+#                       JOIN accounts a ON t.account_id = a.account_id
+#                       JOIN securities s ON t.security_id = s.security_id
+#                       WHERE t.quantity > (SELECT AVG(quantity) FROM trades) * 5
+#                       AND t.trade_date > NOW() - INTERVAL '1 hour';
+#
+#                     > CREATE VIEW customer_order_book AS
+#                       SELECT c.customer_id, c.name, COUNT(o.order_id) AS open_orders,
+#                              SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) AS completed_orders
+#                       FROM customers c
+#                       JOIN accounts a ON c.customer_id = a.customer_id
+#                       JOIN orders o ON a.account_id = o.account_id
+#                       GROUP BY c.customer_id, c.name;
+#
+#                     > CREATE VIEW sector_performance AS
+#                       SELECT s.sector, AVG(t.price) AS avg_trade_price, COUNT(t.trade_id) AS trade_count,
+#                              SUM(t.quantity) AS total_volume
+#                       FROM trades t
+#                       JOIN securities s ON t.security_id = s.security_id
+#                       GROUP BY s.sector;
+#
+#                     > CREATE VIEW account_activity_summary AS
+#                       SELECT a.account_id, COUNT(t.trade_id) AS trade_count,
+#                              SUM(t.quantity * t.price) AS total_trade_value,
+#                              MAX(t.trade_date) AS last_trade_date
+#                       FROM accounts a
+#                       LEFT JOIN trades t ON a.account_id = t.account_id
+#                       GROUP BY a.account_id;
+#
+#                     > CREATE VIEW daily_market_movements AS
+#                       SELECT md.security_id, s.ticker, s.name,
+#                              md.price AS current_price,
+#                              LAG(md.price) OVER (PARTITION BY md.security_id ORDER BY md.market_date) AS previous_price,
+#                              (md.price - LAG(md.price) OVER (PARTITION BY md.security_id ORDER BY md.market_date)) AS price_change,
+#                              md.market_date
+#                       FROM market_data md
+#                       JOIN securities s ON md.security_id = s.security_id
+#                       WHERE md.market_date > NOW() - INTERVAL '1 day';
+#
+#                     > CREATE VIEW high_value_customers AS
+#                       SELECT c.customer_id, c.name, SUM(a.balance) AS total_balance
+#                       FROM customers c
+#                       JOIN accounts a ON c.customer_id = a.customer_id
+#                       GROUP BY c.customer_id, c.name
+#                       HAVING SUM(a.balance) > 1000000;
+#
+#                     > CREATE VIEW pending_orders_summary AS
+#                       SELECT s.ticker, s.name, COUNT(o.order_id) AS pending_order_count,
+#                              SUM(o.quantity) AS pending_volume,
+#                              AVG(o.limit_price) AS avg_limit_price
+#                       FROM orders o
+#                       JOIN securities s ON o.security_id = s.security_id
+#                       WHERE o.status = 'pending'
+#                       GROUP BY s.ticker, s.name;
+#
+#                     > CREATE VIEW trade_volume_by_hour AS
+#                       SELECT EXTRACT(HOUR FROM t.trade_date) AS trade_hour,
+#                              COUNT(t.trade_id) AS trade_count,
+#                              SUM(t.quantity) AS total_quantity
+#                       FROM trades t
+#                       GROUP BY EXTRACT(HOUR FROM t.trade_date);
+#
+#                     > CREATE VIEW top_securities_by_sector AS
+#                       WITH ranked_securities AS (
+#                           SELECT s.sector, s.ticker, s.name,
+#                                  SUM(t.quantity) AS total_volume,
+#                                  ROW_NUMBER() OVER (PARTITION BY s.sector ORDER BY SUM(t.quantity) DESC) AS sector_rank
+#                           FROM trades t
+#                           JOIN securities s ON t.security_id = s.security_id
+#                           GROUP BY s.sector, s.ticker, s.name
+#                       )
+#                       SELECT sector, ticker, name, total_volume, sector_rank
+#                       FROM ranked_securities
+#                       WHERE sector_rank <= 5;
+#
+#                     > CREATE VIEW recent_trades_by_account AS
+#                       SELECT a.account_id, s.ticker, t.quantity, t.price, t.trade_date
+#                       FROM trades t
+#                       JOIN accounts a ON t.account_id = a.account_id
+#                       JOIN securities s ON t.security_id = s.security_id
+#                       WHERE t.trade_date > NOW() - INTERVAL '1 day';
+#
+#                     > CREATE VIEW order_fulfillment_rates AS
+#                       SELECT c.customer_id, c.name,
+#                              COUNT(o.order_id) AS total_orders,
+#                              SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) AS fulfilled_orders,
+#                              (SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) * 100.0 / COUNT(o.order_id)) AS fulfillment_rate
+#                       FROM customers c
+#                       JOIN accounts a ON c.customer_id = a.customer_id
+#                       JOIN orders o ON a.account_id = o.account_id
+#                       GROUP BY c.customer_id, c.name;
+#
+#                     > CREATE VIEW sector_order_activity AS
+#                       SELECT s.sector, COUNT(o.order_id) AS order_count,
+#                              SUM(o.quantity) AS total_quantity,
+#                              AVG(o.limit_price) AS avg_limit_price
+#                       FROM orders o
+#                       JOIN securities s ON o.security_id = s.security_id
+#                       GROUP BY s.sector;
+#                     """
+#                 ),
+#                 # TODO: Inserts, Selects
+#                 LoadPhase(
+#                     duration=120,
+#                     actions=[],
+#                 ),
+#             ]
+#         )
 
 
 class Statistics:
@@ -1121,10 +1126,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         stats: dict[str, Statistics] = {}
         scenario = scenario_class(c, conn_infos)
         scenario.setup(c, conn_infos)
-        start_time = datetime.datetime.now()
+        start_time = time.time()
         Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
         try:
-            # Don't let the garbage collector interfere with our measurementss
+            # Don't let the garbage collector interfere with our measurements
             gc.disable()
             scenario.run(c, measurements)
             scenario.teardown()
@@ -1133,9 +1138,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         finally:
             plt.figure(figsize=(10, 6))
             for key, m in measurements.items():
-                times: list[float] = [
-                    (x.timestamp - start_time).total_seconds() for x in m
-                ]
+                times: list[float] = [x.timestamp - start_time for x in m]
                 values: list[float] = [x.value * 1000 for x in m]
                 stats[key] = Statistics(times, values)
                 plt.scatter(times, values, label=key, marker=MarkerStyle("+"))
@@ -1164,6 +1167,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             plt.title(f"{scenario_name} against {mz_string}")
             plt.legend(loc="best")
             plt.grid(True)
+            plt.ylim(bottom=0)
             plot_path = f"plots/{scenario_name}.png"
             plt.savefig(MZ_ROOT / plot_path, dpi=300)
             if buildkite.is_in_buildkite():
