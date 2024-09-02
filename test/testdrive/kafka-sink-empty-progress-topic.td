@@ -52,7 +52,7 @@ $ set-arg-default single-replica-cluster=quickstart
 # Ensure that sinks can be created against a progress topic that is empty with a
 # low water mark of zero.
 
-$ kafka-create-topic topic=empty-at-zero
+$ kafka-create-topic topic=empty-at-zero partitions=1
 
 > CREATE CONNECTION kafka_conn_empty_at_zero
   TO KAFKA (
@@ -75,7 +75,7 @@ $ kafka-verify-data sink=materialize.public.empty_at_zero format=json
 # Ensure that sinks can be created against a progress topic that is empty with a
 # low water mark that is nonzero.
 
-$ kafka-create-topic topic=empty-at-nonzero
+$ kafka-create-topic topic=empty-at-nonzero partitions=1
 $ kafka-ingest topic=empty-at-nonzero format=bytes
 data
 data
