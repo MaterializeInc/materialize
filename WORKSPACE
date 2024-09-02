@@ -166,6 +166,37 @@ http_archive(
     urls = ["https://github.com/MaterializeInc/toolchains/releases/download/macos-sysroot-sdk-{0}/MacOSX{0}.sdk.tar.zst".format(DARWIN_SYSROOT_VERSION)],
 )
 
+_LINUX_SYSROOT_BUILD_FILE = """
+filegroup(
+    name = "sysroot",
+    srcs = glob(["*/**"]),
+    visibility = ["//visibility:public"],
+)
+"""
+
+# Format is <KERNEL_VERSION-GLIBC_VERSION-LIBSTDCXX_VERSION>
+LINUX_SYSROOT_VERSION = "5_10-2_35-11_4_0"
+
+LINUX_SYSROOT_X86_64_INTEGRITY = "sha256-H2q1ti0l6vETl6QBOIvwuizpAJrvKCMObTuw/0Gedy0="
+
+http_archive(
+    name = "linux_sysroot-x86_64",
+    build_file_content = _LINUX_SYSROOT_BUILD_FILE,
+    integrity = LINUX_SYSROOT_X86_64_INTEGRITY,
+    strip_prefix = "sysroot",
+    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/linux-sysroot-{0}/linux-sysroot-x86_64.tar.zst".format(LINUX_SYSROOT_VERSION)],
+)
+
+LINUX_SYSROOT_AARCH64_INTEGRITY = "sha256-kUasOepnmvdoJlI2JHm9T5o3alaS17xS4avwKDyaxMQ="
+
+http_archive(
+    name = "linux_sysroot-aarch64",
+    build_file_content = _LINUX_SYSROOT_BUILD_FILE,
+    integrity = LINUX_SYSROOT_AARCH64_INTEGRITY,
+    strip_prefix = "sysroot",
+    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/linux-sysroot-{0}/linux-sysroot-aarch64.tar.zst".format(LINUX_SYSROOT_VERSION)],
+)
+
 # Version of clang/llvm we use.
 #
 # We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
@@ -174,9 +205,9 @@ LLVM_VERSION = "18.1.8"
 maybe(
     http_archive,
     name = "toolchains_llvm",
+    canonical_id = "{0}".format(TOOLCHAINS_LLVM_VERSION),
     integrity = TOOLCHAINS_LLVM_INTEGRITY,
     strip_prefix = "toolchains_llvm-{0}".format(TOOLCHAINS_LLVM_VERSION),
-    canonical_id = "{0}".format(TOOLCHAINS_LLVM_VERSION),
     url = "https://github.com/bazel-contrib/toolchains_llvm/releases/download/{0}/toolchains_llvm-{0}.tar.gz".format(TOOLCHAINS_LLVM_VERSION),
 )
 
@@ -187,19 +218,29 @@ load("@toolchains_llvm//toolchain:rules.bzl", "llvm_toolchain")
 llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
+    sha256 = {
+        "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
+        "linux-aarch64": "bdab5b24cb44f121c82378503afdf55052931c8a26a86f16dad4405a3626a23d",
+        "linux-x86_64": "c44046d74e491661e53fc409add8eb7bdcca4b13decde9aa4adb9b8dc8ef1fa4",
+    },
+    # Default behavior is to link against LLVM's libc++ which is included with our Clang
+    # toolchain. But when cross-compiling, libc++ isn't available so we link against
+    # GNU's libstdc++. Instead we just always link against libstdc++ so the behavior is
+    # the same whether cross-compiling or not.
+    stdlib = {
+        "linux-aarch64": "stdc++",
+        "linux-x86_64": "stdc++",
+    },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
         "darwin-x86_64": "@sysroot_darwin_universal//:sysroot",
+        "linux-x86_64": "@linux_sysroot-x86_64//:sysroot",
+        "linux-aarch64": "@linux_sysroot-aarch64//:sysroot",
     },
     urls = {
         "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
         "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_aarch64.tar.zst".format(LLVM_VERSION)],
         "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_x86_64.tar.zst".format(LLVM_VERSION)],
-    },
-    sha256 = {
-        "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
-        "linux-aarch64": "bdab5b24cb44f121c82378503afdf55052931c8a26a86f16dad4405a3626a23d",
-        "linux-x86_64": "c44046d74e491661e53fc409add8eb7bdcca4b13decde9aa4adb9b8dc8ef1fa4",
     },
 )
 
