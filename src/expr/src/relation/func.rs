@@ -403,7 +403,10 @@ where
         .zip(1i64..)
         .map(|(d, i)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![Datum::Int64(i), d]);
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::Int64(i));
+                    packer.push(d);
+                });
             })
         });
 
@@ -448,7 +451,10 @@ where
             })
         }.3).into_iter().map(|(d, i)| {
         temp_storage.make_datum(|packer| {
-            packer.push_list(vec![Datum::Int64(i), d]);
+            packer.push_list_with(|packer| {
+                packer.push(Datum::Int64(i));
+                packer.push(d);
+            });
         })
     });
 
@@ -496,7 +502,10 @@ where
             })
         }.2).into_iter().map(|(d, i)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![Datum::Int64(i), d]);
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::Int64(i));
+                    packer.push(d);
+                });
             })
         });
 
@@ -561,7 +570,10 @@ where
         .zip_eq(orig_rows)
         .map(|(result_value, original_row)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![result_value, original_row]);
+                packer.push_list_with(|packer| {
+                    packer.push(result_value);
+                    packer.push(original_row);
+                });
             })
         });
 
@@ -789,7 +801,10 @@ where
             .zip_eq(orig_rows)
             .map(|(result_value, original_row)| {
                 temp_storage.make_datum(|packer| {
-                    packer.push_list(vec![result_value, original_row]);
+                    packer.push_list_with(|packer| {
+                        packer.push(result_value);
+                        packer.push(original_row);
+                    });
                 })
             });
 
@@ -896,7 +911,10 @@ where
         .zip_eq(original_rows)
         .map(|(result_value, original_row)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![result_value, original_row]);
+                packer.push_list_with(|packer| {
+                    packer.push(result_value);
+                    packer.push(original_row);
+                });
             })
         });
 
@@ -1078,10 +1096,10 @@ where
     let temp_storage = RowArena::with_capacity(2 * original_rows.len());
     let results_with_orig_rows = results_per_row.into_iter().enumerate().map(|(i, results)| {
         temp_storage.make_datum(|packer| {
-            packer.push_list(vec![
-                temp_storage.make_datum(|packer| packer.push_list(results)),
-                original_rows[i],
-            ]);
+            packer.push_list_with(|packer| {
+                packer.push(temp_storage.make_datum(|packer| packer.push_list(results)));
+                packer.push(original_rows[i]);
+            });
         })
     });
 
@@ -1450,7 +1468,10 @@ where
 
     let result = result.into_iter().map(|(result_value, original_row)| {
         temp_storage.make_datum(|packer| {
-            packer.push_list(vec![result_value, original_row]);
+            packer.push_list_with(|packer| {
+                packer.push(result_value);
+                packer.push(original_row);
+            });
         })
     });
 
