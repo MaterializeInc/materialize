@@ -1881,7 +1881,7 @@ impl SystemVars {
     }
 
     /// Returns the `kafka_socket_timeout` configuration parameter.
-    pub fn kafka_socket_timeout(&self) -> Duration {
+    pub fn kafka_socket_timeout(&self) -> Option<Duration> {
         *self.expect_value(&KAFKA_SOCKET_TIMEOUT)
     }
 
@@ -1901,7 +1901,7 @@ impl SystemVars {
     }
 
     /// Returns the `kafka_progress_record_fetch_timeout` configuration parameter.
-    pub fn kafka_progress_record_fetch_timeout(&self) -> Duration {
+    pub fn kafka_progress_record_fetch_timeout(&self) -> Option<Duration> {
         *self.expect_value(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
     }
 
