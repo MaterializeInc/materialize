@@ -61,6 +61,7 @@ impl UserConfig {
 #[derive(Deserialize, Clone, Serialize)]
 pub struct UserCreate {
     pub email: String,
+    pub password: Option<String>,
     #[serde(rename = "roleIds")]
     pub role_ids: Option<Vec<String>>,
 }

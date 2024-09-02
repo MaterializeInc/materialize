@@ -292,7 +292,9 @@ pub async fn handle_create_user(
     let user_config = UserConfig {
         id: user_id,
         email: new_user.email.clone(),
-        password: Uuid::new_v4().to_string(),
+        password: new_user
+            .password
+            .unwrap_or_else(|| Uuid::new_v4().to_string()),
         tenant_id: default_tenant_id,
         initial_api_tokens: vec![],
         roles: role_names.clone(),

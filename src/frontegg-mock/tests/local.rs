@@ -703,6 +703,82 @@ async fn test_delete_nonexistent_user() {
     assert_eq!(response.status(), 404);
 }
 
+#[mz_ore::test(tokio::test)]
+async fn test_create_user_with_optional_password() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // Test creating a user with a password
+    let new_user_email = "newuser_with_password@example.com";
+    let new_user_password = "secure_password_123";
+    let response = ctx
+        .client
+        .post(format!("{}/identity/resources/users/v2", ctx.base_url))
+        .bearer_auth(access_token.clone())
+        .json(&json!({
+            "email": new_user_email,
+            "password": new_user_password
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 201);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["email"], new_user_email);
+
+    // Verify that we can authenticate with the new user's credentials
+    let auth_response = ctx
+        .client
+        .post(format!("{}/identity/resources/auth/v1/user", ctx.base_url))
+        .json(&json!({
+            "email": new_user_email,
+            "password": new_user_password
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(auth_response.status(), 200);
+    let auth_body: serde_json::Value = auth_response.json().await.unwrap();
+    assert!(auth_body.get("accessToken").is_some());
+
+    // Test creating a user without a password
+    let new_user_email_no_password = "newuser_without_password@example.com";
+    let response_no_password = ctx
+        .client
+        .post(format!("{}/identity/resources/users/v2", ctx.base_url))
+        .bearer_auth(access_token.clone())
+        .json(&json!({
+            "email": new_user_email_no_password
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response_no_password.status(), 201);
+    let body_no_password: serde_json::Value = response_no_password.json().await.unwrap();
+    assert_eq!(body_no_password["email"], new_user_email_no_password);
+
+    let get_user_response = ctx
+        .client
+        .get(format!(
+            "{}/identity/resources/users/v3?_email={}",
+            ctx.base_url, new_user_email_no_password
+        ))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(get_user_response.status(), 200);
+    let get_user_body: serde_json::Value = get_user_response.json().await.unwrap();
+    assert_eq!(
+        get_user_body["items"][0]["email"],
+        new_user_email_no_password
+    );
+}
+
 // SSO Configuration Tests
 
 #[mz_ore::test(tokio::test)]
