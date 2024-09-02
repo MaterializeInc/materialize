@@ -41,6 +41,19 @@ impl<T: TimelyTimestamp> Debug for ReadHold<T> {
     }
 }
 
+/// Errors for manipulating read holds.
+#[derive(Error, Debug)]
+pub enum ReadHoldDowngradeError<T> {
+    /// The new frontier is not beyond the current since.
+    #[error("since violation: new frontier {frontier:?} is not beyond current since {since:?}")]
+    SinceViolation {
+        /// The frontier to downgrade to.
+        frontier: Antichain<T>,
+        /// The since of the collection.
+        since: Antichain<T>,
+    },
+}
+
 impl<T: TimelyTimestamp> ReadHold<T> {
     pub fn new(
         id: GlobalId,
@@ -111,13 +124,15 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     /// Downgrades `self` to the given `frontier`. Returns `Err` when the new
     /// frontier is `less_than` the frontier at which this [ReadHold] is
     /// holding.
-    pub fn try_downgrade(&mut self, frontier: Antichain<T>) -> Result<(), anyhow::Error> {
+    pub fn try_downgrade(
+        &mut self,
+        frontier: Antichain<T>,
+    ) -> Result<(), ReadHoldDowngradeError<T>> {
         if PartialOrder::less_than(&frontier, &self.since) {
-            return Err(anyhow::anyhow!(
-                "new frontier {:?} is not beyond current since {:?}",
+            return Err(ReadHoldDowngradeError::SinceViolation {
                 frontier,
-                self.since
-            ));
+                since: self.since.clone(),
+            });
         }
 
         let mut changes = ChangeBatch::new();
