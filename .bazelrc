@@ -70,3 +70,47 @@ common --experimental_remote_merkle_tree_cache
 common --experimental_remote_merkle_tree_cache_size=5000
 # Tells `xz` to use all available cores.
 action_env=XZ_OPT=-T0
+
+
+# LLVM's libc++ has different assertion modes which can be configured to catch
+# undefined behavior. See: <https://libcxx.llvm.org/Hardening.html>
+build:debug --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
+build:debug --host_cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
+build:debug --@rules_rust//:extra_rustc_flag="-Csplit-debuginfo=unpacked"
+
+# Common Build Configuration
+build --linkopt="-Wl,-O2"
+build --linkopt="-fuse-ld=lld"
+build --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
+build --@rules_rust//:extra_rustc_flag="-Clink-arg=-fuse-ld=lld"
+build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
+
+# TODO(parkmycar): toolchains_llvm uses ld64 for macOS which doesn't support
+# compressing debug sections.
+build:linux --linkopt="-Wl,--compress-debug-sections=zlib"
+build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,--compress-debug-sections=zlib"
+
+# As of Jan 2024 all of the x86-64 and aarch64 hardware we run on support these
+# CPU targets.
+build:linux-amd64 --copt="-march=x86-64-v3"
+build:linux-amd64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=x86-64-v3"
+build:linux-arm64 --copt="-mcpu=neoverse-n1"
+build:linux-arm64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=neoverse-n1"
+
+# Release Build Configuration
+build:release --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST"
+build:release --copt="-O3"
+build:release --copt="-DNDEBUG"
+build:release --copt="-flto=thin"
+build:release --linkopt="-flto=thin"
+build:release --@rules_rust//:extra_rustc_flag="-Clto=thin"
+build:release -c opt
+
+# Cross Language LTO
+#
+# <https://blog.llvm.org/2019/09/closing-gap-cross-language-lto-between.html>
+#
+# TODO(parkmycar): Measure the tradeoff between compile time and runtime performance.
+# TODO(parkmycar): Experiment with a different number of codegen units.
+build:x-lang-lto --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
+build:x-lang-lto --@rules_rust//:extra_rustc_flag="-Clinker=external/llvm_toolchain_llvm/bin/clang"

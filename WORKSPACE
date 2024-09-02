@@ -10,7 +10,6 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 
-
 """
 Materialize's Bazel Workspace.
 
@@ -348,7 +347,6 @@ load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 
 crates_repository(
     name = "crates_io",
-    cargo_lockfile = "//:Cargo.lock",
     annotations = {
         "decnumber-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decnumber.bazel",
@@ -450,7 +448,23 @@ crates_repository(
                 "RUSTDOC": "",
             },
         )],
+        # Compile the backtrace crate and its dependencies with all optimizations, even in dev
+        # builds, since otherwise backtraces can take 20s+ to symbolize. With optimizations
+        # enabled, symbolizing a backtrace takes less than 1s.
+        "addr2line": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "adler": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "backtrace": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "gimli": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "miniz_oxide": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "object": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "rustc-demangle": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
     },
+    cargo_config = "//:.cargo/config.toml",
+    cargo_lockfile = "//:Cargo.lock",
+    # When `isolated` is true, Bazel will create a new `$CARGO_HOME`, i.e. it
+    # won't use `~/.cargo`, when re-pinning. This is nice but not totally
+    # necessary, and it makes re-pinning painfully slow, so we disable it.
+    isolated = False,
     manifests = [
         "//:Cargo.toml",
         "//:src/adapter-types/Cargo.toml",

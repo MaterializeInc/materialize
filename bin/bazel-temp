@@ -28,4 +28,4 @@ bin/bazel build \
     //src/sqllogictest:sqllogictest \
     //src/testdrive:testdrive \
     //src/fivetran-destination:mz_fivetran_destination_bin \
-    -c opt --remote_cache=https://bazel-remote.dev.materialize.com 2>&1 | sed -e 's/INFO/--- INFO/'
+    --config release --remote_cache=https://bazel-remote.dev.materialize.com 2>&1 | sed -e 's/INFO/--- INFO/'
