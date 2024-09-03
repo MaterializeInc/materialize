@@ -237,16 +237,8 @@ llvm_toolchain(
     llvm_version = LLVM_VERSION,
     sha256 = {
         "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
-        "linux-aarch64": "bdab5b24cb44f121c82378503afdf55052931c8a26a86f16dad4405a3626a23d",
-        "linux-x86_64": "c44046d74e491661e53fc409add8eb7bdcca4b13decde9aa4adb9b8dc8ef1fa4",
-    },
-    # Default behavior is to link against LLVM's libc++ which is included with our Clang
-    # toolchain. But when cross-compiling, libc++ isn't available so we link against
-    # GNU's libstdc++. Instead we just always link against libstdc++ so the behavior is
-    # the same whether cross-compiling or not.
-    stdlib = {
-        "linux-aarch64": "stdc++",
-        "linux-x86_64": "stdc++",
+        "linux-aarch64": "6117a28376d91d331fbacbac3cf9ef4e21ad255e3cbd6fcbfc260e3f437be533",
+        "linux-x86_64": "6aa8a3c61de78e95134261b6d0e3a1907e1fee5b41a3baa62b185ec8326c0753",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -256,8 +248,8 @@ llvm_toolchain(
     },
     urls = {
         "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_x86_64.tar.zst".format(LLVM_VERSION)],
+        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-1/linux_aarch64.tar.zst".format(LLVM_VERSION)],
+        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-1/linux_x86_64.tar.zst".format(LLVM_VERSION)],
     },
 )
 
