@@ -1262,7 +1262,10 @@ mod test {
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
 
-    use super::{DatabaseKey, DatabaseValue, ItemKey, ItemValue, SchemaKey, SchemaValue};
+    use super::{
+        DatabaseKey, DatabaseValue, FenceToken, ItemKey, ItemValue, SchemaKey, SchemaValue,
+    };
+    use crate::durable::Epoch;
 
     proptest! {
         #[mz_ore::test]
@@ -1318,5 +1321,33 @@ mod test {
 
             prop_assert_eq!(value, round);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_fence_token_order() {
+        let ft1 = FenceToken {
+            deploy_generation: 10,
+            epoch: Epoch::new(20).unwrap(),
+        };
+        let ft2 = FenceToken {
+            deploy_generation: 10,
+            epoch: Epoch::new(19).unwrap(),
+        };
+
+        assert!(ft1 > ft2);
+
+        let ft3 = FenceToken {
+            deploy_generation: 11,
+            epoch: Epoch::new(10).unwrap(),
+        };
+
+        assert!(ft3 > ft1);
+
+        let ft4 = FenceToken {
+            deploy_generation: 11,
+            epoch: Epoch::new(30).unwrap(),
+        };
+
+        assert!(ft4 > ft1);
     }
 }

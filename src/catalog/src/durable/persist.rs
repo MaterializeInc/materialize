@@ -842,6 +842,10 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                 (StateUpdateKind::Epoch(epoch), 1) => {
                     current_epoch.maybe_fence(epoch)?;
                 }
+                (StateUpdateKind::FenceToken(token), 1) => {
+                    current_deploy_generation.maybe_fence(token.deploy_generation)?;
+                    current_epoch.maybe_fence(token.epoch)?;
+                }
                 _ => {}
             }
         }
@@ -1374,6 +1378,13 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
 
         match (update.kind, update.diff) {
             (StateUpdateKind::AuditLog(_, ()), _) => Ok(None),
+            // Nothing to due for fence token retractions but wait for the next insertion.
+            (StateUpdateKind::FenceToken(_), -1) => Ok(None),
+            (StateUpdateKind::FenceToken(token), 1) => {
+                current_deploy_generation.maybe_fence(token.deploy_generation)?;
+                current_epoch.maybe_fence(token.epoch)?;
+                Ok(None)
+            }
             // Nothing to due for epoch retractions but wait for the next insertion.
             (StateUpdateKind::Epoch(_), -1) => Ok(None),
             (StateUpdateKind::Epoch(epoch), 1) => {
