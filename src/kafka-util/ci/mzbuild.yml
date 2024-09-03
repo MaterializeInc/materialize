@@ -11,3 +11,4 @@ name: kgen
 pre-image:
   - type: cargo-build
     bin: kgen
+    bazel-bin: "@//src/kafka-util:kgen"
