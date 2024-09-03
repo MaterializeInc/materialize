@@ -1206,6 +1206,7 @@ pub enum SourceExportStatementDetails {
     LoadGenerator {
         output: LoadGeneratorOutput,
     },
+    Kafka {},
 }
 
 impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
@@ -1238,6 +1239,11 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     )),
                 }
             }
+            SourceExportStatementDetails::Kafka {} => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Kafka(
+                    kafka::ProtoKafkaSourceExportStatementDetails {},
+                )),
+            },
         }
     }
 
@@ -1261,6 +1267,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     .output
                     .into_rust_if_some("ProtoLoadGeneratorSourceExportStatementDetails::output")?,
             },
+            Some(Kind::Kafka(_details)) => SourceExportStatementDetails::Kafka {},
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoSourceExportStatementDetails::kind",

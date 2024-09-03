@@ -135,6 +135,8 @@ pub enum KafkaSourcePurificationError {
     NotKafkaConnection(FullItemName),
     #[error("failed to create and connect Kafka consumer")]
     KafkaConsumerError(String),
+    #[error("Referenced kafka connection uses a different topic '{0}' than specified: '{1}'")]
+    WrongKafkaTopic(String, UnresolvedItemName),
 }
 
 impl KafkaSourcePurificationError {
@@ -161,6 +163,10 @@ pub enum LoadGeneratorSourcePurificationError {
     ForTables,
     #[error("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement")]
     MultiOutputRequiresForAllTables,
+    #[error("multi-output sources require an external reference")]
+    MultiOutputRequiresExternalReference,
+    #[error("Referenced load generator is different '{0}' than specified: '{1}'")]
+    WrongLoadGenerator(String, UnresolvedItemName),
 }
 
 impl LoadGeneratorSourcePurificationError {
