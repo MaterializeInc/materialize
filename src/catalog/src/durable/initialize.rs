@@ -46,8 +46,6 @@ use crate::durable::{
     USER_ROLE_ID_ALLOC_KEY,
 };
 
-/// The key used within the "config" collection stores the deploy generation.
-pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 /// The key within the "config" Collection that stores the version of the catalog.
 pub const USER_VERSION_KEY: &str = "user_version";
 /// The key within the "config" collection that stores whether the remote configuration was
