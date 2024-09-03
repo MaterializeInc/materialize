@@ -487,11 +487,11 @@ where
 
     /// Process a pending response from the storage controller. If necessary,
     /// return a higher-level response to our client.
-    async fn process_storage_response(
+    fn process_storage_response(
         &mut self,
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let maybe_response = self.storage.process(storage_metadata).await?;
+        let maybe_response = self.storage.process(storage_metadata)?;
         Ok(maybe_response.and_then(
             |mz_storage_client::controller::Response::FrontierUpdates(r)| {
                 self.handle_frontier_updates(&r)
@@ -501,10 +501,8 @@ where
 
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
-    async fn process_compute_response(
-        &mut self,
-    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let response = self.compute.process(&mut *self.storage).await;
+    fn process_compute_response(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let response = self.compute.process(&mut *self.storage);
 
         let response = response.and_then(|r| match r {
             ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
@@ -537,11 +535,11 @@ where
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => self.process_storage_response(storage_metadata).await,
-            Readiness::Compute => self.process_compute_response().await,
+            Readiness::Storage => self.process_storage_response(storage_metadata),
+            Readiness::Compute => self.process_compute_response(),
             Readiness::Metrics => self.process_replica_metrics().await,
             Readiness::Frontiers => {
-                self.record_frontiers().await;
+                self.record_frontiers();
                 Ok(None)
             }
             Readiness::Internal(message) => Ok(Some(message)),
@@ -596,15 +594,11 @@ where
             return Ok(None);
         };
 
-        self.record_replica_metrics(id, &metrics).await;
+        self.record_replica_metrics(id, &metrics);
         Ok(Some(ControllerResponse::ComputeReplicaMetrics(id, metrics)))
     }
 
-    async fn record_replica_metrics(
-        &mut self,
-        replica_id: ReplicaId,
-        metrics: &[ServiceProcessMetrics],
-    ) {
+    fn record_replica_metrics(&mut self, replica_id: ReplicaId, metrics: &[ServiceProcessMetrics]) {
         if self.read_only() {
             return;
         }
@@ -631,18 +625,16 @@ where
             .collect();
 
         self.storage
-            .append_introspection_updates(IntrospectionType::ReplicaMetricsHistory, updates)
-            .await;
+            .append_introspection_updates(IntrospectionType::ReplicaMetricsHistory, updates);
     }
 
-    async fn record_frontiers(&mut self) {
+    fn record_frontiers(&mut self) {
         let compute_frontiers = self.compute.collection_frontiers();
-        self.storage.record_frontiers(compute_frontiers).await;
+        self.storage.record_frontiers(compute_frontiers);
 
         let compute_replica_frontiers = self.compute.replica_write_frontiers();
         self.storage
-            .record_replica_frontiers(compute_replica_frontiers)
-            .await;
+            .record_replica_frontiers(compute_replica_frontiers);
     }
 
     /// Determine the "real-time recency" timestamp for all `ids`.

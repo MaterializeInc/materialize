@@ -50,7 +50,6 @@ use mz_storage_types::sources::{
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::TimestamplessUpdate;
@@ -680,13 +679,7 @@ pub trait StorageController: Debug {
     async fn ready(&mut self);
 
     /// Processes the work queued by [`StorageController::ready`].
-    ///
-    /// This method is guaranteed to return "quickly" unless doing so would
-    /// compromise the correctness of the system.
-    ///
-    /// This method is **not** guaranteed to be cancellation safe. It **must**
-    /// be awaited to completion.
-    async fn process(
+    fn process(
         &mut self,
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
@@ -713,7 +706,7 @@ pub trait StorageController: Debug {
     /// controller's frontiers take precedence. The rationale is that the
     /// storage controller should be the authority on frontiers of storage
     /// objects, not the caller of this method.
-    async fn record_frontiers(
+    fn record_frontiers(
         &mut self,
         external_frontiers: BTreeMap<
             GlobalId,
@@ -729,7 +722,7 @@ pub trait StorageController: Debug {
     /// controller's frontiers take precedence. The rationale is that the
     /// storage controller should be the authority on frontiers of storage
     /// objects, not the caller of this method.
-    async fn record_replica_frontiers(
+    fn record_replica_frontiers(
         &mut self,
         external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
     );
@@ -738,21 +731,13 @@ pub trait StorageController: Debug {
     ///
     /// Rows passed in `updates` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
-    async fn append_introspection_updates(
-        &mut self,
-        type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
-    );
+    fn append_introspection_updates(&mut self, type_: IntrospectionType, updates: Vec<(Row, Diff)>);
 
     /// Updates the desired state of the given introspection type.
     ///
     /// Rows passed in `op` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
-    async fn update_introspection_collection(
-        &mut self,
-        type_: IntrospectionType,
-        op: StorageWriteOp,
-    );
+    fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp);
 
     /// On boot, seed the controller's metadata/state.
     async fn initialize_state(
@@ -864,7 +849,7 @@ impl<T: Timestamp> ExportState<T> {
 #[derive(Clone, Debug)]
 pub struct MonotonicAppender<T> {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
-    tx: mpsc::Sender<(
+    tx: mpsc::UnboundedSender<(
         Vec<(Row, Diff)>,
         oneshot::Sender<Result<(), StorageError<T>>>,
     )>,
@@ -872,7 +857,7 @@ pub struct MonotonicAppender<T> {
 
 impl<T> MonotonicAppender<T> {
     pub fn new(
-        tx: mpsc::Sender<(
+        tx: mpsc::UnboundedSender<(
             Vec<(Row, Diff)>,
             oneshot::Sender<Result<(), StorageError<T>>>,
         )>,
@@ -883,17 +868,10 @@ impl<T> MonotonicAppender<T> {
     pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError<T>> {
         let (tx, rx) = oneshot::channel();
 
-        // Make sure there is space available on the channel.
-        let permit = self.tx.try_reserve().map_err(|e| {
-            let msg = "collection manager";
-            match e {
-                TrySendError::Full(_) => StorageError::ResourceExhausted(msg),
-                TrySendError::Closed(_) => StorageError::ShuttingDown(msg),
-            }
-        })?;
-
         // Send our update to the CollectionManager.
-        permit.send((updates, tx));
+        self.tx
+            .send((updates, tx))
+            .map_err(|_| StorageError::ShuttingDown("collection manager"))?;
 
         // Wait for a response, if we fail to receive then the CollectionManager has gone away.
         let result = rx

@@ -223,7 +223,7 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn drain_statement_log(&mut self) {
+    pub(crate) fn drain_statement_log(&mut self) {
         let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
             .into_iter()
             .map(|update| (update, 1))
@@ -257,8 +257,7 @@ impl Coordinator {
             if !updates.is_empty() && !self.controller.read_only() {
                 self.controller
                     .storage
-                    .append_introspection_updates(type_, updates)
-                    .await;
+                    .append_introspection_updates(type_, updates);
             }
         }
     }

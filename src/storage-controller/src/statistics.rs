@@ -149,9 +149,7 @@ where
         if !correction.is_empty() {
             current_metrics.extend(correction.iter().cloned());
 
-            collection_mgmt
-                .differential_append(statistics_collection_id, correction)
-                .await;
+            collection_mgmt.differential_append(statistics_collection_id, correction);
         }
 
         let mut interval = tokio::time::interval(initial_interval);
@@ -202,8 +200,7 @@ where
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
                         collection_mgmt
-                            .differential_append(statistics_collection_id, correction)
-                            .await;
+                            .differential_append(statistics_collection_id, correction);
                     }
                 }
             }

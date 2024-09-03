@@ -177,7 +177,7 @@ impl Coordinator {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::DrainStatementLog => {
-                self.drain_statement_log().boxed_local().await;
+                self.drain_statement_log();
             }
             Message::PrivateLinkVpcEndpointEvents(events) => {
                 if !self.controller.read_only() {
@@ -189,8 +189,7 @@ impl Coordinator {
                                     .into_iter()
                                     .map(|e| (mz_repr::Row::from(e), 1))
                                     .collect(),
-                            )
-                            .boxed_local().await;
+                            );
                 }
             }
             Message::CheckSchedulingPolicies => {

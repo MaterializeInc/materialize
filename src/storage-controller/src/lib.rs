@@ -894,8 +894,7 @@ where
             }
         }
 
-        self.append_shard_mappings(new_collections.into_iter(), 1)
-            .await;
+        self.append_shard_mappings(new_collections.into_iter(), 1);
 
         // TODO(guswynn): perform the io in this final section concurrently.
         for id in to_execute {
@@ -1801,7 +1800,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn process(
+    fn process(
         &mut self,
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<Response<T>>, anyhow::Error> {
@@ -1872,7 +1871,7 @@ where
                 }
             }
             Some(StorageResponse::StatusUpdates(updates)) => {
-                self.record_status_updates(updates).await;
+                self.record_status_updates(updates);
             }
         }
 
@@ -1998,8 +1997,7 @@ where
             .chain(pending_collection_drops.iter())
             .cloned()
             .collect();
-        self.append_shard_mappings(shards_to_update.into_iter(), -1)
-            .await;
+        self.append_shard_mappings(shards_to_update.into_iter(), -1);
 
         // Record the drop status for all pending source and sink drops.
         //
@@ -2016,8 +2014,7 @@ where
 
         if !self.read_only {
             self.collection_status_manager
-                .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
-                .await;
+                .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory);
         }
 
         {
@@ -2040,8 +2037,7 @@ where
 
         if !self.read_only {
             self.collection_status_manager
-                .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory)
-                .await;
+                .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory);
         }
 
         Ok(updated_frontiers)
@@ -2063,7 +2059,7 @@ where
         Ok(json_state)
     }
 
-    async fn record_frontiers(
+    fn record_frontiers(
         &mut self,
         external_frontiers: BTreeMap<
             GlobalId,
@@ -2120,12 +2116,10 @@ where
         }
 
         let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.collection_manager
-            .differential_append(id, updates)
-            .await;
+        self.collection_manager.differential_append(id, updates);
     }
 
-    async fn record_replica_frontiers(
+    fn record_replica_frontiers(
         &mut self,
         external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
     ) {
@@ -2201,27 +2195,21 @@ where
 
         let id =
             self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.collection_manager
-            .differential_append(id, updates)
-            .await;
+        self.collection_manager.differential_append(id, updates);
     }
 
-    async fn append_introspection_updates(
+    fn append_introspection_updates(
         &mut self,
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.collection_manager.blind_write(id, updates).await;
+        self.collection_manager.blind_write(id, updates);
     }
 
-    async fn update_introspection_collection(
-        &mut self,
-        type_: IntrospectionType,
-        op: StorageWriteOp,
-    ) {
+    fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.collection_manager.differential_write(id, op).await;
+        self.collection_manager.differential_write(id, op);
     }
 
     async fn initialize_state(
@@ -3549,7 +3537,7 @@ where
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
     #[instrument(level = "debug")]
-    async fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
+    fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
     where
         I: Iterator<Item = GlobalId>,
     {
@@ -3579,9 +3567,7 @@ where
             updates.push((row_buf.clone(), diff));
         }
 
-        self.collection_manager
-            .differential_append(id, updates)
-            .await;
+        self.collection_manager.differential_append(id, updates);
     }
 
     /// Determines and returns this collection's dependencies, if any.
@@ -3689,7 +3675,7 @@ where
 
     /// Handles writing of status updates for sources/sinks to the appropriate
     /// status relation
-    async fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+    fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
         if self.read_only {
             return;
         }
@@ -3706,15 +3692,12 @@ where
             }
         }
 
+        self.collection_status_manager.append_updates(
+            source_status_updates,
+            IntrospectionType::SourceStatusHistory,
+        );
         self.collection_status_manager
-            .append_updates(
-                source_status_updates,
-                IntrospectionType::SourceStatusHistory,
-            )
-            .await;
-        self.collection_status_manager
-            .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory)
-            .await;
+            .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory);
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError<T>> {

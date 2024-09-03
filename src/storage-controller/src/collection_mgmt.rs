@@ -89,17 +89,15 @@ use tracing::{debug, error, info};
 
 use crate::StorageError;
 
-// Note(parkmycar): The capacity here was chosen arbitrarily.
-const CHANNEL_CAPACITY: usize = 4096;
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
 
 /// A channel for sending writes to a differential collection.
 type DifferentialWriteChannel<T> =
-    mpsc::Sender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>;
+    mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>;
 
 /// A channel for sending writes to an append-only collection.
-type AppendOnlyWriteChannel<T> = mpsc::Sender<(
+type AppendOnlyWriteChannel<T> = mpsc::UnboundedSender<(
     Vec<(Row, Diff)>,
     oneshot::Sender<Result<(), StorageError<T>>>,
 )>;
@@ -342,7 +340,7 @@ where
     /// - If `id` does not belong to an append-only collections.
     /// - If this [`CollectionManager`] is in read-only mode.
     /// - If the collection closed.
-    pub(super) async fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    pub(super) fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         if *self.read_only_rx.borrow() {
             panic!("attempting blind write to {} while in read-only mode", id);
         }
@@ -358,9 +356,8 @@ where
                 update_tx.clone()
             };
 
-            // Specifically _do not_ wait for the append to complete, just for it to be sent.
             let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
+            update_tx.send((updates, tx)).expect("rx hung up");
         }
     }
 
@@ -371,7 +368,7 @@ where
     /// # Panics
     /// - If `id` does not belong to a differential collection.
     /// - If the collection closed.
-    pub(super) async fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
+    pub(super) fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
         if !op.is_empty_append() {
             // Get the update channel in a block to make sure the Mutex lock is scoped.
             let update_tx = {
@@ -383,9 +380,8 @@ where
                 update_tx.clone()
             };
 
-            // Specifically _do not_ wait for the append to complete, just for it to be sent.
             let (tx, _rx) = oneshot::channel();
-            update_tx.send((op, tx)).await.expect("rx hung up");
+            update_tx.send((op, tx)).expect("rx hung up");
         }
     }
 
@@ -394,9 +390,8 @@ where
     /// # Panics
     /// - If `id` does not belong to a differential collection.
     /// - If the collection closed.
-    pub(super) async fn differential_append(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    pub(super) fn differential_append(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         self.differential_write(id, StorageWriteOp::Append { updates })
-            .await
     }
 
     /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
@@ -462,7 +457,7 @@ where
     upper_tick_interval: tokio::time::Interval,
 
     /// Receiver for write commands. These change our desired state.
-    cmd_rx: mpsc::Receiver<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
+    cmd_rx: mpsc::UnboundedReceiver<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
 
     /// We have to shut down when receiving from this.
     shutdown_rx: oneshot::Receiver<()>,
@@ -507,7 +502,7 @@ where
         read_only_watch: watch::Receiver<bool>,
         now: NowFn,
     ) -> (DifferentialWriteChannel<T>, WriteTask, ShutdownSender) {
-        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let upper_tick_interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
@@ -566,8 +561,8 @@ where
                     return ControlFlow::Break("graceful shutdown".to_string());
                 }
 
-                // Pull as many queued updates off the channel as possible.
-                cmd = self.cmd_rx.mz_recv_many(CHANNEL_CAPACITY) => {
+                // Pull a chunk of queued updates off the channel.
+                cmd = self.cmd_rx.mz_recv_many(4096) => {
                     if let Some(batch) = cmd {
 
                         let _ = self.handle_updates(batch).await?;
@@ -656,18 +651,8 @@ where
         self.cmd_rx.close();
 
         // Get as many waiting senders as possible.
-        'collect: while let Ok((_batch, sender)) = self.cmd_rx.try_recv() {
+        while let Ok((_batch, sender)) = self.cmd_rx.try_recv() {
             senders.push(sender);
-
-            // Note: because we're shutting down the sending side of `rx` is no
-            // longer accessible, and thus we should no longer receive new
-            // requests. We add this check just as an extra guard.
-            if senders.len() > CHANNEL_CAPACITY {
-                // There's not a correctness issue if we receive new requests, just
-                // unexpected behavior.
-                tracing::error!("Write task channel should not be receiving new requests");
-                break 'collect;
-            }
         }
 
         // Notify them that this collection is closed.
@@ -895,7 +880,7 @@ where
 }
 
 /// Spawns an [`mz_ore::task`] that will continuously bump the upper for the specified collection,
-/// and append data that is sent via the provided [`mpsc::Sender`].
+/// and append data that is sent via the provided [`mpsc::UnboundedSender`].
 ///
 /// TODO(parkmycar): One day if we want to customize the tick interval for each collection, that
 /// should be done here.
@@ -910,7 +895,7 @@ fn append_only_write_task<T>(
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
-    let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let handle = mz_ore::task::spawn(
@@ -932,18 +917,8 @@ where
                         rx.close();
 
                         // Get as many waiting senders as possible.
-                        'collect: while let Ok((_batch, sender)) = rx.try_recv() {
+                        while let Ok((_batch, sender)) = rx.try_recv() {
                             senders.push(sender);
-
-                            // Note: because we're shutting down the sending side of `rx` is no
-                            // longer accessible, and thus we should no longer receive new
-                            // requests. We add this check just as an extra guard.
-                            if senders.len() > CHANNEL_CAPACITY {
-                                // There's not a correctness issue if we receive new requests, just
-                                // unexpected behavior.
-                                tracing::error!("Write task channel should not be receiving new requests");
-                                break 'collect;
-                            }
                         }
 
                         // Notify them that this collection is closed.
@@ -956,8 +931,8 @@ where
                         break 'run;
                     }
 
-                    // Pull as many queued updates off the channel as possible.
-                    cmd = rx.mz_recv_many(CHANNEL_CAPACITY) => {
+                    // Pull a chunk of queued updates off the channel.
+                    cmd = rx.mz_recv_many(4096) => {
                         if let Some(batch) = cmd {
                             // To rate limit appends to persist we add artificial latency, and will
                             // finish no sooner than this instant.
