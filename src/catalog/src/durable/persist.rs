@@ -118,7 +118,7 @@ const UPGRADE_SEED: usize = 2;
 /// Seed used to generate the persist shard ID for builtin table migrations.
 pub const BUILTIN_MIGRATION_SEED: usize = 3;
 /// Seed used to generate the persist shard ID for the expression cache.
-pub const EXPRESSION_CACHE_SEED: usize = 4;
+pub const EXPRESSION_CACHE_SEED: usize = 5;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -645,20 +645,30 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate<T>>,
     ) -> Result<(), FenceError> {
+        let convert_start = Instant::now();
         let mut updates: Vec<_> = updates
             .into_iter()
             .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
             .collect();
+        println!("DURABLE LOOK: convert took {:?}", convert_start.elapsed());
 
+        let consolidate_start = Instant::now();
         // This helps guarantee that for a single key, there is at most a single retraction and a
         // single insertion per timestamp. Otherwise, we would need to match the retractions and
         // insertions up by value and manually figure out what the end value should be.
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        println!(
+            "DURABLE LOOK: consolidate took {:?}",
+            consolidate_start.elapsed()
+        );
 
+        let sort_start = Instant::now();
         // Updates must be applied in timestamp order. Within a timestamp retractions must be
         // applied before insertions, or we might end up retracting the wrong value.
         updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
+        println!("DURABLE LOOK: sort took {:?}", sort_start.elapsed());
 
+        let apply_start = Instant::now();
         let mut errors = Vec::new();
 
         for (kind, ts, diff) in updates {
@@ -683,8 +693,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         if let Some(err) = errors.into_iter().next() {
             return Err(err);
         }
+        println!("DURABLE LOOK: apply inner took {:?}", apply_start.elapsed());
 
+        let consolidate_again_start = Instant::now();
         self.consolidate();
+        println!(
+            "DURABLE LOOK: consolidate again took {:?}",
+            consolidate_again_start.elapsed()
+        );
 
         Ok(())
     }
@@ -974,6 +990,7 @@ impl UnopenedPersistCatalogState {
         deploy_generation: Option<u64>,
         metrics: Arc<Metrics>,
     ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
+        let start = Instant::now();
         let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
         debug!(
@@ -995,6 +1012,10 @@ impl UnopenedPersistCatalogState {
                 });
             }
         }
+        info!(
+            "CATALOG INIT LOOK: upgrade check took {:?}",
+            start.elapsed()
+        );
 
         let open_handles_start = Instant::now();
         info!("startup: envd serve: catalog init: open handles beginning");
@@ -1029,6 +1050,7 @@ impl UnopenedPersistCatalogState {
             open_handles_start.elapsed()
         );
 
+        let empty_start = Instant::now();
         // Commit an empty write at the minimum timestamp so the catalog is always readable.
         let upper = {
             const EMPTY_UPDATES: &[((SourceData, ()), Timestamp, Diff)] = &[];
@@ -1043,6 +1065,10 @@ impl UnopenedPersistCatalogState {
                 Err(mismatch) => antichain_to_timestamp(mismatch.current),
             }
         };
+        info!(
+            "CATALOG INIT LOOK: empty write took {:?}",
+            empty_start.elapsed()
+        );
 
         let snapshot_start = Instant::now();
         info!("startup: envd serve: catalog init: snapshot beginning");
@@ -1051,15 +1077,21 @@ impl UnopenedPersistCatalogState {
             .await
             .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
             .collect();
+        info!(
+            "startup: envd serve: catalog init: snapshot complete in {:?}",
+            snapshot_start.elapsed()
+        );
+        let listen_start = Instant::now();
         let listen = read_handle
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
         info!(
-            "startup: envd serve: catalog init: snapshot complete in {:?}",
-            snapshot_start.elapsed()
+            "CATALOG INIT LOOK: create listen took {:?}",
+            listen_start.elapsed()
         );
 
+        let new_start = Instant::now();
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
             mode: Mode::Writable,
@@ -1083,18 +1115,26 @@ impl UnopenedPersistCatalogState {
             snapshot.iter().all(|(_, _, diff)| *diff == 1),
             "snapshot should be consolidated: {snapshot:#?}"
         );
+        info!(
+            "CATALOG INIT LOOK: create new struct took {:?}",
+            new_start.elapsed()
+        );
 
-        let apply_start = Instant::now();
+        let map_start = Instant::now();
         info!("startup: envd serve: catalog init: apply updates beginning");
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
+        info!("CATALOG INIT LOOK: map took {:?}", map_start.elapsed());
+
+        let apply_start = Instant::now();
         handle.apply_updates(updates)?;
         info!(
             "startup: envd serve: catalog init: apply updates complete in {:?}",
             apply_start.elapsed()
         );
 
+        let binary_start = Instant::now();
         // Validate that the binary version of the current process is not less than any binary
         // version that has written to the catalog.
         // This condition is only checked once, right here. If a new process comes along with a
@@ -1108,6 +1148,10 @@ impl UnopenedPersistCatalogState {
                 });
             }
         }
+        info!(
+            "CATALOG INIT LOOK: binary check took {:?}",
+            binary_start.elapsed()
+        );
 
         Ok(handle)
     }
@@ -1124,6 +1168,7 @@ impl UnopenedPersistCatalogState {
         let mut commit_ts = self.upper;
         self.mode = mode;
 
+        let validate_start = Instant::now();
         // Validate the current deploy generation.
         match (&self.mode, &self.fenceable_token) {
             (_, FenceableToken::Unfenced { .. } | FenceableToken::Fenced { .. }) => {
@@ -1150,6 +1195,9 @@ impl UnopenedPersistCatalogState {
 
         let read_only = matches!(self.mode, Mode::Readonly);
 
+        println!("DURABLE LOOK: validate took {:?}", validate_start.elapsed());
+
+        let fence_start = Instant::now();
         // Fence out previous catalogs.
         loop {
             self.sync_to_current_upper().await?;
@@ -1186,7 +1234,9 @@ impl UnopenedPersistCatalogState {
             self.fenceable_token = current_fenceable_token;
             break;
         }
+        println!("DURABLE LOOK: fence took {:?}", fence_start.elapsed());
 
+        let upgrade_start = Instant::now();
         let is_initialized = self.is_initialized_inner();
         if !matches!(self.mode, Mode::Writable) && !is_initialized {
             return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
@@ -1210,7 +1260,9 @@ impl UnopenedPersistCatalogState {
         if is_initialized && !read_only {
             commit_ts = upgrade(&mut self, commit_ts).await?;
         }
+        println!("DURABLE LOOK: upgrade took {:?}", upgrade_start.elapsed());
 
+        let init_struct_start = Instant::now();
         debug!(
             ?is_initialized,
             ?self.upper,
@@ -1233,12 +1285,28 @@ impl UnopenedPersistCatalogState {
             metrics: self.metrics,
         };
         catalog.metrics.collection_entries.reset();
+        println!(
+            "DURABLE LOOK: init struct took {:?}",
+            init_struct_start.elapsed()
+        );
+
+        let apply_start = Instant::now();
+        let mut json_deser_dur = Duration::new(0, 0);
         let updates = self.snapshot.into_iter().map(|(kind, ts, diff)| {
+            let deser_start = Instant::now();
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
-            StateUpdate { kind, ts, diff }
+            let res = StateUpdate { kind, ts, diff };
+            json_deser_dur += deser_start.elapsed();
+            res
         });
         catalog.apply_updates(updates)?;
+        println!(
+            "DURABLE LOOK: apply took {:?}, JSON deser took: {:?}",
+            apply_start.elapsed(),
+            json_deser_dur
+        );
 
+        let init_start = Instant::now();
         let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
@@ -1266,7 +1334,9 @@ impl UnopenedPersistCatalogState {
             .await?;
             txn
         };
+        println!("DURABLE LOOK: init took {:?}", init_start.elapsed());
 
+        let commit_start = Instant::now();
         if read_only {
             let (txn_batch, _) = txn.into_parts();
             // The upper here doesn't matter because we are only applying the updates in memory.
@@ -1275,7 +1345,9 @@ impl UnopenedPersistCatalogState {
         } else {
             txn.commit_internal(commit_ts).await?;
         }
+        println!("DURABLE LOOK: commit took {:?}", commit_start.elapsed());
 
+        let increment_start = Instant::now();
         // Now that we've fully opened the catalog at the current version, we can increment the
         // version in the catalog upgrade shard to signal to readers that the allowable versions
         // have increased.
@@ -1310,6 +1382,10 @@ impl UnopenedPersistCatalogState {
                     .await;
             });
         }
+        println!(
+            "DURABLE LOOK: increment version took {:?}",
+            increment_start.elapsed()
+        );
 
         Ok((Box::new(catalog), audit_log_handle))
     }
@@ -1871,18 +1947,37 @@ async fn snapshot_binary_inner(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
+    let start = Instant::now();
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
         .await
         .expect("we have advanced the restart_as_of by the since");
+    info!(
+        "SNAPSHOT LOOK: snapshot_and_fetch took {:?}",
+        start.elapsed()
+    );
+
     soft_assert_no_log!(
         snapshot.iter().all(|(_, _, diff)| *diff == 1),
         "snapshot_and_fetch guarantees a consolidated result: {snapshot:#?}"
     );
-    snapshot
+
+    let start = Instant::now();
+    let mut deserialize_dur = Duration::from_millis(0);
+    let res = snapshot
         .into_iter()
-        .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
-        .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
+        .map(|update| {
+            let start = Instant::now();
+            let res = Into::<StateUpdate<StateUpdateKindJson>>::into(update);
+            deserialize_dur += start.elapsed();
+            res
+        })
+        .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts));
+    let tot_dur = start.elapsed();
+    let sort_dur = tot_dur - deserialize_dur;
+    info!("SNAPSHOT LOOK: deserialize took {:?}", deserialize_dur);
+    info!("SNAPSHOT LOOK: sort took {:?}", sort_dur);
+    res
 }
 
 /// Convert an [`Antichain<Timestamp>`] to a [`Timestamp`].

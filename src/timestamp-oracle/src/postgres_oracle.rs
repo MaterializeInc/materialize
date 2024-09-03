@@ -365,8 +365,6 @@ impl PostgresTimestampOracleParameters {
     /// possible for the timestamp oracle/postgres client to race with this and
     /// see some but not all of the parameters applied.
     pub fn apply(&self, cfg: &PostgresTimestampOracleConfig) {
-        info!(params = ?self, "Applying configuration update!");
-
         // Deconstruct self so we get a compile failure if new fields are added.
         let Self {
             pg_connection_pool_max_size,
