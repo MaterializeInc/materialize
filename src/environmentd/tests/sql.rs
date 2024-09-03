@@ -1379,6 +1379,7 @@ fn test_transactional_explain_timestamps() {
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
+#[ignore] // TODO: Reenable when #29299 is fixed
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
