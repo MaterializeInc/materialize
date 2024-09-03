@@ -45,6 +45,11 @@ if [ -z "${MZ_NO_BUILTIN_COCKROACH:-}" ]; then
       --background \
       --store=/mzdata/cockroach
 
+  # See: https://github.com/cockroachdb/cockroach/issues/130011
+  while ! cockroach sql --insecure -e "SELECT 1"; do
+      echo "Reaching CRDB failed, retrying..."
+  done
+
   # See: https://github.com/cockroachdb/cockroach/issues/93892
   # See: https://github.com/MaterializeInc/materialize/issues/16726
   cockroach sql --insecure -e "SET CLUSTER SETTING sql.stats.forecasts.enabled = false"
