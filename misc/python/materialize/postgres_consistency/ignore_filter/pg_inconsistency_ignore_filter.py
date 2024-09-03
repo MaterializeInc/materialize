@@ -60,6 +60,7 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 )
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_AGGREGATION,
+    TAG_JSONB_OBJECT_GENERATION,
     TAG_JSONB_TO_TEXT,
     TAG_JSONB_VALUE_ACCESS,
 )
@@ -91,6 +92,9 @@ from materialize.output_consistency.operation.operation import (
 )
 from materialize.output_consistency.query.query_result import QueryFailure, QueryResult
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.column_selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 from materialize.output_consistency.validation.validation_message import ValidationError
 
 NAME_OF_NON_EXISTING_FUNCTION_PATTERN = re.compile(
@@ -675,6 +679,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             in pg_error_msg
         ):
             return YesIgnore("Not supported by Postgres")
+
+        if query_template.matches_any_expression(
+            is_table_function,
+            True,
+        ) and ExpressionCharacteristics.NULL in query_template.get_involved_characteristics(
+            ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
+        ):
+            # known at least for unnest: where condition will not be evaluated if mz knows that the number of resulting
+            # rows is zero
+            return YesIgnore("Evaluation shortcut for table functions")
 
         return NoIgnore()
 
