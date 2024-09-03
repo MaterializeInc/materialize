@@ -208,7 +208,6 @@ where
 
     /// Updates the duration we'll wait to batch events for user owned collections.
     pub fn update_user_batch_duration(&self, duration: Duration) {
-        tracing::info!(?duration, "updating user batch duration");
         let millis: u64 = duration.as_millis().try_into().unwrap_or(u64::MAX);
         self.user_batch_duration_ms.store(millis, Ordering::Relaxed);
     }
@@ -595,8 +594,6 @@ where
     /// This might include consolidation, deleting older entries or seeding
     /// in-memory state of, say, scrapers, with current collection contents.
     async fn prepare(&self, introspection_config: DifferentialIntrospectionConfig<T>) {
-        tracing::info!(%self.id, ?introspection_config.introspection_type, "preparing differential introspection collection for writes");
-
         match introspection_config.introspection_type {
             IntrospectionType::ShardMapping => {
                 // Done by the `append_shard_mappings` call.
@@ -773,8 +770,6 @@ where
                 } else {
                     return ControlFlow::Break("upper is the empty antichain".to_string());
                 };
-
-                tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "upper mismatch while bumping upper, syncing to persist state");
 
                 self.current_upper = actual_upper;
 
@@ -953,8 +948,6 @@ where
                     } else {
                         return ControlFlow::Break("upper is the empty antichain".to_string());
                     };
-
-                    tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "retrying append for differential collection");
 
                     // We've exhausted all of our retries, notify listeners and
                     // break out of the retry loop so we can wait for more data.

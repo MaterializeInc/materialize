@@ -157,7 +157,10 @@ impl StateVersions {
         let shard_id = shard_metrics.shard_id;
 
         // The common case is that the shard is initialized, so try that first
+        // CRDB timings
         let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
+
+        // S3 timings
         if !recent_live_diffs.0.is_empty() {
             return self
                 .fetch_current_state(&shard_id, recent_live_diffs.0)
@@ -414,10 +417,17 @@ impl StateVersions {
                 .decode(|| {
                     StateDiff::<T>::decode(&self.cfg.build_version, latest_diff.data.clone())
                 });
-            let mut state = match self
+            // S3 stuff
+            // let start = Instant::now();
+            let res = self
                 .fetch_rollup_at_key(shard_id, &latest_diff.latest_rollup_key)
-                .await
-            {
+                .await;
+            // println!(
+            //     "PERSIST LOOK: S3 Spent {:?} on shard {:?}",
+            //     start.elapsed(),
+            //     shard_id
+            // );
+            let mut state = match res {
                 Some(x) => x,
                 None => {
                     // The rollup that this diff referenced is gone, so the diff
@@ -555,13 +565,22 @@ impl StateVersions {
     where
         T: Timestamp + Lattice + Codec64,
     {
+        // let start = Instant::now();
         let path = shard_id.to_string();
         let scan_limit = STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT.get(&self.cfg);
         let oldest_diffs =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-                self.consensus
+                // let start = Instant::now();
+                let res = self
+                    .consensus
                     .scan(&path, SeqNo::minimum(), scan_limit)
-                    .await
+                    .await;
+                // println!(
+                //     "PERSIST LOOK: CRDB fast path spent {:?} on shard {:?}",
+                //     start.elapsed(),
+                //     shard_id
+                // );
+                res
             })
             .instrument(debug_span!("fetch_state::scan"))
             .await;
@@ -570,9 +589,11 @@ impl StateVersions {
         // calls to go down this path, unless a reader has a very long seqno-hold on the shard.
         if oldest_diffs.len() < scan_limit {
             self.metrics.state.fetch_recent_live_diffs_fast_path.inc();
+            // println!("PERSIST LOOK: Used fast path for {shard_id:?}");
             return RecentLiveDiffs(oldest_diffs);
         }
 
+        // let start = Instant::now();
         // slow-path: we could be arbitrarily far behind the head of Consensus (either intentionally
         // due to a long seqno-hold from a reader, or unintentionally from a bug that's preventing
         // a seqno-hold from advancing). rather than scanning a potentially unbounded number of old
@@ -596,7 +617,7 @@ impl StateVersions {
             .state_diff
             .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, head.data));
 
-        match BlobKey::parse_ids(&latest_diff.latest_rollup_key.complete(shard_id)) {
+        let res = match BlobKey::parse_ids(&latest_diff.latest_rollup_key.complete(shard_id)) {
             Ok((_shard_id, PartialBlobKey::Rollup(seqno, _rollup))) => {
                 self.metrics.state.fetch_recent_live_diffs_slow_path.inc();
                 let diffs =
@@ -615,7 +636,15 @@ impl StateVersions {
                 latest_diff.latest_rollup_key
             ),
             Err(err) => panic!("unparseable state diff rollup key: {}", err),
-        }
+        };
+
+        // println!(
+        //     "PERSIST LOOK: CRDB Spent {:?} on shard {:?}",
+        //     start.elapsed(),
+        //     shard_id
+        // );
+
+        res
     }
 
     /// Fetches all live diffs greater than the given SeqNo.
