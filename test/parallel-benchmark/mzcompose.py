@@ -16,18 +16,14 @@ import collections
 import gc
 import queue
 import random
-import ssl
 import threading
 import time
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from textwrap import dedent
-from urllib.parse import parse_qs, unquote, urlparse
 
 import matplotlib.pyplot as plt
 import numpy
-import pg8000
 from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
@@ -49,7 +45,7 @@ from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
 )
-from materialize.util import all_subclasses
+from materialize.util import PgConnInfo, all_subclasses, parse_pg_conn_string
 
 SERVICES = [
     Zookeeper(),
@@ -69,51 +65,16 @@ SERVICES = [
 ]
 
 
-@dataclass
-class PgConnInfo:
-    user: str
-    host: str
-    port: int
-    database: str
-    password: str | None = None
-    ssl: bool = False
-
-    def connect(self) -> pg8000.Connection:
-        return pg8000.connect(
-            host=self.host,
-            port=self.port,
-            user=self.user,
-            password=self.password,
-            database=self.database,
-            ssl_context=ssl.SSLContext() if self.ssl else None,
-        )
-
-
-def parse_pg_conn_string(conn_string: str) -> PgConnInfo:
-    url = urlparse(conn_string)
-    query_params = parse_qs(url.query)
-    assert url.username
-    assert url.hostname
-    return PgConnInfo(
-        user=unquote(url.username),
-        password=unquote(url.password) if url.password else url.password,
-        host=url.hostname,
-        port=url.port or 5432,
-        database=url.path.lstrip("/"),
-        ssl=query_params.get("sslmode", ["disable"])[-1] != "disable",
-    )
-
-
 class Measurement:
-    value: float
+    duration: float
     timestamp: float
 
-    def __init__(self, value: float, timestamp: float | None = None):
-        self.value = value
-        self.timestamp = timestamp or time.time()
+    def __init__(self, duration: float, timestamp: float):
+        self.duration = duration
+        self.timestamp = timestamp
 
     def __str__(self) -> str:
-        return f"{self.timestamp} {self.value}"
+        return f"{self.timestamp} {self.duration}"
 
 
 class Action:
@@ -177,8 +138,9 @@ class ReuseConnQuery(Action):
         self.conn = conn_info.connect()
         self.conn.autocommit = True
         self.cur = self.conn.cursor()
-        if not strict_serializable:
-            self.cur.execute("SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'")
+        self.cur.execute(
+            f"SET TRANSACTION_ISOLATION TO '{'STRICT SERIALIZABLE' if strict_serializable else 'SERIALIZABLE'}'"
+        )
 
     def _run(self, conns: queue.Queue):
         self.cur.execute(self.query)
@@ -314,9 +276,9 @@ class TdPhase(Phase):
 
 class LoadPhase(Phase):
     duration: int
-    phase_actions: list[ClosedLoop | OpenLoop]
+    phase_actions: Sequence[PhaseAction]
 
-    def __init__(self, duration: int, actions: list[ClosedLoop | OpenLoop]):
+    def __init__(self, duration: int, actions: Sequence[PhaseAction]):
         self.duration = duration
         self.phase_actions = actions
 
@@ -341,10 +303,6 @@ class LoadPhase(Phase):
             assert (
                 jobs.qsize() < 100
             ), "Too many jobs in queue, can't keep up: {jobs.qsize()}"
-            # if jobs.qsize() != 0:
-            #    measurements["Job queue"].append(Measurement(jobs.qsize()))
-            # if conns.qsize() != 0:
-            #    measurements["Connection queue"].append(Measurement(conns.qsize()))
             time.sleep(1)
         for thread in threads:
             thread.join()
@@ -413,6 +371,7 @@ class Scenario:
             conn.close()
             self.conns.task_done()
         for i in range(len(self.thread_pool)):
+            # Indicate to every thread to stop working
             self.jobs.put(None)
         for thread in self.thread_pool:
             thread.join()
@@ -985,17 +944,17 @@ class PoolRead(Scenario):
 
 
 class Statistics:
-    def __init__(self, times: list[float], values: list[float]):
-        assert len(times) == len(values)
+    def __init__(self, times: list[float], durations: list[float]):
+        assert len(times) == len(durations)
         self.queries: int = len(times)
         self.qps: float = len(times) / max(times)
-        self.max: float = max(values)
-        self.min: float = min(values)
-        self.avg = numpy.mean(values)
-        self.p50 = numpy.median(values)
-        self.p95 = numpy.percentile(values, 95)
-        self.p99 = numpy.percentile(values, 99)
-        self.std = numpy.std(values, ddof=1)
+        self.max: float = max(durations)
+        self.min: float = min(durations)
+        self.avg = numpy.mean(durations)
+        self.p50 = numpy.median(durations)
+        self.p95 = numpy.percentile(durations, 95)
+        self.p99 = numpy.percentile(durations, 99)
+        self.std = numpy.std(durations, ddof=1)
 
     def __str__(self) -> str:
         return f"""  queries: {self.queries:>5}
@@ -1007,6 +966,63 @@ class Statistics:
   p95: {self.p95:>7.2f}ms
   p99: {self.p99:>7.2f}ms
   std: {self.std:>7.2f}ms"""
+
+
+def report(
+    mz_string: str,
+    scenario: Scenario,
+    measurements: collections.defaultdict[str, list[Measurement]],
+    start_time: float,
+    guarantees: bool,
+) -> list[TestFailureDetails]:
+    scenario_name = type(scenario).__name__
+    failures = []
+    plt.figure(figsize=(10, 6))
+    for key, m in measurements.items():
+        times: list[float] = [x.timestamp - start_time for x in m]
+        durations: list[float] = [x.duration * 1000 for x in m]
+        stats = Statistics(times, durations)
+        plt.scatter(times, durations, label=key, marker=MarkerStyle("+"))
+        print(f"Statistics for {key}:\n{stats}")
+        if key in scenario.guarantees and guarantees:
+            for stat, guarantee in scenario.guarantees[key].items():
+                duration = getattr(stats, stat)
+                less_than = stat == "qps"
+                if duration < guarantee if less_than else duration > guarantee:
+                    failure = f"Scenario {scenario_name} failed: {key}: {stat}: {duration:.2f} {'<' if less_than else '>'} {guarantee:.2f}"
+                    print(failure)
+                    failures.append(
+                        TestFailureDetails(
+                            message=failure,
+                            details=str(stats),
+                            test_class_name_override=scenario_name,
+                        )
+                    )
+                else:
+                    print(
+                        f"Scenario {scenario_name} succeeded: {key}: {stat}: {duration:.2f} {'>=' if less_than else '<='} {guarantee:.2f}"
+                    )
+
+    plt.xlabel("time [s]")
+    plt.ylabel("latency [ms]")
+    plt.title(f"{scenario_name} against {mz_string}")
+    plt.legend(loc="best")
+    plt.grid(True)
+    plt.ylim(bottom=0)
+    plot_path = f"plots/{scenario_name}.png"
+    plt.savefig(MZ_ROOT / plot_path, dpi=300)
+    if buildkite.is_in_buildkite():
+        buildkite.upload_artifact(plot_path, cwd=MZ_ROOT)
+        print(f"+++ Plot for {scenario_name}")
+        print(
+            buildkite.inline_image(
+                f"artifact://{plot_path}", f"Plot for {scenario_name}"
+            )
+        )
+    else:
+        print(f"Saving plot to {plot_path}")
+
+    return failures
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1067,7 +1083,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             conn_infos = {"materialized": target}
             conn = target.connect()
             with conn.cursor() as cur:
-                mz_version = cur.execute("SELECT mz_version()")
+                cur.execute("SELECT mz_version()")
                 mz_version = cur.fetchall()[0][0]
             conn.close()
             mz_string = f"{mz_version} ({target.host})"
@@ -1123,7 +1139,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenario_name = scenario_class.__name__
         print(f"--- Running scenario {scenario_name}")
         measurements = collections.defaultdict(list)
-        stats: dict[str, Statistics] = {}
         scenario = scenario_class(c, conn_infos)
         scenario.setup(c, conn_infos)
         start_time = time.time()
@@ -1136,50 +1151,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             gc.collect()
             gc.enable()
         finally:
-            plt.figure(figsize=(10, 6))
-            for key, m in measurements.items():
-                times: list[float] = [x.timestamp - start_time for x in m]
-                values: list[float] = [x.value * 1000 for x in m]
-                stats[key] = Statistics(times, values)
-                plt.scatter(times, values, label=key, marker=MarkerStyle("+"))
-                print(f"Statistics for {key}:\n{stats[key]}")
-                if key in scenario.guarantees and args.guarantees:
-                    for stat, guarantee in scenario.guarantees[key].items():
-                        value = getattr(stats[key], stat)
-                        less_than = stat == "qps"
-                        if value < guarantee if less_than else value > guarantee:
-                            failure = f"Scenario {scenario_name} failed: {key}: {stat}: {value:.2f} {'<' if less_than else '>'} {guarantee:.2f}"
-                            print(failure)
-                            failures.append(
-                                TestFailureDetails(
-                                    message=failure,
-                                    details=str(stats[key]),
-                                    test_class_name_override=scenario_name,
-                                )
-                            )
-                        else:
-                            print(
-                                f"Scenario {scenario_name} succeeded: {key}: {stat}: {value:.2f} {'>=' if less_than else '<='} {guarantee:.2f}"
-                            )
-
-            plt.xlabel("time [s]")
-            plt.ylabel("latency [ms]")
-            plt.title(f"{scenario_name} against {mz_string}")
-            plt.legend(loc="best")
-            plt.grid(True)
-            plt.ylim(bottom=0)
-            plot_path = f"plots/{scenario_name}.png"
-            plt.savefig(MZ_ROOT / plot_path, dpi=300)
-            if buildkite.is_in_buildkite():
-                buildkite.upload_artifact(plot_path, cwd=MZ_ROOT)
-                print(f"+++ Plot for {scenario_name}")
-                print(
-                    buildkite.inline_image(
-                        f"artifact://{plot_path}", f"Plot for {scenario_name}"
-                    )
-                )
-            else:
-                print(f"Saving plot to {plot_path}")
+            failures.extend(
+                report(mz_string, scenario, measurements, start_time, args.guarantees)
+            )
 
     if failures:
         raise FailedTestExecutionError(errors=failures)
