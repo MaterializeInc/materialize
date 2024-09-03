@@ -68,6 +68,7 @@ mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 pin-project = "1.0.12"
 postgres-protocol = { version = "0.6.5" }
+postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 rand = "0.8.5"

@@ -790,6 +790,13 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.serde_json]]
+version = "1.0.127"
+when = "2024-08-23"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.serde_path_to_error]]
 version = "0.1.8"
 when = "2022-08-03"

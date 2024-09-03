@@ -227,7 +227,8 @@ impl PgConn {
                                     if err_field_typs.contains(&typ) {
                                         Ok(Some(ErrorField {
                                             typ,
-                                            value: f.value().to_string(),
+                                            value: String::from_utf8_lossy(f.value_bytes())
+                                                .into_owned(),
                                         }))
                                     } else {
                                         Ok(None)
@@ -247,7 +248,8 @@ impl PgConn {
                                     if err_field_typs.contains(&typ) {
                                         Ok(Some(ErrorField {
                                             typ,
-                                            value: f.value().to_string(),
+                                            value: String::from_utf8_lossy(f.value_bytes())
+                                                .into_owned(),
                                         }))
                                     } else {
                                         Ok(None)

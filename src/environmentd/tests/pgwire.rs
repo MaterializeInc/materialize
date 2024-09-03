@@ -18,7 +18,6 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
-use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
@@ -315,7 +314,12 @@ async fn test_conn_startup() {
         };
         let mut fields: Vec<_> = error
             .fields()
-            .map(|f| Ok((f.type_(), f.value().to_owned())))
+            .map(|f| {
+                Ok((
+                    f.type_(),
+                    String::from_utf8_lossy(f.value_bytes()).into_owned(),
+                ))
+            })
             .collect()
             .unwrap();
         fields.sort_by_key(|(ty, _value)| *ty);
@@ -470,7 +474,9 @@ fn test_arrays() {
     let message = client
         .simple_query("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]")
         .unwrap()
-        .into_first();
+        .into_iter()
+        .find(|m| matches!(m, SimpleQueryMessage::Row(_)))
+        .unwrap();
     match message {
         SimpleQueryMessage::Row(row) => {
             assert_eq!(row.get(0).unwrap(), "{{1},{NULL},{2}}");
@@ -481,7 +487,9 @@ fn test_arrays() {
     let message = client
         .simple_query("SELECT ARRAY[ROW(1,2), ROW(3,4), ROW(5,6)]")
         .unwrap()
-        .into_first();
+        .into_iter()
+        .find(|m| matches!(m, SimpleQueryMessage::Row(_)))
+        .unwrap();
     match message {
         SimpleQueryMessage::Row(row) => {
             assert_eq!(row.get(0).unwrap(), r#"{"(1,2)","(3,4)","(5,6)"}"#);

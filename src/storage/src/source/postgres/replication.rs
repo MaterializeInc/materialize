@@ -97,9 +97,8 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
-use postgres_protocol::message::backend::{
-    LogicalReplicationMessage, ReplicationMessage, TupleData,
-};
+use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessage, TupleData};
+use postgres_replication::LogicalReplicationStream;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
@@ -110,7 +109,6 @@ use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
-use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
 

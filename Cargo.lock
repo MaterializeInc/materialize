@@ -6503,6 +6503,7 @@ dependencies = [
  "num_cpus",
  "pin-project",
  "postgres-protocol",
+ "postgres-replication",
  "prometheus",
  "prost",
  "rand",
@@ -7755,8 +7756,8 @@ checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 
 [[package]]
 name = "postgres"
-version = "0.19.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
+version = "0.19.8"
+source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -7769,7 +7770,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
+source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
 dependencies = [
  "openssl",
  "tokio",
@@ -7779,10 +7780,10 @@ dependencies = [
 
 [[package]]
 name = "postgres-protocol"
-version = "0.6.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
+version = "0.6.7"
+source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
 dependencies = [
- "base64 0.21.5",
+ "base64 0.22.0",
  "byteorder",
  "bytes",
  "fallible-iterator",
@@ -7795,9 +7796,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-replication"
+version = "0.6.7"
+source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "futures-util",
+ "memchr",
+ "pin-project-lite",
+ "postgres-protocol",
+ "postgres-types",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "postgres-types"
-version = "0.2.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
+version = "0.2.7"
+source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
 dependencies = [
  "bytes",
  "chrono",
@@ -8957,9 +8973,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.125"
+version = "1.0.127"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83c8e735a073ccf5be70aa8066aa984eaf2fa000db6c8d0100ae605b366d31ed"
+checksum = "8043c06d9f82bd7271361ed64f415fe5e12a77fdb52e573e7f06a516dea329ad"
 dependencies = [
  "indexmap 2.2.6",
  "itoa",
@@ -9888,8 +9904,8 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.7.8"
-source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
+version = "0.7.11"
+source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -9909,6 +9925,7 @@ dependencies = [
  "socket2 0.5.7",
  "tokio",
  "tokio-util",
+ "whoami",
 ]
 
 [[package]]
@@ -10576,6 +10593,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
+name = "wasite"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8dad83b4f25e74f184f64c43b150b91efe7647395b42289f38e50566d82855b"
+
+[[package]]
 name = "wasm-bindgen"
 version = "0.2.87"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10670,6 +10693,17 @@ dependencies = [
  "either",
  "lazy_static",
  "libc",
+]
+
+[[package]]
+name = "whoami"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a44ab49fad634e88f55bf8f9bb3abd2f27d7204172a112c7c9987e01c1c94ea9"
+dependencies = [
+ "redox_syscall 0.4.1",
+ "wasite",
+ "web-sys",
 ]
 
 [[package]]
