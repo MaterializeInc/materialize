@@ -63,6 +63,9 @@ from materialize.output_consistency.input_data.operations.jsonb_operations_provi
     TAG_JSONB_TO_TEXT,
     TAG_JSONB_VALUE_ACCESS,
 )
+from materialize.output_consistency.input_data.operations.number_operations_provider import (
+    TAG_BASIC_ARITHMETIC_OP,
+)
 from materialize.output_consistency.input_data.operations.record_operations_provider import (
     TAG_RECORD_CREATION,
 )
@@ -1137,7 +1140,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
 
         if query_template.matches_specific_select_or_filter_expression(
-            col_index, partial(matches_op_by_pattern, pattern="$ / $"), True
+            col_index, partial(is_operation_tagged, tag=TAG_BASIC_ARITHMETIC_OP), True
         ):
             return YesIgnore("#28852: numeric return type inconsistency")
 
