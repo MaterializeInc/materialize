@@ -1562,6 +1562,9 @@ pub struct CreateTableFromSourceStatement<T: AstInfo> {
     pub source: T::ItemName,
     pub external_reference: UnresolvedItemName,
     pub with_options: Vec<TableFromSourceOption<T>>,
+    pub include_metadata: Vec<SourceIncludeMetadata>,
+    pub format: Option<FormatSpecifier<T>>,
+    pub envelope: Option<SourceEnvelope>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
@@ -1574,6 +1577,9 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
             external_reference,
             if_not_exists,
             with_options,
+            include_metadata,
+            format,
+            envelope,
         } = self;
         f.write_str("CREATE TABLE ");
         if *if_not_exists {
@@ -1596,6 +1602,17 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
         f.write_node(external_reference);
         f.write_str(")");
 
+        if let Some(format) = &format {
+            f.write_node(format);
+        }
+        if !include_metadata.is_empty() {
+            f.write_str(" INCLUDE ");
+            f.write_node(&display::comma_separated(include_metadata));
+        }
+        if let Some(envelope) = &envelope {
+            f.write_str(" ENVELOPE ");
+            f.write_node(envelope);
+        }
         if !with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(with_options));
