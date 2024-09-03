@@ -14,7 +14,6 @@
 # limitations under the License.
 
 load("@rules_foreign_cc//foreign_cc:configure.bzl", "configure_make")
-load("@bazel_skylib//rules:select_file.bzl", "select_file")
 
 """Builds jemalloc."""
 
@@ -39,12 +38,14 @@ CONFIGURE_OPTIONS = [
     "--enable-prof",
     "--enable-stats",
     "--with-malloc-conf=background_thread:true",
+    # We build with clang.
+    "--enable-prof-libunwind",
+    "--disable-prof-libgcc",
+    "--disable-prof-gcc",
 ]
 
 configure_make(
     name = "jemalloc",
-    autogen = True,
-    configure_in_place = True,
     # TODO(parkmycar): Do we want to customize page sizes?
     configure_options = CONFIGURE_OPTIONS + select({
         "@//misc/bazel/platforms:linux_arm": ["--host=aarch64-unknown-linux-gnu"],
@@ -58,7 +59,7 @@ configure_make(
     # macOS we use llvm-ar instead.
     build_data = select({
         "@platforms//os:macos": ["@llvm_toolchain_llvm//:ar"],
-        "//conditions:default": {},
+        "//conditions:default": [],
     }),
     env = select({
         "@platforms//os:macos": {"AR": "$(execpath @llvm_toolchain_llvm//:ar)"},
@@ -75,12 +76,5 @@ configure_make(
         "install_include",
     ],
     copts = ["-lpthread"],
-    visibility = ["//visibility:public"],
-)
-
-select_file(
-    name = "libjemalloc",
-    srcs = ":jemalloc",
-    subpath = "libjemalloc.a",
     visibility = ["//visibility:public"],
 )

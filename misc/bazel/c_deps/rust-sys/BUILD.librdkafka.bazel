@@ -17,10 +17,6 @@
 
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
-load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
-load("@bazel_skylib//rules:select_file.bzl", "select_file")
-
 filegroup(
     name = "all_srcs",
     srcs = glob(["librdkafka/**"]),
@@ -72,21 +68,4 @@ cmake(
     ],
     build_data = ["@openssl//:openssl_root"],
     out_static_libs = ["librdkafka.a"],
-)
-
-select_file(
-    name = "librdkafka_a",
-    srcs = ":librdkafka",
-    subpath = "librdkafka.a",
-)
-copy_file(
-    name = "librdkafka_copy",
-    src = ":librdkafka_a",
-    out = "librdkafka.a",
-    allow_symlink = False,
-)
-copy_to_directory(
-    name = "rdkafka_lib",
-    srcs = [":librdkafka_copy"],
-    visibility = ["//visibility:public"],
 )

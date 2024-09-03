@@ -20,11 +20,10 @@ Adapted from the OpenSSL build file in the `rules_rust` examples:
 https://github.com/bazelbuild/rules_rust/blob/21eed19188c0359d72f9a508a0c0e7040ff20070/examples/crate_universe/multi_package/3rdparty/BUILD.openssl.bazel
 """
 
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
-
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@bazel_skylib//rules:select_file.bzl", "select_file")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
 
 # Read https://wiki.openssl.org/index.php/Compilation_and_Installation
 
@@ -74,24 +73,32 @@ MAKE_TARGETS = [
 
 configure_make(
     name = "openssl",
-    configure_command = "config",
-    configure_in_place = True,
-    configure_options = CONFIGURE_OPTIONS + select({
-        "@platforms//os:macos": ["ARFLAGS=r"],
-        "//conditions:default": [],
-    }),
+    # TODO(parkmycar): Figure out how to dynamically provide a number of jobs to foreign_cc rules.
+    args = ["-j8"],
     # darwin/macOS defaults to using libtool but openSSL3 fails linking with
     # the generated archive, so we switch to `llvm-ar`.
     build_data = select({
         "@platforms//os:macos": ["@llvm_toolchain_llvm//:ar"],
         "//conditions:default": {},
     }),
+    configure_command = "config",
+    configure_in_place = True,
+    configure_options = CONFIGURE_OPTIONS + select(
+        {
+            "@//misc/bazel/platforms:linux_arm": ["linux-aarch64"],
+            "@//misc/bazel/platforms:linux_x86_64": ["linux-x86_64"],
+            "@//misc/bazel/platforms:macos_arm": ["darwin64-arm64-cc"],
+            "@//misc/bazel/platforms:macos_x86_64": ["darwin64-x86_64-cc"],
+        },
+        no_match_error = "The specified platform is not supported.",
+    ) + select({
+        "@platforms//os:macos": ["ARFLAGS=r"],
+        "//conditions:default": [],
+    }),
     env = select({
         "@platforms//os:macos": {"AR": "$(execpath @llvm_toolchain_llvm//:ar)"},
         "//conditions:default": {},
     }),
-    # TODO(parkmycar): Figure out how to dynamically provide a number of jobs to foreign_cc rules.
-    args = ["-j8"],
     lib_name = LIB_NAME,
     lib_source = ":all_srcs",
     # Note that for Linux builds, libssl must come before libcrypto on the linker command-line.
@@ -126,6 +133,7 @@ select_file(
     srcs = ":out_dir",
     subpath = "libssl.a",
 )
+
 copy_file(
     name = "libssl_copy",
     src = ":libssl",
@@ -138,6 +146,7 @@ select_file(
     srcs = ":out_dir",
     subpath = "libcrypto.a",
 )
+
 copy_file(
     name = "libcrypto_copy",
     src = ":libcrypto",
@@ -148,8 +157,8 @@ copy_file(
 copy_to_directory(
     name = "openssl_lib",
     srcs = [
-        ":libssl_copy",
         ":libcrypto_copy",
+        ":libssl_copy",
     ],
     visibility = ["//visibility:public"],
 )
@@ -165,10 +174,13 @@ select_file(
 copy_to_directory(
     name = "openssl_root",
     srcs = [
-        ":libssl_copy",
         ":libcrypto_copy",
+        ":libssl_copy",
         ":openssl_include",
     ],
-    root_paths = [".", "openssl"],
+    root_paths = [
+        ".",
+        "openssl",
+    ],
     visibility = ["//visibility:public"],
 )

@@ -2,10 +2,6 @@
 # `build:[ linux | macos | windows | freebsd | openbsd ]`
 common --enable_platform_specific_config
 
-# C Toolchain Configuration
-common --compiler=clang++
-common --cxxopt=-stdlib=libc++
-
 # Required for remote caching to be effective.
 #
 # Otherwise Bazel will passthrough the current system's PATH in the execution

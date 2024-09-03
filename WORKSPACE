@@ -32,7 +32,9 @@ included by calling a `*_dependencies()` macro.
 # Note: In an ideal world the two rule sets would be combined into one.
 
 BAZEL_SKYLIB_VERSION = "1.6.1"
+
 BAZEL_SKYLIB_INTEGRITY = "sha256-nziIakBUjG6WwQa3UvJCEw7hGqoGila6flb0UR8z5PI="
+
 maybe(
     http_archive,
     name = "bazel_skylib",
@@ -44,7 +46,9 @@ maybe(
 )
 
 ASPECT_BAZEL_LIB_VERSION = "2.7.0"
+
 ASPECT_BAZEL_LIB_INTEGRITY = "sha256-NX2tnSEjJ8NdkkQZDvAQqtMV5z/6G+0aKeIMNy+co0Y="
+
 maybe(
     http_archive,
     name = "aspect_bazel_lib",
@@ -52,10 +56,12 @@ maybe(
     strip_prefix = "bazel-lib-{0}".format(ASPECT_BAZEL_LIB_VERSION),
     url = "https://github.com/aspect-build/bazel-lib/releases/download/v{0}/bazel-lib-v{0}.tar.gz".format(ASPECT_BAZEL_LIB_VERSION),
 )
+
 load("@aspect_bazel_lib//lib:repositories.bzl", "aspect_bazel_lib_dependencies", "aspect_bazel_lib_register_toolchains")
 
 # Required bazel-lib dependencies
 aspect_bazel_lib_dependencies()
+
 # Register bazel-lib toolchains
 aspect_bazel_lib_register_toolchains()
 
@@ -66,7 +72,9 @@ aspect_bazel_lib_register_toolchains()
 # rule set.
 
 RULES_CC_VERSION = "0.0.9"
+
 RULES_CC_INTEGRITY = "sha256-IDeHW5pEVtzkp50RKorohbvEqtlo5lh9ym5k86CQDN8="
+
 maybe(
     http_archive,
     name = "rules_cc",
@@ -82,7 +90,9 @@ maybe(
 # Rules for building archives, e.g. `tar` or `zip`, for packages.
 
 RULES_PKG_VERSION = "0.7.0"
+
 RULES_PKG_INTEGRITY = "sha256-iimOgydi7aGDBZfWT+fbWBeKqEzVkm121bdE1lWJQcI="
+
 maybe(
     http_archive,
     name = "rules_pkg",
@@ -117,7 +127,9 @@ maybe(
 #    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/de4a79280f54d8796e86b7ab0b631939b7b44d05>
 
 RULES_FOREIGN_CC_VERSION = "de4a79280f54d8796e86b7ab0b631939b7b44d05"
+
 RULES_FOREIGN_CC_INTEGRITY = "sha256-WwRg/GJuUjT3SMJEagTni2ZH+g3szIkHaqGgbYCN1u0="
+
 maybe(
     http_archive,
     name = "rules_foreign_cc",
@@ -125,6 +137,7 @@ maybe(
     strip_prefix = "rules_foreign_cc-{0}".format(RULES_FOREIGN_CC_VERSION),
     url = "https://github.com/MaterializeInc/rules_foreign_cc/archive/{0}.tar.gz".format(RULES_FOREIGN_CC_VERSION),
 )
+
 load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
 
 rules_foreign_cc_dependencies(make_version = "4.2")
@@ -140,6 +153,7 @@ rules_foreign_cc_dependencies(make_version = "4.2")
 
 # Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
 TOOLCHAINS_LLVM_VERSION = "1.0.0"
+
 TOOLCHAINS_LLVM_INTEGRITY = "sha256-6RxDYfmQEaVIFOGvvlxDbg0ymHEUajzVjCOitK+1Bzc="
 
 # System roots that we use, this is where clang will search for things like libc.
@@ -156,6 +170,7 @@ filegroup(
 """
 
 DARWIN_SYSROOT_VERSION = "14.5"
+
 DARWIN_SYSROOT_INTEGRITY = "sha256-k8OxF+DSVq0L1dy1S9TPqhFxDHF/bT32Ust3a1ldat8="
 
 http_archive(
@@ -166,6 +181,37 @@ http_archive(
     urls = ["https://github.com/MaterializeInc/toolchains/releases/download/macos-sysroot-sdk-{0}/MacOSX{0}.sdk.tar.zst".format(DARWIN_SYSROOT_VERSION)],
 )
 
+_LINUX_SYSROOT_BUILD_FILE = """
+filegroup(
+    name = "sysroot",
+    srcs = glob(["*/**"]),
+    visibility = ["//visibility:public"],
+)
+"""
+
+# Format is <KERNEL_VERSION-GLIBC_VERSION-LIBSTDCXX_VERSION>
+LINUX_SYSROOT_VERSION = "5_10-2_35-11_4_0"
+
+LINUX_SYSROOT_X86_64_INTEGRITY = "sha256-H2q1ti0l6vETl6QBOIvwuizpAJrvKCMObTuw/0Gedy0="
+
+http_archive(
+    name = "linux_sysroot-x86_64",
+    build_file_content = _LINUX_SYSROOT_BUILD_FILE,
+    integrity = LINUX_SYSROOT_X86_64_INTEGRITY,
+    strip_prefix = "sysroot",
+    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/linux-sysroot-{0}/linux-sysroot-x86_64.tar.zst".format(LINUX_SYSROOT_VERSION)],
+)
+
+LINUX_SYSROOT_AARCH64_INTEGRITY = "sha256-kUasOepnmvdoJlI2JHm9T5o3alaS17xS4avwKDyaxMQ="
+
+http_archive(
+    name = "linux_sysroot-aarch64",
+    build_file_content = _LINUX_SYSROOT_BUILD_FILE,
+    integrity = LINUX_SYSROOT_AARCH64_INTEGRITY,
+    strip_prefix = "sysroot",
+    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/linux-sysroot-{0}/linux-sysroot-aarch64.tar.zst".format(LINUX_SYSROOT_VERSION)],
+)
+
 # Version of clang/llvm we use.
 #
 # We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
@@ -174,36 +220,41 @@ LLVM_VERSION = "18.1.8"
 maybe(
     http_archive,
     name = "toolchains_llvm",
+    canonical_id = "{0}".format(TOOLCHAINS_LLVM_VERSION),
     integrity = TOOLCHAINS_LLVM_INTEGRITY,
     strip_prefix = "toolchains_llvm-{0}".format(TOOLCHAINS_LLVM_VERSION),
-    canonical_id = "{0}".format(TOOLCHAINS_LLVM_VERSION),
     url = "https://github.com/bazel-contrib/toolchains_llvm/releases/download/{0}/toolchains_llvm-{0}.tar.gz".format(TOOLCHAINS_LLVM_VERSION),
 )
 
 load("@toolchains_llvm//toolchain:deps.bzl", "bazel_toolchain_dependencies")
+
 bazel_toolchain_dependencies()
 
 load("@toolchains_llvm//toolchain:rules.bzl", "llvm_toolchain")
+
 llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
+    sha256 = {
+        "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
+        "linux-aarch64": "6117a28376d91d331fbacbac3cf9ef4e21ad255e3cbd6fcbfc260e3f437be533",
+        "linux-x86_64": "6aa8a3c61de78e95134261b6d0e3a1907e1fee5b41a3baa62b185ec8326c0753",
+    },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
         "darwin-x86_64": "@sysroot_darwin_universal//:sysroot",
+        "linux-x86_64": "@linux_sysroot-x86_64//:sysroot",
+        "linux-aarch64": "@linux_sysroot-aarch64//:sysroot",
     },
     urls = {
         "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/linux_x86_64.tar.zst".format(LLVM_VERSION)],
-    },
-    sha256 = {
-        "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
-        "linux-aarch64": "bdab5b24cb44f121c82378503afdf55052931c8a26a86f16dad4405a3626a23d",
-        "linux-x86_64": "c44046d74e491661e53fc409add8eb7bdcca4b13decde9aa4adb9b8dc8ef1fa4",
+        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-1/linux_aarch64.tar.zst".format(LLVM_VERSION)],
+        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-1/linux_x86_64.tar.zst".format(LLVM_VERSION)],
     },
 )
 
 load("@llvm_toolchain//:toolchains.bzl", "llvm_register_toolchains")
+
 llvm_register_toolchains()
 
 # `rules_perl`
@@ -211,6 +262,7 @@ llvm_register_toolchains()
 # Provides a `perl` toolchain which is required to build some libraries (e.g. openssl).
 
 RULES_PERL_VERISON = "0.1.0"
+
 RULES_PERL_INTEGRITY = "sha256-XO+tvypJvzQh7eAJ8sWiyYNquueSYg7S/5kYQTN1UyU="
 
 maybe(
@@ -222,9 +274,11 @@ maybe(
         "https://github.com/bazelbuild/rules_perl/archive/refs/tags/{0}.tar.gz".format(RULES_PERL_VERISON),
     ],
 )
+
 load("@rules_perl//perl:deps.bzl", "perl_register_toolchains", "perl_rules_dependencies")
 
 perl_rules_dependencies()
+
 perl_register_toolchains()
 
 # Extra setup.
@@ -233,12 +287,14 @@ perl_register_toolchains()
 # specific to a single library we move their definitions into separate files
 # to avoid cluter.
 load("//misc/bazel/c_deps:extra_setup.bzl", "protoc_setup")
+
 protoc_setup()
 
 # C Repositories
 #
 # Loads all of the C dependencies that we rely on.
 load("//misc/bazel/c_deps:repositories.bzl", "c_repositories")
+
 c_repositories()
 
 # `rules_rust`
@@ -247,6 +303,7 @@ c_repositories()
 # dependencies.
 
 RULES_RUST_VERSION = "0.49.3"
+
 RULES_RUST_INTEGRITY = "sha256-3QBrdyIdWeTRQSB8DnrfEbH7YNFEC4/KA7+SVheTKmA="
 
 maybe(
@@ -260,6 +317,7 @@ maybe(
 )
 
 load("@rules_rust//rust:repositories.bzl", "rules_rust_dependencies")
+
 rules_rust_dependencies()
 
 # `rustc`
@@ -270,6 +328,7 @@ rules_rust_dependencies()
 RUST_VERSION = "1.80.1"
 
 load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
+
 rust_toolchains(
     RUST_VERSION,
     {
@@ -295,71 +354,69 @@ rust_toolchains(
             "rust-std": "e7b766fce1cd89c02bde33f8cc3a81f341c52677258a546df2bee1c7090e9fc5",
         },
         "x86_64-apple-darwin": {},
-    }
+    },
 )
 
 # Load all dependencies for crate_universe.
 load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
+
 crate_universe_dependencies()
 
-load("@rules_rust//crate_universe:defs.bzl", "crates_repository", "crate")
+load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
+
 crates_repository(
     name = "crates_io",
-    rust_version = RUST_VERSION,
     annotations = {
         "decnumber-sys": [crate.annotation(
-            gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decnumber.bazel",
+            gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
-            compile_data = [":decnumber_static_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath :decnumber_static_lib)",
-                "-lstatic=decnumber",
-            ]
+            deps = [":decnumber"],
         )],
         "librocksdb-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
             # Note: The below targets are from the additive build file.
+            #
+            # HACK(parkmycar): The `librocksdb-sys` build script runs bindgen for us, and to
+            # support cross compiling we need to provide the sysroot to the build script so
+            # bindgen can find it. Providing the sysroot and relying on the raw paths is quite
+            # fragile, the fix is to use `@rules_rust//bindgen/...` rules with our Clang toolchain.
+            build_script_data = [
+                ":rocksdb_lib",
+                ":rocksdb_include",
+                ":snappy_lib",
+                "@linux_sysroot-aarch64//:sysroot",
+                "@linux_sysroot-x86_64//:sysroot",
+            ],
             build_script_env = {
                 "ROCKSDB_STATIC": "true",
                 "ROCKSDB_LIB_DIR": "$(execpath :rocksdb_lib)",
                 "ROCKSDB_INCLUDE_DIR": "$(execpath :rocksdb_include)",
                 "SNAPPY_STATIC": "true",
                 "SNAPPY_LIB_DIR": "$(execpath :snappy_lib)",
+                "BINDGEN_EXTRA_CLANG_ARGS_aarch64-unknown-linux-gnu": "--sysroot=external/linux_sysroot-aarch64",
+                "BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu": "--sysroot=external/linux_sysroot-x86_64",
             },
-            build_script_data = [
+            compile_data = [
                 ":rocksdb_lib",
                 ":rocksdb_include",
                 ":snappy_lib",
             ],
-            compile_data = [":rocksdb_lib", ":rocksdb_include", ":snappy_lib"],
         )],
-        # TODO(parkmycar): Re-enable linking with a jemalloc built by Bazel.
-        # "tikv-jemalloc-sys": [crate.annotation(
-        #     build_script_env = {
-        #         "JEMALLOC_OVERRIDE": "$(execpath @jemalloc//:libjemalloc)",
-        #     },
-        #     build_script_data = ["@jemalloc//:libjemalloc"],
-        #     compile_data = ["@jemalloc//:libjemalloc"],
-        # )],
-        "rdkafka-sys": [crate.annotation(
+        "tikv-jemalloc-sys": [crate.annotation(
             gen_build_script = False,
+            rustc_flags = ["--cfg=prefixed"],
+            deps = ["@jemalloc"],
+        )],
+        "rdkafka-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.librdkafka.bazel",
+            gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
             deps = [":librdkafka"],
-            compile_data = [":rdkafka_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath :rdkafka_lib)",
-                "-lstatic=rdkafka",
-            ]
         )],
         "libz-sys": [crate.annotation(
             gen_build_script = False,
-            compile_data = ["@zlib//:zlib_static_lib"],
-            rustc_flags = [
-                "-Lnative=$(execpath @zlib//:zlib_static_lib)",
-                "-lstatic=zlib",
-            ]
+            deps = ["@zlib"],
         )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
@@ -379,12 +436,26 @@ crates_repository(
             # Note: We shouldn't ever depend on protobuf-src, but if we do, don't try to bootstrap
             # `protoc`.
             gen_build_script = False,
-            rustc_env = { "INSTALL_DIR": "fake" },
+            rustc_env = {"INSTALL_DIR": "fake"},
         )],
         "protobuf-native": [crate.annotation(
-            gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.protobuf-native.bazel",
+            gen_build_script = False,
             deps = [":protobuf-native-bridge"],
+        )],
+        "psm": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.psm.bazel",
+            gen_build_script = False,
+            # Note: All of the targets we build for support switching stacks, if we ever want to
+            # support Windows we'll have to revist this.
+            rustc_flags = [
+                "--check-cfg=cfg(switchable_stack,asm,link_asm)",
+                "--cfg=asm",
+                "--cfg=link_asm",
+                "--cfg=switchable_stack",
+            ],
+            # Note: This is a target we add from the additive build file above.
+            deps = ["psm_s"],
         )],
         "launchdarkly-server-sdk": [crate.annotation(
             build_script_env = {
@@ -519,14 +590,15 @@ crates_repository(
         "//:test/test-util/Cargo.toml",
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
     ],
+    rust_version = RUST_VERSION,
     # Only used if developing rules_rust.
     # generator = "@cargo_bazel_bootstrap//:cargo-bazel",
 )
 
 load("@crates_io//:defs.bzl", "crate_repositories")
+
 crate_repositories()
 
-load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
 crate_universe_dependencies()
 
 # Third-Party Rust Tools
@@ -535,6 +607,7 @@ crate_universe_dependencies()
 # with Bazel we need to include the `cxx` command line binary.
 
 load("//misc/bazel/rust_deps:repositories.bzl", "rust_repositories")
+
 rust_repositories()
 
 # Load and include any dependencies the third-party Rust binaries require.
@@ -546,6 +619,7 @@ rust_repositories()
 # TODO(parkmycar): This should get better when we switch to bzlmod.
 
 load("@cxxbridge//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")
+
 cxxbridge_cmd_deps()
 
 # git Submodules
@@ -555,6 +629,6 @@ cxxbridge_cmd_deps()
 
 new_local_repository(
     name = "fivetran_sdk",
-    path = "misc/fivetran-sdk",
     build_file = "//misc/bazel:git_submodules/BUILD.fivetran_sdk.bazel",
+    path = "misc/fivetran-sdk",
 )
