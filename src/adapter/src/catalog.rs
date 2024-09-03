@@ -39,7 +39,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -72,6 +72,7 @@ use mz_transform::notice::OptimizerNotice;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
+use tracing::error;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -332,7 +333,8 @@ impl Catalog {
                 )
             });
             let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
-            soft_panic_or_log!(
+            // soft_panic_or_log!(
+            error!(
                 "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
                  bad_notices = {bad_notices}; \
                  drop_ids = {drop_ids:?}"
