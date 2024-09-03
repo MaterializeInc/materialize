@@ -339,7 +339,6 @@ where
     /// Runs the replica task.
     async fn run(self) {
         let replica_id = self.replica_id;
-        info!(%replica_id, "starting replica task");
 
         let client = self.connect().await;
         match self.run_message_loop(client).await {

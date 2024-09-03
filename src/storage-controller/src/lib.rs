@@ -580,6 +580,11 @@ where
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
+        let start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap beginning");
+
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create collections beginning");
+
         self.migrated_storage_collections
             .extend(migrated_storage_collections.iter().cloned());
 
@@ -596,6 +601,14 @@ where
         // is no longer useful, so abort it if it's still running.
         drop(self.persist_warm_task.take());
 
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create collections complete in {:?}",
+            start.elapsed()
+        );
+
+        let sort_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: sort and validate beginning");
+
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.
@@ -608,6 +621,13 @@ where
             }
         }
 
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: sort and validate complete in {:?}",
+            sort_start.elapsed()
+        );
+
+        let enrich_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: enrichment beginning");
         // We first enrich each collection description with some additional metadata...
         let enriched_with_metadata = collections
             .into_iter()
@@ -651,6 +671,11 @@ where
             })
             .collect_vec();
 
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: enrichment complete in {:?}",
+            enrich_start.elapsed()
+        );
+
         // So that we can open persist handles for each collections concurrently.
         let persist_client = self
             .persist
@@ -659,6 +684,8 @@ where
             .unwrap();
         let persist_client = &persist_client;
 
+        let handles_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: open handles beginning");
         // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
         // this stream cannot all have exclusive access.
         use futures::stream::{StreamExt, TryStreamExt};
@@ -706,6 +733,15 @@ where
 
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: open handles complete in {:?}",
+            handles_start.elapsed()
+        );
+
+        let to_register_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: to register beginning");
+
+        let mut register_dur = Duration::new(0, 0);
 
         // The set of collections that we should render at the end of this
         // function.
@@ -800,13 +836,14 @@ where
                     // regardless of read-only mode. The CollectionManager itself is
                     // aware of read-only mode and will not attempt to write before told
                     // to do so.
-                    //
+                    let reg_start = Instant::now();
                     self.register_introspection_collection(
                         id,
                         *typ,
                         write,
                         persist_client.clone(),
                     )?;
+                    register_dur += reg_start.elapsed();
                 }
                 DataSource::Webhook => {
                     debug!(
@@ -934,6 +971,13 @@ where
             self.collections.insert(id, collection_state);
         }
 
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: to register complete in {:?}, register_introspection_collection took {:?}",
+            to_register_start.elapsed(), register_dur,
+        );
+
+        let stat_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create stats beginning");
         {
             // Ensure all sources are associated with the statistics.
             //
@@ -952,7 +996,13 @@ where
                 source_statistics.webhook_statistics.entry(id).or_default();
             }
         }
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create stats complete in {:?}",
+            stat_start.elapsed()
+        );
 
+        let register_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: register beginning");
         // Register the tables all in one batch.
         if !table_registers.is_empty() {
             let register_ts = register_ts
@@ -982,6 +1032,13 @@ where
                     .expect("table worker unexpectedly shut down");
             }
         }
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: register complete in {:?}",
+            register_start.elapsed()
+        );
+
+        let ingestion_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: run ingestions beginning");
 
         self.append_shard_mappings(new_collections.into_iter(), 1);
 
@@ -1002,6 +1059,15 @@ where
                 DataSource::Introspection(_) | DataSource::Webhook | DataSource::Table | DataSource::Progress | DataSource::Other => {}
             };
         }
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap: run ingestions complete in {:?}",
+            ingestion_start.elapsed()
+        );
+
+        info!(
+            "STORAGE LOOK: storage collections init: create_collections_for_bootstrap complete in {:?}",
+            start.elapsed()
+        );
 
         Ok(())
     }
@@ -2478,17 +2544,28 @@ where
         txn: &dyn StorageTxn<T>,
         storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     ) -> Self {
+        let start = Instant::now();
         let txns_client = persist_clients
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
+        info!(
+            "CONTROLLER NEW LOOK HERE: open txns client took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         let persist_warm_task = warm_persist_state_in_background(
             txns_client.clone(),
             txn.get_collection_metadata().into_values(),
         );
         let persist_warm_task = Some(persist_warm_task.abort_on_drop());
+        info!(
+            "CONTROLLER NEW LOOK HERE: create warm task took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // This value must be already installed because we must ensure it's
@@ -2523,8 +2600,19 @@ where
             .await;
             persist_handles::PersistTableWriteWorker::new_txns(txns)
         };
-        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
+        info!(
+            "CONTROLLER NEW LOOK HERE: create persist table worker took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
+        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
+        info!(
+            "CONTROLLER NEW LOOK HERE: create txns read took {:?}",
+            start.elapsed()
+        );
+
+        let start = Instant::now();
         let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
 
         let introspection_ids = BTreeMap::new();
@@ -2543,7 +2631,7 @@ where
 
         let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
 
-        Self {
+        let res = Self {
             build_info,
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
@@ -2585,7 +2673,14 @@ where
             instance_response_rx,
             instance_response_tx,
             persist_warm_task,
-        }
+        };
+
+        info!(
+            "CONTROLLER NEW LOOK HERE: postamble took {:?}",
+            start.elapsed()
+        );
+
+        res
     }
 
     // This is different from `set_read_policies`, which is for external users.
@@ -2973,8 +3068,6 @@ where
         write_handle: WriteHandle<SourceData, (), T, Diff>,
         persist_client: PersistClient,
     ) -> Result<(), StorageError<T>> {
-        tracing::info!(%id, ?introspection_type, "registering introspection collection");
-
         // In read-only mode we create a new shard for all migrated storage collections. So we
         // "trick" the write task into thinking that it's not in read-only mode so something is
         // advancing this new shard.

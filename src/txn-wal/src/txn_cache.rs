@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -31,7 +32,7 @@ use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataRemapEntry, DataSnapshot, DataSubscribe};
@@ -152,6 +153,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         only_data_id: Option<ShardId>,
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
     ) -> (Self, Subscribe<C::Key, C::Val, T, i64>) {
+        let start = Instant::now();
         let txns_id = txns_read.shard_id();
         let as_of = txns_read.since().clone();
         let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
@@ -159,6 +161,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             .subscribe(as_of)
             .await
             .expect("handle holds a capability");
+        info!(
+            "TXNS CACHE INIT LOOK HERE: create subscribe took {:?}",
+            start.elapsed()
+        );
+        let start = Instant::now();
         let mut state = Self::new(txns_id, since_ts.clone(), only_data_id.clone());
         let mut buf = Vec::new();
         // The cache must be updated to `since_ts` to maintain the invariant
@@ -171,6 +178,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             |progress_exclusive| progress_exclusive >= &since_ts,
         )
         .await;
+        info!(
+            "TXNS CACHE INIT LOOK HERE: update took {:?}",
+            start.elapsed()
+        );
         debug_assert_eq!(state.validate(), Ok(()));
         (state, txns_subscribe)
     }
@@ -798,9 +809,24 @@ where
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
         txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
+        let start = Instant::now();
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
+        info!(
+            "TXNS HANDLE INIT LOOK HERE: empty caa took {:?}",
+            start.elapsed()
+        );
+        let start = Instant::now();
         let mut ret = Self::from_read(txns_read, None).await;
+        info!(
+            "TXNS HANDLE INIT LOOK HERE: from read took {:?}",
+            start.elapsed()
+        );
+        let start = Instant::now();
         let _ = ret.update_gt(&init_ts).await;
+        info!(
+            "TXNS HANDLE INIT LOOK HERE: update gt took {:?}",
+            start.elapsed()
+        );
         ret
     }
 
@@ -892,17 +918,32 @@ where
         done: F,
     ) {
         while !done(&state.progress_exclusive) {
+            let start = Instant::now();
             let events = txns_subscribe.next(None).await;
+            info!(
+                "TXNS CACHE UPDATE LOOK HERE: next took {:?}",
+                start.elapsed()
+            );
             for event in events {
                 match event {
                     ListenEvent::Progress(frontier) => {
+                        let start = Instant::now();
                         let progress = frontier
                             .into_option()
                             .expect("nothing should close the txns shard");
                         state.push_entries(std::mem::take(buf), progress);
+                        info!(
+                            "TXNS CACHE UPDATE LOOK HERE: progress took {:?}",
+                            start.elapsed()
+                        );
                     }
                     ListenEvent::Updates(parts) => {
+                        let start = Instant::now();
                         Self::fetch_parts(only_data_id, txns_subscribe, parts, buf).await;
+                        info!(
+                            "TXNS CACHE UPDATE LOOK HERE: fetch parts took {:?}",
+                            start.elapsed()
+                        );
                     }
                 };
             }

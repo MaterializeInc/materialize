@@ -1103,7 +1103,6 @@ impl StorageState {
             }
             StorageCommand::UpdateConfiguration(params) => {
                 // These can be done from all workers safely.
-                tracing::info!("Applying configuration update: {params:?}");
 
                 // We serialize the dyncfg updates in StorageParameters, but configure
                 // persist separately.

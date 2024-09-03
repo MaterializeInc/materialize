@@ -2635,7 +2635,7 @@ mod tests {
             )
             .await
             .expect("unable to open debug catalog");
-            let item = catalog
+            let (item, _) = catalog
                 .state()
                 .deserialize_item(
                     gid,
@@ -3550,7 +3550,7 @@ mod tests {
                     &format!("CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"),
                     &BTreeMap::new(), &mut LocalExpressionCache::Closed
                 )
-                .expect("unable to deserialize item");
+                .expect("unable to deserialize item").0;
             let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(

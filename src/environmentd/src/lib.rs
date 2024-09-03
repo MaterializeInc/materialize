@@ -331,6 +331,7 @@ impl Listeners {
         let catalog_init_start = Instant::now();
         info!("startup: envd serve: catalog init beginning");
 
+        let init_start = Instant::now();
         // Get the current timestamp so we can record when we booted.
         let boot_ts = (config.now)().into();
 
@@ -340,6 +341,10 @@ impl Listeners {
             .open(config.controller.persist_location.clone())
             .await
             .context("opening persist client")?;
+        info!(
+            "CATALOG INIT LOOK: open persist client took {:?}",
+            init_start.elapsed()
+        );
         let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
             persist_client.clone(),
             config.environment_id.organization_id(),

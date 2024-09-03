@@ -389,12 +389,6 @@ impl Coordinator {
         let old_id = id;
         let (_, new_id) = self.allocate_transient_id();
 
-        info!(
-            %old_id, %new_id, %replica_id,
-            type_ = ?subscribe.spec.introspection_type,
-            "reinstalling introspection subscribe",
-        );
-
         if let Err(error) = self
             .controller
             .compute

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -433,6 +433,7 @@ where
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
     ) -> Self {
+        let start = Instant::now();
         let metrics = StorageCollectionsMetrics::register_into(metrics_registry);
 
         // This value must be already installed because we must ensure it's
@@ -441,12 +442,22 @@ where
         let txns_id = txn
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating StorageCollections");
+        info!(
+            "STORAGE COLLECTIONS IMPL NEW LOOK HERE: preamble took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         let txns_client = persist_clients
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
+        info!(
+            "STORAGE COLLECTIONS IMPL NEW LOOK HERE: open txns client took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         // We have to initialize, so that TxnsRead::start() below does not
         // block.
         let _txns_handle: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow> =
@@ -458,7 +469,12 @@ where
                 txns_id,
             )
             .await;
+        info!(
+            "STORAGE COLLECTIONS IMPL NEW LOOK HERE: open txns handle took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         // For handing to the background task, for listening to upper updates.
         let (txns_key_schema, txns_val_schema) = TxnsCodecRow::schemas();
         let mut txns_write = txns_client
@@ -473,9 +489,19 @@ where
             )
             .await
             .expect("txns schema shouldn't change");
+        info!(
+            "STORAGE COLLECTIONS IMPL NEW LOOK HERE: open writer took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
+        info!(
+            "STORAGE COLLECTIONS IMPL NEW LOOK HERE: start reader took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
         let finalizable_shards =
             Arc::new(ShardIdSet::new(metrics.finalization_outstanding.clone()));
@@ -522,7 +548,7 @@ where
             }),
         );
 
-        Self {
+        let res = Self {
             finalizable_shards,
             finalized_shards,
             collections,
@@ -537,7 +563,14 @@ where
             holds_tx,
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
-        }
+        };
+
+        info!(
+            "STORAGE COLLECTIONS IMPL NEW LOOK HERE: postamble took {:?}",
+            start.elapsed()
+        );
+
+        res
     }
 
     /// Opens a [WriteHandle] and a [SinceHandleWrapper], for holding back the since.
@@ -554,23 +587,41 @@ where
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
-        let since_handle = if self.read_only {
+    ) -> (
+        WriteHandle<SourceData, (), T, Diff>,
+        SinceHandleWrapper<T>,
+        Duration,
+        OpenCriticalHandleTimings,
+        Duration,
+        Duration,
+    ) {
+        let (since_handle, leased_dur, critical_dur) = if self.read_only {
+            let start = Instant::now();
             let read_handle = self
                 .open_leased_handle(id, shard, relation_desc.clone(), since, persist_client)
                 .await;
-            SinceHandleWrapper::Leased(read_handle)
+            (
+                SinceHandleWrapper::Leased(read_handle),
+                start.elapsed(),
+                OpenCriticalHandleTimings::new(),
+            )
         } else {
-            let since_handle = self
+            let (since_handle, timings) = self
                 .open_critical_handle(id, shard, since, persist_client)
                 .await;
 
-            SinceHandleWrapper::Critical(since_handle)
+            (
+                SinceHandleWrapper::Critical(since_handle),
+                Duration::new(0, 0),
+                timings,
+            )
         };
 
+        let start = Instant::now();
         let mut write_handle = self
             .open_write_handle(id, shard, relation_desc, persist_client)
             .await;
+        let write_dur = start.elapsed();
 
         // N.B.
         // Fetch the most recent upper for the write handle. Otherwise, this may
@@ -582,9 +633,18 @@ where
         //
         // Note that this returns the upper, but also sets it on the handle to
         // be fetched later.
+        let start = Instant::now();
         write_handle.fetch_recent_upper().await;
+        let upper_dur = start.elapsed();
 
-        (write_handle, since_handle)
+        (
+            write_handle,
+            since_handle,
+            leased_dur,
+            critical_dur,
+            write_dur,
+            upper_dur,
+        )
     }
 
     /// Opens a write handle for the given `shard`.
@@ -626,9 +686,13 @@ where
         shard: ShardId,
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
-    ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
+    ) -> (
+        SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+        OpenCriticalHandleTimings,
+    ) {
         tracing::debug!(%id, ?since, "opening critical handle");
-
+        let mut timings = OpenCriticalHandleTimings::new();
+        let start = Instant::now();
         assert!(
             !self.read_only,
             "attempting to open critical SinceHandle in read-only mode"
@@ -652,6 +716,10 @@ where
                 )
                 .await
                 .expect("invalid persist usage");
+            timings.open_since_handle = start.elapsed();
+
+            let downgrade_start = Instant::now();
+            timings.compare_tries = 1;
 
             // Take the join of the handle's since and the provided `since`;
             // this lets materialized views express the since at which their
@@ -662,7 +730,7 @@ where
 
             let our_epoch = self.envd_epoch;
 
-            loop {
+            let res = loop {
                 let current_epoch: PersistEpoch = handle.opaque().clone();
 
                 // Ensure the current epoch is <= our epoch.
@@ -684,10 +752,18 @@ where
                 } else {
                     mz_ore::halt!("fenced by envd @ {current_epoch:?}. ours = {our_epoch}");
                 }
-            }
+
+                timings.compare_tries += 1;
+            };
+
+            timings.compare_and_downgrade = downgrade_start.elapsed();
+
+            res
         };
 
-        since_handle
+        timings.total += start.elapsed();
+
+        (since_handle, timings)
     }
 
     /// Opens a leased [ReadHandle], for the purpose of holding back a since,
@@ -1107,6 +1183,32 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct OpenCriticalHandleTimings {
+    pub open_since_handle: Duration,
+    pub compare_and_downgrade: Duration,
+    pub compare_tries: u64,
+    pub total: Duration,
+}
+
+impl OpenCriticalHandleTimings {
+    fn new() -> Self {
+        Self {
+            open_since_handle: Duration::new(0, 0),
+            compare_and_downgrade: Duration::new(0, 0),
+            compare_tries: 0,
+            total: Duration::new(0, 0),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.open_since_handle += other.open_since_handle;
+        self.compare_and_downgrade += other.compare_and_downgrade;
+        self.compare_tries += other.compare_tries;
+        self.total += other.total;
+    }
+}
+
 // See comments on the above impl for StorageCollectionsImpl.
 #[async_trait]
 impl<T> StorageCollections for StorageCollectionsImpl<T>
@@ -1359,6 +1461,11 @@ where
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
+        let start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning");
+
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: sort beginning");
+
         let is_in_txns = |id, metadata: &CollectionMetadata| {
             metadata.txns_shard.is_some()
                 && !(self.read_only && migrated_storage_collections.contains(&id))
@@ -1376,6 +1483,10 @@ where
             }
         }
 
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: sort complete in {:?}", start.elapsed());
+
+        let sanity_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: sanity check beginning");
         {
             // Early sanity check: if we knew about a collection already it's
             // description must match!
@@ -1392,6 +1503,10 @@ where
             }
         }
 
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: sanity check complete in {:?}", sanity_start.elapsed());
+
+        let enrich = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: enrich beginning");
         // We first enrich each collection description with some additional
         // metadata...
         let enriched_with_metadata = collections
@@ -1437,6 +1552,10 @@ where
             })
             .collect_vec();
 
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: enrich complete in {:?}", enrich.elapsed());
+
+        let open_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: open client beginning");
         // So that we can open `SinceHandle`s for each collections concurrently.
         let persist_client = self
             .persist
@@ -1444,12 +1563,17 @@ where
             .await
             .unwrap();
         let persist_client = &persist_client;
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: open handles: open complete in {:?}", open_start.elapsed());
+
+        let handles_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: open handles beginning");
         // Reborrow the `&mut self` as immutable, as all the concurrent work to
         // be processed in this stream cannot all have exclusive access.
         use futures::stream::{StreamExt, TryStreamExt};
         let this = &*self;
-        let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
+        let to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
             .map(|data: Result<_, StorageError<Self::Timestamp>>| {
+                let open_handle_start = Instant::now();
                 let register_ts = register_ts.clone();
                 async move {
                     let (id, description, metadata) = data?;
@@ -1463,8 +1587,8 @@ where
                         id, metadata.remap_shard, metadata.data_shard
                     );
 
-                    let (write, mut since_handle) = this
-                        .open_data_handles(
+                    let (write, mut since_handle, leased_dur, critical_dur, write_dur, upper_dur) =
+                        this.open_data_handles(
                             &id,
                             metadata.data_shard,
                             description.since.as_ref(),
@@ -1472,7 +1596,9 @@ where
                             persist_client,
                         )
                         .await;
+                    let open_handle_dur = open_handle_start.elapsed();
 
+                    let downgrade_start = Instant::now();
                     // Present tables as springing into existence at the register_ts
                     // by advancing the since. Otherwise, we could end up in a
                     // situation where a table with a long compaction window appears
@@ -1506,6 +1632,7 @@ where
                             }
                         }
                     }
+                    let downgrade_dur = downgrade_start.elapsed();
 
                     Ok::<_, StorageError<Self::Timestamp>>((
                         id,
@@ -1513,6 +1640,12 @@ where
                         write,
                         since_handle,
                         metadata,
+                        open_handle_dur,
+                        leased_dur,
+                        critical_dur,
+                        write_dur,
+                        upper_dur,
+                        downgrade_dur,
                     ))
                 }
             })
@@ -1534,8 +1667,41 @@ where
             .try_collect()
             .await?;
 
+        let mut open_handle_dur = Duration::new(0, 0);
+        let mut open_leased_dur = Duration::new(0, 0);
+        let mut open_critical_timing = OpenCriticalHandleTimings::new();
+        let mut open_write_dur = Duration::new(0, 0);
+        let mut open_upper_dur = Duration::new(0, 0);
+        let mut downgrade_dur = Duration::new(0, 0);
+
+        for (_, _, _, _, _, open_dur, leased_dur, critical_dur, write_dur, upper_dur, down_dur) in
+            &to_register
+        {
+            open_handle_dur += open_dur.clone();
+            open_leased_dur += leased_dur.clone();
+            open_critical_timing.merge(critical_dur.clone());
+            open_write_dur += write_dur.clone();
+            open_upper_dur += upper_dur.clone();
+            downgrade_dur += down_dur.clone();
+        }
+
+        let mut to_register: Vec<_> = to_register
+            .into_iter()
+            .map(|(a, b, c, d, e, _, _, _, _, _, _)| (a, b, c, d, e))
+            .collect();
+
+        let handles_elapsed = handles_start.elapsed();
+        let num_handles = to_register.len();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: open handles complete in {handles_elapsed:?}. num handles: {num_handles}, open inner: {open_handle_dur:?}, open leased since inner: {open_leased_dur:?}, open critical since inner: {open_critical_timing:?}, open write inner: {open_write_dur:?}, open upper inner: {open_upper_dur:?}, downgrade inner: {downgrade_dur:?}");
+
+        let sort_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: sort handles beginning");
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: sort handles complete in {:?}", sort_start.elapsed());
+
+        let register_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: register beginning");
 
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
@@ -1698,9 +1864,18 @@ where
             self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
         }
 
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: register complete in {:?}", register_start.elapsed());
+
+        let sync_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: synchronize beginning");
+
         drop(self_collections);
 
         self.synchronize_finalized_shards(storage_metadata);
+
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap beginning: synchronize complete in {:?}", sync_start.elapsed());
+
+        info!("STORAGE LOOK: storage collections init: create_collections_for_bootstrap: create_collections_for_bootstrap complete in {:?}", start.elapsed());
 
         Ok(())
     }

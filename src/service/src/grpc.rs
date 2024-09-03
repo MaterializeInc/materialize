@@ -40,7 +40,7 @@ use tonic::service::Interceptor;
 use tonic::transport::{Channel, Endpoint, Server};
 use tonic::{IntoStreamingRequest, Request, Response, Status, Streaming};
 use tower::Service;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 use crate::codec::{StatCodec, StatsCollector};
@@ -98,8 +98,6 @@ where
         metrics: G::STATS,
         params: &GrpcClientParameters,
     ) -> Result<Self, anyhow::Error> {
-        debug!("GrpcClient {}: Attempt to connect", addr);
-
         let channel = match SocketAddrType::guess(&addr) {
             SocketAddrType::Inet => {
                 let mut endpoint = Endpoint::new(format!("http://{}", addr))?;
@@ -131,7 +129,6 @@ where
             .establish_bidi_stream(UnboundedReceiverStream::new(rx))
             .await?
             .into_inner();
-        info!("GrpcClient {}: connected", &addr);
         Ok(GrpcClient { tx, rx })
     }
 

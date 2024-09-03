@@ -49,9 +49,7 @@ impl SystemParameterBackend {
             info!(name = param.name, value = param.value, "updating parameter");
             vars.insert(param.name.clone(), param.value.clone());
             match self.session_client.set_system_vars(vars).await {
-                Ok(()) => {
-                    info!(name = param.name, value = param.value, "update success");
-                }
+                Ok(()) => {}
                 Err(error) => match error {
                     AdapterError::ReadOnly => {
                         info!(

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use mz_catalog::builtin::BuiltinTable;
 use mz_catalog::durable::{
@@ -24,6 +25,7 @@ use mz_sql_parser::ast::{Raw, Statement};
 use semver::Version;
 use tracing::info;
 use uuid::Uuid;
+
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
@@ -39,15 +41,53 @@ where
 {
     let mut updated_items = BTreeMap::new();
 
+    let mut parse_dur = Duration::new(0, 0);
+    let mut closure_dur = Duration::new(0, 0);
+    let mut to_ast_dur = Duration::new(0, 0);
+    let mut insert_dur = Duration::new(0, 0);
+
     for mut item in tx.get_items() {
+        let parse_start = Instant::now();
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+        parse_dur += parse_start.elapsed();
+
+        let clo_start = Instant::now();
         f(tx, item.id, &mut stmt)?;
+        closure_dur += clo_start.elapsed();
 
+        let start = Instant::now();
         item.create_sql = stmt.to_ast_string_stable();
+        to_ast_dur += start.elapsed();
 
+        let start = Instant::now();
         updated_items.insert(item.id, item);
+        insert_dur += start.elapsed();
     }
+
+    info!(
+        "STARTUP LOOK: rewrite AST items parse took: {:?}",
+        parse_dur
+    );
+    info!(
+        "STARTUP LOOK: rewrite AST items run closure took: {:?}",
+        closure_dur
+    );
+    info!(
+        "STARTUP LOOK: rewrite AST items to AST took: {:?}",
+        to_ast_dur
+    );
+    info!(
+        "STARTUP LOOK: rewrite AST items insert took: {:?}",
+        insert_dur
+    );
+
+    let start = Instant::now();
     tx.update_items(updated_items)?;
+    info!(
+        "STARTUP LOOK: rewrite AST items tx update items took: {:?}",
+        start.elapsed()
+    );
+
     Ok(())
 }
 
@@ -66,16 +106,47 @@ where
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.get_items();
+
+    let mut parse_dur = Duration::new(0, 0);
+    let mut closure_dur = Duration::new(0, 0);
+    let mut to_ast_dur = Duration::new(0, 0);
+    let mut insert_dur = Duration::new(0, 0);
+
     for mut item in items {
+        let start = Instant::now();
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+        parse_dur += start.elapsed();
 
+        let start = Instant::now();
         f(tx, &cat, item.id, &mut stmt)?;
+        closure_dur += start.elapsed();
 
+        let start = Instant::now();
         item.create_sql = stmt.to_ast_string_stable();
+        to_ast_dur += start.elapsed();
 
+        let start = Instant::now();
         updated_items.insert(item.id, item);
+        insert_dur += start.elapsed();
     }
+
+    info!(
+        "STARTUP LOOK: rewrite items parse items took: {:?}",
+        parse_dur
+    );
+    info!(
+        "STARTUP LOOK: rewrite items run closure took: {:?}",
+        closure_dur
+    );
+    info!("STARTUP LOOK: rewrite items to AST took: {:?}", to_ast_dur);
+    info!("STARTUP LOOK: rewrite items insert took: {:?}", insert_dur);
+
+    let start = Instant::now();
     tx.update_items(updated_items)?;
+    info!(
+        "STARTUP LOOK: rewrite items tx update items took: {:?}",
+        start.elapsed()
+    );
     Ok(())
 }
 
@@ -90,17 +161,23 @@ pub(crate) async fn migrate(
     _now: NowFn,
     _boot_ts: Timestamp,
 ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, anyhow::Error> {
+    let start = Instant::now();
     let catalog_version = tx.get_catalog_content_version();
     let catalog_version = match catalog_version {
         Some(v) => Version::parse(&v)?,
         None => Version::new(0, 0, 0),
     };
+    info!(
+        "STARTUP LOOK: AST migration get catalog version took: {:?}",
+        start.elapsed()
+    );
 
     info!(
         "migrating statements from catalog version {:?}",
         catalog_version
     );
 
+    let rewrite_ast_start = Instant::now();
     rewrite_ast_items(tx, |_tx, _id, _stmt| {
         // Add per-item AST migrations below.
         //
@@ -113,7 +190,12 @@ pub(crate) async fn migrate(
 
         Ok(())
     })?;
+    info!(
+        "STARTUP LOOK: AST migration rewrite ast took: {:?}",
+        rewrite_ast_start.elapsed()
+    );
 
+    let apply_start = Instant::now();
     // Load items into catalog. We make sure to consolidate the old updates with the new updates to
     // avoid trying to apply unmigrated items.
     let commit_ts = tx.upper();
@@ -130,12 +212,19 @@ pub(crate) async fn migrate(
             diff: diff.try_into().expect("valid diff"),
         })
         .collect();
-    let mut ast_builtin_table_updates = state
+    let (mut ast_builtin_table_updates, apply_timing) = state
         .apply_updates_for_bootstrap(item_updates, local_expr_cache)
         .await;
 
+    info!(
+        "STARTUP LOOK: AST migration apply catalog 1 took: {:?}, {:?}",
+        apply_start.elapsed(),
+        apply_timing
+    );
+
     info!("migrating from catalog version {:?}", catalog_version);
 
+    let rewrite_start = Instant::now();
     let conn_cat = state.for_system_session();
 
     rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
@@ -157,17 +246,33 @@ pub(crate) async fn migrate(
         Ok(())
     })?;
 
+    info!(
+        "STARTUP LOOK: AST migration rewrite took: {:?}",
+        rewrite_start.elapsed()
+    );
+
     // Add whole-catalog migrations below.
     //
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
-
+    let apply_start = Instant::now();
     let op_item_updates = tx.get_and_commit_op_updates();
-    let item_builtin_table_updates = state
+    let (item_builtin_table_updates, apply_timings) = state
         .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
         .await;
 
+    info!(
+        "STARTUP LOOK: AST migration apply catalog 2 took: {:?}, {:?}",
+        apply_start.elapsed(),
+        apply_timings
+    );
+
     ast_builtin_table_updates.extend(item_builtin_table_updates);
+
+    info!(
+        "STARTUP LOOK: AST migration total took: {:?}",
+        start.elapsed()
+    );
 
     info!(
         "migration from catalog version {:?} complete",
