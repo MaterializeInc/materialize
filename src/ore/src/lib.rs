@@ -102,6 +102,10 @@ pub mod vec;
 
 pub use mz_ore_proc::{instrument, static_list, test};
 
+pub fn foo_bar(x: usize) -> String {
+    format!("foo bar this is a test {x}")
+}
+
 #[doc(hidden)]
 pub mod __private {
     #[cfg(feature = "tracing_")]

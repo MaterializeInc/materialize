@@ -25,6 +25,12 @@ def main() -> None:
         mzbuild.Repository(
             Path("."), Arch.AARCH64, coverage=False, sanitizer=Sanitizer.none
         ),
+        mzbuild.Repository(
+            Path("."), Arch.X86_64, coverage=False, sanitizer=Sanitizer.none
+        ),
+        mzbuild.Repository(
+            Path("."), Arch.AARCH64, coverage=False, sanitizer=Sanitizer.none
+        ),
     ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]
 
