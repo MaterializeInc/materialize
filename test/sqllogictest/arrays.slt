@@ -255,7 +255,7 @@ SELECT array_agg(1)
 query T
 select array_agg(unnest) FROM (SELECT NULL) x JOIN LATERAL unnest(ARRAY[1,2,NULL]) ON true;
 ----
-{NULL,1,2}
+{1,2,NULL}
 
 statement ok
 CREATE TABLE t1 (a int)
@@ -276,12 +276,12 @@ SELECT array_agg(a) FROM (select a from t1 where a IS NULL)
 query T
 SELECT array_agg(a) FROM t1
 ----
-{NULL,NULL,1,2,3}
+{1,2,3,NULL,NULL}
 
 query T
 SELECT array_agg(a::text) FROM t1
 ----
-{NULL,NULL,1,2,3}
+{1,2,3,NULL,NULL}
 
 query T
 SELECT array_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1

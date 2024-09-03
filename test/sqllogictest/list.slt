@@ -2315,7 +2315,7 @@ SELECT list_agg(1)::text
 query T
 select list_agg(unnest)::text FROM (SELECT NULL) x JOIN LATERAL unnest(ARRAY[1,2,NULL]) ON true;
 ----
-{NULL,1,2}
+{1,2,NULL}
 
 statement ok
 CREATE TABLE t1 (a int)
@@ -2336,12 +2336,12 @@ SELECT list_agg(a)::text FROM (select a from t1 where a IS NULL)
 query T
 SELECT list_agg(a)::text FROM t1
 ----
-{NULL,NULL,1,2,3}
+{1,2,3,NULL,NULL}
 
 query T
 SELECT list_agg(a::text)::text FROM t1
 ----
-{NULL,NULL,1,2,3}
+{1,2,3,NULL,NULL}
 
 query T
 SELECT (list_agg(a) FILTER (WHERE a IS NOT NULL))::text FROM t1
@@ -2365,12 +2365,12 @@ INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
 query T
 SELECT list_agg((a, b))::text FROM t2
 ----
-{"(,2020-01-02)","(1,2020-01-01)"}
+{"(1,2020-01-01)","(,2020-01-02)"}
 
 query TTT
 SELECT list_agg((a, b))::text, list_agg(a)::text, list_agg(b)::text FROM t2
 ----
-{"(,2020-01-02)","(1,2020-01-01)"}  {NULL,1}  {2020-01-01,2020-01-02}
+{"(1,2020-01-01)","(,2020-01-02)"}  {1,NULL}  {2020-01-01,2020-01-02}
 
 query T
 SELECT list_agg(ARRAY[1])::text
@@ -2386,12 +2386,12 @@ SELECT list_agg('a'::char(2))::text
 query T
 SELECT list_agg(a)::text FROM (VALUES ('{1,2}'::int list), ('{3}'), (NULL)) v(a);
 ----
-{NULL,{3},{1,2}}
+{{1,2},{3},NULL}
 
 query T
 SELECT list_agg(a)::text FROM (VALUES (array[1,2]), (array[3]), (NULL)) v(a);
 ----
-{NULL,{3},{1,2}}
+{{1,2},{3},NULL}
 
 statement ok
 INSERT INTO t2 VALUES (3, date '2020-01-03')

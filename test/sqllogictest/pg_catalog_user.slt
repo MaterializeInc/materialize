@@ -34,6 +34,6 @@ ALTER USER "materialize@foocorp.io" SET cluster = "cluster=cluster=cluster=";
 query TT rowsort
 SELECT usename, useconfig::text FROM pg_user;
 ----
-materialize@foocorp.io  {"search_path=abc,␠def",cluster=cluster=cluster=cluster=}
+materialize@foocorp.io  {cluster=cluster=cluster=cluster=,"search_path=abc,␠def"}
 mz_support  NULL
 mz_system  NULL
