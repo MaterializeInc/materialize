@@ -74,6 +74,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateRole(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
+        | Plan::CreateContinualTask(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)

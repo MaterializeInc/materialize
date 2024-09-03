@@ -600,6 +600,7 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {}) => todo!("WIP"),
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,
