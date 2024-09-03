@@ -283,9 +283,10 @@ steps:
               ]
 
       - id: testdrive-in-cloudtest
-        label: Full Testdrive in Cloudtest (K8s)
+        label: "Full Testdrive in Cloudtest (K8s) %N"
         depends_on: build-aarch64
-        timeout_in_minutes: 300
+        timeout_in_minutes: 180
+        parallelism: 2
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
@@ -294,7 +295,8 @@ steps:
           queue: linux-aarch64-medium
         plugins:
           - ./ci/plugins/cloudtest:
-              args: [-m=long, test/cloudtest/test_full_testdrive.py]
+              # Uses .td-file based parallelism instead
+              args: [-m=long, test/cloudtest/test_full_testdrive.py, --no-test-parallelism]
         sanitizer: skip
 
       - id: persistence-testdrive
@@ -313,7 +315,7 @@ steps:
     key: limits-group
     steps:
       - id: limits
-        label: "Product limits"
+        label: "Product limits %N"
         depends_on: build-aarch64
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -322,6 +324,7 @@ steps:
               composition: limits
               run: main
         timeout_in_minutes: 180
+        parallelism: 3
         # TODO(def-) Move to larger agents to prevent flakiness
         retry:
           automatic:
@@ -347,7 +350,7 @@ steps:
               limit: 1
 
       - id: bounded-memory
-        label: "Bounded Memory"
+        label: "Bounded Memory %N"
         depends_on: build-aarch64
         timeout_in_minutes: 90
         parallelism: 2
@@ -537,7 +540,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-entire-mz
-        label: "Checks + restart of the entire Mz"
+        label: "Checks + restart of the entire Mz %N"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
@@ -551,7 +554,7 @@ steps:
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-multi
-        label: "Checks + multiple backups/restores"
+        label: "Checks + multiple backups/restores %N"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -563,7 +566,7 @@ steps:
               args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-drop-create-default-replica
-        label: "Checks parallel + DROP/CREATE replica"
+        label: "Checks parallel + DROP/CREATE replica %N"
         depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
@@ -576,7 +579,7 @@ steps:
               args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-clusterd-compute
-        label: "Checks parallel + restart compute clusterd"
+        label: "Checks parallel + restart compute clusterd %N"
         depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
@@ -589,7 +592,7 @@ steps:
               args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-entire-mz
-        label: "Checks parallel + restart of the entire Mz"
+        label: "Checks parallel + restart of the entire Mz %N"
         depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
@@ -602,7 +605,7 @@ steps:
               args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
-        label: "Checks parallel + restart of environmentd & storage clusterd"
+        label: "Checks parallel + restart of environmentd & storage clusterd %N"
         depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
@@ -615,7 +618,7 @@ steps:
               args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-kill-clusterd-storage
-        label: "Checks parallel + kill storage clusterd"
+        label: "Checks parallel + kill storage clusterd %N"
         depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
@@ -628,7 +631,7 @@ steps:
               args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-redpanda
-        label: "Checks parallel + restart Redpanda & Debezium"
+        label: "Checks parallel + restart Redpanda & Debezium %N"
         depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
@@ -641,7 +644,7 @@ steps:
               args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
-        label: "Checks upgrade, whole-Mz restart"
+        label: "Checks upgrade, whole-Mz restart %N"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -653,7 +656,7 @@ steps:
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
-        label: "Checks preflight-check and roll back upgrade"
+        label: "Checks preflight-check and roll back upgrade %N"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -665,7 +668,7 @@ steps:
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-two-versions
-        label: "Checks upgrade across two versions"
+        label: "Checks upgrade across two versions %N"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -677,7 +680,7 @@ steps:
               args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-four-versions
-        label: "Checks upgrade across four versions"
+        label: "Checks upgrade across four versions %N"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2

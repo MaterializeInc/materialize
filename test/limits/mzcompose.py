@@ -20,6 +20,7 @@ from io import StringIO
 from textwrap import dedent
 from urllib.parse import quote
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -1715,8 +1716,16 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("testdrive", persistent=True)
 
-    scenarios = (
-        [globals()[args.scenario]] if args.scenario else list(all_subclasses(Generator))
+    scenarios = buildkite.shard_list(
+        (
+            [globals()[args.scenario]]
+            if args.scenario
+            else list(all_subclasses(Generator))
+        ),
+        lambda s: s.__name__,
+    )
+    print(
+        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {scenarios}"
     )
 
     for scenario in scenarios:
