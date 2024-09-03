@@ -1291,6 +1291,7 @@ class Composition:
         args: list[str] = [],
         caller: Traceback | None = None,
         mz_service: str | None = None,
+        quiet: bool = False,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -1314,12 +1315,26 @@ class Composition:
             ]
 
         if persistent:
-            self.exec(service, *args, stdin=input, capture_and_print=True)
+            self.exec(
+                service,
+                *args,
+                stdin=input,
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+            )
         else:
             assert (
                 mz_service is None
             ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            self.run(service, *args, stdin=input, capture_and_print=True)
+            self.run(
+                service,
+                *args,
+                stdin=input,
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+            )
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")

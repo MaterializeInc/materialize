@@ -17,13 +17,17 @@ import json
 import os
 import pathlib
 import random
+import ssl
 import subprocess
 from collections.abc import Iterator
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from threading import Thread
 from typing import Protocol, TypeVar
+from urllib.parse import parse_qs, unquote, urlparse
 
+import pg8000
 import xxhash
 import zstandard
 
@@ -144,3 +148,39 @@ def selected_by_name(selected: list[str], objs: list[U]) -> Iterator[U]:
             raise ValueError(
                 f"Unknown object with name {name} in {[obj.name for obj in objs]}"
             )
+
+
+@dataclass
+class PgConnInfo:
+    user: str
+    host: str
+    port: int
+    database: str
+    password: str | None = None
+    ssl: bool = False
+
+    def connect(self) -> pg8000.Connection:
+        return pg8000.connect(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            database=self.database,
+            ssl_context=ssl.SSLContext() if self.ssl else None,
+        )
+
+
+def parse_pg_conn_string(conn_string: str) -> PgConnInfo:
+    """Not supported natively by pg8000, so we have to parse ourselves"""
+    url = urlparse(conn_string)
+    query_params = parse_qs(url.query)
+    assert url.username
+    assert url.hostname
+    return PgConnInfo(
+        user=unquote(url.username),
+        password=unquote(url.password) if url.password else url.password,
+        host=url.hostname,
+        port=url.port or 5432,
+        database=url.path.lstrip("/"),
+        ssl=query_params.get("sslmode", ["disable"])[-1] != "disable",
+    )
