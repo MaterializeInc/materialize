@@ -15,6 +15,7 @@ import pathlib
 import subprocess
 
 from materialize import MZ_ROOT, ui
+from materialize.bazel.utils import output_paths as bazel_output_paths
 
 
 def main() -> int:
@@ -71,8 +72,9 @@ def output_path_cmd(args: list[str]):
     """Invokes the output_path function."""
     assert len(args) == 1, "expected a single Bazel target"
     target = args[0]
-    path = output_path(target)
-    print(path)
+    paths = bazel_output_paths(target)
+    for path in paths:
+        print(path)
 
 
 def bazel_cmd(args: list[str]):
