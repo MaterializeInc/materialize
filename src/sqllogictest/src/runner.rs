@@ -1709,15 +1709,18 @@ impl<'a> RunnerInner<'a> {
         let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => result
                 .into_iter()
-                .map(|m| match m {
+                .filter_map(|m| match m {
                     SimpleQueryMessage::Row(row) => {
                         let mut s = vec![];
                         for i in 0..row.len() {
                             s.push(row.get(i).unwrap_or("NULL"));
                         }
-                        s.join(",")
+                        Some(s.join(","))
                     }
-                    SimpleQueryMessage::CommandComplete(count) => format!("COMPLETE {}", count),
+                    SimpleQueryMessage::CommandComplete(count) => {
+                        Some(format!("COMPLETE {}", count))
+                    }
+                    SimpleQueryMessage::RowDescription(_) => None,
                     _ => panic!("unexpected"),
                 })
                 .collect::<Vec<_>>(),

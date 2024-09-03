@@ -783,10 +783,22 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.19.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
+[[audits.postgres]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.19.8@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+importable = false
+
 [[audits.postgres-openssl]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 version = "0.5.0@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
+
+[[audits.postgres-openssl]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.5.0@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+importable = false
 
 [[audits.postgres-openssl]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -803,6 +815,12 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.6.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
+[[audits.postgres-protocol]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.7@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+importable = false
+
 [[audits.postgres-types]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
@@ -812,6 +830,12 @@ version = "0.2.5@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.2.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-types]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.7@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+importable = false
 
 [[audits.pprof_util]]
 who = "Moritz Hoffmann <mh@materialize.com>"
@@ -1145,6 +1169,12 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.7.8@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
+[[audits.tokio-postgres]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.11@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+importable = false
+
 [[audits.tokio-tungstenite]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1240,6 +1270,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.7.0"
 
+[[audits.wasite]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
 [[audits.web-time]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
@@ -1249,6 +1284,11 @@ version = "0.2.4"
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "maintained-and-necessary"
 version = "1.1.0"
+
+[[audits.whoami]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.5.1"
 
 [[audits.windows-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

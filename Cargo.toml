@@ -279,6 +279,7 @@ dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
