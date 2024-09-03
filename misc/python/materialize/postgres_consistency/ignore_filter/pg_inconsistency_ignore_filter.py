@@ -342,6 +342,25 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
+        if expression.matches(
+            partial(
+                matches_fun_by_name,
+                function_name_in_lower_case="pg_size_pretty",
+            ),
+            True,
+        ):
+            if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
+                # different value presentation, potentially an issue in Postgres
+                return YesIgnore("Postgres behaves differently for max_value")
+            if expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
+                ),
+                True,
+            ):
+                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
+
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(
@@ -978,27 +997,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             if verdict.ignore:
                 return verdict
-
-        if query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            partial(
-                matches_fun_by_name,
-                function_name_in_lower_case="pg_size_pretty",
-            ),
-            True,
-        ):
-            if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
-                # different value presentation, potentially an issue in Postgres
-                return YesIgnore("Postgres behaves differently for max_value")
-            if query_template.matches_specific_select_or_filter_expression(
-                col_index,
-                partial(
-                    is_known_to_involve_exact_data_types,
-                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
-                ),
-                True,
-            ):
-                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
