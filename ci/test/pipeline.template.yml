@@ -16,6 +16,7 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
+  CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
   # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
   # a single core open when compiling. But we want to use all of CI's resources, hence setting the
   # build jobs to "default" which will use all cores.
@@ -50,9 +51,11 @@ steps:
         agents:
           queue: builder-linux-aarch64
 
-      - id: build-x86_64-bazel
+      - id: bazel-build-x86_64
         label: ":bazel: Build x86_64"
-        command: bin/ci-builder run stable bin/bazel-temp
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
           - "WORKSPACE"
@@ -64,9 +67,11 @@ steps:
         agents:
           queue: builder-linux-x86_64
 
-      - id: build-aarch64-bazel
+      - id: bazel-build-aarch64
         label: ":bazel: Build aarch64"
-        command: bin/ci-builder run stable bin/bazel-temp
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
           - "WORKSPACE"
@@ -274,11 +279,13 @@ steps:
       queue: builder-linux-aarch64
 
   - id: testdrive
-    label: Testdrive %N
-    depends_on: build-aarch64
+    label: ":bazel: Testdrive %N"
+    depends_on: bazel-build-aarch64
     timeout_in_minutes: 40
     inputs: [test/testdrive]
     parallelism: 8
+    env:
+      CI_BUILD_WITH_BAZEL: "1"
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -286,11 +293,13 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-tests
-    label: Cluster tests %N
-    depends_on: build-aarch64
+    label: ":bazel: Cluster tests %N"
+    depends_on: bazel-build-aarch64
     timeout_in_minutes: 30
     inputs: [test/cluster]
     parallelism: 4
+    env:
+      CI_BUILD_WITH_BAZEL: "1"
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -300,11 +309,13 @@ steps:
       queue: linux-aarch64
 
   - id: sqllogictest-fast
-    label: Fast SQL logic tests %N
-    depends_on: build-aarch64
+    label: ":bazel: Fast SQL logic tests %N"
+    depends_on: bazel-build-aarch64
     timeout_in_minutes: 30
     parallelism: 3
     inputs: [test/sqllogictest]
+    env:
+      CI_BUILD_WITH_BAZEL: "1"
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -313,9 +324,11 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: restarts
-    label: Restart test
-    depends_on: build-aarch64
+    label: ":bazel: Restart test"
+    depends_on: bazel-build-aarch64
     timeout_in_minutes: 30
+    env:
+      CI_BUILD_WITH_BAZEL: "1"
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
@@ -323,9 +336,11 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
-    label: Legacy upgrade tests (last version from docs)
-    depends_on: build-aarch64
+    label: ":bazel: Legacy upgrade tests (last version from docs)"
+    depends_on: bazel-build-aarch64
     timeout_in_minutes: 60
+    env:
+      CI_BUILD_WITH_BAZEL: "1"
     plugins:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
@@ -337,10 +352,12 @@ steps:
     key: debezium-tests
     steps:
       - id: debezium-postgres
-        label: Debezium Postgres tests
-        depends_on: build-aarch64
+        label: ":bazel: Debezium Postgres tests"
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: debezium
@@ -349,8 +366,8 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: debezium-sql-server
-        label: Debezium SQL Server tests
-        depends_on: build-x86_64
+        label: ":bazel: Debezium SQL Server tests"
+        depends_on: bazel-build-x86_64
         timeout_in_minutes: 30
         inputs: [test/debezium]
         plugins:
@@ -364,10 +381,12 @@ steps:
           # queue: hetzner-x86-64-4cpu-8gb
 
       - id: debezium-mysql
-        label: Debezium MySQL tests
-        depends_on: build-aarch64
+        label: ":bazel: Debezium MySQL tests"
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: debezium
@@ -379,11 +398,13 @@ steps:
     key: mysql-tests
     steps:
       - id: mysql-cdc
-        label: MySQL CDC tests %N
+        label: ":bazel: MySQL CDC tests %N"
         parallelism: 2
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
@@ -392,11 +413,13 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-resumption
-        label: MySQL CDC resumption tests %N
+        label: ":bazel: MySQL CDC resumption tests %N"
         parallelism: 3
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc-resumption]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
@@ -404,10 +427,12 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
-        label: MySQL RTR tests
-        depends_on: build-aarch64
+        label: ":bazel: MySQL RTR tests"
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-rtr]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-rtr
@@ -418,10 +443,12 @@ steps:
     key: postgres-tests
     steps:
       - id: pg-cdc
-        label: Postgres CDC tests
-        depends_on: build-aarch64
+        label: ":bazel: Postgres CDC tests"
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
@@ -430,11 +457,13 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
-        label: Postgres CDC resumption tests %N
+        label: ":bazel: Postgres CDC resumption tests %N"
         parallelism: 2
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
@@ -442,10 +471,12 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-rtr
-        label: Postgres RTR tests
+        label: ":bazel: Postgres RTR tests"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-rtr]
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-rtr
