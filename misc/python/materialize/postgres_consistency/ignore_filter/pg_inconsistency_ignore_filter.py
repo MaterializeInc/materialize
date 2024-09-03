@@ -35,6 +35,7 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_fun_by_name,
     matches_op_by_any_pattern,
     matches_op_by_pattern,
+    matches_recursively,
     matches_x_and_y,
     matches_x_or_y,
 )
@@ -502,6 +503,30 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             assert isinstance(pg_outcome, QueryResult)
             return self._shall_ignore_mz_failure_where_pg_succeeds(
                 query_template, mz_outcome
+            )
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_x_and_y,
+                x=partial(
+                    is_operation_tagged,
+                    tag=TAG_JSONB_OBJECT_GENERATION,
+                ),
+                y=partial(
+                    matches_recursively,
+                    matcher=partial(
+                        matches_any_expression_arg,
+                        arg_matcher=partial(
+                            matches_fun_by_any_name,
+                            function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+                        ),
+                    ),
+                ),
+            ),
+            True,
+        ):
+            return YesIgnore(
+                "Deviations in floating point functions may cause an invalid JSONB (e.g., #29350 producing NaN in mz)"
             )
 
         return super()._shall_ignore_success_mismatch(
@@ -1138,9 +1163,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 matches_x_and_y,
                 x=partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
                 y=partial(
-                    matches_any_expression_arg,
-                    arg_matcher=partial(
-                        matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                    matches_recursively,
+                    matcher=partial(
+                        matches_any_expression_arg,
+                        arg_matcher=partial(
+                            matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                        ),
                     ),
                 ),
             ),
