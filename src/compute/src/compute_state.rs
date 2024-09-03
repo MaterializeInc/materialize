@@ -379,8 +379,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
-        info!("Applying configuration update: {params:?}");
-
         let ComputeParameters {
             workload_class,
             max_result_size,
@@ -415,26 +413,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // The latter is used to extract dependency information, which is in terms of collections ids.
         let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
-
-        if dataflow.is_transient() {
-            tracing::debug!(
-                name = %dataflow.debug_name,
-                import_ids = %dataflow.display_import_ids(),
-                export_ids = %dataflow.display_export_ids(),
-                as_of = ?as_of.elements(),
-                until = ?dataflow.until.elements(),
-                "creating dataflow",
-            );
-        } else {
-            tracing::info!(
-                name = %dataflow.debug_name,
-                import_ids = %dataflow.display_import_ids(),
-                export_ids = %dataflow.display_export_ids(),
-                as_of = ?as_of.elements(),
-                until = ?dataflow.until.elements(),
-                "creating dataflow",
-            );
-        };
 
         let subscribe_copy_ids: BTreeSet<_> = dataflow
             .subscribe_ids()
