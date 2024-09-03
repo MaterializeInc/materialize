@@ -48,7 +48,6 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
-use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
@@ -78,6 +77,9 @@ mod sequential_hydration;
 pub mod error;
 
 type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
+type StorageCollections<T> = Arc<
+    dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
+>;
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
@@ -149,7 +151,7 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     instance_workload_classes: Arc<Mutex<BTreeMap<ComputeInstanceId, Option<String>>>>,
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
-    storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
+    storage_collections: StorageCollections<T>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Whether or not this controller is in read-only mode.
@@ -199,7 +201,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
-        storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
+        storage_collections: StorageCollections<T>,
         envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: MetricsRegistry,

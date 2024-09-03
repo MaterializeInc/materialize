@@ -19,6 +19,7 @@ use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::WallclockLagFn;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
@@ -38,7 +39,6 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
@@ -55,7 +55,7 @@ use crate::controller::error::{
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, ReplicaId,
-    WallclockLagFn,
+    StorageCollections,
 };
 use crate::logging::LogVariant;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
@@ -158,7 +158,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
-    storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
+    storage_collections: StorageCollections<T>,
     /// Whether instance initialization has been completed.
     initialized: bool,
     /// Whether or not this instance is in read-only mode.
@@ -793,7 +793,7 @@ where
 {
     pub fn new(
         build_info: &'static BuildInfo,
-        storage: Arc<dyn StorageCollections<Timestamp = T>>,
+        storage: StorageCollections<T>,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
