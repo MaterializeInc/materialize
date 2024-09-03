@@ -480,13 +480,7 @@ class CargoBuild(CargoPreImage):
         # instantaneous since we just compiled above with the same crates and
         # features. (We don't want to do the compile above with JSON-formatted
         # messages because it wouldn't be human readable.)
-        if not rd.bazel:
-            json_output = spawn.capture(
-                cargo_build + ["--message-format=json"],
-                cwd=rd.root,
-            )
-            prep = {"cargo": json_output}
-        else:
+        if rd.bazel:
             # TODO(parkmycar): Having to assign the same compilation flags as the build process
             # is a bit brittle. It would be better if the Bazel build process itself could
             # output the file to a known location.
@@ -501,6 +495,12 @@ class CargoBuild(CargoPreImage):
                 assert len(paths) == 1, f"more than one output path found for '{tar}'"
                 paths_to_binaries[tar] = paths[0]
             prep = {"bazel": paths_to_binaries}
+        else:
+            json_output = spawn.capture(
+                cargo_build + ["--message-format=json"],
+                cwd=rd.root,
+            )
+            prep = {"cargo": json_output}
 
         return prep
 

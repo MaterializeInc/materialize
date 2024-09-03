@@ -93,14 +93,14 @@ def maybe_upload_debuginfo(
     polar_signals_api_token = os.environ["POLAR_SIGNALS_API_TOKEN"]
 
     for bin in bins:
-        if not repo.rd.bazel:
-            cargo_profile = "release" if repo.rd.release_mode else "debug"
-            bin_path = repo.rd.cargo_target_dir() / cargo_profile / bin
-        else:
+        if repo.rd.bazel:
             options = ["--config=release"] if repo.rd.release_mode else []
             paths = bazel_output_paths(bazel_bins[bin], options)
             assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
             bin_path = paths[0]
+        else:
+            cargo_profile = "release" if repo.rd.release_mode else "debug"
+            bin_path = repo.rd.cargo_target_dir() / cargo_profile / bin
 
         dbg_path = bin_path.with_suffix(bin_path.suffix + ".debug")
         spawn.runv(
