@@ -86,6 +86,20 @@ statement ok
 BEGIN
 
 statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t ENVELOPE UPSERT (KEY (a)) WITH (PROGRESS)
+
+query IIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_progressed mz_state a b
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
 DECLARE c CURSOR FOR SUBSCRIBE t ENVELOPE UPSERT (KEY (b))
 
 query IIII colnames

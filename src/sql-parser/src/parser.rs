@@ -7816,6 +7816,7 @@ impl<'a> Parser<'a> {
         } else {
             SubscribeRelation::Name(self.parse_raw_name()?)
         };
+        let mut output = self.parse_subscribe_output()?;
         let options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
             let options = self.parse_comma_separated(Self::parse_subscribe_option)?;
@@ -7826,25 +7827,15 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
-        let output = if self.parse_keywords(&[ENVELOPE]) {
-            let keyword = self.expect_one_of_keywords(&[UPSERT, DEBEZIUM])?;
-            self.expect_token(&Token::LParen)?;
-            self.expect_keyword(KEY)?;
-            let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
-            let output = match keyword {
-                UPSERT => SubscribeOutput::EnvelopeUpsert { key_columns },
-                DEBEZIUM => SubscribeOutput::EnvelopeDebezium { key_columns },
-                _ => unreachable!("no other keyword allowed"),
-            };
-            self.expect_token(&Token::RParen)?;
-            output
-        } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {
-            SubscribeOutput::WithinTimestampOrderBy {
-                order_by: self.parse_comma_separated(Parser::parse_order_by_expr)?,
-            }
-        } else {
-            SubscribeOutput::Diffs
-        };
+        // For backwards compatibility, we allow parsing output options
+        // (`ENVELOPE`, `WITHIN TIMESTAMP ORDER BY`) at the end of the
+        // statement, if they haven't already been specified where we prefer
+        // them, before the `WITH` options and before the `AS OF`/`UP TO`
+        // options. Our preferred syntax better aligns with the option ordering
+        // for `CREATE SINK` and `SELECT`.
+        if output == SubscribeOutput::Diffs {
+            output = self.parse_subscribe_output()?;
+        }
         Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
@@ -7864,6 +7855,28 @@ impl<'a> Parser<'a> {
             name,
             value: self.parse_optional_option_value()?,
         })
+    }
+
+    fn parse_subscribe_output(&mut self) -> Result<SubscribeOutput<Raw>, ParserError> {
+        if self.parse_keywords(&[ENVELOPE]) {
+            let keyword = self.expect_one_of_keywords(&[UPSERT, DEBEZIUM])?;
+            self.expect_token(&Token::LParen)?;
+            self.expect_keyword(KEY)?;
+            let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
+            let output = match keyword {
+                UPSERT => SubscribeOutput::EnvelopeUpsert { key_columns },
+                DEBEZIUM => SubscribeOutput::EnvelopeDebezium { key_columns },
+                _ => unreachable!("no other keyword allowed"),
+            };
+            self.expect_token(&Token::RParen)?;
+            Ok(output)
+        } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {
+            Ok(SubscribeOutput::WithinTimestampOrderBy {
+                order_by: self.parse_comma_separated(Parser::parse_order_by_expr)?,
+            })
+        } else {
+            Ok(SubscribeOutput::Diffs)
+        }
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
