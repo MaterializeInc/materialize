@@ -7,9 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import argparse
+import glob
 
 import pytest
 
+from materialize import buildkite
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
@@ -22,12 +24,15 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
     parser.add_argument("--file-pattern", default="*.td", type=str)
     args, _ = parser.parse_known_args()
 
-    file_pattern = args.file_pattern
-    print(f"File pattern: {file_pattern}")
+    matching_files = glob.glob(f"testdrive/{args.file_pattern}", root_dir="test")
+
+    # TODO: #26392 (test requires fivetran running in cloudtest)
+    matching_files.remove("testdrive/fivetran-destination.td")
+
+    sharded_files = buildkite.shard_list(matching_files, lambda file: file)
+
+    print(f"Files: {sharded_files}")
 
     mz.testdrive.copy("test/testdrive", "/workdir")
 
-    # TODO: #26392 (test requires fivetran running in cloudtest)
-    mz.testdrive.delete("/workdir/testdrive/fivetran-destination.td")
-
-    mz.testdrive.run("--var=uses-redpanda=True", f"testdrive/{file_pattern}")
+    mz.testdrive.run("--var=uses-redpanda=True", *sharded_files)
