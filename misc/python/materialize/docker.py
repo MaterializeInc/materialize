@@ -149,7 +149,7 @@ def _resolve_image_name_by_commit_hash(commit_hash: str) -> str:
 
 
 def _search_docker_hub_for_image_name(
-    search_value: str, remaining_retries: int = 1
+    search_value: str, remaining_retries: int = 3
 ) -> list[str]:
     try:
         json_response = requests.get(
@@ -159,9 +159,9 @@ def _search_docker_hub_for_image_name(
         requests.exceptions.ConnectionError,
         requests.exceptions.JSONDecodeError,
     ) as _:
-        print("Searching Docker Hub for image name failed, retrying in 5 seconds")
-        time.sleep(5)
         if remaining_retries > 0:
+            print("Searching Docker Hub for image name failed, retrying in 5 seconds")
+            time.sleep(5)
             return _search_docker_hub_for_image_name(
                 search_value, remaining_retries - 1
             )
