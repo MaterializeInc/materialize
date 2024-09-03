@@ -291,6 +291,8 @@ impl ComputeState {
         info!("using chunked stack: {chunked_stack}");
         mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
 
+        // Remember the maintenance interval locally to avoid reading it from the config set on
+        // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
     }
 
