@@ -59,7 +59,7 @@ def main() -> None:
     print(f"Publishing {filename}")
     spawn.runv(
         [
-            *repo.rd.cargo("deb", rustflags=[]),
+            *repo.rd.build("deb", rustflags=[]),
             "--no-build",
             "--no-strip",
             "--deb-version",
