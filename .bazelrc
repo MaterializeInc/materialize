@@ -85,6 +85,11 @@ build --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
 build --@rules_rust//:extra_rustc_flag="-Clink-arg=-fuse-ld=lld"
 build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
 
+# Note: Cargo defaults to 256
+#
+# See: <https://doc.rust-lang.org/rustc/codegen-options/index.html#codegen-units>
+build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=128"
+
 # TODO(parkmycar): toolchains_llvm uses ld64 for macOS which doesn't support
 # compressing debug sections.
 build:linux --linkopt="-Wl,--compress-debug-sections=zlib"
