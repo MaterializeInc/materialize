@@ -146,20 +146,11 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         row_selection = (
             query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
         )
-        data_sources_of_non_select_expressions = (
-            self._collect_data_sources_of_non_select_expressions(query_template)
-        )
 
         setup_code_lines = []
         for data_source in query_template.get_all_data_sources():
             if data_source.custom_db_object_name is not None:
                 # we assume that the custom object already exists
-                continue
-
-            if (
-                not table_column_selection.requires_data_source(data_source)
-                and data_source not in data_sources_of_non_select_expressions
-            ):
                 continue
 
             setup_code_lines.extend(
