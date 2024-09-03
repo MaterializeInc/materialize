@@ -92,7 +92,6 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{info, warn};
 
 /// Runs as-of selection for the given dataflows.
 ///
@@ -248,7 +247,7 @@ struct Constraint<'a, T> {
     /// A short description of the reason for applying this constraint.
     ///
     /// Used only for logging.
-    reason: &'a str,
+    _reason: &'a str,
 }
 
 impl<T: Timestamp> Constraint<'_, T> {
@@ -381,12 +380,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
         let collection = self.expect_collection(id);
         let mut bounds = collection.bounds.borrow_mut();
         match constraint.apply(&mut bounds) {
-            Ok(changed) => {
-                if changed {
-                    info!(%id, %bounds, reason = %constraint.reason, "applied as-of constraint");
-                }
-                changed
-            }
+            Ok(changed) => changed,
             Err(changed) => {
                 match constraint.type_ {
                     ConstraintType::Hard => {
@@ -395,9 +389,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                              (id={id}, bounds={bounds}, constraint={constraint:?})"
                         );
                     }
-                    ConstraintType::Soft => {
-                        warn!(%id, %bounds, ?constraint, "failed to apply soft as-of constraint");
-                    }
+                    ConstraintType::Soft => {}
                 }
                 changed
             }
@@ -423,7 +415,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     type_: ConstraintType::Hard,
                     bound_type: BoundType::Lower,
                     frontier: read_hold.since(),
-                    reason: &format!("storage input {input_id} read frontier"),
+                    _reason: &format!("storage input {input_id} read frontier"),
                 };
                 self.apply_constraint(*id, constraint);
             }
@@ -457,7 +449,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                 type_: ConstraintType::Hard,
                 bound_type: BoundType::Upper,
                 frontier: &upper,
-                reason: &format!("storage export {id} write frontier"),
+                _reason: &format!("storage export {id} write frontier"),
             };
             self.apply_constraint(*id, constraint);
         }
@@ -487,7 +479,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     type_: ConstraintType::Soft,
                     bound_type: BoundType::Upper,
                     frontier: &upper,
-                    reason: &format!("storage input {input_id} warmup frontier"),
+                    _reason: &format!("storage input {input_id} warmup frontier"),
                 };
                 self.apply_constraint(*id, constraint);
             }
@@ -553,7 +545,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     type_: ConstraintType::Soft,
                     bound_type: BoundType::Upper,
                     frontier: &upper,
-                    reason: &format!(
+                    _reason: &format!(
                         "read policy applied to write frontier {:?}",
                         write_frontier.elements()
                     ),
@@ -581,7 +573,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     type_: ConstraintType::Soft,
                     bound_type: BoundType::Upper,
                     frontier: &upper,
-                    reason: "index current time",
+                    _reason: "index current time",
                 };
                 self.apply_constraint(*id, constraint);
             }
@@ -631,7 +623,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     type_: constraint_type,
                     bound_type,
                     frontier: bounds.get(bound_type),
-                    reason: &format!("upstream {input_id} {bound_type} as-of bound"),
+                    _reason: &format!("upstream {input_id} {bound_type} as-of bound"),
                 };
                 *changed |= self.apply_constraint(*id, constraint);
             }
@@ -677,7 +669,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                     type_: constraint_type,
                     bound_type,
                     frontier: bounds.get(bound_type),
-                    reason: &format!("downstream {id} {bound_type} as-of bound"),
+                    _reason: &format!("downstream {id} {bound_type} as-of bound"),
                 };
                 *changed |= self.apply_constraint(*input_id, constraint);
             }
