@@ -27,6 +27,7 @@ use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, PersistSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
+use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -153,6 +154,64 @@ impl From<CollectionMissing> for ReadPolicyError {
     }
 }
 
+/// A command sent to an [`Instance`] task.
+pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
+
+/// A client for an [`Instance`] task.
+#[derive(Debug)]
+pub(super) struct Client<T: ComputeControllerTimestamp> {
+    /// A sender for commands for the instance.
+    command_tx: mpsc::UnboundedSender<Command<T>>,
+}
+
+impl<T: ComputeControllerTimestamp> Client<T> {
+    pub fn send(&self, command: Command<T>) {
+        self.command_tx.send(command).expect("instance not dropped");
+    }
+}
+
+impl<T> Client<T>
+where
+    T: ComputeControllerTimestamp,
+    ComputeGrpcClient: ComputeClient<T>,
+{
+    pub fn spawn(
+        id: ComputeInstanceId,
+        build_info: &'static BuildInfo,
+        storage: StorageCollections<T>,
+        arranged_logs: BTreeMap<LogVariant, GlobalId>,
+        envd_epoch: NonZeroI64,
+        metrics: InstanceMetrics,
+        now: NowFn,
+        wallclock_lag: WallclockLagFn<T>,
+        dyncfg: Arc<ConfigSet>,
+        response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    ) -> Self {
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+
+        mz_ore::task::spawn(
+            || format!("compute-instance-{id}"),
+            Instance::new(
+                build_info,
+                storage,
+                arranged_logs,
+                envd_epoch,
+                metrics,
+                now,
+                wallclock_lag,
+                dyncfg,
+                command_rx,
+                response_tx,
+                introspection_tx,
+            )
+            .run(),
+        );
+
+        Self { command_tx }
+    }
+}
+
 /// The state we keep for a compute instance.
 pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
@@ -212,8 +271,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     copy_tos: BTreeSet<GlobalId>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<UIntGauge, T>,
+    /// Receiver for commands to be executed.
+    command_rx: mpsc::UnboundedReceiver<Command<T>>,
     /// Sender for responses to be delivered.
-    response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+    response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     /// A number that increases with each restart of `environmentd`.
@@ -726,6 +787,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             subscribes,
             copy_tos,
             history: _,
+            command_rx: _,
             response_tx: _,
             introspection_tx: _,
             envd_epoch,
@@ -800,7 +862,8 @@ where
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
         dyncfg: Arc<ConfigSet>,
-        response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+        command_rx: mpsc::UnboundedReceiver<Command<T>>,
+        response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
         let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
@@ -818,7 +881,7 @@ where
             .collect();
         let history = ComputeCommandHistory::new(metrics.for_history());
 
-        let mut instance = Self {
+        Self {
             build_info,
             storage_collections: storage,
             initialized: false,
@@ -830,6 +893,7 @@ where
             subscribes: Default::default(),
             copy_tos: Default::default(),
             history,
+            command_rx,
             response_tx,
             introspection_tx,
             envd_epoch,
@@ -841,19 +905,31 @@ where
             wallclock_lag_last_refresh: Instant::now(),
             read_holds_tx,
             read_holds_rx,
-        };
+        }
+    }
 
-        instance.send(ComputeCommand::CreateTimely {
+    async fn run(mut self) {
+        self.send(ComputeCommand::CreateTimely {
             config: TimelyConfig::default(),
-            epoch: ClusterStartupEpoch::new(envd_epoch, 0),
+            epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
         });
 
         let dummy_logging_config = Default::default();
-        instance.send(ComputeCommand::CreateInstance(InstanceConfig {
+        self.send(ComputeCommand::CreateInstance(InstanceConfig {
             logging: dummy_logging_config,
         }));
 
-        instance
+        loop {
+            tokio::select! {
+                command = self.command_rx.recv() => match command {
+                    Some(cmd) => cmd(&mut self),
+                    None => break,
+                },
+                (replica_id, response) = Self::recv(&mut self.replicas) => {
+                    self.handle_response(response, replica_id);
+                }
+            }
+        }
     }
 
     /// Update instance configuration.
@@ -883,24 +959,28 @@ where
         }
     }
 
-    /// Drop this compute instance.
+    /// Check that the current instance is empty.
+    ///
+    /// This method exists to help us find bugs where the client drops a compute instance that
+    /// still has replicas or collections installed, and later assumes that said
+    /// replicas/collections still exists.
     ///
     /// # Panics
     ///
     /// Panics if the compute instance still has active replicas.
     /// Panics if the compute instance still has collections installed.
-    pub fn drop(mut self) {
+    pub fn check_empty(&mut self) {
         // Collections might have been dropped but not cleaned up yet.
         self.apply_read_hold_changes();
         self.cleanup_collections();
 
-        let stray_replicas: Vec<_> = self.replicas.into_keys().collect();
+        let stray_replicas: Vec<_> = self.replicas.keys().collect();
         soft_assert_or_log!(
             stray_replicas.is_empty(),
             "dropped instance still has provisioned replicas: {stray_replicas:?}",
         );
 
-        let collections = self.collections.into_iter();
+        let collections = self.collections.iter();
         let stray_collections: Vec<_> = collections
             .filter(|(_, c)| !c.log_collection)
             .map(|(id, _)| id)
@@ -926,12 +1006,14 @@ where
         }
     }
 
-    /// Receives the next response from any replica of this instance.
+    /// Receives the next response from the given replicas.
     ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
+    pub async fn recv(
+        replicas: &mut BTreeMap<ReplicaId, ReplicaState<T>>,
+    ) -> (ReplicaId, ComputeResponse<T>) {
         loop {
-            let live_replicas = self.replicas.iter_mut().filter(|(_, r)| !r.failed);
+            let live_replicas = replicas.iter_mut().filter(|(_, r)| !r.failed);
             let response = live_replicas
                 .map(|(id, replica)| async { (*id, replica.client.recv().await) })
                 .collect::<FuturesUnordered<_>>()
@@ -946,7 +1028,7 @@ where
                 }
                 Some((replica_id, None)) => {
                     // A replica has failed and requires rehydration.
-                    let replica = self.replicas.get_mut(&replica_id).unwrap();
+                    let replica = replicas.get_mut(&replica_id).unwrap();
                     replica.failed = true;
                 }
                 Some((replica_id, Some(response))) => {

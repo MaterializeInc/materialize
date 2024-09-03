@@ -30,12 +30,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate;
-use futures::{future, Future, FutureExt};
+use futures::stream::FuturesUnordered;
+use futures::{FutureExt, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
@@ -52,10 +52,9 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -67,7 +66,7 @@ use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
-use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch};
+use crate::protocol::response::{PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
@@ -90,9 +89,9 @@ impl ComputeControllerTimestamp for mz_repr::Timestamp {}
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`].
+    /// See [`crate::protocol::response::ComputeResponse::PeekResponse`].
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`].
+    /// See [`crate::protocol::response::ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
     ///
@@ -144,7 +143,7 @@ impl ComputeReplicaLogging {
 
 /// A controller for the compute layer.
 pub struct ComputeController<T: ComputeControllerTimestamp> {
-    instances: BTreeMap<ComputeInstanceId, Instance<T>>,
+    instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
     /// `production` or `staging`).
@@ -164,9 +163,8 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     config: ComputeParameters,
     /// `arrangement_exert_proportionality` value passed to new replicas.
     arrangement_exert_proportionality: u32,
-    /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
-    /// [`ComputeController::process`].
-    stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
+    /// A controller response to be returned on the next call to [`ComputeController::process`].
+    stashed_response: Option<ComputeControllerResponse<T>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
     /// The compute controller metrics.
@@ -181,11 +179,10 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     /// subcomponents of the compute controller.
     dyncfg: Arc<ConfigSet>,
 
-    /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
-    /// [`ComputeController::process`].
-    response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
+    /// Receiver for responses produced by `Instance`s.
+    response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
-    response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+    response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Receiver for introspection updates produced by `Instance`s.
     introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
     /// Introspection updates sender that's passed to new `Instance`s.
@@ -208,7 +205,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
     ) -> Self {
-        let (response_tx, response_rx) = crossbeam_channel::unbounded();
+        let (response_tx, response_rx) = mpsc::unbounded_channel();
         let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
 
         let mut maintenance_ticker = time::interval(Duration::from_secs(1));
@@ -265,7 +262,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: Default::default(),
             arrangement_exert_proportionality: 16,
-            stashed_replica_response: None,
+            stashed_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
             now,
@@ -286,22 +283,27 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     }
 
     /// Return a reference to the indicated compute instance.
-    fn instance(&self, id: ComputeInstanceId) -> Result<&Instance<T>, InstanceMissing> {
+    fn instance(&self, id: ComputeInstanceId) -> Result<&InstanceState<T>, InstanceMissing> {
         self.instances.get(&id).ok_or(InstanceMissing(id))
     }
 
     /// Return a mutable reference to the indicated compute instance.
-    fn instance_mut(&mut self, id: ComputeInstanceId) -> Result<&mut Instance<T>, InstanceMissing> {
+    fn instance_mut(
+        &mut self,
+        id: ComputeInstanceId,
+    ) -> Result<&mut InstanceState<T>, InstanceMissing> {
         self.instances.get_mut(&id).ok_or(InstanceMissing(id))
     }
 
     /// List the IDs of all collections in the identified compute instance.
-    pub fn collection_ids(
+    pub async fn collection_ids(
         &self,
         instance_id: ComputeInstanceId,
-    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
+    ) -> Result<BTreeSet<GlobalId>, InstanceMissing> {
         let instance = self.instance(instance_id)?;
-        let ids = instance.collections_iter().map(|(id, _)| id);
+        let ids = instance
+            .call_sync(|i| i.collections_iter().map(|(id, _)| id).collect())
+            .await;
         Ok(ids)
     }
 
@@ -309,35 +311,45 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     ///
     /// If an `instance_id` is provided, the collection is assumed to be installed on that
     /// instance. Otherwise all available instances are searched.
-    pub fn collection_frontiers(
+    pub async fn collection_frontiers(
         &self,
         collection_id: GlobalId,
         instance_id: Option<ComputeInstanceId>,
     ) -> Result<CollectionFrontiers<T>, CollectionLookupError> {
-        let collection = match instance_id {
-            Some(id) => self.instance(id)?.collection(collection_id)?,
-            None => self
-                .instances
-                .values()
-                .find_map(|i| i.collection(collection_id).ok())
-                .ok_or(CollectionLookupError::CollectionMissing(collection_id))?,
-        };
+        let mut pending: FuturesUnordered<_> = self
+            .instances
+            .iter()
+            .filter(|(id, _)| instance_id.map_or(true, |i| i == **id))
+            .map(|(_, instance)| {
+                instance.call_sync(move |i| {
+                    i.collection(collection_id).map(|c| CollectionFrontiers {
+                        read_frontier: c.read_frontier().to_owned(),
+                        write_frontier: c.write_frontier().to_owned(),
+                    })
+                })
+            })
+            .collect();
 
-        Ok(CollectionFrontiers {
-            read_frontier: collection.read_frontier(),
-            write_frontier: collection.write_frontier(),
-        })
+        while let Some(x) = pending.next().await {
+            if let Ok(frontiers) = x {
+                return Ok(frontiers);
+            }
+        }
+
+        Err(CollectionLookupError::CollectionMissing(collection_id))
     }
 
     /// List compute collections that depend on the given collection.
-    pub fn collection_reverse_dependencies(
+    pub async fn collection_reverse_dependencies(
         &self,
         instance_id: ComputeInstanceId,
         id: GlobalId,
-    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
-        Ok(self
-            .instance(instance_id)?
-            .collection_reverse_dependencies(id))
+    ) -> Result<BTreeSet<GlobalId>, InstanceMissing> {
+        let instance = self.instance(instance_id)?;
+        let rdeps = instance
+            .call_sync(move |i| i.collection_reverse_dependencies(id).collect())
+            .await;
+        Ok(rdeps)
     }
 
     /// Set the `arrangement_exert_proportionality` value to be passed to new replicas.
@@ -351,17 +363,25 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// For this check, zero-replica clusters are always considered hydrated.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub fn clusters_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
-        let mut result = true;
-        for (instance_id, i) in &self.instances {
-            let instance_hydrated = i.collections_hydrated(exclude_collections);
+    pub async fn clusters_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
+        let instances = self.instances.iter();
+        let mut pending: FuturesUnordered<_> = instances
+            .map(|(id, instance)| {
+                let exclude_collections = exclude_collections.clone();
+                instance
+                    .call_sync(move |i| i.collections_hydrated(&exclude_collections))
+                    .map(move |x| (id, x))
+            })
+            .collect();
 
-            if !instance_hydrated {
+        let mut result = true;
+        while let Some((id, hydrated)) = pending.next().await {
+            if !hydrated {
                 result = false;
 
                 // We continue with our loop instead of breaking out early, so
                 // that we log all non-hydrated clusters.
-                tracing::info!("cluster {instance_id} is not hydrated");
+                tracing::info!("cluster {id} is not hydrated");
             }
         }
 
@@ -374,21 +394,26 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// For this check, zero-replica clusters are always considered hydrated.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub fn collections_hydrated_for_replicas(
+    pub async fn collections_hydrated_for_replicas(
         &self,
         cluster: ComputeInstanceId,
         replicas: Vec<ReplicaId>,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, anyhow::Error> {
-        let i = self.instance(cluster)?;
-        i.collections_hydrated_on_replicas(Some(replicas), exclude_collections)
-            .map_err(|e| e.into())
+        let instance = self.instance(cluster)?;
+        let exclude_collections = exclude_collections.clone();
+        let hydrated = instance
+            .call_sync(move |i| {
+                i.collections_hydrated_on_replicas(Some(replicas), &exclude_collections)
+            })
+            .await?;
+        Ok(hydrated)
     }
 
     /// Returns the state of the [`ComputeController`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
-    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+    pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
@@ -404,7 +429,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: _,
             arrangement_exert_proportionality,
-            stashed_replica_response,
+            stashed_response,
             envd_epoch,
             metrics: _,
             now: _,
@@ -418,10 +443,11 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             maintenance_scheduled,
         } = self;
 
-        let instances: BTreeMap<_, _> = instances
-            .iter()
-            .map(|(id, instance)| Ok((id.to_string(), instance.dump()?)))
-            .collect::<Result<_, anyhow::Error>>()?;
+        let mut instances_dump = BTreeMap::new();
+        for (id, instance) in instances {
+            let dump = instance.call_sync(|i| i.dump()).await?;
+            instances_dump.insert(id.to_string(), dump);
+        }
 
         let instance_workload_classes: BTreeMap<_, _> = instance_workload_classes
             .lock()
@@ -439,7 +465,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         }
 
         let map = serde_json::Map::from_iter([
-            field("instances", instances)?,
+            field("instances", instances_dump)?,
             field("instance_workload_classes", instance_workload_classes)?,
             field("initialized", initialized)?,
             field("read_only", read_only)?,
@@ -447,10 +473,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
                 "arrangement_exert_proportionality",
                 arrangement_exert_proportionality,
             )?,
-            field(
-                "stashed_replica_response",
-                format!("{stashed_replica_response:?}"),
-            )?,
+            field("stashed_response", format!("{stashed_response:?}"))?,
             field("envd_epoch", envd_epoch)?,
             field("maintenance_scheduled", maintenance_scheduled)?,
         ]);
@@ -474,21 +497,20 @@ where
             return Err(InstanceExists(id));
         }
 
-        self.instances.insert(
+        let client = instance::Client::spawn(
             id,
-            Instance::new(
-                self.build_info,
-                Arc::clone(&self.storage_collections),
-                arranged_logs,
-                self.envd_epoch,
-                self.metrics.for_instance(id),
-                self.now.clone(),
-                Arc::clone(&self.wallclock_lag),
-                Arc::clone(&self.dyncfg),
-                self.response_tx.clone(),
-                self.introspection_tx.clone(),
-            ),
+            self.build_info,
+            Arc::clone(&self.storage_collections),
+            arranged_logs,
+            self.envd_epoch,
+            self.metrics.for_instance(id),
+            self.now.clone(),
+            Arc::clone(&self.wallclock_lag),
+            Arc::clone(&self.dyncfg),
+            self.response_tx.clone(),
+            self.introspection_tx.clone(),
         );
+        self.instances.insert(id, InstanceState { client });
 
         self.instance_workload_classes
             .lock()
@@ -497,16 +519,16 @@ where
 
         let instance = self.instances.get_mut(&id).expect("instance just added");
         if self.initialized {
-            instance.initialization_complete();
+            instance.call(Instance::initialization_complete);
         }
 
         if !self.read_only {
-            instance.allow_writes();
+            instance.call(Instance::allow_writes);
         }
 
         let mut config_params = self.config.clone();
         config_params.workload_class = Some(workload_class);
-        instance.update_configuration(config_params);
+        instance.call(|i| i.update_configuration(config_params));
 
         Ok(())
     }
@@ -537,8 +559,8 @@ where
     ///
     /// Panics if the identified `instance` still has active replicas.
     pub fn drop_instance(&mut self, id: ComputeInstanceId) {
-        if let Some(compute_state) = self.instances.remove(&id) {
-            compute_state.drop();
+        if let Some(instance) = self.instances.remove(&id) {
+            instance.call(|i| i.check_empty());
         }
 
         self.instance_workload_classes
@@ -567,7 +589,7 @@ where
         for (id, instance) in self.instances.iter_mut() {
             let mut params = config_params.clone();
             params.workload_class = Some(instance_workload_classes[id].clone());
-            instance.update_configuration(params);
+            instance.call(|i| i.update_configuration(params));
         }
 
         // Remember updates for future clusters.
@@ -582,7 +604,7 @@ where
     pub fn initialization_complete(&mut self) {
         self.initialized = true;
         for instance in self.instances.values_mut() {
-            instance.initialization_complete();
+            instance.call(Instance::initialization_complete);
         }
     }
 
@@ -594,12 +616,8 @@ where
     ///
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
-        if self.stashed_replica_response.is_some() {
+        if self.stashed_response.is_some() {
             // We still have a response stashed, which we are immediately ready to process.
-            return;
-        }
-        if !self.response_rx.is_empty() {
-            // We have responses waiting to be processed.
             return;
         }
         if self.maintenance_scheduled {
@@ -607,23 +625,11 @@ where
             return;
         }
 
-        let receives: Pin<Box<dyn Future<Output = _>>> = if self.instances.is_empty() {
-            // Calling `select_all` with an empty list of futures will panic.
-            Box::pin(future::pending())
-        } else {
-            // `Instance::recv` is cancellation safe, so it is safe to construct this `select_all`.
-            let iter = self
-                .instances
-                .iter_mut()
-                .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
-            Box::pin(future::select_all(iter))
-        };
-
         tokio::select! {
-            (response, _index, _remaining) = receives => {
-                let (instance_id, (replica_id, resp)) = response;
-                self.stashed_replica_response = Some((instance_id, replica_id, resp));
-            },
+            resp = self.response_rx.recv() => {
+                let resp = resp.expect("`self.response_tx` not dropped");
+                self.stashed_response = Some(resp);
+            }
             _ = self.maintenance_ticker.tick() => {
                 self.maintenance_scheduled = true;
             },
@@ -631,7 +637,7 @@ where
     }
 
     /// Adds replicas of an instance.
-    pub fn add_replica_to_instance(
+    pub async fn add_replica_to_instance(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
@@ -655,18 +661,21 @@ where
             grpc_client: self.config.grpc_client.clone(),
         };
 
-        self.instance_mut(instance_id)?
-            .add_replica(replica_id, replica_config)?;
+        self.instance(instance_id)?
+            .call_sync(move |i| i.add_replica(replica_id, replica_config))
+            .await?;
         Ok(())
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
-    pub fn drop_replica(
+    pub async fn drop_replica(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) -> Result<(), ReplicaDropError> {
-        self.instance_mut(instance_id)?.remove_replica(replica_id)?;
+        self.instance(instance_id)?
+            .call_sync(move |i| i.remove_replica(replica_id))
+            .await?;
         Ok(())
     }
 
@@ -677,31 +686,33 @@ where
     /// It installs read dependencies from the outputs to the inputs, so that the input read
     /// capabilities will be held back to the output read capabilities, ensuring that we are
     /// always able to return to a state that can serve the output read capabilities.
-    pub fn create_dataflow(
+    pub async fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance_mut(instance_id)?
-            .create_dataflow(dataflow, subscribe_target_replica)?;
+        self.instance(instance_id)?
+            .call_sync(move |i| i.create_dataflow(dataflow, subscribe_target_replica))
+            .await?;
         Ok(())
     }
 
     /// Drop the read capability for the given collections and allow their resources to be
     /// reclaimed.
-    pub fn drop_collections(
+    pub async fn drop_collections(
         &mut self,
         instance_id: ComputeInstanceId,
         collection_ids: Vec<GlobalId>,
     ) -> Result<(), CollectionUpdateError> {
-        self.instance_mut(instance_id)?
-            .drop_collections(collection_ids)?;
+        self.instance(instance_id)?
+            .call_sync(move |i| i.drop_collections(collection_ids))
+            .await?;
         Ok(())
     }
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
-    pub fn peek(
+    pub async fn peek(
         &mut self,
         instance_id: ComputeInstanceId,
         peek_target: PeekTarget,
@@ -712,15 +723,19 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
-        self.instance_mut(instance_id)?.peek(
-            peek_target,
-            literal_constraints,
-            uuid,
-            timestamp,
-            finishing,
-            map_filter_project,
-            target_replica,
-        )?;
+        self.instance(instance_id)?
+            .call_sync(move |i| {
+                i.peek(
+                    peek_target,
+                    literal_constraints,
+                    uuid,
+                    timestamp,
+                    finishing,
+                    map_filter_project,
+                    target_replica,
+                )
+            })
+            .await?;
         Ok(())
     }
 
@@ -738,7 +753,8 @@ where
         instance_id: ComputeInstanceId,
         uuid: Uuid,
     ) -> Result<(), InstanceMissing> {
-        self.instance_mut(instance_id)?.cancel_peek(uuid);
+        self.instance(instance_id)?
+            .call(move |i| i.cancel_peek(uuid));
         Ok(())
     }
 
@@ -753,24 +769,27 @@ where
     ///
     /// It is an error to attempt to set a read policy for a collection that is not readable in the
     /// context of compute. At this time, only indexes are readable compute collections.
-    pub fn set_read_policy(
+    pub async fn set_read_policy(
         &mut self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ReadPolicyError> {
-        self.instance_mut(instance_id)?.set_read_policy(policies)?;
+        self.instance(instance_id)?
+            .call_sync(|i| i.set_read_policy(policies))
+            .await?;
         Ok(())
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
-    pub fn acquire_read_hold(
+    pub async fn acquire_read_hold(
         &mut self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
     ) -> Result<ReadHold<T>, CollectionUpdateError> {
         let hold = self
-            .instance_mut(instance_id)?
-            .acquire_read_hold(collection_id)?;
+            .instance(instance_id)?
+            .call_sync(move |i| i.acquire_read_hold(collection_id))
+            .await?;
         Ok(hold)
     }
 
@@ -827,36 +846,15 @@ where
             self.maintenance_scheduled = false;
         }
 
-        // Process pending responses from replicas.
-        if let Some((instance_id, replica_id, response)) = self.stashed_replica_response.take() {
-            if let Some(instance) = self.instances.get_mut(&instance_id) {
-                instance.handle_response(response, replica_id);
-            } else {
-                warn!(
-                    ?instance_id,
-                    ?response,
-                    "processed response from unknown instance"
-                );
-            };
-        }
-
         // Return a ready response, if any.
-        match self.response_rx.try_recv() {
-            Ok(response) => Some(response),
-            Err(crossbeam_channel::TryRecvError::Empty) => None,
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                // This should never happen, since the `ComputeController` is always holding on to
-                // a copy of the `response_tx`.
-                panic!("response_tx has disconnected");
-            }
-        }
+        self.stashed_response.take()
     }
 
     #[mz_ore::instrument(level = "debug")]
     fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {
-            instance.maintain();
+            instance.call(Instance::maintain);
         }
 
         // Record pending introspection updates.
@@ -868,10 +866,38 @@ where
     }
 }
 
+#[derive(Debug)]
+struct InstanceState<T: ComputeControllerTimestamp> {
+    client: instance::Client<T>,
+}
+
+impl<T: ComputeControllerTimestamp> InstanceState<T> {
+    pub fn call<F>(&self, f: F)
+    where
+        F: FnOnce(&mut Instance<T>) + Send + 'static,
+    {
+        self.client.send(Box::new(f));
+    }
+
+    pub async fn call_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.client.send(Box::new(|instance| {
+            let result = f(instance);
+            let _ = tx.send(result);
+        }));
+
+        rx.await.expect("instance not dropped")
+    }
+}
+
 /// The frontiers of a compute collection.
-pub struct CollectionFrontiers<'a, T> {
+pub struct CollectionFrontiers<T> {
     /// The read frontier.
-    pub read_frontier: AntichainRef<'a, T>,
+    pub read_frontier: Antichain<T>,
     /// The write frontier.
-    pub write_frontier: AntichainRef<'a, T>,
+    pub write_frontier: Antichain<T>,
 }
