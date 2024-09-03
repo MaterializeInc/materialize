@@ -15,7 +15,6 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@//misc/bazel/rules:rust_cxx_bridge.bzl", "rust_cxx_bridge")
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 
 cc_library(
     name = "protobuf-native-bridge",
@@ -36,6 +35,7 @@ cc_library(
         ":io-bridge/include",
         ":lib-bridge/include",
         ":internal-bridge/include",
+        ":internal-bridge",
         "@crates_io__cxx-1.0.122//:cxx_cc",
         "@protobuf//src/google/protobuf/compiler:importer",
         "@protobuf//src/google/protobuf/compiler:code_generator",
