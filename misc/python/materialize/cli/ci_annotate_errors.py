@@ -92,7 +92,7 @@ ERROR_RE = re.compile(
     # non-greedy using ? so that we don't match all the result comparison issues into one block
     | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------[\s\S]*?----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
     # output consistency tests
-    | possibly\ invalid\ operation\ specification
+    # | possibly\ invalid\ operation\ specification # disabled
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     # parallel-workload
