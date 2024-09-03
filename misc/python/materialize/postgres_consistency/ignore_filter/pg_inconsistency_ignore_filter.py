@@ -808,6 +808,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 "Different evaluation order of join clause and where filter"
             )
 
+        if query_template.uses_join():
+            # more generic catch
+            return YesIgnore("#29347: eager evaluation of select expression in mz")
+
         if (
             "invalid input syntax for type jsonb" in mz_error_msg
             and "is out of range" in mz_error_msg
