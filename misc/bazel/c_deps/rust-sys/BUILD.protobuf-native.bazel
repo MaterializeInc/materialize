@@ -14,8 +14,6 @@
 # limitations under the License.
 
 load("@//misc/bazel/rules:rust_cxx_bridge.bzl", "rust_cxx_bridge")
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
-load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
     name = "protobuf-native-bridge",
@@ -36,7 +34,8 @@ cc_library(
         ":internal-bridge/include",
         ":io-bridge/include",
         ":lib-bridge/include",
-        "@com_google_absl//absl/strings",
+        ":internal-bridge/include",
+        ":internal-bridge",
         "@crates_io__cxx-1.0.122//:cxx_cc",
         "@protobuf//src/google/protobuf/compiler:code_generator",
         "@protobuf//src/google/protobuf/compiler:importer",

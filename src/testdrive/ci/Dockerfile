@@ -14,7 +14,10 @@ COPY testdrive /usr/local/bin/
 # Install the Protobuf compiler from protobuf-src.
 COPY protobuf-bin /usr/local/bin
 COPY protobuf-include /usr/local/include
+RUN chmod +x /usr/local/bin/protoc
+
 ENV PROTOC /usr/local/bin/protoc
+ENV PROTOC_INCLUDE /usr/local/include
 
 WORKDIR /workdir
 
