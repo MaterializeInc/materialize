@@ -21,12 +21,12 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
-    MutRecBlock, Op, Query, Statement, TableFactor, UnresolvedItemName, UnresolvedSchemaName,
-    Value, ViewDefinition,
+    CreateConnectionStatement, CreateContinualTaskStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateSubsourceStatement, CreateTableFromSourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
+    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
+    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -410,6 +410,16 @@ pub fn create_statement(
                 }
             }
             *if_exists = IfExistsBehavior::Error;
+        }
+
+        Statement::CreateContinualTask(CreateContinualTaskStatement {
+            name,
+            columns,
+            input,
+            stmts,
+            in_cluster,
+        }) => {
+            todo!("WIP {:?}", (name, columns, input, stmts, in_cluster));
         }
 
         Statement::CreateIndex(CreateIndexStatement {

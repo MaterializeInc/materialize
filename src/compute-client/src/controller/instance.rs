@@ -1219,6 +1219,9 @@ where
                     };
                     ComputeSinkConnection::Persist(conn)
                 }
+                ComputeSinkConnection::ContinualTask(conn) => {
+                    todo!("WIP {:?}", conn);
+                }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {
                     ComputeSinkConnection::CopyToS3Oneshot(conn)

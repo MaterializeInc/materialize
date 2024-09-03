@@ -112,6 +112,7 @@ use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
 
 mod cluster;
+mod create_continual_task;
 mod create_index;
 mod create_materialized_view;
 mod create_view;

@@ -1150,6 +1150,11 @@ impl ItemValue {
                 assert_eq!(tokens.next(), Some("VIEW"));
                 CatalogItemType::MaterializedView
             }
+            Some("CONTINUAL") => {
+                assert_eq!(tokens.next(), Some("TASK"));
+                // TODO(ct): CatalogItemType::ContinualTask
+                CatalogItemType::MaterializedView
+            }
             Some("INDEX") => CatalogItemType::Index,
             Some("TYPE") => CatalogItemType::Type,
             Some("FUNCTION") => CatalogItemType::Func,
