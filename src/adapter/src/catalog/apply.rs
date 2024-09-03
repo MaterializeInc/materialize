@@ -10,12 +10,6 @@
 //! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fmt::Debug;
-use std::iter;
-use std::str::FromStr;
-use std::sync::Arc;
-
 use futures::future;
 use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
@@ -54,6 +48,12 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::Debug;
+use std::iter;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::{error, info_span, warn, Instrument};
 
 use crate::catalog::state::LocalExpressionCache;
@@ -85,6 +85,139 @@ struct InProgressRetractions {
     system_object_mappings: BTreeMap<CatalogItemId, CatalogEntry>,
 }
 
+#[derive(Debug)]
+pub struct ApplyTimings {
+    pub role_duration: Duration,
+    pub database_duration: Duration,
+    pub schema_duration: Duration,
+    pub default_privilege_duration: Duration,
+    pub system_privilege_duration: Duration,
+    pub system_configuration_duration: Duration,
+    pub cluster_duration: Duration,
+    pub network_policy_duration: Duration,
+    pub introspection_source_index_duration: Duration,
+    pub cluster_replica_duration: Duration,
+    pub source_references_duration: Duration,
+    pub system_object_mapping_duration: Duration,
+    pub temporary_item_duration: Duration,
+    pub item_duration: ApplyItemTimings,
+    pub comment_duration: Duration,
+    pub audit_log_duration: Duration,
+    pub storage_collection_metadata_duration: Duration,
+    pub unfinalized_shard_duration: Duration,
+    pub generate_builtin_table_updates: Duration,
+    pub sorting: Duration,
+    pub should_be_low: Duration,
+}
+
+impl ApplyTimings {
+    fn new() -> Self {
+        Self {
+            role_duration: Duration::new(0, 0),
+            database_duration: Duration::new(0, 0),
+            schema_duration: Duration::new(0, 0),
+            default_privilege_duration: Duration::new(0, 0),
+            system_privilege_duration: Duration::new(0, 0),
+            system_configuration_duration: Duration::new(0, 0),
+            cluster_duration: Duration::new(0, 0),
+            network_policy_duration: Duration::new(0, 0),
+            introspection_source_index_duration: Duration::new(0, 0),
+            cluster_replica_duration: Duration::new(0, 0),
+            source_references_duration: Duration::new(0, 0),
+            system_object_mapping_duration: Duration::new(0, 0),
+            temporary_item_duration: Duration::new(0, 0),
+            item_duration: ApplyItemTimings::new(),
+            comment_duration: Duration::new(0, 0),
+            audit_log_duration: Duration::new(0, 0),
+            storage_collection_metadata_duration: Duration::new(0, 0),
+            unfinalized_shard_duration: Duration::new(0, 0),
+            generate_builtin_table_updates: Duration::new(0, 0),
+            sorting: Duration::new(0, 0),
+            should_be_low: Duration::new(0, 0),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        let Self {
+            role_duration,
+            database_duration,
+            schema_duration,
+            default_privilege_duration,
+            system_privilege_duration,
+            system_configuration_duration,
+            cluster_duration,
+            network_policy_duration: network_policy,
+            introspection_source_index_duration,
+            cluster_replica_duration,
+            source_references_duration,
+            system_object_mapping_duration,
+            temporary_item_duration,
+            item_duration,
+            comment_duration,
+            audit_log_duration,
+            storage_collection_metadata_duration,
+            unfinalized_shard_duration,
+            generate_builtin_table_updates,
+            sorting,
+            should_be_low,
+        } = self;
+
+        *role_duration += other.role_duration;
+        *database_duration += other.database_duration;
+        *schema_duration += other.schema_duration;
+        *default_privilege_duration += other.default_privilege_duration;
+        *system_privilege_duration += other.system_privilege_duration;
+        *system_configuration_duration += other.system_configuration_duration;
+        *cluster_duration += other.cluster_duration;
+        *network_policy += other.network_policy_duration;
+        *introspection_source_index_duration += other.introspection_source_index_duration;
+        *cluster_replica_duration += other.cluster_replica_duration;
+        *source_references_duration += other.source_references_duration;
+        *system_object_mapping_duration += other.system_object_mapping_duration;
+        *temporary_item_duration += other.temporary_item_duration;
+        item_duration.merge(other.item_duration);
+        *comment_duration += other.comment_duration;
+        *audit_log_duration += other.audit_log_duration;
+        *storage_collection_metadata_duration += other.storage_collection_metadata_duration;
+        *unfinalized_shard_duration += other.unfinalized_shard_duration;
+        *generate_builtin_table_updates += other.generate_builtin_table_updates;
+        *sorting += other.sorting;
+        *should_be_low += other.should_be_low;
+    }
+}
+
+#[derive(Debug)]
+pub struct ApplyItemTimings {
+    pub parse_duration: Duration,
+    pub resolve_duration: Duration,
+    pub plan_duration: Duration,
+    pub optimize_duration: Duration,
+    pub misc_duration: Duration,
+    pub total_duration: Duration,
+}
+
+impl ApplyItemTimings {
+    pub fn new() -> Self {
+        Self {
+            parse_duration: Duration::new(0, 0),
+            resolve_duration: Duration::new(0, 0),
+            plan_duration: Duration::new(0, 0),
+            optimize_duration: Duration::new(0, 0),
+            misc_duration: Duration::new(0, 0),
+            total_duration: Duration::new(0, 0),
+        }
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.parse_duration += other.parse_duration;
+        self.resolve_duration += other.resolve_duration;
+        self.plan_duration += other.plan_duration;
+        self.optimize_duration += other.optimize_duration;
+        self.misc_duration += other.misc_duration;
+        self.total_duration += other.total_duration;
+    }
+}
+
 impl CatalogState {
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
     ///
@@ -98,21 +231,33 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let updates = sort_updates(updates);
+    ) -> (Vec<BuiltinTableUpdate<&'static BuiltinTable>>, ApplyTimings) {
+        let mut apply_timings = ApplyTimings::new();
 
+        let mut builtin_table_updates = Vec::with_capacity(updates.len());
+        let sort_start = Instant::now();
+        let updates = sort_updates(updates);
+        apply_timings.sorting += sort_start.elapsed();
+
+        let misc_start = Instant::now();
         let mut groups: Vec<Vec<_>> = Vec::new();
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
             groups.push(updates.collect());
         }
+        apply_timings.should_be_low += misc_start.elapsed();
+
         for updates in groups {
+            let misc_start = Instant::now();
             let mut apply_state = BootstrapApplyState::Updates(Vec::new());
             let mut retractions = InProgressRetractions::default();
+            apply_timings.should_be_low += misc_start.elapsed();
 
             for update in updates {
+                let misc_start = Instant::now();
                 let next_apply_state = BootstrapApplyState::new(update);
-                let (next_apply_state, builtin_table_update) = apply_state
+                apply_timings.should_be_low += misc_start.elapsed();
+
+                let (next_apply_state, builtin_table_update, inner_apply_timings) = apply_state
                     .step(
                         next_apply_state,
                         self,
@@ -122,15 +267,17 @@ impl CatalogState {
                     .await;
                 apply_state = next_apply_state;
                 builtin_table_updates.extend(builtin_table_update);
+                apply_timings.merge(inner_apply_timings);
             }
 
             // Apply remaining state.
-            let builtin_table_update = apply_state
+            let (builtin_table_update, inner_apply_timings) = apply_state
                 .apply(self, &mut retractions, local_expression_cache)
                 .await;
             builtin_table_updates.extend(builtin_table_update);
+            apply_timings.merge(inner_apply_timings);
         }
-        builtin_table_updates
+        (builtin_table_updates, apply_timings)
     }
 
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
@@ -146,7 +293,7 @@ impl CatalogState {
 
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
-            let builtin_table_update = self.apply_updates_inner(
+            let (builtin_table_update, _) = self.apply_updates_inner(
                 updates.collect(),
                 &mut retractions,
                 &mut LocalExpressionCache::Closed,
@@ -163,11 +310,12 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<(Vec<BuiltinTableUpdate<&'static BuiltinTable>>, ApplyTimings), CatalogError> {
         soft_assert_no_log!(
             updates.iter().map(|update| update.ts).all_equal(),
             "all timestamps should be equal: {updates:?}"
         );
+        let mut apply_timings = ApplyTimings::new();
 
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         for StateUpdate { kind, ts: _, diff } in updates {
@@ -175,20 +323,28 @@ impl CatalogState {
                 StateDiff::Retraction => {
                     // We want the builtin table retraction to match the state of the catalog
                     // before applying the update.
+                    let start = Instant::now();
                     builtin_table_updates
                         .extend(self.generate_builtin_table_update(kind.clone(), diff));
-                    self.apply_update(kind, diff, retractions, local_expression_cache)?;
+                    apply_timings.generate_builtin_table_updates += start.elapsed();
+                    let inner_apply_timings =
+                        self.apply_update(kind, diff, retractions, local_expression_cache)?;
+                    apply_timings.merge(inner_apply_timings);
                 }
                 StateDiff::Addition => {
-                    self.apply_update(kind.clone(), diff, retractions, local_expression_cache)?;
+                    let inner_apply_timings =
+                        self.apply_update(kind.clone(), diff, retractions, local_expression_cache)?;
+                    apply_timings.merge(inner_apply_timings);
                     // We want the builtin table addition to match the state of the catalog
                     // after applying the update.
+                    let start = Instant::now();
                     builtin_table_updates
                         .extend(self.generate_builtin_table_update(kind.clone(), diff));
+                    apply_timings.generate_builtin_table_updates += start.elapsed();
                 }
             }
         }
-        Ok(builtin_table_updates)
+        Ok((builtin_table_updates, apply_timings))
     }
 
     #[instrument(level = "debug")]
@@ -198,31 +354,41 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<ApplyTimings, CatalogError> {
+        let mut apply_timings = ApplyTimings::new();
+        let start = Instant::now();
         match kind {
             StateUpdateKind::Role(role) => {
                 self.apply_role_update(role, diff, retractions);
+                apply_timings.role_duration += start.elapsed();
             }
             StateUpdateKind::Database(database) => {
                 self.apply_database_update(database, diff, retractions);
+                apply_timings.database_duration += start.elapsed();
             }
             StateUpdateKind::Schema(schema) => {
                 self.apply_schema_update(schema, diff, retractions);
+                apply_timings.schema_duration += start.elapsed();
             }
             StateUpdateKind::DefaultPrivilege(default_privilege) => {
                 self.apply_default_privilege_update(default_privilege, diff, retractions);
+                apply_timings.default_privilege_duration += start.elapsed();
             }
             StateUpdateKind::SystemPrivilege(system_privilege) => {
                 self.apply_system_privilege_update(system_privilege, diff, retractions);
+                apply_timings.system_privilege_duration += start.elapsed();
             }
             StateUpdateKind::SystemConfiguration(system_configuration) => {
                 self.apply_system_configuration_update(system_configuration, diff, retractions);
+                apply_timings.system_configuration_duration += start.elapsed();
             }
             StateUpdateKind::Cluster(cluster) => {
                 self.apply_cluster_update(cluster, diff, retractions);
+                apply_timings.cluster_duration += start.elapsed();
             }
             StateUpdateKind::NetworkPolicy(network_policy) => {
                 self.apply_network_policy_update(network_policy, diff, retractions);
+                apply_timings.network_policy_duration += start.elapsed();
             }
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.apply_introspection_source_index_update(
@@ -230,29 +396,37 @@ impl CatalogState {
                     diff,
                     retractions,
                 );
+                apply_timings.introspection_source_index_duration += start.elapsed();
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => {
                 self.apply_cluster_replica_update(cluster_replica, diff, retractions);
+                apply_timings.cluster_replica_duration += start.elapsed();
             }
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                self.apply_system_object_mapping_update(
+                let item_timings = self.apply_system_object_mapping_update(
                     system_object_mapping,
                     diff,
                     retractions,
                     local_expression_cache,
                 );
+                apply_timings.item_duration.merge(item_timings);
             }
             StateUpdateKind::TemporaryItem(item) => {
                 self.apply_temporary_item_update(item, diff, retractions);
+                apply_timings.temporary_item_duration += start.elapsed();
             }
             StateUpdateKind::Item(item) => {
-                self.apply_item_update(item, diff, retractions, local_expression_cache)?;
+                let item_timings =
+                    self.apply_item_update(item, diff, retractions, local_expression_cache)?;
+                apply_timings.item_duration.merge(item_timings);
             }
             StateUpdateKind::Comment(comment) => {
                 self.apply_comment_update(comment, diff, retractions);
+                apply_timings.comment_duration += start.elapsed();
             }
             StateUpdateKind::SourceReferences(source_reference) => {
                 self.apply_source_references_update(source_reference, diff, retractions);
+                apply_timings.source_references_duration += start.elapsed();
             }
             StateUpdateKind::AuditLog(_audit_log) => {
                 // Audit logs are not stored in-memory.
@@ -263,13 +437,15 @@ impl CatalogState {
                     diff,
                     retractions,
                 );
+                apply_timings.storage_collection_metadata_duration += start.elapsed();
             }
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);
+                apply_timings.unfinalized_shard_duration += start.elapsed();
             }
         }
 
-        Ok(())
+        Ok(apply_timings)
     }
 
     #[instrument(level = "debug")]
@@ -552,6 +728,7 @@ impl CatalogState {
         }
     }
 
+    #[must_use]
     #[instrument(level = "debug")]
     fn apply_system_object_mapping_update(
         &mut self,
@@ -559,7 +736,9 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) {
+    ) -> ApplyItemTimings {
+        let start = Instant::now();
+        let mut item_timings = ApplyItemTimings::new();
         let item_id = system_object_mapping.unique_identifier.catalog_id;
         let global_id = system_object_mapping.unique_identifier.global_id;
 
@@ -567,13 +746,15 @@ impl CatalogState {
             // Runtime-alterable system objects have real entries in the items
             // collection and so get handled through the normal `insert_item`
             // and `drop_item` code paths.
-            return;
+            item_timings.total_duration += start.elapsed();
+            return item_timings;
         }
 
         if let StateDiff::Retraction = diff {
             let entry = self.drop_item(item_id);
             retractions.system_object_mappings.insert(item_id, entry);
-            return;
+            item_timings.total_duration += start.elapsed();
+            return item_timings;
         }
 
         if let Some(entry) = retractions.system_object_mappings.remove(&item_id) {
@@ -582,7 +763,8 @@ impl CatalogState {
             // definition from a previous version. So we can just stick the old entry back into the
             // catalog.
             self.insert_entry(entry);
-            return;
+            item_timings.total_duration += start.elapsed();
+            return item_timings;
         }
 
         let builtin = BUILTIN_LOOKUP
@@ -666,7 +848,7 @@ impl CatalogState {
                 // Indexes can't be versioned.
                 let versions = BTreeMap::new();
 
-                let item = self
+                let (item, inner_item_timings) = self
                     .parse_item(
                         global_id,
                         &index.create_sql(),
@@ -685,6 +867,7 @@ impl CatalogState {
                             index.name, e
                         )
                     });
+                item_timings.merge(inner_item_timings);
                 let CatalogItem::Index(_) = item else {
                     panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                 };
@@ -806,7 +989,7 @@ impl CatalogState {
                 // Continual Tasks can't be versioned.
                 let versions = BTreeMap::new();
 
-                let item = self
+                let (item, inner_item_timings) = self
                     .parse_item(
                         global_id,
                         &ct.create_sql(),
@@ -829,7 +1012,7 @@ impl CatalogState {
                 let CatalogItem::ContinualTask(_) = &item else {
                     panic!("internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".", ct.name);
                 };
-
+                item_timings.merge(inner_item_timings);
                 self.insert_item(
                     item_id,
                     ct.oid,
@@ -842,7 +1025,7 @@ impl CatalogState {
             Builtin::Connection(connection) => {
                 // Connections can't be versioned.
                 let versions = BTreeMap::new();
-                let mut item = self
+                let (mut item, inner_item_timings) = self
                     .parse_item(
                         global_id,
                         connection.sql,
@@ -862,6 +1045,7 @@ impl CatalogState {
                             connection.name, e
                         )
                     });
+                item_timings.merge(inner_item_timings);
                 let CatalogItem::Connection(_) = &mut item else {
                     panic!("internal error: builtin connection {}'s SQL does not begin with \"CREATE CONNECTION\".", connection.name);
                 };
@@ -882,6 +1066,9 @@ impl CatalogState {
                 );
             }
         }
+
+        item_timings.total_duration += start.elapsed();
+        item_timings
     }
 
     #[instrument(level = "debug")]
@@ -938,7 +1125,9 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<ApplyItemTimings, CatalogError> {
+        let start = Instant::now();
+        let mut item_timings = ApplyItemTimings::new();
         match diff {
             StateDiff::Addition => {
                 let key = item.key();
@@ -969,7 +1158,7 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self
+                            let (item, inner_item_timings) = self
                                 .deserialize_item(
                                     global_id,
                                     &create_sql,
@@ -980,6 +1169,7 @@ impl CatalogState {
                                     panic!("{e:?}: invalid persisted SQL: {create_sql}")
                                 });
                             retraction.item = item;
+                            item_timings.merge(inner_item_timings);
                         }
                         retraction.id = id;
                         retraction.oid = oid;
@@ -990,7 +1180,7 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item = self
+                        let (catalog_item, inner_item_timings) = self
                             .deserialize_item(
                                 global_id,
                                 &create_sql,
@@ -1000,6 +1190,7 @@ impl CatalogState {
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
+                        item_timings.merge(inner_item_timings);
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
@@ -1031,7 +1222,8 @@ impl CatalogState {
                 retractions.items.insert(key, entry);
             }
         }
-        Ok(())
+        item_timings.total_duration += start.elapsed();
+        Ok(item_timings)
     }
 
     #[instrument(level = "debug")]
@@ -1287,7 +1479,13 @@ impl CatalogState {
         builtin_views: Vec<(&'static BuiltinView, CatalogItemId, GlobalId)>,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> (
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        ApplyItemTimings,
+    ) {
+        let mut item_timings = ApplyItemTimings::new();
+
+        let start = Instant::now();
         let (updates, additions): (Vec<_>, Vec<_>) =
             builtin_views
                 .into_iter()
@@ -1325,7 +1523,11 @@ impl CatalogState {
         let item_ids: Vec<_> = views.keys().copied().collect();
 
         let mut ready: VecDeque<CatalogItemId> = views.keys().cloned().collect();
+
+        item_timings.misc_duration += start.elapsed();
+
         while !handles.is_empty() || !ready.is_empty() || !awaiting_all.is_empty() {
+            let start = Instant::now();
             if handles.is_empty() && ready.is_empty() {
                 // Enqueue the views that were waiting for all the others.
                 ready.extend(awaiting_all.drain(..));
@@ -1364,9 +1566,12 @@ impl CatalogState {
                     handles.push(handle);
                 }
             }
+            item_timings.misc_duration += start.elapsed();
 
             // Wait for a view to be ready.
             let (handle, _idx, remaining) = future::select_all(handles).await;
+
+            let start = Instant::now();
             handles = remaining;
             let (id, global_id, res) = handle.expect("must join");
             let mut insert_cached_expr = |cached_expr| {
@@ -1374,8 +1579,10 @@ impl CatalogState {
                     local_expression_cache.insert_cached_expression(global_id, cached_expr);
                 }
             };
+            item_timings.misc_duration += start.elapsed();
             match res {
-                Ok((item, uncached_expr)) => {
+                Ok((item, inner_item_timings, uncached_expr)) => {
+                    let start = Instant::now();
                     if let Some((uncached_expr, optimizer_features)) = uncached_expr {
                         local_expression_cache.insert_uncached_expression(
                             global_id,
@@ -1383,6 +1590,7 @@ impl CatalogState {
                             optimizer_features,
                         );
                     }
+                    item_timings.merge(inner_item_timings);
                     // Add item to catalog.
                     let (view, _gid) = views.remove(&id).expect("must exist");
                     let schema_id = state
@@ -1425,12 +1633,14 @@ impl CatalogState {
 
                     completed_ids.insert(id);
                     completed_names.insert(full_name);
+                    item_timings.misc_duration += start.elapsed();
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err((
                     AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep)),
                     cached_expr,
                 )) => {
+                    let start = Instant::now();
                     insert_cached_expr(cached_expr);
                     if completed_ids.contains(&missing_dep) {
                         ready.push_back(id);
@@ -1440,6 +1650,7 @@ impl CatalogState {
                             .or_default()
                             .push(id);
                     }
+                    item_timings.misc_duration += start.elapsed();
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err((
@@ -1448,6 +1659,7 @@ impl CatalogState {
                     )),
                     cached_expr,
                 )) => {
+                    let start = Instant::now();
                     insert_cached_expr(cached_expr);
                     match CatalogItemId::from_str(&missing_dep) {
                         Ok(missing_dep) => {
@@ -1471,13 +1683,16 @@ impl CatalogState {
                             }
                         }
                     }
+                    item_timings.misc_duration += start.elapsed();
                 }
                 Err((
                     AdapterError::PlanError(plan::PlanError::InvalidCast { .. }),
                     cached_expr,
                 )) => {
+                    let start = Instant::now();
                     insert_cached_expr(cached_expr);
                     awaiting_all.push(id);
+                    item_timings.misc_duration += start.elapsed();
                 }
                 Err((e, _)) => {
                     let (bad_view, _gid) = views.get(&id).expect("must exist");
@@ -1494,6 +1709,7 @@ impl CatalogState {
             }
         }
 
+        let start = Instant::now();
         assert!(awaiting_id_dependencies.is_empty());
         assert!(
             awaiting_name_dependencies.is_empty(),
@@ -1502,10 +1718,12 @@ impl CatalogState {
         assert!(awaiting_all.is_empty());
         assert!(views.is_empty());
 
-        item_ids
+        let updates = item_ids
             .into_iter()
             .flat_map(|id| state.pack_item_update(id, 1))
-            .collect()
+            .collect();
+        item_timings.misc_duration += start.elapsed();
+        (updates, item_timings)
     }
 
     /// Associates a name, `CatalogItemId`, and entry.
@@ -2033,12 +2251,14 @@ impl BootstrapApplyState {
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> (Vec<BuiltinTableUpdate<&'static BuiltinTable>>, ApplyTimings) {
         match self {
             BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions) => {
+                let mut apply_timings = ApplyTimings::new();
+                let start = Instant::now();
                 let restore = state.system_configuration.clone();
                 state.system_configuration.enable_for_item_parsing();
-                let builtin_table_updates = CatalogState::parse_builtin_views(
+                let (builtin_table_updates, mut item_timings) = CatalogState::parse_builtin_views(
                     state,
                     builtin_view_additions,
                     retractions,
@@ -2046,7 +2266,9 @@ impl BootstrapApplyState {
                 )
                 .await;
                 state.system_configuration = restore;
-                builtin_table_updates
+                item_timings.total_duration += start.elapsed();
+                apply_timings.item_duration.merge(item_timings);
+                (builtin_table_updates, apply_timings)
             }
             BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
                 state
@@ -2068,38 +2290,56 @@ impl BootstrapApplyState {
     ) -> (
         BootstrapApplyState,
         Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        ApplyTimings,
     ) {
+        let mut apply_timings = ApplyTimings::new();
         match (self, next) {
             (
                 BootstrapApplyState::BuiltinViewAdditions(mut builtin_view_additions),
                 BootstrapApplyState::BuiltinViewAdditions(next_builtin_view_additions),
             ) => {
                 // Continue batching builtin view additions.
+                let misc_start = Instant::now();
                 builtin_view_additions.extend(next_builtin_view_additions);
+                apply_timings.should_be_low += misc_start.elapsed();
                 (
                     BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions),
                     Vec::new(),
+                    apply_timings,
                 )
             }
             (BootstrapApplyState::Items(mut updates), BootstrapApplyState::Items(next_updates)) => {
                 // Continue batching item updates.
+                let misc_start = Instant::now();
                 updates.extend(next_updates);
-                (BootstrapApplyState::Items(updates), Vec::new())
+                apply_timings.should_be_low += misc_start.elapsed();
+                (
+                    BootstrapApplyState::Items(updates),
+                    Vec::new(),
+                    apply_timings,
+                )
             }
             (
                 BootstrapApplyState::Updates(mut updates),
                 BootstrapApplyState::Updates(next_updates),
             ) => {
                 // Continue batching updates.
+                let misc_start = Instant::now();
                 updates.extend(next_updates);
-                (BootstrapApplyState::Updates(updates), Vec::new())
+                apply_timings.should_be_low += misc_start.elapsed();
+                (
+                    BootstrapApplyState::Updates(updates),
+                    Vec::new(),
+                    apply_timings,
+                )
             }
             (apply_state, next_apply_state) => {
                 // Apply the current batch and start batching new apply state.
-                let builtin_table_update = apply_state
+                let (builtin_table_update, inner_apply_timings) = apply_state
                     .apply(state, retractions, local_expression_cache)
                     .await;
-                (next_apply_state, builtin_table_update)
+                apply_timings.merge(inner_apply_timings);
+                (next_apply_state, builtin_table_update, apply_timings)
             }
         }
     }
