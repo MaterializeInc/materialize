@@ -17,6 +17,7 @@ from pathlib import Path
 import boto3
 
 from materialize import elf, mzbuild, spawn, ui
+from materialize.bazel.utils import output_paths as bazel_output_paths
 from materialize.mzbuild import CargoBuild, ResolvedImage
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
@@ -31,7 +32,16 @@ DEBUGINFO_BINS = ["environmentd", "clusterd"]
 def main() -> None:
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-    repo = mzbuild.Repository(Path("."), coverage=coverage, sanitizer=sanitizer)
+    bazel = ui.env_is_truthy("CI_BUILD_WITH_BAZEL")
+    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+
+    repo = mzbuild.Repository(
+        Path("."),
+        coverage=coverage,
+        sanitizer=sanitizer,
+        bazel=bazel,
+        bazel_remote_cache=bazel_remote_cache,
+    )
 
     # Build and push any images that are not already available on Docker Hub,
     # so they are accessible to other build agents.
@@ -63,12 +73,16 @@ def maybe_upload_debuginfo(
 
     # Find all binaries created by the `cargo-bin` pre-image.
     bins: set[str] = set()
+    bazel_bins: dict[str, str] = dict()
     for image in built_images:
         for pre_image in image.image.pre_images:
             if isinstance(pre_image, CargoBuild):
                 for bin in pre_image.bins:
                     if bin in DEBUGINFO_BINS:
                         bins.add(bin)
+                    if repo.rd.bazel:
+                        bazel_bins[bin] = pre_image.bazel_bins[bin]
+
     if not bins:
         return
 
@@ -79,8 +93,15 @@ def maybe_upload_debuginfo(
     polar_signals_api_token = os.environ["POLAR_SIGNALS_API_TOKEN"]
 
     for bin in bins:
-        cargo_profile = "release" if repo.rd.release_mode else "debug"
-        bin_path = repo.rd.cargo_target_dir() / cargo_profile / bin
+        if not repo.rd.bazel:
+            cargo_profile = "release" if repo.rd.release_mode else "debug"
+            bin_path = repo.rd.cargo_target_dir() / cargo_profile / bin
+        else:
+            options = ["--config=release"] if repo.rd.release_mode else []
+            paths = bazel_output_paths(bazel_bins[bin], options)
+            assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
+            bin_path = paths[0]
+
         dbg_path = bin_path.with_suffix(bin_path.suffix + ".debug")
         spawn.runv(
             [
