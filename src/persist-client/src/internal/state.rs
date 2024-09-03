@@ -2371,10 +2371,9 @@ where
     pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
         let mut metrics = ExpiryMetrics::default();
         let shard_id = self.shard_id();
-        self.collections.leased_readers.retain(|k, v| {
+        self.collections.leased_readers.retain(|_k, v| {
             let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
             if !retain {
-                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
                 metrics.readers_expired += 1;
             }
             retain
