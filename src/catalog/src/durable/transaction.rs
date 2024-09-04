@@ -2455,6 +2455,10 @@ where
             .collect()
     }
 
+    /// Verifies that no items in `self` violate `self.uniqueness_violation`.
+    ///
+    /// Runtime is O(n^2), where n is the number of items in `self`. Prefer using
+    /// [`Self::verify_keys`].
     fn verify(&self) -> Result<(), DurableCatalogError> {
         if let Some(uniqueness_violation) = self.uniqueness_violation {
             // Compare each value to each other value and ensure they are unique.
@@ -2474,6 +2478,35 @@ where
             "pending should be sorted by timestamp: {:?}",
             self.pending
         );
+        Ok(())
+    }
+
+    /// Verifies that no items in `self` violate `self.uniqueness_violation` with `keys`.
+    ///
+    /// Runtime is O(n * k), where n is the number of items in `self` and k is the number of
+    /// items in `keys`.
+    fn verify_keys<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a K>,
+    ) -> Result<(), DurableCatalogError>
+    where
+        K: 'a,
+    {
+        if let Some(uniqueness_violation) = self.uniqueness_violation {
+            let entries: Vec<_> = keys
+                .into_iter()
+                .filter_map(|key| self.get(key).map(|value| (key, value)))
+                .collect();
+            // Compare each value in `entries` to each value in `self` and ensure they are unique.
+            for (ki, vi) in self.items() {
+                for (kj, vj) in &entries {
+                    if &ki != *kj && uniqueness_violation(&vi, vj) {
+                        return Err(DurableCatalogError::UniquenessViolation);
+                    }
+                }
+            }
+        }
+        soft_assert_no_log!(self.verify().is_ok());
         Ok(())
     }
 
@@ -2577,11 +2610,13 @@ where
         ts: Timestamp,
     ) -> Result<Diff, DurableCatalogError> {
         let mut changed = 0;
+        let mut keys = BTreeSet::new();
         // Keep a copy of pending in case of uniqueness violation.
         let pending = self.pending.clone();
         self.for_values_mut(|p, k, v| {
             if let Some(next) = f(k, v) {
                 changed += 1;
+                keys.insert(k.clone());
                 let updates = p.entry(k.clone()).or_default();
                 updates.push(TransactionUpdate {
                     value: v.clone(),
@@ -2596,7 +2631,7 @@ where
             }
         });
         // Check for uniqueness violation.
-        if let Err(err) = self.verify() {
+        if let Err(err) = self.verify_keys(&keys) {
             self.pending = pending;
             Err(err)
         } else {
@@ -2646,7 +2681,7 @@ where
         }
 
         // Check for uniqueness violation.
-        if let Err(err) = self.verify() {
+        if let Err(err) = self.verify_keys([&k]) {
             // Revert self.pending to the state it was in before calling this
             // function.
             let pending = self.pending.get_mut(&k).expect("inserted above");
@@ -2708,7 +2743,7 @@ where
         }
 
         // Check for uniqueness violation.
-        if let Err(err) = self.verify() {
+        if let Err(err) = self.verify_keys(prevs.keys()) {
             for (k, restore_len) in restores {
                 // Revert self.pending to the state it was in before calling this
                 // function.
@@ -2993,6 +3028,7 @@ mod tests {
                 0,
             )
             .unwrap_err();
+
         table_txn
             .set_many(
                 BTreeMap::from([
