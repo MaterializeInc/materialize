@@ -371,6 +371,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 6  privileges  mz_aclitem[]
 7  create_sql  text
 8  redacted_create_sql  text
+9  source_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_abbreviations' ORDER BY position

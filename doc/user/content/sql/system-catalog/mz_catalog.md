@@ -562,6 +562,7 @@ Field        | Type                 | Meaning
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
 `create_sql` | [`text`]             | The `CREATE` SQL statement for the table.
 `redacted_create_sql` | [`text`]    | The redacted `CREATE` SQL statement for the table.
+`source_id`  | [`text`]             | The ID of the source associated with the table, if any. Corresponds to [`mz_sources.id`](/sql/system-catalog/mz_catalog/#mz_sources).
 
 ### `mz_timezone_abbreviations`
 

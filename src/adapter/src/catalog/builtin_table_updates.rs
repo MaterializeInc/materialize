@@ -476,63 +476,20 @@ impl CatalogState {
         let owner_id = entry.owner_id();
         let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
-        let mut updates =
-            match entry.item() {
-                CatalogItem::Log(_) => self.pack_source_update(
-                    id, oid, schema_id, name, "log", None, None, None, None, None, owner_id,
-                    privileges, diff, None,
-                ),
-                CatalogItem::Index(index) => {
-                    self.pack_index_update(id, oid, name, owner_id, index, diff)
-                }
-                CatalogItem::Table(table) => self
-                    .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table),
-                CatalogItem::Source(source) => {
-                    let source_type = source.source_type();
-                    let connection_id = source.connection_id();
-                    let envelope = source.envelope();
-                    let cluster_entry = match source.data_source {
-                        // Ingestion exports don't have their own cluster, but
-                        // run on their ingestion's cluster.
-                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                            self.get_entry(&ingestion_id)
-                        }
-                        _ => entry,
-                    };
+        let mut updates = match entry.item() {
+            CatalogItem::Log(_) => self.pack_source_update(
+                id, oid, schema_id, name, "log", None, None, None, None, None, owner_id,
+                privileges, diff, None,
+            ),
+            CatalogItem::Index(index) => {
+                self.pack_index_update(id, oid, name, owner_id, index, diff)
+            }
+            CatalogItem::Table(table) => {
+                let mut updates = self
+                    .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table);
 
-                    let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
-
-                    let (key_format, value_format) = source.formats();
-
-                    let mut updates = self.pack_source_update(
-                        id,
-                        oid,
-                        schema_id,
-                        name,
-                        source_type,
-                        connection_id,
-                        envelope,
-                        key_format,
-                        value_format,
-                        cluster_id.as_deref(),
-                        owner_id,
-                        privileges,
-                        diff,
-                        source.create_sql.as_ref(),
-                    );
-
-                    updates.extend(match &source.data_source {
-                        DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                            match &ingestion_desc.desc.connection {
-                                GenericSourceConnection::Postgres(postgres) => {
-                                    self.pack_postgres_source_update(id, postgres, diff)
-                                }
-                                GenericSourceConnection::Kafka(kafka) => {
-                                    self.pack_kafka_source_update(id, kafka, diff)
-                                }
-                                _ => vec![],
-                            }
-                        }
+                if let TableDataSource::DataSource(data_source) = &table.data_source {
+                    updates.extend(match data_source {
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
                             external_reference: UnresolvedItemName(external_reference),
@@ -577,38 +534,139 @@ impl CatalogState {
                                 // Load generator sources don't have any special
                                 // updates.
                                 "load-generator" => vec![],
-                                s => unreachable!("{s} sources do not have subsources"),
+                                // TODO(roshan): Add support for kafka source tables.
+                                s => unreachable!("{s} sources do not have tables"),
                             }
-                        }
-                        DataSourceDesc::Webhook { .. } => {
-                            vec![self.pack_webhook_source_update(id, diff)]
                         }
                         _ => vec![],
                     });
+                }
 
-                    updates
-                }
-                CatalogItem::View(view) => self
-                    .pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff),
-                CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
-                    id, oid, schema_id, name, owner_id, privileges, mview, diff,
-                ),
-                CatalogItem::Sink(sink) => {
-                    self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
-                }
-                CatalogItem::Type(ty) => {
-                    self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
-                }
-                CatalogItem::Func(func) => {
-                    self.pack_func_update(id, schema_id, name, owner_id, func, diff)
-                }
-                CatalogItem::Secret(_) => {
-                    self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
-                }
-                CatalogItem::Connection(connection) => self.pack_connection_update(
-                    id, oid, schema_id, name, owner_id, privileges, connection, diff,
-                ),
-            };
+                updates
+            }
+            CatalogItem::Source(source) => {
+                let source_type = source.source_type();
+                let connection_id = source.connection_id();
+                let envelope = source.envelope();
+                let cluster_entry = match source.data_source {
+                    // Ingestion exports don't have their own cluster, but
+                    // run on their ingestion's cluster.
+                    DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                        self.get_entry(&ingestion_id)
+                    }
+                    _ => entry,
+                };
+
+                let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
+
+                let (key_format, value_format) = source.formats();
+
+                let mut updates = self.pack_source_update(
+                    id,
+                    oid,
+                    schema_id,
+                    name,
+                    source_type,
+                    connection_id,
+                    envelope,
+                    key_format,
+                    value_format,
+                    cluster_id.as_deref(),
+                    owner_id,
+                    privileges,
+                    diff,
+                    source.create_sql.as_ref(),
+                );
+
+                updates.extend(match &source.data_source {
+                    DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                        match &ingestion_desc.desc.connection {
+                            GenericSourceConnection::Postgres(postgres) => {
+                                self.pack_postgres_source_update(id, postgres, diff)
+                            }
+                            GenericSourceConnection::Kafka(kafka) => {
+                                self.pack_kafka_source_update(id, kafka, diff)
+                            }
+                            _ => vec![],
+                        }
+                    }
+                    DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference: UnresolvedItemName(external_reference),
+                        details: _,
+                    } => {
+                        let ingestion_entry = self
+                            .get_entry(ingestion_id)
+                            .source_desc()
+                            .expect("primary source exists")
+                            .expect("primary source is a source");
+
+                        match ingestion_entry.connection.name() {
+                            "postgres" => {
+                                mz_ore::soft_assert_eq_no_log!(external_reference.len(), 3);
+                                // The left-most qualification of Postgres
+                                // tables is the database, but this
+                                // information is redundant because each
+                                // Postgres connection connects to only one
+                                // database.
+                                let schema_name = external_reference[1].to_ast_string();
+                                let table_name = external_reference[2].to_ast_string();
+
+                                self.pack_postgres_source_tables_update(
+                                    id,
+                                    &schema_name,
+                                    &table_name,
+                                    diff,
+                                )
+                            }
+                            "mysql" => {
+                                mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
+                                let schema_name = external_reference[0].to_ast_string();
+                                let table_name = external_reference[1].to_ast_string();
+
+                                self.pack_mysql_source_tables_update(
+                                    id,
+                                    &schema_name,
+                                    &table_name,
+                                    diff,
+                                )
+                            }
+                            // Load generator sources don't have any special
+                            // updates.
+                            "load-generator" => vec![],
+                            s => unreachable!("{s} sources do not have subsources"),
+                        }
+                    }
+                    DataSourceDesc::Webhook { .. } => {
+                        vec![self.pack_webhook_source_update(id, diff)]
+                    }
+                    _ => vec![],
+                });
+
+                updates
+            }
+            CatalogItem::View(view) => {
+                self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
+            }
+            CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
+                id, oid, schema_id, name, owner_id, privileges, mview, diff,
+            ),
+            CatalogItem::Sink(sink) => {
+                self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
+            }
+            CatalogItem::Type(ty) => {
+                self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
+            }
+            CatalogItem::Func(func) => {
+                self.pack_func_update(id, schema_id, name, owner_id, func, diff)
+            }
+            CatalogItem::Secret(_) => {
+                self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
+            }
+            CatalogItem::Connection(connection) => self.pack_connection_update(
+                id, oid, schema_id, name, owner_id, privileges, connection, diff,
+            ),
+        };
 
         if !entry.item().is_temporary() {
             // Populate or clean up the `mz_object_dependencies` table.
@@ -739,6 +797,15 @@ impl CatalogState {
                 .ast
                 .to_ast_string_redacted()
         });
+        let source_id = if let TableDataSource::DataSource(DataSourceDesc::IngestionExport {
+            ingestion_id,
+            ..
+        }) = &table.data_source
+        {
+            Some(ingestion_id.to_string())
+        } else {
+            None
+        };
 
         vec![BuiltinTableUpdate {
             id: &*MZ_TABLES,
@@ -756,6 +823,11 @@ impl CatalogState {
                 },
                 if let Some(redacted) = &redacted {
                     Datum::String(redacted)
+                } else {
+                    Datum::Null
+                },
+                if let Some(source_id) = source_id.as_ref() {
+                    Datum::String(source_id)
                 } else {
                     Datum::Null
                 },
