@@ -112,7 +112,7 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     fn default() -> Self {
         Self {
             spine: Spine::new(),
-            roundtrip_structure: false,
+            roundtrip_structure: true,
         }
     }
 }
