@@ -13,6 +13,7 @@ fn main() {
 
     prost_build::Config::new()
         .type_attribute(".", "#[derive(serde::Serialize)]")
+        .type_attribute(".mz_persist_types.arrow", "#[derive(serde::Deserialize)]")
         .btree_map(["."])
         .bytes([".mz_persist_types.arrow.Buffer"])
         .compile_protos(

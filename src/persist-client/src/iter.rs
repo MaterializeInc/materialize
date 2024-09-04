@@ -1164,6 +1164,7 @@ mod tests {
                             ),
                             encoded_size_bytes,
                             key_lower: vec![],
+                            structured_key_lower: None,
                             stats: None,
                             ts_rewrite: None,
                             diffs_sum: None,

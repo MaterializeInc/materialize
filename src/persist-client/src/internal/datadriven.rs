@@ -106,6 +106,7 @@ impl<'a> DirectiveArgs<'a> {
                         key: PartialBatchKey((*x).to_owned()),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
+                        structured_key_lower: None,
                         stats: None,
                         ts_rewrite: None,
                         diffs_sum: None,

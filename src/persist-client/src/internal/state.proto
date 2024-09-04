@@ -17,6 +17,7 @@ syntax = "proto3";
 package mz_persist_client.internal.state;
 
 import "google/protobuf/empty.proto";
+import "persist-types/src/arrow.proto";
 import "persist/src/persist.proto";
 
 message ProtoU64Antichain {
@@ -39,6 +40,7 @@ message ProtoHollowBatchPart {
     // Only set when Kind is Key
     uint64 encoded_size_bytes = 2;
     bytes key_lower = 3;
+    optional bytes structured_key_lower = 10;
     optional int64 diffs_sum = 6;
     oneof format {
         google.protobuf.Empty row = 7;

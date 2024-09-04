@@ -28,6 +28,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
+use mz_persist_types::arrow::ProtoArrayData;
 use mz_persist_types::columnar::{ColumnEncoder, Schema2};
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -44,7 +45,7 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats};
+use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
@@ -346,6 +347,9 @@ pub struct HollowBatchPart<T> {
     /// possible key: `vec![]`.)
     #[serde(serialize_with = "serialize_part_bytes")]
     pub key_lower: Vec<u8>,
+    /// A lower bound on the keys in the part, stored as structured data.
+    #[serde(serialize_with = "serialize_lazy_proto")]
+    pub structured_key_lower: Option<LazyProto<ProtoArrayData>>,
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
     pub stats: Option<LazyPartStats>,
@@ -684,6 +688,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             key: self_key,
             encoded_size_bytes: self_encoded_size_bytes,
             key_lower: self_key_lower,
+            structured_key_lower: self_structured_key_lower,
             stats: self_stats,
             ts_rewrite: self_ts_rewrite,
             diffs_sum: self_diffs_sum,
@@ -694,6 +699,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             key: other_key,
             encoded_size_bytes: other_encoded_size_bytes,
             key_lower: other_key_lower,
+            structured_key_lower: other_structured_key_lower,
             stats: other_stats,
             ts_rewrite: other_ts_rewrite,
             diffs_sum: other_diffs_sum,
@@ -704,6 +710,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_key,
             self_encoded_size_bytes,
             self_key_lower,
+            self_structured_key_lower,
             self_stats,
             self_ts_rewrite.as_ref().map(|x| x.elements()),
             self_diffs_sum,
@@ -714,6 +721,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_key,
                 other_encoded_size_bytes,
                 other_key_lower,
+                other_structured_key_lower,
                 other_stats,
                 other_ts_rewrite.as_ref().map(|x| x.elements()),
                 other_diffs_sum,
@@ -2048,6 +2056,15 @@ fn serialize_part_bytes<S: Serializer>(val: &[u8], s: S) -> Result<S::Ok, S::Err
     val.serialize(s)
 }
 
+fn serialize_lazy_proto<S: Serializer, T: prost::Message + Default>(
+    val: &Option<LazyProto<T>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    val.as_ref()
+        .map(|lazy| hex::encode(&lazy.into_proto()))
+        .serialize(s)
+}
+
 fn serialize_part_stats<S: Serializer>(
     val: &Option<LazyPartStats>,
     s: S,
@@ -2252,6 +2269,7 @@ pub(crate) mod tests {
                     key,
                     encoded_size_bytes,
                     key_lower,
+                    structured_key_lower: None,
                     stats,
                     ts_rewrite: ts_rewrite.map(Antichain::from_elem),
                     diffs_sum: Some(diffs_sum),
@@ -2424,6 +2442,7 @@ pub(crate) mod tests {
                         key: PartialBatchKey((*x).to_owned()),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
+                        structured_key_lower: None,
                         stats: None,
                         ts_rewrite: None,
                         diffs_sum: None,

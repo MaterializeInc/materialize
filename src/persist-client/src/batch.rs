@@ -1265,6 +1265,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             key: partial_key,
             encoded_size_bytes: payload_len,
             key_lower,
+            structured_key_lower: None,
             stats,
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
