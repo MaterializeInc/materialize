@@ -2118,6 +2118,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn backward_compatible_migrate_from_common() {
+        use mz_repr::ColumnType;
         fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
             // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
             let should_be_compatible = diffs.iter().all(|diff| match diff {
