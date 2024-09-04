@@ -239,6 +239,9 @@ class QueryGenerator:
                 data_source, additional_data_sources = self.minimize_sources(
                     data_source, additional_data_sources, expressions
                 )
+                row_selection.trim_to_minimized_sources(
+                    [data_source] + additional_data_sources
+                )
 
             uses_joins = len(additional_data_sources) > 0
 
@@ -314,6 +317,9 @@ class QueryGenerator:
                 # remove sources that are not used by the expression
                 data_source, additional_data_sources = self.minimize_sources(
                     data_source, additional_data_sources, all_expressions
+                )
+                row_selection.trim_to_minimized_sources(
+                    [data_source] + additional_data_sources
                 )
 
             uses_joins = len(additional_data_sources) > 0

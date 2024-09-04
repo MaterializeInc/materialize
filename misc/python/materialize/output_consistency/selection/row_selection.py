@@ -39,5 +39,15 @@ class DataRowSelection:
 
         return index in self.get_row_indices(data_source)
 
+    def trim_to_minimized_sources(self, data_sources: list[DataSource]):
+        data_sources_to_remove_from_selection = []
+
+        for data_source in self.row_indices_per_data_source.keys():
+            if data_source not in data_sources:
+                data_sources_to_remove_from_selection.append(data_source)
+
+        for data_source in data_sources_to_remove_from_selection:
+            del self.row_indices_per_data_source[data_source]
+
 
 ALL_ROWS_SELECTION = DataRowSelection()
