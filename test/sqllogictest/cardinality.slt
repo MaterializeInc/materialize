@@ -14,6 +14,12 @@ ALTER SYSTEM SET enable_cardinality_estimates = true
 ----
 COMPLETE 0
 
+# avoid flakes in CI
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '100ms'
+----
+COMPLETE 0
+
 simple
 SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE
 ----
