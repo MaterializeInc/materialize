@@ -302,7 +302,7 @@ class LoadPhase(Phase):
         for i in range(self.duration):
             assert (
                 jobs.qsize() < 100
-            ), "Too many jobs in queue, can't keep up: {jobs.qsize()}"
+            ), f"Too many jobs in queue, can't keep up: {jobs.qsize()}"
             time.sleep(1)
         for thread in threads:
             thread.join()
@@ -428,7 +428,7 @@ class Kafka(Scenario):
                             action=StandaloneQuery(
                                 "SELECT * FROM kafka_mv",
                                 conn_infos["materialized"],
-                                strict_serializable=True,
+                                strict_serializable=False,
                             ),
                         )
                         for i in range(10)
@@ -488,7 +488,7 @@ class PgReadReplica(Scenario):
                             action=StandaloneQuery(
                                 "SELECT * FROM mv_sum",
                                 conn_infos["materialized"],
-                                strict_serializable=True,
+                                strict_serializable=False,
                             ),
                         )
                         for i in range(10)
@@ -611,7 +611,7 @@ class MySQLReadReplica(Scenario):
                             action=StandaloneQuery(
                                 "SELECT * FROM mv_sum_mysql",
                                 conn_info=conn_infos["materialized"],
-                                strict_serializable=True,
+                                strict_serializable=False,
                             ),
                         )
                         for i in range(10)
@@ -746,7 +746,7 @@ class PoolRead(Scenario):
         self.init(
             [
                 LoadPhase(
-                    duration=10,
+                    duration=120,
                     actions=[
                         OpenLoop(
                             action=PooledQuery(
@@ -756,6 +756,46 @@ class PoolRead(Scenario):
                             # dist=Gaussian(mean=0.01, stddev=0.05),
                         ),
                     ],
+                ),
+            ],
+            conn_pool_size=100,
+            guarantees={
+                "SELECT 1 (pooled)": {"avg": 5, "max": 200},
+            },
+        )
+
+
+class StatementLogging(Scenario):
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        self.init(
+            [
+                TdPhase(
+                    """
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+                    ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+                    ALTER SYSTEM SET enable_statement_lifecycle_logging = true;
+                    """
+                ),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        OpenLoop(
+                            action=PooledQuery(
+                                "SELECT 1", conn_info=conn_infos["materialized"]
+                            ),
+                            dist=Periodic(per_second=100),
+                            # dist=Gaussian(mean=0.01, stddev=0.05),
+                        ),
+                    ],
+                ),
+                TdPhase(
+                    """
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    ALTER SYSTEM SET statement_logging_default_sample_rate = 0;
+                    ALTER SYSTEM SET statement_logging_max_sample_rate = 0;
+                    ALTER SYSTEM SET enable_statement_lifecycle_logging = false;
+                    """
                 ),
             ],
             conn_pool_size=100,
@@ -1159,6 +1199,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         raise FailedTestExecutionError(errors=failures)
 
     # TODO: Silence testdrive output
-    # TODO: Allow parametrization of scenarios
+    # TODO: Allow parametrization of scenarios (--load-phase-duration, --parallelism, ...)
     # TODO: Linear regression slope as a measurement to make sure something doesn't get slower with time
     # TODO: Choose an existing cluster name (for remote mz)
