@@ -46,6 +46,7 @@ message ProtoStorageParameters {
     optional mz_proto.ProtoDuration pg_source_tcp_keepalives_interval = 36;
     optional mz_proto.ProtoDuration pg_source_tcp_user_timeout = 37;
     bool pg_source_tcp_configure_server = 38;
+    uint64 keep_n_replica_status_history_entries = 39;
 
     mz_dyncfg.ConfigUpdates dyncfg_updates = 30;
 

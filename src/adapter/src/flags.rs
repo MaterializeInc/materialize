@@ -53,6 +53,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),
         keep_n_privatelink_status_history_entries: config
             .keep_n_privatelink_status_history_entries(),
+        keep_n_replica_status_history_entries: config.keep_n_replica_status_history_entries(),
         upsert_rocksdb_tuning_config: {
             match mz_rocksdb_types::RocksDBTuningParameters::from_parameters(
                 config.upsert_rocksdb_compaction_style(),
