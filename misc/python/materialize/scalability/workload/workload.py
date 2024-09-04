@@ -9,11 +9,11 @@
 
 from psycopg import Cursor
 
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.operation import Operation
-from materialize.scalability.operation_data import OperationData
-from materialize.scalability.schema import Schema
-from materialize.scalability.workload_version import WorkloadVersion
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.operation.operation_data import OperationData
+from materialize.scalability.operation.scalability_operation import Operation
+from materialize.scalability.schema.schema import Schema
+from materialize.scalability.workload.workload_version import WorkloadVersion
 
 
 class Workload:

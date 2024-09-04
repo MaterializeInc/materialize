@@ -6,16 +6,15 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-from materialize.scalability.operation import Operation
-from materialize.scalability.operations_test import (
+from materialize.scalability.operation.operations_test import (
     EmptyOperation,
     EmptySqlStatement,
     SleepInClusterd,
     SleepInEnvironmentd,
     SleepInPython,
 )
-from materialize.scalability.workload_markers import SelfTestWorkload
+from materialize.scalability.operation.scalability_operation import Operation
+from materialize.scalability.workload.workload_markers import SelfTestWorkload
 
 
 class EmptyOperatorWorkload(SelfTestWorkload):

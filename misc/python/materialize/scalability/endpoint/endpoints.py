@@ -13,7 +13,7 @@ from materialize import git
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.scalability.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoint import Endpoint
 
 POSTGRES_ENDPOINT_NAME = "postgres"
 

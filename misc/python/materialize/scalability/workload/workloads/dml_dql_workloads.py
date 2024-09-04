@@ -6,10 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
-from materialize.scalability.operation import Operation
-from materialize.scalability.operations import (
+from materialize.scalability.operation.operations.operations import (
     InsertDefaultValues,
     SelectCount,
     SelectCountInMv,
@@ -19,9 +16,8 @@ from materialize.scalability.operations import (
     SelectUnionAll,
     Update,
 )
-from materialize.scalability.workload_markers import (
-    DmlDqlWorkload,
-)
+from materialize.scalability.operation.scalability_operation import Operation
+from materialize.scalability.workload.workload_markers import DmlDqlWorkload
 
 
 class InsertWorkload(DmlDqlWorkload):

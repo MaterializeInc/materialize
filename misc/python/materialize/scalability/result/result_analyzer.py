@@ -10,9 +10,9 @@
 
 from __future__ import annotations
 
-from materialize.scalability.comparison_outcome import ComparisonOutcome
-from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.workload_result import WorkloadResult
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.result.comparison_outcome import ComparisonOutcome
+from materialize.scalability.result.workload_result import WorkloadResult
 
 
 class ResultAnalyzer:

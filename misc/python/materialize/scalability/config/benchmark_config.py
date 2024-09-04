@@ -9,7 +9,7 @@
 from dataclasses import dataclass
 from math import floor, sqrt
 
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload.workload import Workload
 
 
 @dataclass

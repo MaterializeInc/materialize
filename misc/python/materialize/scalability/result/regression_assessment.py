@@ -14,8 +14,8 @@ from materialize.docker import (
 )
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.test_result import TestFailureDetails
-from materialize.scalability.comparison_outcome import ComparisonOutcome
-from materialize.scalability.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.result.comparison_outcome import ComparisonOutcome
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
 )

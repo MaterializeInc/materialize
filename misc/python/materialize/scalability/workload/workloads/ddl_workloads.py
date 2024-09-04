@@ -6,11 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
-from materialize.scalability.operation import Operation, OperationChainWithDataExchange
-from materialize.scalability.operation_data import OperationData
-from materialize.scalability.operations import (
+from materialize.scalability.operation.operation_data import OperationData
+from materialize.scalability.operation.operations.operations import (
     CreateMvOnTableX,
     CreateTableX,
     CreateViewXOnSeries,
@@ -21,12 +18,12 @@ from materialize.scalability.operations import (
     SelectStarFromMvOnTableX,
     SelectStarFromTableX,
 )
-from materialize.scalability.workload import (
-    WorkloadWithContext,
+from materialize.scalability.operation.scalability_operation import (
+    Operation,
+    OperationChainWithDataExchange,
 )
-from materialize.scalability.workload_markers import (
-    DdlWorkload,
-)
+from materialize.scalability.workload.workload import WorkloadWithContext
+from materialize.scalability.workload.workload_markers import DdlWorkload
 
 
 class CreateAndDropTableWorkload(WorkloadWithContext, DdlWorkload):
