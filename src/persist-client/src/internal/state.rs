@@ -1206,6 +1206,8 @@ where
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
             let min_writer = claim_compaction_min_version.map(WriterKey::for_version);
             merge_reqs.extend(
+                // We keep the oldest `reqs_to_take` batches, under the theory that they're least
+                // likely to be compacted soon for other reasons.
                 self.trace
                     .fueled_merge_reqs_before_ms(threshold_ms, min_writer)
                     .take(reqs_to_take),

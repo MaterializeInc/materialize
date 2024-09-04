@@ -537,7 +537,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     /// Obtain all fueled merge reqs that either have no active compaction, or the previous
-    /// compaction was started at or before the threshold time.
+    /// compaction was started at or before the threshold time, in order from oldest to newest.
     pub(crate) fn fueled_merge_reqs_before_ms(
         &self,
         threshold_ms: u64,
@@ -1100,10 +1100,12 @@ struct Spine<T> {
 }
 
 impl<T> Spine<T> {
+    /// All batches in the spine, oldest to newest.
     pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
         self.merging.iter().rev().flat_map(|m| &m.batches)
     }
 
+    /// All (mutable) batches in the spine, oldest to newest.
     pub fn spine_batches_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut SpineBatch<T>> {
         self.merging.iter_mut().rev().flat_map(|m| &mut m.batches)
     }
