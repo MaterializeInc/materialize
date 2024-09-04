@@ -109,6 +109,10 @@ def bazel(
         sys.platform == "darwin" and arch == Arch.X86_64
     ), "cross compiling to Linux x86_64 is not supported from macOS"
 
+    bazel_flags = ["--config=linux"]
+    if sys.platform != "darwin":
+        bazel_flags += [f"--config=linux-{arch.go_str()}"]
+
     rustc_flags = [
         f"--@rules_rust//:extra_rustc_flag={flag}"
         for flag in rustflags
@@ -116,7 +120,7 @@ def bazel(
         if "tokio_unstable" not in flag
     ]
 
-    return ["bazel", subcommand, platform, *rustc_flags]
+    return ["bazel", subcommand, platform, *bazel_flags, *rustc_flags]
 
 
 def cargo(

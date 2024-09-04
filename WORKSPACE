@@ -405,7 +405,6 @@ crates_repository(
         )],
         "tikv-jemalloc-sys": [crate.annotation(
             gen_build_script = False,
-            rustc_flags = ["--cfg=prefixed"],
             deps = ["@jemalloc"],
         )],
         "rdkafka-sys": [crate.annotation(

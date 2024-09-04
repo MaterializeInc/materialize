@@ -32,16 +32,11 @@ CONFIGURE_OPTIONS = [
     "--enable-doc=no",
     "--enable-shared=no",
     "--disable-cxx",
-    "--with-jemalloc-prefix=_rjem_",
     "--with-private-namespace=_rjem_",
     # Features we enable for jemalloc-sys.
     "--enable-prof",
     "--enable-stats",
     "--with-malloc-conf=background_thread:true",
-    # We build with clang.
-    "--enable-prof-libunwind",
-    "--disable-prof-libgcc",
-    "--disable-prof-gcc",
 ]
 
 configure_make(
@@ -55,12 +50,16 @@ configure_make(
         "@platforms//os:macos": ["@llvm_toolchain_llvm//:ar"],
         "//conditions:default": [],
     }),
+    configure_in_place = True,
     # TODO(parkmycar): Do we want to customize page sizes?
     configure_options = CONFIGURE_OPTIONS + select({
         "@//misc/bazel/platforms:linux_arm": ["--host=aarch64-unknown-linux-gnu"],
         "@//misc/bazel/platforms:linux_x86_64": ["--host=x86_64-unknown-linux-gnu"],
         "@//misc/bazel/platforms:macos_arm": ["--host=aarch64-apple-darwin"],
         "@//misc/bazel/platforms:macos_x86_64": ["--host=x86_64-apple-darwin"],
+        "//conditions:default": [],
+    }) + select({
+        "@platforms//os:macos": ["--with-jemalloc-prefix=_rjem_"],
         "//conditions:default": [],
     }),
     copts = ["-lpthread"],
