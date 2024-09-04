@@ -28,7 +28,6 @@ use std::num::NonZeroI64;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
@@ -63,9 +62,8 @@ use mz_storage_types::controller::StorageError;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc;
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 pub mod clusters;
@@ -140,8 +138,8 @@ enum Readiness<T> {
     Storage,
     /// The compute controller is ready.
     Compute,
-    /// The metrics channel is ready.
-    Metrics,
+    /// A batch of metric data is ready.
+    Metrics((ReplicaId, Vec<ServiceProcessMetrics>)),
     /// Frontiers are ready for recording.
     Frontiers,
     /// An internally-generated message is ready to be returned.
@@ -172,9 +170,9 @@ pub struct Controller<T: Timestamp = mz_repr::Timestamp> {
     /// Tasks for collecting replica metrics.
     metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
-    metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
+    metrics_tx: mpsc::UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
-    metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
+    metrics_rx: mpsc::UnboundedReceiver<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Periodic notification to record frontiers.
     frontiers_ticker: Interval,
     /// A function providing the current wallclock time.
@@ -375,8 +373,8 @@ where
                     () = self.compute.ready() => {
                         self.readiness = Readiness::Compute;
                     }
-                    _ = Pin::new(&mut self.metrics_rx).peek() => {
-                        self.readiness = Readiness::Metrics;
+                    Some(metrics) = self.metrics_rx.recv() => {
+                        self.readiness = Readiness::Metrics(metrics);
                     }
                     _ = self.frontiers_ticker.tick() => {
                         self.readiness = Readiness::Frontiers;
@@ -529,7 +527,7 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn process(
+    pub fn process(
         &mut self,
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
@@ -537,7 +535,7 @@ where
             Readiness::NotReady => Ok(None),
             Readiness::Storage => self.process_storage_response(storage_metadata),
             Readiness::Compute => self.process_compute_response(),
-            Readiness::Metrics => self.process_replica_metrics().await,
+            Readiness::Metrics((id, metrics)) => self.process_replica_metrics(id, metrics),
             Readiness::Frontiers => {
                 self.record_frontiers();
                 Ok(None)
@@ -587,13 +585,11 @@ where
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
     }
 
-    async fn process_replica_metrics(
+    fn process_replica_metrics(
         &mut self,
+        id: ReplicaId,
+        metrics: Vec<ServiceProcessMetrics>,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let Some((id, metrics)) = self.metrics_rx.next().await else {
-            return Ok(None);
-        };
-
         self.record_replica_metrics(id, &metrics);
         Ok(Some(ControllerResponse::ComputeReplicaMetrics(id, metrics)))
     }
@@ -758,7 +754,7 @@ where
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
-            metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
+            metrics_rx,
             frontiers_ticker,
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,

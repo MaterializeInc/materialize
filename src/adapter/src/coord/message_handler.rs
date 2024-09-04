@@ -72,7 +72,6 @@ impl Coordinator {
                 let storage_metadata = catalog.state().storage_metadata();
                 if let Some(m) = controller
                     .process(storage_metadata)
-                    .await
                     .expect("`process` never returns an error")
                 {
                     self.message_controller(m).boxed_local().await
