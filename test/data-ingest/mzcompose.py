@@ -18,6 +18,7 @@ import traceback
 
 from pg8000.exceptions import InterfaceError
 
+from materialize import buildkite
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     KafkaRoundtripExecutor,
@@ -93,10 +94,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    workloads = (
-        [globals()[workload] for workload in args.workload]
-        if args.workload
-        else WORKLOADS
+    workloads = buildkite.shard_list(
+        (
+            [globals()[workload] for workload in args.workload]
+            if args.workload
+            else list(WORKLOADS)
+        ),
+        lambda w: w.__name__,
+    )
+    print(
+        f"Workloads in shard with index {buildkite.get_parallelism_index()}: {workloads}"
     )
 
     print(f"--- Random seed is {args.seed}")

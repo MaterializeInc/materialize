@@ -19,7 +19,7 @@ SCALABILITY_WORKLOADS_DIR = SCALABILITY_FRAMEWORK_DIR / "workload" / "workloads"
 # Consider increasing the #SCALABILITY_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {}
 SHA256_OF_FRAMEWORK["*"] = (
-    "f275bb082ff0427e48c2216abdf493adf95f288a1c167092974a853d5ca28ceb"
+    "1d0fa12d738b686e62d0fa2612656a1b4a0ac43cbfb377f1ffa5c7952ec4314d"
 )
 
 # Consider increasing the workload's class #version() if changes are expected to impact results!

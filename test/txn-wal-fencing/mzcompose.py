@@ -18,6 +18,7 @@ from concurrent import futures
 from dataclasses import dataclass
 from enum import Enum
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -94,7 +95,12 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for workload in WORKLOADS:
+    workloads = buildkite.shard_list(WORKLOADS, lambda w: w.name)
+    print(
+        f"Workloads in shard with index {buildkite.get_parallelism_index()}: {[w.name for w in workloads]}"
+    )
+
+    for workload in workloads:
         run_workload(c, workload)
 
 

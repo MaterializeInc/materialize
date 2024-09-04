@@ -1506,6 +1506,8 @@ class MySqlSources(Generator):
 
 
 class WebhookSources(Generator):
+    COUNT = 100  # TODO: Remove when #29358 is fixed
+
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")

@@ -335,7 +335,7 @@ steps:
               composition: limits
               run: main
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 2
         # TODO(def-) Move to larger agents to prevent flakiness
         retry:
           automatic:
@@ -1273,7 +1273,8 @@ steps:
   - id: data-ingest
     label: "Data Ingest"
     depends_on: build-aarch64
-    timeout_in_minutes: 120
+    timeout_in_minutes: 90
+    parallelism: 2
     retry:
       automatic:
         - exit_status: 75
@@ -1473,7 +1474,8 @@ steps:
   - id: txn-wal-fencing
     label: Txn-wal fencing
     depends_on: build-aarch64
-    timeout_in_minutes: 180
+    timeout_in_minutes: 120
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
