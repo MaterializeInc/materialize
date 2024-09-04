@@ -796,9 +796,7 @@ pub fn show_role_membership<'a>(
     let mut query_filter = Vec::new();
     if let Some(role) = role {
         let name = role.name;
-        query_filter.push(format!(
-            "(pg_has_role('{name}', member, 'USAGE') OR role = '{name}')"
-        ));
+        query_filter.push(format!("pg_has_role('{name}', member, 'USAGE')"));
     }
     let query_filter = if query_filter.len() > 0 {
         format!("WHERE {}", itertools::join(query_filter, " AND "))

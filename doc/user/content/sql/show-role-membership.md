@@ -42,7 +42,6 @@ SHOW ROLE MEMBERSHIP FOR r2;
 ```nofmt
  role | member |  grantor
 ------+--------+-----------
- r2   | r1     | mz_system
  r3   | r2     | mz_system
  r4   | r3     | mz_system
 ```
