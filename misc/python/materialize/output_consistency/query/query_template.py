@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from __future__ import annotations
+
 from collections.abc import Callable
 
 from materialize.output_consistency.execution.evaluation_strategy import (
@@ -417,3 +419,20 @@ class QueryTemplate:
             all_involved_characteristics.update(characteristics)
 
         return all_involved_characteristics
+
+    def clone(
+        self, expect_error: bool, select_expressions: list[Expression]
+    ) -> QueryTemplate:
+        return QueryTemplate(
+            expect_error=expect_error,
+            select_expressions=select_expressions,
+            where_expression=self.where_expression,
+            storage_layout=self.storage_layout,
+            data_source=self.data_source,
+            contains_aggregations=self.contains_aggregations,
+            row_selection=self.row_selection,
+            offset=self.offset,
+            limit=self.limit,
+            additional_data_sources=self.additional_data_sources,
+            custom_order_expressions=self.custom_order_expressions,
+        )
