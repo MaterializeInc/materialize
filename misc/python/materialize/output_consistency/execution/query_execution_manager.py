@@ -226,12 +226,16 @@ class QueryExecutionManager:
         # However, it is also possible that the where condition was invalid.
         # This is ignored as of now.
         arg_split_index = int(args_count / 2)
-        query1_args = original_query_template.select_expressions[arg_split_index:]
-        query2_args = original_query_template.select_expressions[:arg_split_index]
+        query1_select_expressions = original_query_template.select_expressions[
+            arg_split_index:
+        ]
+        query2_select_expressions = original_query_template.select_expressions[
+            :arg_split_index
+        ]
 
         new_query_template1 = QueryTemplate(
             False,
-            query1_args,
+            query1_select_expressions,
             original_query_template.where_expression,
             original_query_template.storage_layout,
             original_query_template.data_source,
@@ -241,10 +245,11 @@ class QueryExecutionManager:
             original_query_template.limit,
             # keep the original data sources
             additional_data_sources=original_query_template.additional_data_sources,
+            custom_order_expressions=original_query_template.custom_order_expressions,
         )
         new_query_template2 = QueryTemplate(
             False,
-            query2_args,
+            query2_select_expressions,
             original_query_template.where_expression,
             original_query_template.storage_layout,
             original_query_template.data_source,
@@ -254,6 +259,7 @@ class QueryExecutionManager:
             original_query_template.limit,
             # keep the original data sources
             additional_data_sources=original_query_template.additional_data_sources,
+            custom_order_expressions=original_query_template.custom_order_expressions,
         )
         query_id_prefix = f"{query_id}."
 
