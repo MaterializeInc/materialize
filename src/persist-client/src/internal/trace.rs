@@ -85,7 +85,6 @@ pub struct FueledMergeRes<T> {
 #[derive(Debug, Clone)]
 pub struct Trace<T> {
     spine: Spine<T>,
-    pub(crate) roundtrip_structure: bool,
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -93,14 +92,8 @@ impl<T: PartialEq> PartialEq for Trace<T> {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
-        let Trace {
-            spine: _,
-            roundtrip_structure: _,
-        } = self;
-        let Trace {
-            spine: _,
-            roundtrip_structure: _,
-        } = other;
+        let Trace { spine: _ } = self;
+        let Trace { spine: _ } = other;
 
         // Intentionally use HollowBatches for this comparison so we ignore
         // differences in spine layers.
@@ -112,7 +105,6 @@ impl<T: Timestamp + Lattice> Default for Trace<T> {
     fn default() -> Self {
         Self {
             spine: Spine::new(),
-            roundtrip_structure: false,
         }
     }
 }
@@ -242,12 +234,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
 
-        if !self.roundtrip_structure {
-            assert!(hollow_batches.is_empty());
-            spine_batches.clear();
-            merges.clear();
-        }
-
         FlatTrace {
             since,
             legacy_batches,
@@ -264,10 +250,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
             spine_batches,
             mut merges,
         } = value;
-
-        // If the flattened representation has spine batches (or is empty)
-        // we know to preserve the structure for this trace.
-        let roundtrip_structure = !spine_batches.is_empty() || legacy_batches.is_empty();
 
         // We need to look up legacy batches somehow, but we don't have a spine id for them.
         // Instead, we rely on the fact that the spine must store them in antichain order.
@@ -288,7 +270,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
         let mut pop_batch =
             |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
-                let mut batch = hollow_batches
+                let batch = hollow_batches
                     .remove(&id)
                     .or_else(|| legacy_batches.pop())
                     .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
@@ -303,42 +285,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         batch.desc.lower().elements(),
                         expected_desc.lower().elements()
                     ));
-                }
-
-                // Empty legacy batches are not deterministic: different nodes may split them up
-                // in different ways. For now, we rearrange them such to match the spine data.
-                if batch.parts.is_empty() && batch.run_splits.is_empty() && batch.len == 0 {
-                    let mut new_upper = batch.desc.upper().clone();
-
-                    // While our current batch is too small, and there's another empty batch
-                    // in the list, roll it in.
-                    while PartialOrder::less_than(&new_upper, expected_desc.upper()) {
-                        let Some(next_batch) = legacy_batches.pop() else {
-                            break;
-                        };
-                        if next_batch.is_empty() {
-                            new_upper.clone_from(next_batch.desc.upper());
-                        } else {
-                            legacy_batches.push(next_batch);
-                            break;
-                        }
-                    }
-
-                    // If our current batch is too large, split it by the expected upper
-                    // and preserve the remainder.
-                    if PartialOrder::less_than(expected_desc.upper(), &new_upper) {
-                        legacy_batches.push(Arc::new(HollowBatch::empty(Description::new(
-                            expected_desc.upper().clone(),
-                            new_upper.clone(),
-                            batch.desc.since().clone(),
-                        ))));
-                        new_upper.clone_from(expected_desc.upper());
-                    }
-                    batch = Arc::new(HollowBatch::empty(Description::new(
-                        batch.desc.lower().clone(),
-                        new_upper,
-                        expected_desc.since().clone(),
-                    )))
                 }
 
                 if expected_desc.upper() != batch.desc.upper() {
@@ -397,7 +343,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             }
         }
 
-        let mut trace = Trace {
+        let trace = Trace {
             spine: Spine {
                 effort: 1,
                 next_id,
@@ -405,7 +351,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 upper,
                 merging,
             },
-            roundtrip_structure,
         };
 
         fn check_empty(name: &str, len: usize) -> Result<(), String> {
@@ -415,15 +360,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 Ok(())
             }
         }
-
-        if roundtrip_structure {
-            check_empty("legacy batches", legacy_batches.len())?;
-        } else {
-            // If the structure wasn't actually serialized, we may have legacy batches left over.
-            for batch in legacy_batches.into_iter().rev() {
-                trace.push_batch_no_merge_reqs(Arc::unwrap_or_clone(batch));
-            }
-        }
+        check_empty("legacy batches", legacy_batches.len())?;
         check_empty("hollow batches", hollow_batches.len())?;
         check_empty("merges", merges.len())?;
 
@@ -485,12 +422,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     #[must_use]
     pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
         let mut merge_reqs = Vec::new();
-        self.spine.insert(
-            batch,
-            &mut SpineLog::Enabled {
-                merge_reqs: &mut merge_reqs,
-            },
-        );
+        self.spine.insert(batch, &mut merge_reqs);
         debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
         // Spine::roll_up (internally used by insert) clears all batches out of
         // levels below a target by walking up from level 0 and merging each
@@ -510,12 +442,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                 break;
             }
         }
-    }
-
-    /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
-    /// account for a surprising amount of cpu in prod. #18368
-    pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
-        self.spine.insert(batch, &mut SpineLog::Disabled);
     }
 
     /// Validates invariants.
@@ -607,12 +533,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
 /// A log of what transitively happened during a Spine operation: e.g.
 /// FueledMergeReqs were generated.
-enum SpineLog<'a, T> {
-    Enabled {
-        merge_reqs: &'a mut Vec<FueledMergeReq<T>>,
-    },
-    Disabled,
-}
+type SpineLog<'a, T> = Vec<FueledMergeReq<T>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SpineId(pub usize, pub usize);
@@ -971,13 +892,11 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         // Sanity check the pre-size code.
         debug_assert_eq!(merged_parts.len(), merged_parts_len);
 
-        if let SpineLog::Enabled { merge_reqs } = log {
-            merge_reqs.push(FueledMergeReq {
-                id,
-                desc: desc.clone(),
-                inputs: merged_parts.clone(),
-            });
-        }
+        log.push(FueledMergeReq {
+            id,
+            desc: desc.clone(),
+            inputs: merged_parts.clone(),
+        });
 
         Some(SpineBatch {
             id,
@@ -1732,10 +1651,9 @@ pub(crate) mod tests {
             (
                 any::<Option<T>>(),
                 proptest::collection::vec(any_hollow_batch::<T>(), num_batches),
-                any::<bool>(),
                 any::<u64>(),
             ),
-            |(since, mut batches, roundtrip_structure, timeout_ms)| {
+            |(since, mut batches, timeout_ms)| {
                 let mut trace = Trace::<T>::default();
                 trace.downgrade_since(&since.map_or_else(Antichain::new, Antichain::from_elem));
 
@@ -1760,7 +1678,6 @@ pub(crate) mod tests {
                 for req in reqs {
                     trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }
-                trace.roundtrip_structure = roundtrip_structure;
                 trace
             },
         )

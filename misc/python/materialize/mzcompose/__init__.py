@@ -111,7 +111,6 @@ def get_default_system_parameters(
         "persist_pubsub_client_enabled": "true",
         "persist_pubsub_push_diff_enabled": "true",
         "persist_record_compactions": "true",
-        "persist_roundtrip_spine": "true",
         "persist_schema_register": (
             "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
         ),
