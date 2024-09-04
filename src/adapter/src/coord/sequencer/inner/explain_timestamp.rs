@@ -301,7 +301,7 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
             ExplainFormat::Sql => {
-                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS SYNTAX"));
+                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS SQL"));
             }
         };
         let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;

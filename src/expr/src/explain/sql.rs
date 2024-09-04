@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN ... AS SYNTAX` support for structures defined in this crate.
+//! `EXPLAIN ... AS SQL` support for structures defined in this crate.
 
 use std::collections::BTreeMap;
 
@@ -52,7 +52,35 @@ where
     T: DisplaySql<PlanRenderingContext<'a, T>> + Ord,
 {
     fn to_sql_query(&self, _ctx: &mut ()) -> Query<Raw> {
-        todo!()
+        let mut ctes = Vec::with_capacity(self.plans.len());
+        for (id, plan) in self.plans.iter() {
+            let mut ctx = PlanRenderingContext::new(
+                Indent::default(),
+                self.context.humanizer,
+                plan.annotations.clone(),
+                self.context.config,
+            );
+
+            let query = plan.plan.to_sql_query(&mut ctx);
+
+            ctes.push(Cte {
+                alias: TableAlias {
+                    name: Ident::new_unchecked(id),
+                    columns: vec![],
+                    strict: false,
+                },
+                id: (),
+                query,
+            });
+        }
+
+        SqlQuery {
+            ctes: CteBlock::Simple(ctes),
+            body: SetExpr::Values(Values(vec![])),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        }
     }
 }
 
@@ -133,7 +161,7 @@ impl MirToSql {
     fn column_info(
         &self,
         expr: &MirRelationExpr,
-        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+        ctx: &PlanRenderingContext<'_, MirRelationExpr>,
     ) -> Vec<Ident> {
         let Some(attribs) = ctx.annotations.get(expr) else {
             return vec![Ident::new_unchecked("unknown")];

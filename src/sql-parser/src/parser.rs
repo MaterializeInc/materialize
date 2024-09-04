@@ -8151,7 +8151,7 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
 
-        let with_options = if self.parse_keyword(WITH) {
+        let mut with_options = if self.parse_keyword(WITH) {
             if self.consume_token(&Token::LParen) {
                 let options = self.parse_comma_separated(Parser::parse_explain_plan_option)?;
                 self.expect_token(&Token::RParen)?;
@@ -8169,7 +8169,18 @@ impl<'a> Parser<'a> {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
                 Some(DOT) => Some(ExplainFormat::Dot),
-                Some(SQL) => Some(ExplainFormat::Sql),
+                Some(SQL) => {
+                    // make sure we include the relevant attributes
+                    with_options.push(ExplainPlanOption {
+                        name: ExplainPlanOptionName::Arity,
+                        value: None,
+                    });
+                    with_options.push(ExplainPlanOption {
+                        name: ExplainPlanOptionName::ColumnNames,
+                        value: None,
+                    });
+                    Some(ExplainFormat::Sql)
+                }
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }

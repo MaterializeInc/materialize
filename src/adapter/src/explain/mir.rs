@@ -48,7 +48,7 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
     }
 
     fn explain_sql(&'a mut self, context: &'a Self::Context) -> Result<Self::Sql, ExplainError> {
-        self.as_explain_single_plan(context)
+        self.as_explain_single_plan(&context)
     }
 }
 
