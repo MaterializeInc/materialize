@@ -768,24 +768,22 @@ where
     pub fn peek(
         &mut self,
         instance_id: ComputeInstanceId,
-        collection_id: GlobalId,
+        peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
-        peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
         self.instance_mut(instance_id)?.peek(
-            collection_id,
+            peek_target,
             literal_constraints,
             uuid,
             timestamp,
             finishing,
             map_filter_project,
             target_replica,
-            peek_target,
         )?;
         Ok(())
     }

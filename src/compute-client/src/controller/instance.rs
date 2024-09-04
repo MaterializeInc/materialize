@@ -1396,22 +1396,21 @@ where
     #[mz_ore::instrument(level = "debug")]
     pub fn peek(
         &mut self,
-        id: GlobalId,
+        peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
-        peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
         // Install a compaction hold on `id` at `timestamp`.
         let read_hold = match &peek_target {
-            PeekTarget::Index { .. } => {
-                self.acquire_read_hold_at(id, Antichain::from_elem(timestamp.clone()))?
+            PeekTarget::Index { id } => {
+                self.acquire_read_hold_at(*id, Antichain::from_elem(timestamp.clone()))?
             }
-            PeekTarget::Persist { .. } => {
-                self.acquire_storage_read_hold_at(id, Antichain::from_elem(timestamp.clone()))?
+            PeekTarget::Persist { id, .. } => {
+                self.acquire_storage_read_hold_at(*id, Antichain::from_elem(timestamp.clone()))?
             }
         };
 
