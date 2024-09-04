@@ -12,7 +12,7 @@
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -105,11 +105,11 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         None
     }
 
-    fn key_desc(&self) -> RelationDesc {
+    fn default_key_desc(&self) -> RelationDesc {
         RelationDesc::empty()
     }
 
-    fn value_desc(&self) -> RelationDesc {
+    fn default_value_desc(&self) -> RelationDesc {
         // The postgres source only outputs data to its subsources. The catalog object
         // representing the source itself is just an empty relation with no columns
         RelationDesc::empty()
@@ -121,10 +121,6 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
 
     fn connection_id(&self) -> Option<GlobalId> {
         Some(self.connection_id)
-    }
-
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        vec![]
     }
 
     fn primary_export_details(&self) -> SourceExportDetails {

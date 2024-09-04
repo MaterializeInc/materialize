@@ -15,7 +15,7 @@ use std::time::Duration;
 use mz_ore::now::NowFn;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -65,7 +65,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         None
     }
 
-    fn key_desc(&self) -> RelationDesc {
+    fn default_key_desc(&self) -> RelationDesc {
         match &self.load_generator {
             LoadGenerator::KeyValue(_) => {
                 // `"key"` is overridden by the key_envelope in planning.
@@ -77,7 +77,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         }
     }
 
-    fn value_desc(&self) -> RelationDesc {
+    fn default_value_desc(&self) -> RelationDesc {
         match &self.load_generator {
             LoadGenerator::Auction => RelationDesc::empty(),
             LoadGenerator::Clock => RelationDesc::builder()
@@ -132,10 +132,6 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
     fn connection_id(&self) -> Option<GlobalId> {
         None
-    }
-
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        vec![]
     }
 
     // Some load-gen types output to their primary collection while

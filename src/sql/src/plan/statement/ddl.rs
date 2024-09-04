@@ -89,7 +89,9 @@ use mz_storage_types::sources::encoding::{
 use mz_storage_types::sources::envelope::{
     KeyEnvelope, NoneEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
-use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
+use mz_storage_types::sources::kafka::{
+    kafka_metadata_columns_desc, KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails,
+};
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceConnection,
     LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
@@ -730,6 +732,9 @@ pub fn plan_create_source(
                 sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
             }
 
+            // This defines the metadata columns for the primary export of this kafka source,
+            // not any tables that are created from it.
+            // TODO: Remove this when we stop outputting to the primary export of a source.
             let metadata_columns = include_metadata
                 .into_iter()
                 .flat_map(|item| match item {
@@ -908,173 +913,26 @@ pub fn plan_create_source(
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let encoding = match format {
-        Some(format) => Some(get_encoding(scx, format, &envelope)?),
-        None => None,
-    };
-
-    let (key_desc, value_desc) = match &encoding {
-        Some(encoding) => {
-            // If we are applying an encoding we need to ensure that the incoming value_desc is a
-            // single column of type bytes.
-            match external_connection.value_desc().typ().columns() {
-                [typ] => match typ.scalar_type {
-                    ScalarType::Bytes => {}
-                    _ => sql_bail!(
-                        "The schema produced by the source is incompatible with format decoding"
-                    ),
-                },
-                _ => sql_bail!(
-                    "The schema produced by the source is incompatible with format decoding"
-                ),
-            }
-
-            let (key_desc, value_desc) = encoding.desc()?;
-
-            // TODO(petrosagg): This piece of code seems to be making a statement about the
-            // nullability of the NONE envelope when the source is Kafka. As written, the code
-            // misses opportunities to mark columns as not nullable and is over conservative. For
-            // example in the case of `FORMAT BYTES ENVELOPE NONE` the output is indeed
-            // non-nullable but we will mark it as nullable anyway. This kind of crude reasoning
-            // should be replaced with precise type-level reasoning.
-            let key_desc = key_desc.map(|desc| {
-                let is_kafka = matches!(connection, CreateSourceConnection::Kafka { .. });
-                let is_envelope_none = matches!(envelope, ast::SourceEnvelope::None);
-                if is_kafka && is_envelope_none {
-                    RelationDesc::from_names_and_types(
-                        desc.into_iter()
-                            .map(|(name, typ)| (name, typ.nullable(true))),
-                    )
-                } else {
-                    desc
-                }
-            });
-            (key_desc, value_desc)
-        }
-        None => (
-            Some(external_connection.key_desc()),
-            external_connection.value_desc(),
-        ),
-    };
-
-    // KEY VALUE load generators are the only UPSERT source that
-    // has no encoding but defaults to `INCLUDE KEY`.
-    //
-    // As discussed
-    // <https://github.com/MaterializeInc/materialize/pull/26246#issuecomment-2023558097>,
-    // removing this special case amounts to deciding how to handle null keys
-    // from sources, in a holistic way. We aren't yet prepared to do this, so we leave
-    // this special case in.
-    //
-    // Note that this is safe because this generator is
-    // 1. The only source with no encoding that can have its key included.
-    // 2. Never produces null keys (or values, for that matter).
-    let key_envelope_no_encoding = matches!(
-        external_connection,
-        GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-            load_generator: LoadGenerator::KeyValue(_),
+    let metadata_columns_desc = match external_connection {
+        GenericSourceConnection::Kafka(KafkaSourceConnection {
+            ref metadata_columns,
             ..
-        })
-    );
-    let mut key_envelope = get_key_envelope(
+        }) => kafka_metadata_columns_desc(metadata_columns),
+        _ => vec![],
+    };
+
+    // Generate the relation description for the primary export of the source.
+    let (mut desc, envelope, encoding) = apply_source_envelope_encoding(
+        scx,
+        &envelope,
+        format,
+        Some(external_connection.default_key_desc()),
+        external_connection.default_value_desc(),
+        ignore_keys,
         include_metadata,
-        encoding.as_ref(),
-        key_envelope_no_encoding,
+        metadata_columns_desc,
+        &external_connection,
     )?;
-
-    match (&envelope, &key_envelope) {
-        (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
-        (ast::SourceEnvelope::Debezium, _) => sql_bail!(
-            "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
-        ),
-        _ => {}
-    };
-
-    // Not all source envelopes are compatible with all source connections.
-    // Whoever constructs the source ingestion pipeline is responsible for
-    // choosing compatible envelopes and connections.
-    //
-    // TODO(guswynn): ambiguously assert which connections and envelopes are
-    // compatible in typechecking
-    //
-    // TODO: remove bails as more support for upsert is added.
-    let envelope = match &envelope {
-        // TODO: fixup key envelope
-        ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
-        ast::SourceEnvelope::Debezium => {
-            //TODO check that key envelope is not set
-            let after_idx = match typecheck_debezium(&value_desc) {
-                Ok((_before_idx, after_idx)) => Ok(after_idx),
-                Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
-                    Some(DataEncoding::Avro(_)) => Err(type_err),
-                    _ => Err(sql_err!(
-                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
-                    )),
-                },
-            }?;
-
-            UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Debezium { after_idx },
-            }
-        }
-        ast::SourceEnvelope::Upsert {
-            value_decode_err_policy,
-        } => {
-            let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
-                None => {
-                    if !key_envelope_no_encoding {
-                        bail_unsupported!(format!(
-                            "UPSERT requires a key/value format: {:?}",
-                            format
-                        ))
-                    }
-                    None
-                }
-                Some(key_encoding) => Some(key_encoding),
-            };
-            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
-            // specified.
-            if key_envelope == KeyEnvelope::None {
-                key_envelope = get_unnamed_key_envelope(key_encoding)?;
-            }
-            // If the value decode error policy is not set we use the default upsert style.
-            let style = match value_decode_err_policy.as_slice() {
-                [] => UpsertStyle::Default(key_envelope),
-                [SourceErrorPolicy::Inline { alias }] => {
-                    scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_INLINE_ERRORS)?;
-                    UpsertStyle::ValueErrInline {
-                        key_envelope,
-                        error_column: alias
-                            .as_ref()
-                            .map_or_else(|| "error".to_string(), |a| a.to_string()),
-                    }
-                }
-                _ => {
-                    bail_unsupported!("ENVELOPE UPSERT with unsupported value decode error policy")
-                }
-            };
-
-            UnplannedSourceEnvelope::Upsert { style }
-        }
-        ast::SourceEnvelope::CdcV2 => {
-            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
-            //TODO check that key envelope is not set
-            match format {
-                Some(FormatSpecifier::Bare(Format::Avro(_))) => {}
-                _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
-            }
-            UnplannedSourceEnvelope::CdcV2
-        }
-    };
-
-    let metadata_columns = external_connection.metadata_columns();
-    let metadata_desc = included_column_desc(metadata_columns.clone());
-    let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    if ignore_keys.unwrap_or(false) {
-        desc = desc.without_keys();
-    }
-
     plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, col_names)?;
 
     let names: Vec<_> = desc.iter_names().cloned().collect();
@@ -1228,6 +1086,192 @@ pub fn plan_create_source(
     }))
 }
 
+fn apply_source_envelope_encoding(
+    scx: &StatementContext,
+    envelope: &ast::SourceEnvelope,
+    format: &Option<FormatSpecifier<Aug>>,
+    key_desc: Option<RelationDesc>,
+    value_desc: RelationDesc,
+    ignore_keys: Option<bool>,
+    include_metadata: &[SourceIncludeMetadata],
+    metadata_columns_desc: Vec<(&str, ColumnType)>,
+    source_connection: &GenericSourceConnection<ReferencedConnection>,
+) -> Result<
+    (
+        RelationDesc,
+        SourceEnvelope,
+        Option<SourceDataEncoding<ReferencedConnection>>,
+    ),
+    PlanError,
+> {
+    let encoding = match format {
+        Some(format) => Some(get_encoding(scx, format, envelope)?),
+        None => None,
+    };
+
+    let (key_desc, value_desc) = match &encoding {
+        Some(encoding) => {
+            // If we are applying an encoding we need to ensure that the incoming value_desc is a
+            // single column of type bytes.
+            match value_desc.typ().columns() {
+                [typ] => match typ.scalar_type {
+                    ScalarType::Bytes => {}
+                    _ => sql_bail!(
+                        "The schema produced by the source is incompatible with format decoding"
+                    ),
+                },
+                _ => sql_bail!(
+                    "The schema produced by the source is incompatible with format decoding"
+                ),
+            }
+
+            let (key_desc, value_desc) = encoding.desc()?;
+
+            // TODO(petrosagg): This piece of code seems to be making a statement about the
+            // nullability of the NONE envelope when the source is Kafka. As written, the code
+            // misses opportunities to mark columns as not nullable and is over conservative. For
+            // example in the case of `FORMAT BYTES ENVELOPE NONE` the output is indeed
+            // non-nullable but we will mark it as nullable anyway. This kind of crude reasoning
+            // should be replaced with precise type-level reasoning.
+            let key_desc = key_desc.map(|desc| {
+                let is_kafka = matches!(source_connection, GenericSourceConnection::Kafka(_));
+                let is_envelope_none = matches!(envelope, ast::SourceEnvelope::None);
+                if is_kafka && is_envelope_none {
+                    RelationDesc::from_names_and_types(
+                        desc.into_iter()
+                            .map(|(name, typ)| (name, typ.nullable(true))),
+                    )
+                } else {
+                    desc
+                }
+            });
+            (key_desc, value_desc)
+        }
+        None => (key_desc, value_desc),
+    };
+
+    // KEY VALUE load generators are the only UPSERT source that
+    // has no encoding but defaults to `INCLUDE KEY`.
+    //
+    // As discussed
+    // <https://github.com/MaterializeInc/materialize/pull/26246#issuecomment-2023558097>,
+    // removing this special case amounts to deciding how to handle null keys
+    // from sources, in a holistic way. We aren't yet prepared to do this, so we leave
+    // this special case in.
+    //
+    // Note that this is safe because this generator is
+    // 1. The only source with no encoding that can have its key included.
+    // 2. Never produces null keys (or values, for that matter).
+    let key_envelope_no_encoding = matches!(
+        source_connection,
+        GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator: LoadGenerator::KeyValue(_),
+            ..
+        })
+    );
+    let mut key_envelope = get_key_envelope(
+        include_metadata,
+        encoding.as_ref(),
+        key_envelope_no_encoding,
+    )?;
+
+    match (&envelope, &key_envelope) {
+        (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
+        (ast::SourceEnvelope::Debezium, _) => sql_bail!(
+            "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
+        ),
+        _ => {}
+    };
+
+    // Not all source envelopes are compatible with all source connections.
+    // Whoever constructs the source ingestion pipeline is responsible for
+    // choosing compatible envelopes and connections.
+    //
+    // TODO(guswynn): ambiguously assert which connections and envelopes are
+    // compatible in typechecking
+    //
+    // TODO: remove bails as more support for upsert is added.
+    let envelope = match &envelope {
+        // TODO: fixup key envelope
+        ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
+        ast::SourceEnvelope::Debezium => {
+            //TODO check that key envelope is not set
+            let after_idx = match typecheck_debezium(&value_desc) {
+                Ok((_before_idx, after_idx)) => Ok(after_idx),
+                Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
+                    Some(DataEncoding::Avro(_)) => Err(type_err),
+                    _ => Err(sql_err!(
+                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
+                    )),
+                },
+            }?;
+
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Debezium { after_idx },
+            }
+        }
+        ast::SourceEnvelope::Upsert {
+            value_decode_err_policy,
+        } => {
+            let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
+                None => {
+                    if !key_envelope_no_encoding {
+                        bail_unsupported!(format!(
+                            "UPSERT requires a key/value format: {:?}",
+                            format
+                        ))
+                    }
+                    None
+                }
+                Some(key_encoding) => Some(key_encoding),
+            };
+            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
+            // specified.
+            if key_envelope == KeyEnvelope::None {
+                key_envelope = get_unnamed_key_envelope(key_encoding)?;
+            }
+            // If the value decode error policy is not set we use the default upsert style.
+            let style = match value_decode_err_policy.as_slice() {
+                [] => UpsertStyle::Default(key_envelope),
+                [SourceErrorPolicy::Inline { alias }] => {
+                    scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_INLINE_ERRORS)?;
+                    UpsertStyle::ValueErrInline {
+                        key_envelope,
+                        error_column: alias
+                            .as_ref()
+                            .map_or_else(|| "error".to_string(), |a| a.to_string()),
+                    }
+                }
+                _ => {
+                    bail_unsupported!("ENVELOPE UPSERT with unsupported value decode error policy")
+                }
+            };
+
+            UnplannedSourceEnvelope::Upsert { style }
+        }
+        ast::SourceEnvelope::CdcV2 => {
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
+            //TODO check that key envelope is not set
+            match format {
+                Some(FormatSpecifier::Bare(Format::Avro(_))) => {}
+                _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
+            }
+            UnplannedSourceEnvelope::CdcV2
+        }
+    };
+
+    let metadata_desc = included_column_desc(metadata_columns_desc);
+    let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
+
+    if ignore_keys.unwrap_or(false) {
+        desc = desc.without_keys();
+    }
+
+    Ok((desc, envelope, encoding))
+}
+
+/// Plans the RelationDesc for a source export (subsource or table) that has a defined list
+/// of columns and constraints.
 fn plan_source_export_desc(
     scx: &StatementContext,
     name: &UnresolvedItemName,
@@ -1418,6 +1462,9 @@ pub fn plan_create_subsource(
             SourceExportStatementDetails::LoadGenerator { output } => {
                 SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
             }
+            SourceExportStatementDetails::Kafka {} => {
+                bail_unsupported!("subsources cannot reference Kafka sources")
+            }
         };
         DataSourceDesc::IngestionExport {
             ingestion_id,
@@ -1479,8 +1526,13 @@ pub fn plan_create_table_from_source(
         if_not_exists,
         source,
         external_reference,
+        envelope,
+        format,
+        include_metadata,
         with_options,
     } = &stmt;
+
+    let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
     let TableFromSourceOptionExtracted {
         text_columns,
@@ -1492,8 +1544,6 @@ pub fn plan_create_table_from_source(
     let source_item = scx.get_item_by_resolved_name(source)?;
     let ingestion_id = source_item.id();
 
-    let desc = plan_source_export_desc(scx, name, columns, constraints)?;
-
     // Decode the details option stored on the statement, which contains information
     // created during the purification process.
     let details = details
@@ -1504,6 +1554,24 @@ pub fn plan_create_table_from_source(
         ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
     let details =
         SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+
+    if !matches!(details, SourceExportStatementDetails::Kafka { .. })
+        && include_metadata
+            .iter()
+            .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
+    {
+        // TODO(guswynn): should this be `bail_unsupported!`?
+        sql_bail!("INCLUDE HEADERS with non-Kafka source table not supported");
+    }
+    if !matches!(
+        details,
+        SourceExportStatementDetails::Kafka { .. }
+            | SourceExportStatementDetails::LoadGenerator { .. }
+    ) && !include_metadata.is_empty()
+    {
+        bail_unsupported!("INCLUDE metadata with non-Kafka source table");
+    }
+
     let details = match details {
         SourceExportStatementDetails::Postgres { table } => {
             SourceExportDetails::Postgres(PostgresSourceExportDetails {
@@ -1530,21 +1598,114 @@ pub fn plan_create_table_from_source(
         SourceExportStatementDetails::LoadGenerator { output } => {
             SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails { output })
         }
+        SourceExportStatementDetails::Kafka {} => {
+            if !include_metadata.is_empty()
+                && !matches!(
+                    envelope,
+                    ast::SourceEnvelope::Upsert { .. }
+                        | ast::SourceEnvelope::None
+                        | ast::SourceEnvelope::Debezium
+                )
+            {
+                // TODO(guswynn): should this be `bail_unsupported!`?
+                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
+            }
+
+            let metadata_columns = include_metadata
+                .into_iter()
+                .flat_map(|item| match item {
+                    SourceIncludeMetadata::Timestamp { alias } => {
+                        let name = match alias {
+                            Some(name) => name.to_string(),
+                            None => "timestamp".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Timestamp))
+                    }
+                    SourceIncludeMetadata::Partition { alias } => {
+                        let name = match alias {
+                            Some(name) => name.to_string(),
+                            None => "partition".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Partition))
+                    }
+                    SourceIncludeMetadata::Offset { alias } => {
+                        let name = match alias {
+                            Some(name) => name.to_string(),
+                            None => "offset".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Offset))
+                    }
+                    SourceIncludeMetadata::Headers { alias } => {
+                        let name = match alias {
+                            Some(name) => name.to_string(),
+                            None => "headers".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Headers))
+                    }
+                    SourceIncludeMetadata::Header {
+                        alias,
+                        key,
+                        use_bytes,
+                    } => Some((
+                        alias.to_string(),
+                        KafkaMetadataKind::Header {
+                            key: key.clone(),
+                            use_bytes: *use_bytes,
+                        },
+                    )),
+                    SourceIncludeMetadata::Key { .. } => {
+                        // handled below
+                        None
+                    }
+                })
+                .collect();
+
+            SourceExportDetails::Kafka(KafkaSourceExportDetails { metadata_columns })
+        }
     };
+
+    let source_connection = &source_item.source_desc()?.expect("is source").connection;
+
+    // Some source-types (e.g. postgres, mysql, multi-output load-gen sources) define a value_schema
+    // during purification and populate the `columns` and `constraints` fields for the statement,
+    // whereas other source-types (e.g. kafka, single-output load-gen sources) do not, so instead
+    // we use the source connection's default schema.
+    let (key_desc, value_desc) = if !columns.is_empty() || !constraints.is_empty() {
+        let desc = plan_source_export_desc(scx, name, columns, constraints)?;
+        (None, desc)
+    } else {
+        let key_desc = source_connection.default_key_desc();
+        let value_desc = source_connection.default_value_desc();
+        (Some(key_desc), value_desc)
+    };
+
+    let metadata_columns_desc = match &details {
+        SourceExportDetails::Kafka(KafkaSourceExportDetails {
+            metadata_columns, ..
+        }) => kafka_metadata_columns_desc(metadata_columns),
+        _ => vec![],
+    };
+
+    let (desc, envelope, encoding) = apply_source_envelope_encoding(
+        scx,
+        &envelope,
+        format,
+        key_desc,
+        value_desc,
+        None,
+        include_metadata,
+        metadata_columns_desc,
+        source_connection,
+    )?;
+
     let data_source = DataSourceDesc::IngestionExport {
         ingestion_id,
-        external_reference: external_reference.clone(),
+        external_reference: external_reference
+            .as_ref()
+            .expect("populated in purification")
+            .clone(),
         details,
-        // Tables don't currently support non-default envelopes / encoding
-        // TODO(roshan): Once we add support for kafka source tables, refactor
-        // this.
-        data_config: SourceExportDataConfig {
-            envelope: SourceEnvelope::None(NoneEnvelope {
-                key_envelope: KeyEnvelope::None,
-                key_arity: 0,
-            }),
-            encoding: None,
-        },
+        data_config: SourceExportDataConfig { envelope, encoding },
     };
 
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;

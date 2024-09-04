@@ -199,13 +199,13 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
         Some(self.topic.as_str())
     }
 
-    fn key_desc(&self) -> RelationDesc {
+    fn default_key_desc(&self) -> RelationDesc {
         RelationDesc::builder()
             .with_column("key", ScalarType::Bytes.nullable(true))
             .finish()
     }
 
-    fn value_desc(&self) -> RelationDesc {
+    fn default_value_desc(&self) -> RelationDesc {
         RelationDesc::builder()
             .with_column("value", ScalarType::Bytes.nullable(true))
             .finish()
@@ -217,54 +217,6 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
 
     fn connection_id(&self) -> Option<GlobalId> {
         Some(self.connection_id)
-    }
-
-    // TODO(roshan): Refactor this when we refactor kafka source SQL planning to allow
-    // for multiple exports. This should accept the metadata_columns for
-    // each export rather than assuming the primary export.
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        self.metadata_columns
-            .iter()
-            .map(|(name, kind)| {
-                let typ = match kind {
-                    KafkaMetadataKind::Partition => ScalarType::Int32.nullable(false),
-                    KafkaMetadataKind::Offset => ScalarType::UInt64.nullable(false),
-                    KafkaMetadataKind::Timestamp => {
-                        ScalarType::Timestamp { precision: None }.nullable(false)
-                    }
-                    KafkaMetadataKind::Header {
-                        use_bytes: true, ..
-                    } => ScalarType::Bytes.nullable(true),
-                    KafkaMetadataKind::Header {
-                        use_bytes: false, ..
-                    } => ScalarType::String.nullable(true),
-                    KafkaMetadataKind::Headers => ScalarType::List {
-                        element_type: Box::new(ScalarType::Record {
-                            fields: vec![
-                                (
-                                    "key".into(),
-                                    ColumnType {
-                                        nullable: false,
-                                        scalar_type: ScalarType::String,
-                                    },
-                                ),
-                                (
-                                    "value".into(),
-                                    ColumnType {
-                                        nullable: true,
-                                        scalar_type: ScalarType::Bytes,
-                                    },
-                                ),
-                            ],
-                            custom_id: None,
-                        }),
-                        custom_id: None,
-                    }
-                    .nullable(false),
-                };
-                (&**name, typ)
-            })
-            .collect()
     }
 
     fn primary_export_details(&self) -> SourceExportDetails {
@@ -370,6 +322,54 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                 .into_rust_if_some("ProtoKafkaSourceConnection::topic_metadata_refresh_interval")?,
         })
     }
+}
+
+/// Return the column types used to describe the metadata columns of a kafka source export.
+pub fn kafka_metadata_columns_desc(
+    metadata_columns: &Vec<(String, KafkaMetadataKind)>,
+) -> Vec<(&str, ColumnType)> {
+    metadata_columns
+        .iter()
+        .map(|(name, kind)| {
+            let typ = match kind {
+                KafkaMetadataKind::Partition => ScalarType::Int32.nullable(false),
+                KafkaMetadataKind::Offset => ScalarType::UInt64.nullable(false),
+                KafkaMetadataKind::Timestamp => {
+                    ScalarType::Timestamp { precision: None }.nullable(false)
+                }
+                KafkaMetadataKind::Header {
+                    use_bytes: true, ..
+                } => ScalarType::Bytes.nullable(true),
+                KafkaMetadataKind::Header {
+                    use_bytes: false, ..
+                } => ScalarType::String.nullable(true),
+                KafkaMetadataKind::Headers => ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (
+                                "key".into(),
+                                ColumnType {
+                                    nullable: false,
+                                    scalar_type: ScalarType::String,
+                                },
+                            ),
+                            (
+                                "value".into(),
+                                ColumnType {
+                                    nullable: true,
+                                    scalar_type: ScalarType::Bytes,
+                                },
+                            ),
+                        ],
+                        custom_id: None,
+                    }),
+                    custom_id: None,
+                }
+                .nullable(false),
+            };
+            (&**name, typ)
+        })
+        .collect()
 }
 
 /// The details of a source export from a kafka source.
