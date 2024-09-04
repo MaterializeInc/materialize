@@ -142,3 +142,14 @@ pub struct RemoveRolesFromGroupParams {
     #[serde(rename = "roleIds")]
     pub role_ids: Vec<String>,
 }
+
+#[derive(Deserialize)]
+pub struct GetUserPasswordRequest {
+    pub email: String,
+}
+
+#[derive(Serialize)]
+pub struct GetUserPasswordResponse {
+    pub email: String,
+    pub password: String,
+}

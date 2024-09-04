@@ -515,3 +515,19 @@ pub async fn handle_remove_users_from_group(
         StatusCode::NOT_FOUND
     }
 }
+
+pub async fn internal_handle_get_user_password(
+    State(context): State<Arc<Context>>,
+    Json(request): Json<GetUserPasswordRequest>,
+) -> Result<Json<GetUserPasswordResponse>, StatusCode> {
+    let users = context.users.lock().unwrap();
+
+    if let Some(user) = users.get(&request.email) {
+        Ok(Json(GetUserPasswordResponse {
+            email: user.email.clone(),
+            password: user.password.clone(),
+        }))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
