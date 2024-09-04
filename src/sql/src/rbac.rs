@@ -341,8 +341,8 @@ pub fn check_usage(
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
-    // Map from connection IDs to authenticated roles. The roles may have been dropped concurrently.
-    active_conns: &BTreeMap<u32, RoleId>,
+    // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
+    active_conns: impl FnOnce(u32) -> Option<RoleId>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
@@ -382,7 +382,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: &BTreeMap<u32, RoleId>,
+    active_conns: impl FnOnce(u32) -> Option<RoleId>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -1373,10 +1373,9 @@ fn generate_rbac_requirements(
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
                 SideEffectingFunc::PgCancelBackend { connection_id } => {
-                    match active_conns.get(connection_id) {
-                        Some(authenticated_role) => BTreeSet::from([*authenticated_role]),
-                        None => BTreeSet::new(),
-                    }
+                    active_conns(*connection_id)
+                        .map(|x| [x].into())
+                        .unwrap_or_default()
                 }
             };
             RbacRequirements {
