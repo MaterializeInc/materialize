@@ -203,6 +203,8 @@ impl MirToSql {
             .collect()
     }
 
+    // !!!(mgree) have this return fully qualified column names
+    // switch to builder pattern?
     fn to_sql_query(
         &mut self,
         expr: &MirRelationExpr,
@@ -298,7 +300,7 @@ impl MirToSql {
                 let q_value = sc.to_sql_query(value, bindings, ctx)?;
 
                 // prepare the CTE block
-                let ident = Ident::new_unchecked(format!("l{id}"));
+                let ident = Ident::new_unchecked(format!("cte_{id}"));
                 let name = RawItemName::Name(UnresolvedItemName(vec![ident.clone()]));
                 let columns = sc.column_info(value, ctx);
                 let cte_value = Cte::<Raw> {
@@ -911,13 +913,16 @@ impl MirToSql {
 
         match expr {
             Column(col) => Ok(Expr::Identifier(vec![columns[*col].clone()])),
-            Literal(Ok(row), _) => Ok(Expr::Row {
-                exprs: row
-                    .unpack()
-                    .into_iter()
-                    .map(|datum| self.to_sql_value(datum))
-                    .collect(),
-            }),
+            Literal(Ok(row), _) => {
+                let mut datums = row.unpack();
+                if datums.len() != 1 {
+                    return Err(SqlConversionError::BadConstant {
+                        err: EvalError::Internal("literal with more than one datum".to_string()),
+                    });
+                }
+
+                Ok(self.to_sql_value(datums.pop().unwrap()))
+            }
             Literal(Err(err), _) => Err(SqlConversionError::BadConstant { err: err.clone() }),
             CallUnmaterializable(uf) => Ok(call(uf, vec![])),
             CallUnary { func, expr } => {
